@@ -724,9 +724,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """Initialize the model for standard input."""
         # Must run before validation: a real datetime64 column crashes it otherwise.
         date_transformer = DateTransformer(
-            categorical_indices=self.categorical_features_indices
+            categorical_indices=self.categorical_features_indices,
+            transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
-        X = date_transformer.fit_transform(X)
+        dates = date_transformer.fit_transform(X)
+        X = dates.X
 
         # Data validation and cleaning
         X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
@@ -743,8 +745,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=feature_names,
-            provided_categorical_indices=self.categorical_features_indices,
+            feature_names=dates.feature_names or feature_names,
+            provided_categorical_indices=dates.categorical_indices,
+            provided_numerical_indices=dates.numerical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,

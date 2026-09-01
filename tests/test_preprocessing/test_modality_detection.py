@@ -639,6 +639,42 @@ class TestWarnOnMultimodal:
         assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING}'" not in message
 
 
+class TestProvidedNumericalIndices:
+    """`provided_numerical_indices`: columns that are numbers by construction.
+
+    Calendar features (see `date_encoding.DateTransformer`) are the caller for
+    this: a cyclical pair spanning two months holds two distinct values, which
+    the cardinality heuristics would otherwise read as a category.
+    """
+
+    def _detect(self, column: list[float], **kwargs: Any) -> FeatureSchema:
+        X = np.array([[value] for value in column], dtype=object)
+        return detect_feature_modalities(
+            X=X,
+            feature_names=["f"],
+            min_samples_for_inference=2,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
+            **kwargs,
+        )
+
+    def test__low_cardinality_column__would_be_categorical(self) -> None:
+        schema = self._detect([0.0, 1.0] * 10)
+        assert schema.features[0].modality is FeatureModality.CATEGORICAL
+
+    def test__same_column_reported_numerical__is_numerical(self) -> None:
+        schema = self._detect([0.0, 1.0] * 10, provided_numerical_indices=[0])
+        assert schema.features[0].modality is FeatureModality.NUMERICAL
+
+    def test__constant_column_reported_numerical__is_still_constant(self) -> None:
+        """Worth dropping rather than typing: an expanded column that never
+        varies (e.g. the year of a single-year column) carries nothing.
+        """
+        schema = self._detect([1.0] * 10, provided_numerical_indices=[0])
+        assert schema.features[0].modality is FeatureModality.CONSTANT
+
+
 class TestDetectFeatureModalitiesWarnsOnText:
     """`detect_feature_modalities` emits the text warning over real columns.
 

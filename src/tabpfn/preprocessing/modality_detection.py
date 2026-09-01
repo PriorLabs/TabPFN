@@ -40,6 +40,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
+    provided_numerical_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -52,6 +53,10 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
+        provided_numerical_indices: Indices known to hold numbers by construction,
+            e.g. calendar features (see `date_encoding.DateTransformer`). They
+            skip the cardinality heuristics, which would otherwise read a
+            cyclical month pair spanning two months as a category.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
@@ -73,6 +78,7 @@ def detect_feature_modalities(
         feat_modality = _detect_feature_modality(
             s=pd.Series(X_slice, name=feature_name),
             reported_categorical=reported_categorical,
+            reported_numerical=index in (provided_numerical_indices or ()),
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             min_cardinality_for_text=min_cardinality_for_text,
@@ -143,6 +149,7 @@ def _detect_feature_modality(
     s: pd.Series,
     *,
     reported_categorical: bool,
+    reported_numerical: bool = False,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
@@ -174,6 +181,9 @@ def _detect_feature_modality(
         # it still routes through the ordinal encoder instead of crashing as a
         # constant numeric column when predict sees an unseen string value.
         return FeatureModality.CONSTANT
+
+    if reported_numerical:
+        return FeatureModality.NUMERICAL
 
     if _is_numeric_pandas_series(s):
         if _detect_numeric_as_categorical(
