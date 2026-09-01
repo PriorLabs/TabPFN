@@ -80,9 +80,7 @@ def detect_feature_modalities(
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    _warn_on_multimodal(
-        feature_schema, declared_cat_indices=provided_categorical_indices
-    )
+    _warn_on_text(feature_schema, declared_cat_indices=provided_categorical_indices)
     return feature_schema
 
 
@@ -95,7 +93,7 @@ def format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_on_multimodal(
+def _warn_on_text(
     feature_schema: FeatureSchema,
     *,
     declared_cat_indices: Sequence[int] | None = None,
