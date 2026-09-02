@@ -1272,14 +1272,7 @@ def _roc_auc_clf(y, *, tune_decision_thresholds: bool) -> TabPFNClassifier:
 
 
 def test__fit_with_roc_auc_metric_with_threshold_tuning__raises() -> None:
-    """The threshold search does not optimize ROC AUC, so the pairing is rejected.
-
-    The search scores thresholded 0/1 predictions, and the ROC AUC of a single
-    operating point is (TPR + TNR) / 2 -- balanced accuracy -- so this silently
-    optimized a different metric. Separately, decision thresholds cannot improve
-    a ranking metric: for binary targets the predict-time reweighting is a
-    monotone transform of the positive-class probability.
-    """
+    """roc_auc with tune_decision_thresholds=True is rejected."""
     n_classes = 2
     X, y = sklearn.datasets.make_classification(
         n_samples=30 * n_classes,
