@@ -1,8 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for `DateTransformer`: refusing a date, expanding it, converting a duration,
-and for `convert_dates`, the predict paths' guard around `date_transformer_`.
-"""
+"""Tests for `DateTransformer`: refusing a date, expanding it, converting a duration."""
 
 from __future__ import annotations
 
@@ -11,10 +9,11 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.preprocessing.datetimes import DateTransformer, convert_dates
+from tabpfn.preprocessing.datetimes import DateTransformer
 
 
 def _frame(dates: pd.Series | pd.DatetimeIndex | pd.PeriodIndex | list) -> pd.DataFrame:
@@ -292,47 +291,6 @@ class TestExpansionAtPredictTime:
             )
 
 
-class TestConvertDates:
-    """`convert_dates`: the predict paths' guard for an unset attribute.
-
-    `fit_from_preprocessed` never sets `date_transformer_`, exactly like the
-    pre-existing `ordinal_encoder_` guard, so the fallback has nothing fitted
-    to expand a date with.
-    """
-
-    class _Source:
-        def __init__(self, **attributes: object) -> None:
-            self.__dict__.update(attributes)
-
-    def test__source_without_a_transformer__refuses_a_date(self) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-
-        with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
-            convert_dates(X, self._Source(categorical_features_indices=None))
-
-    def test__source_without_a_transformer__still_converts_a_duration(self) -> None:
-        X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
-
-        out = convert_dates(X, self._Source(categorical_features_indices=None))
-
-        assert pd.api.types.is_numeric_dtype(out["date"])
-
-    def test__source_without_a_transformer__honours_declared_categoricals(
-        self,
-    ) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-        out = convert_dates(X, self._Source(categorical_features_indices=[1]))
-        assert out is X
-
-    def test__source_with_a_fitted_transformer__uses_it(self) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-        source = self._Source(
-            date_transformer_=DateTransformer(categorical_indices=[1]),
-            categorical_features_indices=None,
-        )
-        assert convert_dates(X, source) is X
-
-
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 def test__fit_with_real_datetime_column__raises_naming_it(estimator_cls: type) -> None:
     """`fit` refuses a genuine `datetime64` column, naming it.
@@ -444,3 +402,26 @@ def test__fit_with_transform_dates__reports_the_caller_s_own_columns(
     # Positional input has no names to check, only a width.
     with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
         model.predict(np.zeros((10, 3)))
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_differentiable_input__sets_a_date_transformer(
+    estimator_cls: type,
+) -> None:
+    """The differentiable path fits on a tensor, which holds no dates, and still
+    sets the attribute: every predict path converts through it unconditionally.
+    """
+    X = torch.randn(20, 3)
+    y = (
+        torch.tensor([0, 1] * 10)
+        if estimator_cls is TabPFNClassifier
+        else torch.randn(20)
+    )
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        differentiable_input=True,
+        ignore_pretraining_limits=True,
+    ).fit_with_differentiable_input(X, y)
+
+    assert model.date_transformer_.transform(np.zeros((2, 3))).shape == (2, 3)

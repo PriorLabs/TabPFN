@@ -42,7 +42,6 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.datetimes import convert_dates
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
@@ -606,7 +605,7 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     capture_input_shape(X, estimator=model, reset=False)
-    X = convert_dates(X, model)
+    X = model.date_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = clean_data_transform(
         X,

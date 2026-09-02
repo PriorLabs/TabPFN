@@ -80,7 +80,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.datetimes import DateTransformer, convert_dates
+from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -691,6 +691,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             for i in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
+        # A tensor holds no dates, so there is nothing to fit; set anyway, so every
+        # predict path converts through it without first checking for one.
+        self.date_transformer_ = DateTransformer()
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -962,6 +965,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
+        # Preprocessed tensors hold no dates either, so a transformer with nothing
+        # fitted is the right one: it refuses a date and converts a duration.
+        self.date_transformer_ = DateTransformer()
+
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
@@ -1117,7 +1124,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             capture_input_shape(X_test, estimator=worker, reset=False)
-            X_test = convert_dates(X_test, worker)  # noqa: PLW2901
+            X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
@@ -1407,7 +1414,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             capture_input_shape(X, estimator=self, reset=False)
-            X = convert_dates(X, self)
+            X = self.date_transformer_.transform(X)
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = clean_data_transform(
                 X,

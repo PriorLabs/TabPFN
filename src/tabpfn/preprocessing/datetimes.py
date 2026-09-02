@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     from tabpfn.constants import XType
 
-__all__ = ["DateConversion", "DateTransformer", "convert_dates"]
+__all__ = ["DateConversion", "DateTransformer"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -309,21 +309,6 @@ def _refuse(X: pd.DataFrame, positions: Sequence[int]) -> None:
         'Set `inference_config={"TRANSFORM_DATES": True}` to expand them into '
         "calendar features, or preprocess them yourself first."
     )
-
-
-def convert_dates(X: XType, source: object) -> XType:
-    """Convert `X`'s temporal columns via `source`'s fitted `date_transformer_`.
-
-    `source` (a fitted estimator or ensemble worker) may never have set
-    `date_transformer_` at all, e.g. `fit_from_preprocessed` skips the step that
-    would, exactly like the pre-existing `ordinal_encoder_` guard. The fallback
-    has nothing fitted to expand a date with, so it refuses one, and converts a
-    duration as any transformer does.
-    """
-    transformer = getattr(source, "date_transformer_", None) or DateTransformer(
-        categorical_indices=getattr(source, "categorical_features_indices", None)
-    )
-    return transformer.transform(X)
 
 
 def is_instant_dtype(dtype: Any) -> bool:
