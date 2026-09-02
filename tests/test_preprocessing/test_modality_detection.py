@@ -10,10 +10,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
-from packaging.version import Version
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.errors import TabPFNValidationError
+from tabpfn.errors import TabPFNUserError, TabPFNValidationError
 from tabpfn.preprocessing import modality_detection
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
@@ -31,7 +30,7 @@ from tabpfn.preprocessing.modality_detection import (
     _warn_on_multimodal,
     detect_datetime_columns,
     detect_feature_modalities,
-    resolve_datetime_columns,
+    handle_datetime_columns,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
 
@@ -878,79 +877,31 @@ class TestDetectDatetimeColumns:
         assert detect_datetime_columns(X, categorical_features_indices=None) == []
 
 
-class TestResolveDatetimeColumns:
-    """`resolve_datetime_columns`: casting a detected date to numeric.
+class TestHandleDatetimeColumns:
+    """`handle_datetime_columns`: refusing a detected date, naming it.
 
     Which columns count as a date is `detect_datetime_columns`'s decision (see
-    `TestDetectDatetimeColumns`); this only covers what happens to a column
-    once detected, and that nothing else is touched.
+    `TestDetectDatetimeColumns`); this only covers what happens once one is
+    detected, and that nothing else trips the check.
     """
 
-    def test__real_datetime_column__is_cast_to_numeric_and_reported(self) -> None:
-        dates = pd.date_range("2020-01-01", periods=3)
-        X = pd.DataFrame({"num": [1.0, 2.0, 3.0], "date": dates})
-
-        out, date_indices = resolve_datetime_columns(X, categorical_indices=None)
-
-        assert date_indices == [1]
-        assert pd.api.types.is_numeric_dtype(out["date"])
-        # Exact: casting to numeric must not collide distinct dates together.
-        assert out["date"].nunique() == 3
-        # The caller's own frame is left untouched.
-        np.testing.assert_array_equal(out["num"], X["num"])
-        assert pd.api.types.is_datetime64_any_dtype(X["date"])
-
-    def test__missing_date__becomes_nan_not_a_sentinel_int(self) -> None:
-        """`NaT.astype('int64')` is a huge sentinel, not `NaN` -- must be masked."""
+    def test__real_datetime_columns__raise_naming_index_and_label(self) -> None:
         X = pd.DataFrame(
             {
                 "num": [1.0, 2.0, 3.0],
-                "date": pd.to_datetime(["2020-01-01", None, "2020-01-03"]),
+                "start": pd.date_range("2020-01-01", periods=3),
+                "end": pd.date_range("2021-01-01", periods=3),
             }
         )
-        out, _ = resolve_datetime_columns(X, categorical_indices=None)
-        assert out["date"].isna().tolist() == [False, True, False]
+        with pytest.raises(TabPFNUserError, match="does not support") as excinfo:
+            handle_datetime_columns(X, categorical_indices=None)
+        message = str(excinfo.value)
+        assert "1 ('start'), 2 ('end')" in message
+        assert '"TRANSFORM_DATES": True' in message
 
-    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
-    def test__every_datetime_resolution__converts_to_the_same_numbers(
-        self, unit: str
-    ) -> None:
-        """`astype("int64")` counts ticks of the column's own resolution, so the
-        same timestamps arriving as `datetime64[us]` (pandas 3's default) used to
-        come out 1000x smaller than as `[ns]` (pandas 2's), scaling a fit and a
-        predict of one column apart from each other.
-        """
-        dates = pd.to_datetime(["2020-01-01", "2020-06-01", "2021-01-01"])
-        X = pd.DataFrame({"date": dates.astype(f"datetime64[{unit}]")})
-
-        out, _ = resolve_datetime_columns(X, categorical_indices=None)
-
-        expected = [1.5778368e18, 1.5909696e18, 1.6094592e18]
-        np.testing.assert_array_equal(out["date"], expected)
-
-    @pytest.mark.skipif(
-        Version(pd.__version__) < Version("2.0.0"),
-        reason="pandas 1 stores every datetime as [ns], so such a date cannot be held",
-    )
-    def test__date_outside_the_nanosecond_range__still_converts(self) -> None:
-        """Scaling in `float64` rather than casting the column to `[ns]` first,
-        which raises `OutOfBoundsDatetime` outside 1678-2262.
-        """
-        X = pd.DataFrame(
-            {
-                "date": pd.to_datetime(["1500-01-01", "2600-01-01"]).astype(
-                    "datetime64[s]"
-                )
-            }
-        )
-
-        out, _ = resolve_datetime_columns(X, categorical_indices=None)
-
-        assert out["date"].tolist() == [-1.48317696e19, 1.98808992e19]
-
-    def test__nothing_detected__is_a_noop(self) -> None:
-        """Delegates detection to `detect_datetime_columns`: nothing found there
-        means `X` is returned as-is, not merely with an empty index list.
+    def test__date_like_string_column__is_not_rejected(self) -> None:
+        """Only a genuine `datetime64` dtype is refused; a string that merely
+        looks like a date is left for modality detection to classify.
         """
         X = pd.DataFrame(
             {
@@ -958,107 +909,16 @@ class TestResolveDatetimeColumns:
                 "date": ["2020-01-01", "2020-01-02", "2020-01-03"],
             }
         )
-        out, date_indices = resolve_datetime_columns(X, categorical_indices=None)
-        assert date_indices == []
-        assert out is X
+        handle_datetime_columns(X, categorical_indices=None)
 
-    def test__non_dataframe_input__is_a_noop(self) -> None:
-        X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        out, date_indices = resolve_datetime_columns(X, categorical_indices=None)
-        assert date_indices == []
-        assert out is X
-
-
-class TestResolvedDateColumnClassification:
-    """How a genuine `datetime64` column is classified once it is resolved.
-
-    Nothing expands a date into calendar features yet, so `resolve_datetime_columns`
-    leaves a plain nanoseconds-since-epoch column, and detection classifies it as
-    the number it now is. `resolved_date_indices` only feeds the warning naming
-    the column, so the user knows no calendar expansion happened.
-
-    Resolution is dtype-based only, so a date-*like string* is not a date here;
-    see `test__date_like_string__is_not_a_date`.
-    """
-
-    n_rows = 200
-
-    def _numeric_column(self) -> np.ndarray:
-        return np.random.default_rng(0).normal(size=self.n_rows)
-
-    def _detect(self, X: pd.DataFrame) -> FeatureSchema:
-        """Resolve, then detect, in the order `fit` does it."""
-        resolved, date_indices = resolve_datetime_columns(X, categorical_indices=None)
-        return detect_feature_modalities(
-            X=resolved.to_numpy(dtype=object),
-            feature_names=list(X.columns),
-            resolved_date_indices=date_indices,
-            min_samples_for_inference=100,
-            max_unique_for_category=30,
-            min_unique_for_numerical=4,
-            min_cardinality_for_text=30,
+    def test__non_dataframe_input__is_not_rejected(self) -> None:
+        handle_datetime_columns(
+            np.array([[1.0, 2.0], [3.0, 4.0]]), categorical_indices=None
         )
 
-    def _dates(self, n_unique: int) -> pd.DatetimeIndex:
-        pool = pd.date_range("2020-01-01", periods=n_unique)
-        return pd.DatetimeIndex([pool[i % n_unique] for i in range(self.n_rows)])
 
-    def test__high_cardinality_date__is_numerical(self) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.NUMERICAL
-
-    def test__low_cardinality_date__is_categorical(self) -> None:
-        """Below `min_unique_for_numerical`, so categorical like any other number."""
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
-
-    def test__resolved_date__is_not_also_reported_as_free_text(self) -> None:
-        """The date warning fires once; the free-text warning must not repeat it."""
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._detect(X)
-        date_warnings = [w for w in caught if "hold dates" in str(w.message)]
-        text_warnings = [w for w in caught if "look like free text" in str(w.message)]
-        assert len(date_warnings) == 1
-        assert not text_warnings
-
-    def test__date_like_string__is_not_a_date(self) -> None:
-        """A string column that merely looks like a date is left as text: only a
-        genuine `datetime64` dtype is resolved, so no date warning names it.
-        """
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "date": [d.strftime("%Y-%m-%d") for d in self._dates(60)],
-            }
-        )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_real_datetime_column__warns_at_call_site(
-    estimator_cls: type,
-) -> None:
-    """`fit` detects a genuine `datetime64` column and warns naming it.
-
-    Both estimators share the detection path, so one parametrized test pins the
-    estimator-level behaviour: `fit` emits the warning naming the column and
-    blaming this file's `fit` call (the stacklevel). Declaring the column in
-    `categorical_features_indices` excludes it from `resolve_datetime_columns`
-    (see that function and `TestResolveDatetimeColumns`), so it is left as a
-    real `datetime64` dtype all the way to validation and hits the pre-existing,
-    unrelated `np.result_type` crash instead -- an accepted limitation of
-    declaring a genuine date column categorical, not something this silences.
-    """
+def _estimator_data(estimator_cls: type) -> tuple[pd.DataFrame, np.ndarray]:
+    """A numeric column next to a genuine `datetime64` one, plus a matching `y`."""
     n = 120
     rng = np.random.default_rng(seed=42)
     X = pd.DataFrame(
@@ -1069,17 +929,44 @@ def test__fit_with_real_datetime_column__warns_at_call_site(
         if estimator_cls is TabPFNClassifier
         else rng.normal(size=n)
     )
+    return X, y
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_real_datetime_column__raises_naming_it(estimator_cls: type) -> None:
+    """`fit` refuses a genuine `datetime64` column, naming it.
+
+    Both estimators share the check, so one parametrized test pins the
+    estimator-level behaviour. Declaring the column in
+    `categorical_features_indices` excludes it from `handle_datetime_columns`
+    (see `detect_datetime_columns`), so it is left as a real `datetime64` dtype
+    all the way to validation and hits the pre-existing, unrelated
+    `np.result_type` failure instead -- an accepted limitation of declaring a
+    genuine date column categorical, not something this silences.
+    """
+    X, y = _estimator_data(estimator_cls)
 
     model = estimator_cls(n_estimators=1, device="cpu")
-    with pytest.warns(UserWarning, match="hold dates") as record:
+    with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
         model.fit(X, y)
-    assert "'date'" in str(record[0].message)
-    # Pins the stacklevel: the warning must blame this file's `fit` call, not a
-    # frame inside tabpfn or the contextlib wrapper around `fit`.
-    assert record[0].filename == __file__
 
     model = estimator_cls(
         n_estimators=1, device="cpu", categorical_features_indices=[1]
     )
     with pytest.raises(TabPFNValidationError, match="could not be promoted"):
         model.fit(X, y)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__predict_with_real_datetime_column__raises_naming_it(
+    estimator_cls: type,
+) -> None:
+    """A column cast to a number at fit but left as `datetime64` at predict is
+    refused there too, before validation compares it against the fitted frame.
+    """
+    X, y = _estimator_data(estimator_cls)
+    X_numeric = X.assign(date=X["date"].astype("int64"))
+
+    model = estimator_cls(n_estimators=1, device="cpu").fit(X_numeric, y)
+    with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
+        model.predict(X)

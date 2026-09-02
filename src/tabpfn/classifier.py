@@ -87,7 +87,7 @@ from tabpfn.preprocessing.ensemble import (
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import (
     detect_feature_modalities,
-    resolve_datetime_columns,
+    handle_datetime_columns,
 )
 from tabpfn.utils import (
     DevicesSpecification,
@@ -724,7 +724,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Must run before validation: a real datetime64 column crashes it otherwise.
-        X, date_indices = resolve_datetime_columns(
+        handle_datetime_columns(
             X, categorical_indices=self.categorical_features_indices
         )
 
@@ -745,7 +745,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
-            resolved_date_indices=date_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -1109,7 +1108,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
-            X_test, _ = resolve_datetime_columns(  # noqa: PLW2901
+            handle_datetime_columns(
                 X_test, categorical_indices=worker.categorical_features_indices
             )
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
@@ -1400,7 +1399,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X, _ = resolve_datetime_columns(
+            handle_datetime_columns(
                 X, categorical_indices=self.categorical_features_indices
             )
             X = ensure_compatible_predict_input_sklearn(X, self)
