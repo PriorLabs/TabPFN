@@ -723,7 +723,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
-        # Must run before validation: a real datetime64 column crashes it otherwise.
         handle_datetime_columns(
             X, categorical_indices=self.categorical_features_indices
         )

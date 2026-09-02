@@ -867,7 +867,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        # Must run before validation: a real datetime64 column crashes it otherwise.
         handle_datetime_columns(
             X, categorical_indices=self.categorical_features_indices
         )
