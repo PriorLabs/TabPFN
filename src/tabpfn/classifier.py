@@ -80,11 +80,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.datetimes import (
-    DateTransformer,
-    convert_dates,
-    make_date_transformer,
-)
+from tabpfn.preprocessing.datetimes import DateTransformer, convert_dates
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -735,7 +731,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         capture_input_shape(X, estimator=self, reset=True)
 
         # Must run before validation: a real datetime64 column crashes it otherwise.
-        date_transformer = make_date_transformer(
+        date_transformer = DateTransformer(
             categorical_indices=self.categorical_features_indices,
             transform_dates=self.inference_config_.TRANSFORM_DATES,
         )

@@ -84,7 +84,7 @@ def detect_feature_modalities(
     return feature_schema
 
 
-def format_names_for_warning(names: list[str]) -> str:
+def _format_names_for_warning(names: list[str]) -> str:
     """Render column names for a warning, capped so it stays readable."""
     shown = names[:_MAX_TEXT_COLUMNS_IN_WARNING]
     printed = ", ".join(repr(name) for name in shown)
@@ -121,7 +121,7 @@ def _warn_on_text(
     warnings.warn(
         f"These columns look like free text and are being ordinal-encoded as "
         f"high-cardinality categoricals, which usually adds noise rather than "
-        f"signal: {format_names_for_warning(text_names)}.\n"
+        f"signal: {_format_names_for_warning(text_names)}.\n"
         "If such a column holds numbers stored as strings, convert it to a numeric "
         "dtype. If it is a category rather than text, raise "
         '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '

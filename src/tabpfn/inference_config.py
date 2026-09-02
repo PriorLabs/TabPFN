@@ -105,10 +105,11 @@ class InferenceConfig:
 
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
-    or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`,
-    rather than read as one plain number (nanoseconds since the epoch). Only a
-    real datetime dtype counts: a string column that merely looks like a date
-    (e.g. "2020-01-01") is read as a plain category or text either way."""
+    or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`.
+    Off, such a column is refused with an error naming it: cast or expand it
+    yourself first. Only a real datetime dtype counts: a string column that merely
+    looks like a date (e.g. "2020-01-01") is read as a plain category or text
+    either way."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
