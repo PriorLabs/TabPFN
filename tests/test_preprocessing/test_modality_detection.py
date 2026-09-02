@@ -845,8 +845,8 @@ def test__string_column_that_looks_like_a_date__is_not_a_date() -> None:
     string, classified by cardinality like any other, warned about (if at
     all) as free text.
 
-    Detecting a genuine datetime dtype, and expanding or text-rendering it,
-    happens entirely upstream now (`DateTimeExpander`, date_encoding.py)
+    Detecting a genuine datetime dtype, and expanding it, happens entirely
+    upstream now (`DateTimeExpander`, date_encoding.py)
     -- `detect_feature_modalities` never learns a column was ever a date; see
     `tests/test_preprocessing/test_date_encoding.py` for that half.
     """

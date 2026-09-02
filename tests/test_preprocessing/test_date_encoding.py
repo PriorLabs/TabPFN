@@ -1,7 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for `DateTimeExpander`, which resolves every temporal column
-(expand or render to text) before any validation runs.
+"""Tests for `DateTimeExpander` and the date handling built on it: a datetime
+column is expanded into calendar features with `TRANSFORM_DATES=True`, and
+rejected with an informative error otherwise.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from sklearn.exceptions import NotFittedError
 import tabpfn.base
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import get_embeddings
-from tabpfn.preprocessing import date_encoding
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.date_encoding import DateTimeExpander
 
@@ -97,164 +98,86 @@ def test__duplicate_column_labels__are_replaced_by_position() -> None:
     )
     X.columns = ["same", "same"]
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # transform_dates=False: text-render
-        out = DateTimeExpander().fit(X).transform(X)
+    expander = DateTimeExpander(transform_dates=True).fit(X)
+    out = expander.transform(X)
 
-    assert out.iloc[0, 1] == "2020-01-01"
     assert out.iloc[:, 0].tolist() == [1.0, 2.0, 3.0]
-    assert list(out.columns) == ["same", "same"]
+    assert list(out.columns) == ["same", *expander.output_names_[1]]
+    assert out["same_year"].tolist() == [2020, 2020, 2020]
 
 
-def test__non_unique_index__is_preserved() -> None:
-    """Replacement must not depend on the index being unique or ordered."""
+def test__non_unique_index__rows_stay_aligned() -> None:
+    """Expansion must not depend on the index being unique or ordered."""
     X = pd.DataFrame(
         {"n": [1.0, 2.0, 3.0], "d": pd.date_range("2020-01-01", periods=3)},
         index=[7, 7, 2],
     )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        out = DateTimeExpander().fit(X).transform(X)
-    assert list(out.index) == [7, 7, 2]
-    assert out.iloc[0, 1] == "2020-01-01"
+    out = DateTimeExpander(transform_dates=True).fit(X).transform(X)
+    assert out["n"].tolist() == [1.0, 2.0, 3.0]
+    assert out["d_day_of_year"].tolist() == [1, 2, 3]
 
 
-def test__rendering_twice__is_a_noop_the_second_time() -> None:
-    """A frame this already resolved (text-rendered) has no genuine datetime
-    dtype left, so resolving it again finds nothing to do.
-    """
-    X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        expander = DateTimeExpander().fit(X)
-        once = expander.transform(X)
-        twice = expander.transform(once)
-    assert twice is once
-
-
-# --------------------------------------------------------------------------
-# transform_dates=False (default): render to ISO text, warn
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("label", "column", "expected_first"),
-    [
-        ("datetime64", pd.date_range("2020-01-01", periods=3), "2020-01-01"),
-        (
-            "tz aware",
-            pd.date_range("2020-01-01", periods=3, tz="UTC"),
-            "2020-01-01 00:00:00+00:00",
-        ),
-        (
-            "with time",
-            pd.date_range("2020-01-01 13:45", periods=3, freq="D"),
-            "2020-01-01 13:45:00",
-        ),
-        ("period", pd.date_range("2020-01-01", periods=3).to_period("M"), "2020-01-01"),
-    ],
-)
-def test__date_columns__render_as_text_when_not_transformed(
-    label: str, column: pd.Index, expected_first: str
-) -> None:
-    X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
-    expander = DateTimeExpander()
-    with pytest.warns(UserWarning, match="hold dates"):
-        expander.fit(X)
-    out = expander.transform(X)
-    assert expander.encoders_ == {}, label
-    assert out.iloc[0, 1] == expected_first, label
-    assert out.to_numpy(dtype=object).shape == (3, 2)
-
-
-def test__missing_stays_missing__not_the_string_nat() -> None:
-    """`astype(str)` alone writes NaT out as the literal "NaT".
-
-    Which NA marker lands there is the dtype's business -- `None` under
-    object dtype, `nan` under the pandas 3 `str` dtype -- so this asserts
-    that it reads as missing, not that it is any particular one.
-    """
-    X = pd.DataFrame(
-        {"d": pd.Series(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))}
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        out = DateTimeExpander().fit(X).transform(X)
-    assert out["d"].isna().tolist() == [False, True, False]
-    assert not (out["d"] == "NaT").any()
-
-
-def test__timedelta__becomes_seconds_and_is_not_called_a_date() -> None:
-    """A duration is a quantity, not a point on a calendar -- unaffected by
-    `transform_dates`.
+def test__timedelta__becomes_seconds_regardless_of_transform_dates() -> None:
+    """A duration is a quantity, not a point on a calendar, so it needs no
+    opt-in and is never expanded.
     """
     X = pd.DataFrame({"d": pd.to_timedelta([1, 2, 3], unit="D")})
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        expander = DateTimeExpander(transform_dates=True).fit(X)
-        out = expander.transform(X)
+    expander = DateTimeExpander().fit(X)
+    out = expander.transform(X)
     assert expander.encoders_ == {}
     assert out["d"].tolist() == [86400.0, 172800.0, 259200.0]
 
 
-class TestWarnOnDatesHeldAsText:
-    """Unit tests for `_warn_on_dates_held_as_text`."""
+# --------------------------------------------------------------------------
+# Datetime dtypes: rejected by default, expanded with transform_dates=True
+# --------------------------------------------------------------------------
 
-    def test__some_columns__warn_with_names_and_remedies(self) -> None:
-        with pytest.warns(UserWarning, match="hold dates") as record:
-            date_encoding._warn_on_dates_held_as_text(["signed_on"])
-        message = str(record[0].message)
-        assert "'signed_on'" in message
-        assert "TRANSFORM_DATES" in message
-        assert "categorical_features_indices" in message
-
-    def test__no_columns__does_not_warn(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            date_encoding._warn_on_dates_held_as_text([])
+_DATETIME_COLUMNS = [
+    pytest.param(pd.date_range("2020-01-01", periods=3), id="datetime64"),
+    pytest.param(pd.date_range("2020-01-01", periods=3, tz="UTC"), id="tz aware"),
+    pytest.param(
+        pd.date_range("2020-01-01 13:45", periods=3, freq="D"), id="with time"
+    ),
+    pytest.param(pd.date_range("2020-01-01", periods=3).to_period("M"), id="period"),
+]
 
 
-def test__the_warning_belongs_to_fit__transform_is_silent() -> None:
-    """Which columns are read as text is settled once, by `fit`, so that is
-    where it is reported -- every `transform`, at fit time and at predict time
-    alike, is silent.
+@pytest.mark.parametrize("column", _DATETIME_COLUMNS)
+def test__fit__datetime_column__is_rejected_by_default(column: pd.Index) -> None:
+    X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
+    with pytest.raises(TabPFNValidationError, match="TRANSFORM_DATES"):
+        DateTimeExpander().fit(X)
+
+
+@pytest.mark.parametrize("column", _DATETIME_COLUMNS)
+def test__fit__datetime_column__expands_with_transform_dates(column: pd.Index) -> None:
+    X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
+    expander = DateTimeExpander(transform_dates=True).fit(X)
+    out = expander.transform(X)
+    assert expander.expanded_input_indices == [1]
+    assert out["d_year"].tolist() == [2020, 2020, 2020]
+    assert not any(pd.api.types.is_datetime64_any_dtype(d) for d in out.dtypes)
+
+
+def test__fit__rejection_names_the_columns_and_the_way_out() -> None:
+    X = pd.DataFrame({f"d{i}": _dates() for i in range(12)})
+    with pytest.raises(TabPFNValidationError) as excinfo:
+        DateTimeExpander().fit(X)
+    message = str(excinfo.value)
+    assert "'d0'" in message
+    assert "(and 2 more)" in message
+    assert "TRANSFORM_DATES" in message
+    assert ".astype(str)" in message
+
+
+def test__fit__declared_categorical_date_column__is_rejected() -> None:
+    """A datetime column expands into many numerical columns, so there is no
+    single column a categorical declaration could apply to.
     """
     X = _numeric_and_date_frame(_dates())
-    expander = DateTimeExpander()
-    with pytest.warns(UserWarning, match="hold dates"):
+    expander = DateTimeExpander(transform_dates=True, categorical_features_indices=[1])
+    with pytest.raises(TabPFNValidationError, match="categorical_features_indices"):
         expander.fit(X)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        out = expander.transform(X)
-        expander.transform(X)
-    assert out.iloc[0, 1] == "2020-01-01"
-
-
-def test__declared_categorical_date_column__is_not_reported_in_warning() -> None:
-    """With `transform_dates=False`, every date column is text-rendered
-    regardless of the declaration -- but only the undeclared one is named in
-    the warning; the declaration silences it for its own column, like a
-    declared-categorical text column already does.
-    """
-    X = pd.DataFrame(
-        {
-            "num": np.arange(N, dtype=float),
-            "declared": _dates(),
-            "undeclared": _dates(),
-        }
-    )
-    expander = DateTimeExpander(categorical_features_indices=[1])
-    with pytest.warns(UserWarning, match="hold dates") as record:
-        expander.fit(X)
-    message = str(record[0].message)
-    assert "'undeclared'" in message
-    assert "'declared'" not in message
-    assert expander.encoders_ == {}
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        DateTimeExpander(categorical_features_indices=[1, 2]).fit(X)
 
 
 # --------------------------------------------------------------------------
@@ -310,20 +233,6 @@ def test__fit__multiple_date_columns__each_expand() -> None:
     assert out.shape[1] == total_width
     # Nothing is kept, so the expanded block starts at position 0.
     assert expander.expanded_output_indices == list(range(total_width))
-
-
-def test__declared_categorical_date__is_not_expanded_even_with_transform_dates() -> (
-    None
-):
-    """A date column declared categorical stays excluded from expansion,
-    regardless of `transform_dates`.
-    """
-    X = _numeric_and_date_frame(_dates())
-    expander = DateTimeExpander(
-        transform_dates=True, categorical_features_indices=[1]
-    ).fit(X)
-    assert expander.encoders_ == {}
-    assert expander.transform(X).iloc[0, 1] == "2020-01-01"
 
 
 def test__output_feature_names__splices_kept_and_expanded_names() -> None:
@@ -391,6 +300,19 @@ def test__predict__no_native_value_for_a_fitted_date_column__becomes_nan() -> No
     out = expander.transform(_numeric_and_date_frame(["whatever, never inspected"] * N))
 
     assert np.isnan(out[expander.output_names_[1]].to_numpy()).all()
+
+
+def test__predict__datetime_column_that_was_not_a_date_at_fit__is_rejected() -> None:
+    """Which positions expand is settled at fit; a datetime dtype turning up
+    elsewhere at predict time cannot be expanded and is not silently read as
+    something else either.
+    """
+    X_fit = _numeric_and_date_frame(["a string, not a date"] * N)
+    expander = DateTimeExpander(transform_dates=True).fit(X_fit)
+    assert expander.encoders_ == {}
+
+    with pytest.raises(TabPFNValidationError, match="did not when `fit` ran"):
+        expander.transform(_numeric_and_date_frame(_dates()))
 
 
 def test__predict__native_value_has_a_missing_row__only_that_row_becomes_nan() -> None:
@@ -466,8 +388,13 @@ def test__fit_predict__transform_dates__expands_date_and_predicts(
         warnings.simplefilter("error")
         model.fit(X, y)
 
-    assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
-    assert 1 in model.date_expander_.expanded_input_indices  # "signed_on" is 2nd column
+    assert model.date_expander_.expanded_input_indices == [1]  # "signed_on"
+    # Every calendar feature is tagged numerical outright, however few distinct
+    # values it holds (e.g. `year` on a dataset spanning one year).
+    schema = model.inferred_feature_schema_
+    assert schema.indices_for(FeatureModality.NUMERICAL) == list(
+        range(len(schema.feature_names))
+    )
 
     if estimator_cls is TabPFNClassifier:
         out = model.predict_proba(X)
@@ -476,40 +403,10 @@ def test__fit_predict__transform_dates__expands_date_and_predicts(
     assert np.isfinite(out).all()
 
 
-def test__fit__low_cardinality_date__is_categorical_and_warns() -> None:
-    """The full integration this whole redesign exists for: a date column
-    with `TRANSFORM_DATES` off is read as an ordinary category by
-    cardinality, exactly like a same-shaped non-date string, and named as a
-    date (not generic free text) in the warning.
-    """
-    n = 60
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "signed_on": [
-                pd.Timestamp("2020-01-01") + pd.Timedelta(days=i % 3) for i in range(n)
-            ],
-        }
-    )
-    y = rng.integers(0, 2, size=n)
-
-    model = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.warns(UserWarning, match="hold dates") as record:
-        model.fit(X, y)
-
-    assert model.inferred_feature_schema_.features[1].modality is (
-        FeatureModality.CATEGORICAL
-    )
-    assert "'signed_on'" in str(record[0].message)
-    # Pins the stacklevel: the warning must blame this file's `fit` call, not
-    # a frame inside tabpfn.
-    assert record[0].filename == __file__
-
-
-def test__fit__declared_categorical_date__transform_dates_has_no_effect() -> None:
-    """A date column declared categorical must stay excluded from
-    `DatetimeEncoder` -- `TRANSFORM_DATES` must not override that intent.
+def test__fit__records_the_raw_input_shape_and_predict_checks_against_it() -> None:
+    """`feature_names_in_`/`n_features_in_` describe the frame the caller
+    passed, not the wider expanded one -- and a predict frame is checked
+    against that raw shape, before expansion could hide a mismatch.
     """
     n = 60
     rng = np.random.default_rng(0)
@@ -522,17 +419,54 @@ def test__fit__declared_categorical_date__transform_dates_has_no_effect() -> Non
     y = rng.integers(0, 2, size=n)
 
     model = TabPFNClassifier(
-        n_estimators=1,
-        device="cpu",
-        categorical_features_indices=[1],
-        inference_config={"TRANSFORM_DATES": True},
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
     )
     model.fit(X, y)
 
-    assert model.date_expander_.expanded_input_indices == []
-    assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
-    out = model.predict_proba(X)
-    assert np.isfinite(out).all()
+    assert list(model.feature_names_in_) == ["num", "signed_on"]
+    assert model.n_features_in_ == 2
+    assert len(model.inferred_feature_schema_.feature_names) > 2
+
+    with pytest.raises(TabPFNValidationError, match="feature names"):
+        model.predict(X.rename(columns={"signed_on": "renamed"}))
+    with pytest.raises(TabPFNValidationError, match="2 features"):
+        model.predict(X.to_numpy(dtype=object)[:, :1])
+
+
+def test__fit__datetime64_numpy_array__points_at_a_dataframe() -> None:
+    """Only a DataFrame column can be a date. A bare `datetime64` array has no
+    per-column dtype to recast, so it is rejected with the way out, rather
+    than with numpy's own promotion error.
+    """
+    n = 60
+    X = pd.date_range("2020-01-01", periods=n, freq="D").to_numpy().reshape(-1, 1)
+    y = np.arange(n) % 2
+
+    with pytest.raises(ValueError, match=r"pandas DataFrame.*TRANSFORM_DATES"):
+        TabPFNClassifier(n_estimators=1, device="cpu").fit(X, y)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit__datetime_column_without_transform_dates__raises_naming_the_flag(
+    estimator_cls: type,
+) -> None:
+    """With the flag off, a datetime column is a clear error at `fit`, not the
+    opaque numpy promotion error sklearn's validation would otherwise hit.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
+        }
+    )
+    y = _classification_or_regression_target(estimator_cls, rng, n)
+
+    model = estimator_cls(n_estimators=1, device="cpu")
+    with pytest.raises(TabPFNValidationError, match="'signed_on'") as excinfo:
+        model.fit(X, y)
+    assert "TRANSFORM_DATES" in str(excinfo.value)
 
 
 def test__fit_with_differentiable_input__leaves_a_usable_expander() -> None:

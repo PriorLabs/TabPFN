@@ -157,10 +157,9 @@ def _detect_feature_modality(
 ) -> FeatureModality:
     """Decide a single column's modality.
 
-    A date column never reaches here: `detect_feature_modalities` tags it
-    `NUMERICAL` outright via `provided_numerical_indices` if it was expanded,
-    or lets it fall through to this same heuristic as an ordinary string
-    otherwise (`DateTimeExpander` already rendered it to text).
+    A datetime column never reaches here: `DateTimeExpander` (date_encoding.py)
+    has already expanded it, and `detect_feature_modalities` tags the result
+    `NUMERICAL` outright via `provided_numerical_indices`.
     """
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
@@ -212,8 +211,8 @@ def _detect_feature_modality(
         f"values).\n"
         "Convert it to something this can read: a numeric dtype for a quantity, "
         "a string/category dtype for a label, or a datetime dtype for a point in "
-        "time (e.g. `df[col] = pd.to_datetime(df[col])`, or `.dt.to_timestamp()` "
-        "for a period)."
+        "time (e.g. `df[col] = pd.to_datetime(df[col])`, together with "
+        '`inference_config={"TRANSFORM_DATES": True}`).'
     )
 
 
@@ -225,7 +224,7 @@ def _classify_string_like_column(
     """Classify a string/categorical-dtype column as CATEGORICAL or TEXT.
 
     No content-based date guessing here: a column is only ever a date because
-    it arrived as a genuine datetime dtype, resolved by `DateTimeExpander`
+    it arrived as a genuine datetime dtype, expanded by `DateTimeExpander`
     (date_encoding.py) before this module ever runs. A string that merely
     looks like a date -- "2020-01-01" -- is just an ordinary string,
     classified by cardinality like any other.

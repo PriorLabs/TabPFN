@@ -236,16 +236,15 @@ def _unsupported_array_dtype_error(dtype: Any) -> ValueError:
     if dtype.kind in STRING_DTYPE_KINDS:
         return ValueError(f"String dtypes are not supported. Got dtype: {dtype}")
     if dtype.kind in TEMPORAL_DTYPE_KINDS:
-        # `DateTimeExpander` (date_encoding.py) recasts these, but per
-        # column and so only for a DataFrame; a bare temporal array never
-        # passes through it. Say what to do about it rather than name the
-        # dtype and stop.
+        # `DateTimeExpander` (date_encoding.py) expands these, but per column
+        # and so only for a DataFrame; a bare temporal array never passes
+        # through it. Say what to do about it rather than name the dtype and
+        # stop.
         return ValueError(
             f"Temporal dtypes are not supported directly. Got dtype: {dtype}. "
-            "Pass the data as a pandas DataFrame instead, where a datetime column "
-            "is read as a date and, with "
-            '`inference_config={"TRANSFORM_DATES": True}`, expanded into calendar '
-            "features."
+            "Pass the data as a pandas DataFrame with "
+            '`inference_config={"TRANSFORM_DATES": True}` instead, so that a '
+            "datetime column is expanded into calendar features."
         )
     return ValueError(f"Invalid dtype for X: {dtype}")
 

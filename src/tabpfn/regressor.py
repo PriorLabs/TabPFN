@@ -236,7 +236,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The column transformer used to preprocess categorical data to be numeric."""
 
     date_expander_: DateTimeExpander
-    """Expands or text-renders every temporal column, before validation runs."""
+    """Expands every datetime column into calendar features, before validation
+    runs."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -882,20 +883,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        # feature_names_in_/n_features_in_ must describe what the caller
-        # actually passed in, not TabPFN's internal (possibly wider,
-        # post-date-expansion) representation -- so they are read here, from
-        # the raw input, before date expansion runs. n_features_in_ is None
-        # only for an X whose column count can't be read at all (e.g. 1D),
-        # which the value validation below rejects with sklearn's message.
-        feature_names_in, n_features_in = extract_input_shape(X)
-        self.feature_names_in_ = feature_names_in
-        self.n_features_in_ = n_features_in
+        # Read off the raw input: these describe what the caller passed, not
+        # the (possibly wider) post-date-expansion representation.
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
-        # Expand or text-render every date column. Runs before the value
-        # validation below: sklearn's array machinery cannot assemble a
-        # `datetime64` column beside a numeric one into one array, so a
-        # genuine datetime column would not survive that call otherwise.
+        # Dates are resolved before sklearn validation, which cannot hold a
+        # `datetime64` column beside a numeric one in a single array.
         self.date_expander_ = DateTimeExpander(
             transform_dates=self.inference_config_.TRANSFORM_DATES,
             categorical_features_indices=self.categorical_features_indices or (),
@@ -903,10 +896,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X, y = ensure_compatible_fit_inputs_sklearn(
             self.date_expander_.transform(X), y, estimator=self, ensure_y_numeric=True
         )
-        # Only reached once X/y are already sklearn-validated, proper arrays:
-        # sparse/list/None/etc. inputs sklearn's own compatibility checks feed
-        # in must fail with *its* well-defined message, not a bare
-        # AttributeError/TypeError from `len(X)`/`X.shape` here.
+        # After sklearn validation, so a malformed X/y fails with its message.
         validate_dataset_size(
             X=X,
             y=y,
@@ -920,7 +910,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=self.date_expander_.output_feature_names(feature_names_in),
+            feature_names=self.date_expander_.output_feature_names(
+                self.feature_names_in_
+            ),
             provided_categorical_indices=self.date_expander_.output_indices_for(
                 self.categorical_features_indices or ()
             ),

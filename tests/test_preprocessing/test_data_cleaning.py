@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import warnings
 from unittest import mock
 
 import numpy as np
@@ -1119,70 +1118,6 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     out = fix_dtypes(frame, cat_indices=None)
 
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
-
-
-@pytest.mark.parametrize(
-    ("label", "column"),
-    [
-        ("datetime64", pd.date_range("2020-01-01", periods=50)),
-        ("tz aware", pd.date_range("2020-01-01", periods=50, tz="UTC")),
-        ("period", pd.date_range("2020-01-01", periods=50).to_period("M")),
-        ("timedelta", pd.to_timedelta(np.arange(50), unit="D")),
-    ],
-)
-def test__classifier_fit__native_temporal_column__is_read_not_rejected(
-    label: str, column: pd.Index
-) -> None:
-    """Regression: a native temporal column beside another dtype used to crash.
-
-    `validate_data` converts the whole frame to one numpy array, and numpy has
-    no dtype that unifies `datetime64` with a numeric or string column, so the
-    frame could not even be assembled. `DateTimeExpander` (date_encoding.py)
-    recasts the column before validation ever sees it.
-    """
-    n = 50
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame({"num": rng.normal(size=n), "signed_on": column})
-    y = rng.integers(0, 2, n)
-
-    clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        clf.fit(X, y)
-        assert clf.predict(X).shape == (n,), label
-
-
-@pytest.mark.parametrize("transform_dates", [False, True])
-def test__classifier_fit__native_datetime_column__is_recognized_as_a_date(
-    *, transform_dates: bool
-) -> None:
-    """A datetime dtype is a date outright -- no string heuristic has to agree.
-
-    With `TRANSFORM_DATES` off it is demoted like any other detected date, and
-    named in that warning; with it on, it expands into calendar features.
-    """
-    n = 50
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {"num": rng.normal(size=n), "signed_on": pd.date_range("2020-01-01", periods=n)}
-    )
-    y = rng.integers(0, 2, n)
-
-    clf = TabPFNClassifier(
-        n_estimators=1,
-        device="cpu",
-        inference_config={"TRANSFORM_DATES": transform_dates},
-    )
-    if transform_dates:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            clf.fit(X, y)
-        names = clf.inferred_feature_schema_.feature_names
-        assert len(names) > 2
-        assert any(name.startswith("input_signed_on_") for name in names)
-    else:
-        with pytest.warns(UserWarning, match="hold dates"):
-            clf.fit(X, y)
 
 
 def test__clean_data_transform__matches_the_general_path_on_numeric_input() -> None:

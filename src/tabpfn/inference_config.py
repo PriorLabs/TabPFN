@@ -99,11 +99,12 @@ class InferenceConfig:
     this default independently."""
 
     TRANSFORM_DATES: bool = False
-    """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
-    or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`,
-    instead of read as a plain category or text. Only a real datetime dtype
-    counts -- a string column that merely looks like a date (e.g. "2020-01-01")
-    is always read as a plain category or text, regardless of this flag."""
+    """Whether a column holding a datetime dtype (`datetime64`, tz-aware, or
+    `period`) is expanded into calendar features (year, month, day, weekday, ...)
+    via `skrub.DatetimeEncoder`. Datetime columns are only accepted with this on;
+    with it off, `fit` rejects them with a `TabPFNValidationError`. A string
+    column that merely looks like a date (e.g. "2020-01-01") is never treated as
+    one and is read as a plain category or text, regardless of this flag."""
 
     SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
     """The temperature applied to the model's logits at predict time. Lower values
