@@ -287,19 +287,19 @@ def test__predict__differently_labelled_date_column__keeps_the_fit_time_names() 
     assert expander.output_names_[1] == fitted_names
 
 
-def test__predict__no_native_value_for_a_fitted_date_column__becomes_nan() -> None:
-    """A predict-time column can drift dtype like any other fitted column,
-    and detection has already moved on by then -- there is no re-detection
-    to fall back to. A fitted date column that is no longer a genuine
-    datetime dtype degrades to NaN, the same as any other missing value,
-    rather than a best-effort parse of whatever is actually sitting there.
+def test__predict__no_native_value_for_a_fitted_date_column__is_rejected() -> None:
+    """A fitted date column that is no longer a genuine datetime dtype -- say,
+    read back from CSV as strings -- is rejected. Silently reading it as
+    missing would hand the model all-NaN calendar features and near-uniform
+    predictions with nothing to point at the cause.
     """
     X_fit = _numeric_and_date_frame(_dates())
     expander = DateTimeExpander(transform_dates=True).fit(X_fit)
 
-    out = expander.transform(_numeric_and_date_frame(["whatever, never inspected"] * N))
-
-    assert np.isnan(out[expander.output_names_[1]].to_numpy()).all()
+    with pytest.raises(
+        TabPFNValidationError, match=r"held dates .* but do not now: 'signed_on'"
+    ):
+        expander.transform(_numeric_and_date_frame(_dates().astype(str)))
 
 
 def test__predict__datetime_column_that_was_not_a_date_at_fit__is_rejected() -> None:
@@ -347,6 +347,62 @@ def test__predict__native_value_has_a_missing_row__only_that_row_becomes_nan() -
     assert np.isnan(values[3]).all()
     other_rows = [i for i in range(N) if i != 3]
     assert np.isfinite(values[other_rows]).all()
+
+
+def test__fit_transform__matches_fit_then_transform() -> None:
+    """`fit_transform` exists so a fit encodes each date column once; it must
+    land on the same frame and the same fitted state as the two-step form.
+    """
+    X = _numeric_and_date_frame(_dates())
+    X.columns = ["num", "num"]  # positional handling must survive here too
+    two_step = DateTimeExpander(transform_dates=True).fit(X)
+    one_step = DateTimeExpander(transform_dates=True)
+
+    out = one_step.fit_transform(X)
+
+    pd.testing.assert_frame_equal(out, two_step.transform(X))
+    assert one_step.output_names_ == two_step.output_names_
+    assert one_step.n_input_columns_ == two_step.n_input_columns_
+
+
+def test__integer_column_labels__expand() -> None:
+    """A frame with default (integer) column labels is the common case for
+    `pd.DataFrame(array)`; skrub builds output names by string concatenation
+    onto the label, so the label has to be handed over as a string.
+    """
+    X = pd.DataFrame({0: np.arange(N, dtype=float), 1: _dates()})
+
+    out = DateTimeExpander(transform_dates=True).fit_transform(X)
+
+    assert out.shape[0] == N
+    assert out.columns[0] == 0
+    assert len(out.columns) > 2
+    assert all(name.startswith("1_") for name in out.columns[1:])
+
+
+def test__datetime64_array__is_rejected_pointing_at_a_dataframe() -> None:
+    """A bare `datetime64` array has no per-column dtype to expand, so no flag
+    can help; say so here, before modality detection reports the same array
+    as an unreadable dtype and suggests converting it to what it already is.
+    """
+    X = _dates().to_numpy().reshape(-1, 1)
+
+    for transform_dates in (False, True):
+        with pytest.raises(TabPFNValidationError, match=r"DataFrame.*TRANSFORM_DATES"):
+            DateTimeExpander(transform_dates=transform_dates).fit(X)
+
+
+def test__timedelta64_array__becomes_seconds() -> None:
+    """A duration array is read as seconds, the same as a duration column."""
+    durations = pd.to_timedelta(np.arange(N), unit="D")
+    as_array = durations.to_numpy().reshape(-1, 1)
+    as_frame = pd.DataFrame({"d": durations})
+
+    from_array = DateTimeExpander().fit_transform(as_array)
+    from_frame = DateTimeExpander().fit_transform(as_frame)
+
+    np.testing.assert_array_equal(from_array[:, 0], np.arange(N) * 86400.0)
+    np.testing.assert_array_equal(from_frame["d"].to_numpy(), from_array[:, 0])
 
 
 # --------------------------------------------------------------------------

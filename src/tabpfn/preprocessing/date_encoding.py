@@ -11,15 +11,20 @@ column that merely looks like a date is never treated as one.
 
 This runs before sklearn's `check_array`/`check_X_y`, which cannot hold a
 `datetime64` column beside a numeric one in a single array. The expander is
-used like a `ColumnTransformer`: `fit` on the raw fit input decides which
-columns expand, and `transform` reapplies that decision to the fit input and
+used like a `ColumnTransformer`: `fit_transform` on the raw fit input decides
+which columns expand and expands them, and `transform` reapplies that decision
 to every predict input.
+
+Only `TabPFNClassifier` and `TabPFNRegressor` run this. The fine-tuning
+estimators do not: they accept no `inference_config`, so a datetime column
+must be converted before fine-tuning.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import _num_features
@@ -29,8 +34,6 @@ from tabpfn.errors import TabPFNValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
-
-    import numpy as np
 
     from tabpfn.constants import XType
 
@@ -65,17 +68,16 @@ def _make_datetime_encoder() -> DatetimeEncoder:
 class DateTimeExpander:
     """Expands every datetime column of an input into calendar features.
 
-    Used like a `ColumnTransformer`: `fit` it on the raw fit input, then
-    `transform` that same input and every later predict input. `fit` settles
-    which columns are expanded, once, and rejects a datetime column it is not
-    allowed to expand; `transform` reapplies that decision positionally,
-    exactly like `ordinal_encoder_`.
+    Used like a `ColumnTransformer`: `fit_transform` it on the raw fit input,
+    then `transform` every later predict input. Fitting settles which columns
+    are expanded, once, and rejects a datetime column it is not allowed to
+    expand; `transform` reapplies that decision positionally, exactly like
+    `ordinal_encoder_`.
 
-    A predict-time position that was expanded at fit time but is no longer a
-    genuine datetime dtype degrades to a `NaN` calendar feature, the same as
-    any other missing value -- there is no attempt to parse it from whatever
-    is sitting there instead, since a column is a date because of its dtype,
-    at fit and at predict alike.
+    A column is a date because of its dtype, at fit and at predict alike. A
+    position that was expanded at fit time must therefore still carry a
+    datetime dtype at predict time; anything else there is rejected rather
+    than parsed or silently read as missing.
 
     Attributes:
         encoders_: Raw column position -> the encoder fit on that column.
@@ -112,7 +114,9 @@ class DateTimeExpander:
         """Fit one encoder for every datetime column, or reject the input.
 
         Nothing about `X` is inspected but its dtypes, so this is safe to call
-        before any validation.
+        before any validation. Prefer `fit_transform` when the transformed fit
+        input is needed too: fitting an encoder already encodes its column, and
+        `fit_transform` keeps that result instead of encoding a second time.
 
         Args:
             X: The input data, before any dtype fixing. Only a `DataFrame` can
@@ -124,49 +128,28 @@ class DateTimeExpander:
 
         Raises:
             TabPFNValidationError: If `X` holds a datetime column while
-                `transform_dates` is off, or one that is declared categorical.
+                `transform_dates` is off, or one that is declared categorical;
+                or if `X` is a `datetime64` array, which no flag can expand.
         """
-        self.encoders_ = {}
-        self.output_names_ = {}
-        self.n_input_columns_ = _num_columns_or_none(X)
-        if not isinstance(X, pd.DataFrame):
-            return self
-
-        date_indices = _datetime_column_indices(X)
-        if date_indices and not self.transform_dates:
-            raise TabPFNValidationError(
-                f"These columns hold dates (datetime dtype), which are only read "
-                f'with `inference_config={{"TRANSFORM_DATES": True}}`: '
-                f"{_format_names([X.columns[i] for i in date_indices])}.\n"
-                "Set that flag to expand each of them into calendar features "
-                "(year, month, day, weekday, ...), or convert them yourself first "
-                "(e.g. `.astype(str)` to read them as plain categories)."
-            )
-        declared_categorical = set(self.categorical_features_indices)
-        if declared := [i for i in date_indices if i in declared_categorical]:
-            raise TabPFNValidationError(
-                f"These columns hold dates (datetime dtype) but are listed in "
-                f"`categorical_features_indices`: "
-                f"{_format_names([X.columns[i] for i in declared])}.\n"
-                "A datetime column is expanded into calendar features, so it "
-                "cannot be declared categorical. Drop it from "
-                "`categorical_features_indices`, or convert it to strings yourself "
-                "first (e.g. `.astype(str)`)."
-            )
-
-        for position in date_indices:
-            encoder = _make_datetime_encoder()
-            encoded = pd.DataFrame(
-                encoder.fit_transform(_as_timestamp(X.iloc[:, position]))
-            )
-            self.encoders_[position] = encoder
-            # Snapshotted, rather than read back off the encoder when needed:
-            # skrub's `DatetimeEncoder.transform` reassigns its own
-            # `all_outputs_` (what `get_feature_names_out` returns) from the
-            # label of the column it was just handed, so those names drift as
-            # soon as a predict-time frame labels the column differently.
-            self.output_names_[position] = list(encoded.columns)
+        self._fit(X)
         return self
+
+    def fit_transform(self, X: XType) -> XType:
+        """`fit(X).transform(X)`, encoding each datetime column only once.
+
+        Args:
+            X: The input data, before any dtype fixing.
+
+        Returns:
+            `X`, transformed as `transform` would.
+
+        Raises:
+            TabPFNValidationError: As `fit`.
+        """
+        expanded_blocks = self._fit(X)
+        if not isinstance(X, pd.DataFrame):
+            return self.transform(X)
+        return self._assemble(X, expanded_blocks)
 
     def transform(self, X: XType) -> XType:
         """Expand every fitted datetime column and turn durations into seconds.
@@ -184,6 +167,7 @@ class DateTimeExpander:
                 expanded is its decision to make, not this one's.
             TabPFNValidationError: If `X` holds a datetime column at a position
                 `fit` did not expand, i.e. one that was not a date at fit time;
+                if a position `fit` expanded no longer holds a datetime dtype;
                 or if `fit` expanded columns and `X` is not a `DataFrame`, which
                 is the only input that can carry them.
         """
@@ -205,6 +189,8 @@ class DateTimeExpander:
                     f"predict input must be a pandas DataFrame carrying those "
                     f"columns with a datetime dtype; got {type(X).__name__}."
                 )
+            if isinstance(X, np.ndarray) and X.dtype.kind == "m":
+                return X / np.timedelta64(1, "s")
             return X
 
         date_indices = _datetime_column_indices(X)
@@ -216,24 +202,19 @@ class DateTimeExpander:
                 "into calendar features; pass every column with the dtype it had "
                 "at fit time."
             )
-        duration_indices = [
-            i
-            for i, dtype in enumerate(X.dtypes)
-            if pd.api.types.is_timedelta64_dtype(dtype) and i not in self.encoders_
-        ]
-        if not duration_indices and not self.encoders_:
-            return X
-
+        if missing := [i for i in self.expanded_input_indices if i not in date_indices]:
+            raise TabPFNValidationError(
+                f"These columns held dates (datetime dtype) when `fit` ran but do "
+                f"not now: {_format_names([X.columns[i] for i in missing])}.\n"
+                "A column expanded into calendar features at fit time must carry "
+                "a datetime dtype at predict time too; convert it first (e.g. "
+                "`pd.to_datetime`) rather than passing it as strings or numbers."
+            )
         expanded_blocks = {
-            position: self._encode_block(X, position, is_date=position in date_indices)
-            for position in sorted(self.encoders_)
+            position: self._encode_block(X, position)
+            for position in self.expanded_input_indices
         }
-        durations_in_seconds = {
-            position: X.iloc[:, position].dt.total_seconds().to_numpy()
-            for position in duration_indices
-        }
-        recast_frame = _replace_columns_positionally(X, durations_in_seconds)
-        return _drop_expanded_and_append(recast_frame, expanded_blocks)
+        return self._assemble(X, expanded_blocks)
 
     @property
     def expanded_input_indices(self) -> list[int]:
@@ -278,30 +259,104 @@ class DateTimeExpander:
         kept = [name for i, name in enumerate(raw_names) if i not in self.encoders_]
         expanded = [
             name
-            for position in sorted(self.encoders_)
+            for position in self.expanded_input_indices
             for name in self.output_names_[position]
         ]
         return [*kept, *expanded]
 
-    def _encode_block(
-        self, X: pd.DataFrame, position: int, *, is_date: bool
-    ) -> pd.DataFrame:
-        """One expanded column's calendar features, named as they were at fit."""
-        names = self.output_names_[position]
-        if is_date:
-            encoded = pd.DataFrame(
-                self.encoders_[position].transform(_as_timestamp(X.iloc[:, position]))
+    def _fit(self, X: XType) -> dict[int, pd.DataFrame]:
+        """Fit the encoders; return each expanded column's calendar features."""
+        self.encoders_ = {}
+        self.output_names_ = {}
+        self.n_input_columns_ = _num_columns_or_none(X)
+        if not isinstance(X, pd.DataFrame):
+            _reject_datetime_array(X)
+            return {}
+
+        date_indices = _datetime_column_indices(X)
+        if date_indices and not self.transform_dates:
+            raise TabPFNValidationError(
+                f"These columns hold dates (datetime dtype), which are only read "
+                f'with `inference_config={{"TRANSFORM_DATES": True}}`: '
+                f"{_format_names([X.columns[i] for i in date_indices])}.\n"
+                "Set that flag to expand each of them into calendar features "
+                "(year, month, day, weekday, ...), or convert them yourself first "
+                "(e.g. `.astype(str)` to read them as plain categories)."
             )
-        else:
-            # Fit expanded this position, but it is no longer a genuine
-            # datetime dtype right now -- degrade to NaN rather than guess.
-            encoded = pd.DataFrame({name: [float("nan")] * len(X) for name in names})
-        return encoded.set_axis(names, axis=1).reset_index(drop=True)
+        declared_categorical = set(self.categorical_features_indices)
+        if declared := [i for i in date_indices if i in declared_categorical]:
+            raise TabPFNValidationError(
+                f"These columns hold dates (datetime dtype) but are listed in "
+                f"`categorical_features_indices`: "
+                f"{_format_names([X.columns[i] for i in declared])}.\n"
+                "A datetime column is expanded into calendar features, so it "
+                "cannot be declared categorical. Drop it from "
+                "`categorical_features_indices`, or convert it to strings yourself "
+                "first (e.g. `.astype(str)`)."
+            )
+
+        expanded_blocks: dict[int, pd.DataFrame] = {}
+        for position in date_indices:
+            encoder = _make_datetime_encoder()
+            encoded = pd.DataFrame(
+                encoder.fit_transform(_as_timestamp(X.iloc[:, position]))
+            )
+            self.encoders_[position] = encoder
+            # Snapshotted, rather than read back off the encoder when needed:
+            # skrub's `DatetimeEncoder.transform` reassigns its own
+            # `all_outputs_` (what `get_feature_names_out` returns) from the
+            # label of the column it was just handed, so those names drift as
+            # soon as a predict-time frame labels the column differently.
+            self.output_names_[position] = list(encoded.columns)
+            expanded_blocks[position] = encoded.reset_index(drop=True)
+        return expanded_blocks
+
+    def _encode_block(self, X: pd.DataFrame, position: int) -> pd.DataFrame:
+        """One expanded column's calendar features, named as they were at fit."""
+        encoded = pd.DataFrame(
+            self.encoders_[position].transform(_as_timestamp(X.iloc[:, position]))
+        )
+        return encoded.set_axis(self.output_names_[position], axis=1).reset_index(
+            drop=True
+        )
+
+    def _assemble(
+        self, X: pd.DataFrame, expanded_blocks: dict[int, pd.DataFrame]
+    ) -> pd.DataFrame:
+        """Turn durations into seconds, then swap expanded columns for their blocks."""
+        duration_indices = [
+            i
+            for i, dtype in enumerate(X.dtypes)
+            if pd.api.types.is_timedelta64_dtype(dtype) and i not in self.encoders_
+        ]
+        if not duration_indices and not expanded_blocks:
+            return X
+        durations_in_seconds = {
+            position: X.iloc[:, position].dt.total_seconds().to_numpy()
+            for position in duration_indices
+        }
+        recast_frame = _replace_columns_positionally(X, durations_in_seconds)
+        return _drop_expanded_and_append(recast_frame, expanded_blocks)
 
 
 def _datetime_column_indices(X: pd.DataFrame) -> list[int]:
     """Positions of the columns holding points in time."""
     return [i for i, dtype in enumerate(X.dtypes) if _is_datetime_like_dtype(dtype)]
+
+
+def _reject_datetime_array(X: XType) -> None:
+    """Reject a `datetime64` array: only a `DataFrame` column can be expanded.
+
+    Without this, the array reaches modality detection, which cannot read a
+    datetime dtype and says so in terms of a column that is already a date.
+    """
+    if isinstance(X, np.ndarray) and X.dtype.kind == "M":
+        raise TabPFNValidationError(
+            f"Got a numpy array of dtype {X.dtype}, which holds dates. Only a "
+            "pandas DataFrame column can be expanded into calendar features: pass "
+            'the data as a DataFrame with `inference_config={"TRANSFORM_DATES": '
+            "True}` instead."
+        )
 
 
 def _format_names(column_names: list[Any]) -> str:
@@ -314,14 +369,16 @@ def _format_names(column_names: list[Any]) -> str:
 
 
 def _as_timestamp(column: pd.Series) -> pd.Series:
-    """A point-in-time column, as plain (non-period) timestamps.
+    """A point-in-time column, as plain (non-period) timestamps under a string name.
 
     A period is a span, not an instant; its start is the instant that orders
-    identically, which is all the calendar features need.
+    identically, which is all the calendar features need. The name is made a
+    string because skrub builds its output names by concatenating onto it,
+    which fails on an integer label (e.g. a frame with default columns).
     """
     if isinstance(column.dtype, pd.PeriodDtype):
-        return column.dt.to_timestamp()
-    return column
+        column = column.dt.to_timestamp()
+    return column.rename(str(column.name))
 
 
 def _num_columns_or_none(X: XType) -> int | None:

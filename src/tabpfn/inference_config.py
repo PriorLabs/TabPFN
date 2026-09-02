@@ -104,7 +104,11 @@ class InferenceConfig:
     via `skrub.DatetimeEncoder`. Datetime columns are only accepted with this on;
     with it off, `fit` rejects them with a `TabPFNValidationError`. A string
     column that merely looks like a date (e.g. "2020-01-01") is never treated as
-    one and is read as a plain category or text, regardless of this flag."""
+    one and is read as a plain category or text, regardless of this flag.
+
+    Only `TabPFNClassifier` and `TabPFNRegressor` honor this. The fine-tuning
+    estimators accept no `inference_config` and do not expand dates; convert a
+    datetime column yourself before fine-tuning."""
 
     SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
     """The temperature applied to the model's logits at predict time. Lower values

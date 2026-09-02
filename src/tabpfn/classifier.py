@@ -751,9 +751,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.date_expander_ = DateTimeExpander(
             transform_dates=self.inference_config_.TRANSFORM_DATES,
             categorical_features_indices=self.categorical_features_indices or (),
-        ).fit(X)
+        )
         X, y = ensure_compatible_fit_inputs_sklearn(
-            self.date_expander_.transform(X), y, estimator=self, ensure_y_numeric=False
+            self.date_expander_.fit_transform(X),
+            y,
+            estimator=self,
+            ensure_y_numeric=False,
         )
         # After sklearn validation, so a malformed X/y fails with its message.
         validate_dataset_size(
