@@ -297,25 +297,23 @@ class TestExpansionAtPredictTime:
 
         assert list(out.columns) == list(fitted.columns)
 
-    def test__position_that_is_no_longer_a_date__becomes_nan_features(self) -> None:
-        transformer = DateTransformer(transform_dates=True)
-        fitted = transformer.fit_transform(
-            _frame(pd.date_range("2020-01-01", periods=3))
-        )
-
-        out = transformer.transform(_frame(["not", "a", "date"]))
-
-        assert list(out.columns) == list(fitted.columns)
-        assert out[transformer.feature_names_out_[1:]].isna().all().all()
-        # The column that was never a date is untouched.
-        assert out["num"].tolist() == [1.0, 2.0, 3.0]
-
-    def test__date_at_a_position_that_was_not_one_at_fit__is_refused(self) -> None:
-        """No encoder was fit for it, so there is nothing to expand it with."""
+    def test__position_that_is_no_longer_a_date__is_refused(self) -> None:
+        """The encoder fitted there needs dates; strings are not parsed for it."""
         transformer = DateTransformer(transform_dates=True)
         transformer.fit_transform(_frame(pd.date_range("2020-01-01", periods=3)))
 
-        with pytest.raises(TabPFNValidationError, match=r"0 \('num'\)"):
+        with pytest.raises(TabPFNValidationError, match="but do not now") as excinfo:
+            transformer.transform(_frame(["2020-01-01", "2020-01-02", "2020-01-03"]))
+        assert "1 ('date')" in str(excinfo.value)
+
+    def test__date_at_a_position_that_was_not_one_at_fit__is_refused(self) -> None:
+        """No encoder was fit for it, so there is nothing to expand it with, and
+        the flag is already on, so the error must not point at it.
+        """
+        transformer = DateTransformer(transform_dates=True)
+        transformer.fit_transform(_frame(pd.date_range("2020-01-01", periods=3)))
+
+        with pytest.raises(TabPFNValidationError, match="did not when") as excinfo:
             transformer.transform(
                 pd.DataFrame(
                     {
@@ -324,6 +322,25 @@ class TestExpansionAtPredictTime:
                     }
                 )
             )
+        assert "0 ('num')" in str(excinfo.value)
+        assert "TRANSFORM_DATES" not in str(excinfo.value)
+
+    def test__array_after_an_expanding_fit__is_refused(self) -> None:
+        """Its raw width matches the fit input, so only the transformer can tell
+        that it cannot be widened to the expanded layout.
+        """
+        transformer = DateTransformer(transform_dates=True)
+        transformer.fit_transform(_frame(pd.date_range("2020-01-01", periods=3)))
+
+        with pytest.raises(TabPFNValidationError, match="has to be a DataFrame"):
+            transformer.transform(np.zeros((3, 2)))
+
+    def test__array_after_a_fit_that_expanded_nothing__passes(self) -> None:
+        transformer = DateTransformer(transform_dates=True)
+        transformer.fit_transform(_frame([1.0, 2.0, 3.0]))
+
+        X = np.zeros((3, 2))
+        assert transformer.transform(X) is X
 
 
 class TestInterface:
@@ -464,6 +481,9 @@ def test__fit_with_transform_dates__reports_the_caller_s_own_columns(
     # Positional input has no names to check, only a width.
     with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
         model.predict(np.zeros((10, 3)))
+    # The right width, but no columns to expand.
+    with pytest.raises(TabPFNValidationError, match="has to be a DataFrame"):
+        model.predict(np.zeros((10, 2)))
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])

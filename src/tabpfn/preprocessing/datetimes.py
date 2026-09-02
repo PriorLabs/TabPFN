@@ -143,11 +143,11 @@ class DateTransformer:
     def transform(self, X: XType) -> XType:
         """Reapply the conversion `fit` decided on, so the width holds.
 
-        A position expanded at fit that no longer holds a point in time degrades
-        to `NaN` calendar features, like any other missing value: there is no
-        attempt to parse whatever is sitting there instead. A point in time at a
-        position that held something else at fit has no encoder to go through,
-        so it is refused whatever the flag: the model was not fit on a date there.
+        Which positions hold a point in time has to match what `fit` saw: a date
+        where there was none has no encoder to go through, and a position that
+        was expanded needs a date to feed the encoder it has. Either mismatch is
+        refused rather than guessed at, since the model was fit on a frame of
+        one particular shape.
 
         Args:
             X: The data, before any dtype fixing.
@@ -155,14 +155,24 @@ class DateTransformer:
         Raises:
             NotFittedError: If `fit` has not run yet; which columns are expanded
                 is its decision.
-            TabPFNValidationError: On a point in time no fitted encoder covers.
+            TabPFNValidationError: If `X`'s points in time sit at other positions
+                than at fit, or if `fit` expanded columns and `X` is not a
+                `DataFrame`, the only input that can carry them.
         """
         self._check_is_fitted()
         if not isinstance(X, pd.DataFrame):
             _refuse_datetime_array(X)
+            _refuse_array_after_expansion(X, self.expanded_indices)
             return _duration_array_to_seconds(X)
         instants = self._instant_positions(X)
-        _refuse(X, [i for i in instants if i not in self.fitted_columns_])
+        if not self._transform_dates:
+            _refuse(X, instants)
+        _refuse_unexpected_dates(
+            X, [i for i in instants if i not in self.fitted_columns_]
+        )
+        _refuse_missing_dates(
+            X, [i for i in self.expanded_indices if i not in instants]
+        )
         blocks = [
             self._apply_one(X.iloc[:, i], self.fitted_columns_[i])
             for i in self.expanded_indices
@@ -307,11 +317,7 @@ class DateTransformer:
         column: pd.Series,
         fitted: FittedDateColumn,
     ) -> pd.DataFrame:
-        """Reapply one fitted encoder, or produce its features as all-`NaN`."""
-        if not is_instant_dtype(column.dtype):
-            return pd.DataFrame(
-                {name: np.full(len(column), np.nan) for name in fitted.output_names}
-            )
+        """Reapply one fitted encoder, naming its features as at fit."""
         encoded = pd.DataFrame(fitted.encoder.transform(as_timestamp(column)))
         return encoded.set_axis(fitted.output_names, axis=1).reset_index(drop=True)
 
@@ -326,9 +332,9 @@ def _refuse(X: pd.DataFrame, positions: Sequence[int]) -> None:
     """
     if not positions:
         return
-    columns = ", ".join(f"{i} ({X.columns[i]!r})" for i in positions)
     raise TabPFNValidationError(
-        f"These columns hold datetimes, which TabPFN does not support: {columns}. "
+        f"These columns hold datetimes, which TabPFN does not support: "
+        f"{_name_columns(X, positions)}. "
         'Set `inference_config={"TRANSFORM_DATES": True}` to expand them into '
         "calendar features, or preprocess them yourself first."
     )
@@ -343,14 +349,66 @@ def _refuse_declared_categorical(X: pd.DataFrame, positions: Sequence[int]) -> N
     """
     if not positions:
         return
-    columns = ", ".join(f"{i} ({X.columns[i]!r})" for i in positions)
     raise TabPFNValidationError(
         f"These columns hold datetimes but are listed in "
-        f"`categorical_features_indices`: {columns}. A datetime column is "
+        f"`categorical_features_indices`: {_name_columns(X, positions)}. A "
+        "datetime column is "
         "expanded into calendar features, so it cannot be a category as well: "
         "drop it from `categorical_features_indices`, or cast it to strings "
         "yourself first."
     )
+
+
+def _refuse_unexpected_dates(X: pd.DataFrame, positions: Sequence[int]) -> None:
+    """Raise on points in time at `positions`, where `fit` saw none.
+
+    No encoder was fitted for them, so there is nothing to expand them with; the
+    frame the model was fit on had something else there.
+    """
+    if not positions:
+        return
+    raise TabPFNValidationError(
+        f"These columns hold datetimes now but did not when `fit` ran: "
+        f"{_name_columns(X, positions)}. Only a column that held datetimes at fit "
+        "is expanded into calendar features: pass every column with the dtype it "
+        "had at fit."
+    )
+
+
+def _refuse_missing_dates(X: pd.DataFrame, positions: Sequence[int]) -> None:
+    """Raise on `positions` that `fit` expanded but that hold no points in time now.
+
+    The encoder fitted there needs dates to run on; whatever is sitting there
+    instead is not parsed, and not read as missing either.
+    """
+    if not positions:
+        return
+    raise TabPFNValidationError(
+        f"These columns held datetimes when `fit` ran but do not now: "
+        f"{_name_columns(X, positions)}. A column expanded into calendar features "
+        "at fit needs datetimes at predict too: convert it first (e.g. with "
+        "`pd.to_datetime`) rather than passing strings or numbers."
+    )
+
+
+def _refuse_array_after_expansion(X: XType, expanded: Sequence[int]) -> None:
+    """Raise on a non-`DataFrame` predict input once `fit` expanded columns.
+
+    Its raw width may match `n_features_in_`, so the shape check upstream let it
+    through, but nothing here can widen an array to the expanded layout.
+    """
+    if not expanded:
+        return
+    raise TabPFNValidationError(
+        f"`fit` expanded the datetime columns at positions {list(expanded)} into "
+        "calendar features, so predict input has to be a DataFrame carrying those "
+        f"columns as datetimes; got {type(X).__name__}."
+    )
+
+
+def _name_columns(X: pd.DataFrame, positions: Sequence[int]) -> str:
+    """Name each of `positions` by index and label, e.g. `1 ('signed_on')`."""
+    return ", ".join(f"{i} ({X.columns[i]!r})" for i in positions)
 
 
 def _refuse_datetime_array(X: XType) -> None:
