@@ -823,9 +823,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             for _ in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
-        # A tensor holds no dates, so there is nothing to fit; set anyway, so every
+        # A tensor holds no dates, so this fits nothing; set anyway, so every
         # predict path converts through it without first checking for one.
-        self.date_transformer_ = DateTransformer()
+        self.date_transformer_ = DateTransformer().fit(X)
         self.n_features_in_ = n_features
 
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
@@ -881,8 +881,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             categorical_indices=self.categorical_features_indices,
             transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
-        dates = date_transformer.fit_transform(X)
-        X = dates.X
+        X = date_transformer.fit_transform(X)
 
         X, y, _ = ensure_compatible_fit_inputs(
             X,
@@ -900,8 +899,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=dates.feature_names,
-            provided_categorical_indices=dates.categorical_indices,
+            feature_names=date_transformer.feature_names_out_,
+            provided_categorical_indices=date_transformer.output_indices(
+                self.categorical_features_indices
+            ),
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -1034,9 +1035,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
-        # Preprocessed tensors hold no dates either, so a transformer with nothing
-        # fitted is the right one: it refuses a date and converts a duration.
-        self.date_transformer_ = DateTransformer()
+        # Preprocessed tensors hold no dates either, so this fits nothing: the
+        # transformer refuses a date and converts a duration, like any fitted one.
+        self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(

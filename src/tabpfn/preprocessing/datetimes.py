@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+from sklearn.exceptions import NotFittedError
 from skrub import DatetimeEncoder
 
 from tabpfn.errors import TabPFNValidationError
@@ -31,24 +32,7 @@ if TYPE_CHECKING:
 
     from tabpfn.constants import XType
 
-__all__ = ["DateConversion", "DateTransformer"]
-
-
-@dataclasses.dataclass(frozen=True)
-class DateConversion:
-    """What `DateTransformer.fit_transform` did, as the fit path needs it.
-
-    Attributes:
-        X: The converted data.
-        feature_names: `X`'s column labels as strings, in order, or `None` when
-            the input was not a `DataFrame` and so has no labels.
-        categorical_indices: The caller's declared categorical indices, moved to
-            where those columns ended up.
-    """
-
-    X: XType
-    feature_names: list[str] | None
-    categorical_indices: list[int] | None
+__all__ = ["DateTransformer"]
 
 
 @dataclasses.dataclass
@@ -69,8 +53,8 @@ class DateTransformer:
 
     Not a `PreprocessingStep` (`pipeline_interface.py`): that tier runs per
     ensemble member on already-numeric arrays, well past where this has to run.
-    Not `BaseEstimator`/`TransformerMixin` either: `fit_transform` returns more
-    than the transformed data, which does not fit sklearn's shape.
+    Not `BaseEstimator`/`TransformerMixin` either: nothing clones it or reads
+    parameters off it.
 
     Usage mirrors `ordinal_encoder_`: call `fit_transform` once at fit time and
     keep the instance around (as `self.date_transformer_`), then call `transform`
@@ -85,7 +69,17 @@ class DateTransformer:
             weekday pairs, so a December and the December before it are near
             each other rather than a year apart. Off, such a column is refused
             with an error naming it.
+
+    Attributes:
+        fitted_columns_: Input position -> the encoder fitted on that column and
+            the names of the features it makes. Empty when nothing was expanded.
+        feature_names_out_: The transformed frame's column labels as strings, in
+            order, or `None` when the input was not a `DataFrame` and so has no
+            labels.
     """
+
+    fitted_columns_: dict[int, FittedDateColumn]
+    feature_names_out_: list[str] | None
 
     def __init__(
         self,
@@ -93,83 +87,58 @@ class DateTransformer:
         categorical_indices: Sequence[int] | None = None,
         transform_dates: bool = False,
     ) -> None:
-        self._categorical_indices = (
-            None if categorical_indices is None else list(categorical_indices)
-        )
-        self._declared_categorical = set(self._categorical_indices or ())
+        self._declared_categorical = set(categorical_indices or ())
         self._transform_dates = transform_dates
-        self._fitted: dict[int, FittedDateColumn] = {}
 
     @property
-    def _expanded_indices(self) -> list[int]:
-        """Input positions that were expanded into calendar features, ascending.
+    def expanded_indices(self) -> list[int]:
+        """Input positions that were expanded into calendar features, ascending."""
+        self._check_is_fitted()
+        return sorted(self.fitted_columns_)
 
-        Empty before `fit_transform` runs, and whenever it expanded nothing.
-        """
-        return sorted(self._fitted)
+    def fit(self, X: XType) -> DateTransformer:
+        """Fit one encoder per point in time in `X`, refusing a date it cannot.
 
-    def fit_transform(self, X: XType) -> DateConversion:
-        """Convert every temporal column in `X`, refusing a date it cannot.
-
-        Expansion changes the column count, so the conversion carries the
-        resolved feature names and the declared categorical indices moved to
-        their new positions: everything downstream indexes the wider frame.
+        Prefer `fit_transform` when the converted fit input is needed too:
+        fitting an encoder already encodes its column, and `fit_transform` keeps
+        that result rather than encoding a second time.
 
         Args:
             X: The input data, before any dtype fixing.
 
         Returns:
-            The conversion, including what the caller has to pass on to
-            `detect_feature_modalities`.
+            Itself, fitted.
 
         Raises:
             TabPFNValidationError: On a point in time, with `transform_dates` off.
         """
-        # Cleared before anything else, so that refitting on an input with no
-        # columns to expand still forgets the last fit.
-        self._fitted = {}
+        self._fit(X)
+        return self
+
+    def fit_transform(self, X: XType) -> XType:
+        """`fit(X).transform(X)`, encoding each date column only once.
+
+        Expansion changes the column count, so the fitted transformer also
+        reports the transformed frame's labels (`feature_names_out_`) and moves
+        input indices to where those columns ended up (`output_indices`):
+        everything downstream indexes the wider frame.
+
+        Args:
+            X: The input data, before any dtype fixing.
+
+        Returns:
+            `X`, converted as `transform` would.
+
+        Raises:
+            TabPFNValidationError: As `fit`.
+        """
+        blocks = self._fit(X)
         if not isinstance(X, pd.DataFrame):
-            return DateConversion(
-                X=X, feature_names=None, categorical_indices=self._categorical_indices
-            )
-
-        instants, durations = self._temporal_positions(X)
-        if not self._transform_dates:
-            _refuse(X, instants)
-        converted = self._durations_to_seconds(X, durations)
-        if not instants:
-            return DateConversion(
-                X=converted,
-                feature_names=[str(column) for column in converted.columns],
-                categorical_indices=self._categorical_indices,
-            )
-
-        # `drop_and_append` concatenates the kept columns against skrub's own
-        # (freshly default-indexed) output, so the row index has to be the
-        # default range already or the two align by label instead of position.
-        converted = converted.reset_index(drop=True)
-        kept_names = [
-            str(column)
-            for i, column in enumerate(converted.columns)
-            if i not in set(instants)
-        ]
-        expanded_names: list[str] = []
-        blocks: list[pd.DataFrame] = []
-        for position in instants:
-            column = as_timestamp(X.iloc[:, position]).rename(str(X.columns[position]))
-            block, fitted = self._fit_one(column, kept_names + expanded_names)
-            self._fitted[position] = fitted
-            expanded_names += fitted.output_names
-            blocks.append(block)
-
-        return DateConversion(
-            X=drop_and_append(converted, instants, blocks),
-            feature_names=kept_names + expanded_names,
-            categorical_indices=self._remap(self._categorical_indices, instants),
-        )
+            return X
+        return self._assemble(X, blocks)
 
     def transform(self, X: XType) -> XType:
-        """Reapply the conversion `fit_transform` decided on, so the width holds.
+        """Reapply the conversion `fit` decided on, so the width holds.
 
         A position expanded at fit that no longer holds a point in time degrades
         to `NaN` calendar features, like any other missing value: there is no
@@ -181,63 +150,116 @@ class DateTransformer:
             X: The data, before any dtype fixing.
 
         Raises:
+            NotFittedError: If `fit` has not run yet; which columns are expanded
+                is its decision.
             TabPFNValidationError: On a point in time no fitted encoder covers.
         """
+        self._check_is_fitted()
         if not isinstance(X, pd.DataFrame):
             return X
-        instants, durations = self._temporal_positions(X)
-        _refuse(X, [i for i in instants if i not in self._fitted])
-        converted = self._durations_to_seconds(X, durations)
-        expanded = self._expanded_indices
-        if not expanded:
-            return converted
-
-        # `drop_and_append` aligns the kept columns against skrub's own
-        # default-indexed output by position, which needs the default index.
-        converted = converted.reset_index(drop=True)
-        blocks = [self._apply_one(X.iloc[:, i], self._fitted[i]) for i in expanded]
-        return drop_and_append(converted, expanded, blocks)
-
-    def _temporal_positions(self, X: pd.DataFrame) -> tuple[list[int], list[int]]:
-        """The positions of `X`'s points in time and of its durations.
-
-        A declared-categorical instant is not among them at all. A declared
-        categorical duration is: leaving it alone only crashes validation, and a
-        whole number of seconds ordinal-encodes as a category just as well.
-        """
-        dtypes = list(X.dtypes)
-        instants = [
-            i
-            for i, dtype in enumerate(dtypes)
-            if is_instant_dtype(dtype) and i not in self._declared_categorical
+        instants = self._instant_positions(X)
+        _refuse(X, [i for i in instants if i not in self.fitted_columns_])
+        blocks = [
+            self._apply_one(X.iloc[:, i], self.fitted_columns_[i])
+            for i in self.expanded_indices
         ]
-        durations = [
-            i
-            for i, dtype in enumerate(dtypes)
-            if pd.api.types.is_timedelta64_dtype(dtype)
-        ]
-        return instants, durations
+        return self._assemble(X, blocks)
 
-    @staticmethod
-    def _durations_to_seconds(
-        X: pd.DataFrame, durations: Sequence[int]
-    ) -> pd.DataFrame:
-        """Replace each duration column with its length in seconds."""
-        return replace_columns_positionally(
-            X, {i: to_seconds(X.iloc[:, i]) for i in durations}
-        )
-
-    @staticmethod
-    def _remap(indices: list[int] | None, expanded: Sequence[int]) -> list[int] | None:
-        """Move `indices` to where those columns end up once `expanded` is gone.
+    def output_indices(self, indices: Sequence[int] | None) -> list[int] | None:
+        """Where each of `indices`, input positions, sits in the transformed frame.
 
         A kept column keeps its relative order, so it just shifts down by however
-        many expanded columns sat ahead of it. An expanded index is not remapped
-        here: a declared-categorical column is never expanded to begin with.
+        many expanded columns sat ahead of it. An expanded position has no single
+        answer, it became many columns, and is never asked for: the one caller
+        passes declared-categorical indices, which are never expanded.
+
+        Args:
+            indices: Input positions, or `None` for none declared.
+
+        Returns:
+            The same positions in the transformed frame, or `None` for `None`.
         """
+        self._check_is_fitted()
         if indices is None:
             return None
+        expanded = self.expanded_indices
         return [i - sum(1 for j in expanded if j < i) for i in indices]
+
+    def _check_is_fitted(self) -> None:
+        # By hand rather than sklearn's `check_is_fitted`, which requires a
+        # `BaseEstimator`.
+        if not hasattr(self, "fitted_columns_"):
+            raise NotFittedError(
+                f"This {type(self).__name__} instance is not fitted yet. Call "
+                "`fit` before using `transform`."
+            )
+
+    def _fit(self, X: XType) -> list[pd.DataFrame]:
+        """Fit the encoders; return each expanded column's features, in order."""
+        # Cleared before anything else, so that refitting on an input with no
+        # columns to expand still forgets the last fit.
+        self.fitted_columns_ = {}
+        self.feature_names_out_ = None
+        if not isinstance(X, pd.DataFrame):
+            return []
+
+        instants = self._instant_positions(X)
+        if not self._transform_dates:
+            _refuse(X, instants)
+        kept_names = [
+            str(column) for i, column in enumerate(X.columns) if i not in set(instants)
+        ]
+        expanded_names: list[str] = []
+        blocks: list[pd.DataFrame] = []
+        for position in instants:
+            column = as_timestamp(X.iloc[:, position]).rename(str(X.columns[position]))
+            block, fitted = self._fit_one(column, kept_names + expanded_names)
+            self.fitted_columns_[position] = fitted
+            expanded_names += fitted.output_names
+            blocks.append(block)
+        self.feature_names_out_ = kept_names + expanded_names
+        return blocks
+
+    def _assemble(
+        self, X: pd.DataFrame, blocks: Sequence[pd.DataFrame]
+    ) -> pd.DataFrame:
+        """Turn durations into seconds, then swap expanded columns for `blocks`."""
+        converted = replace_columns_positionally(
+            X, {i: to_seconds(X.iloc[:, i]) for i in self._duration_positions(X)}
+        )
+        if not blocks:
+            return converted
+        # `drop_and_append` concatenates the kept columns against skrub's own
+        # (freshly default-indexed) output, so the row index has to be the
+        # default range already or the two align by label instead of position.
+        return drop_and_append(
+            converted.reset_index(drop=True), self.expanded_indices, blocks
+        )
+
+    def _instant_positions(self, X: pd.DataFrame) -> list[int]:
+        """The positions of `X`'s points in time, minus the declared categoricals.
+
+        A declared-categorical instant is not among them at all: the user's
+        declared intent for it wins over reading it as a date.
+        """
+        return [
+            i
+            for i, dtype in enumerate(X.dtypes)
+            if is_instant_dtype(dtype) and i not in self._declared_categorical
+        ]
+
+    @staticmethod
+    def _duration_positions(X: pd.DataFrame) -> list[int]:
+        """The positions of `X`'s durations, declared categorical or not.
+
+        Leaving a declared-categorical duration alone only crashes validation,
+        and a whole number of seconds ordinal-encodes as a category just as well.
+        """
+        return [
+            i
+            for i, dtype in enumerate(X.dtypes)
+            if pd.api.types.is_timedelta64_dtype(dtype)
+        ]
 
     @staticmethod
     def _make_encoder() -> DatetimeEncoder:

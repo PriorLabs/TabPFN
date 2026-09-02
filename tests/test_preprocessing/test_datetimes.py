@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from sklearn.exceptions import NotFittedError
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
@@ -75,19 +76,20 @@ class TestRefusal:
 
     def test__date_like_string_column__is_not_refused(self) -> None:
         X = _frame(["2020-01-01", "2020-01-02", "2020-01-03"])
-        assert DateTransformer().fit_transform(X).X is X
+        assert DateTransformer().fit_transform(X) is X
 
     def test__declared_categorical_date__is_left_alone(self) -> None:
         """The user's declared intent for the column wins over reading it as a
         date, so it is neither refused nor converted.
         """
         X = _frame(pd.date_range("2020-01-01", periods=3))
-        assert DateTransformer(categorical_indices=[1]).fit_transform(X).X is X
+        assert DateTransformer(categorical_indices=[1]).fit_transform(X) is X
 
     def test__non_dataframe_input__is_a_noop(self) -> None:
         X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        assert DateTransformer().fit_transform(X).X is X
-        assert DateTransformer().transform(X) is X
+        transformer = DateTransformer()
+        assert transformer.fit_transform(X) is X
+        assert transformer.transform(X) is X
 
     def test__transform__refuses_a_date_too(self) -> None:
         transformer = DateTransformer()
@@ -106,7 +108,7 @@ class TestDurations:
     def test__duration_column__becomes_seconds(self, transform_dates: bool) -> None:
         X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
 
-        out = DateTransformer(transform_dates=transform_dates).fit_transform(X).X
+        out = DateTransformer(transform_dates=transform_dates).fit_transform(X)
 
         np.testing.assert_array_equal(out["date"], [86400.0, 172800.0, 259200.0])
         # The caller's own frame is left untouched.
@@ -118,14 +120,14 @@ class TestDurations:
         """
         X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
 
-        out = DateTransformer(categorical_indices=[1]).fit_transform(X).X
+        out = DateTransformer(categorical_indices=[1]).fit_transform(X)
 
         assert pd.api.types.is_numeric_dtype(out["date"])
 
     def test__transform__converts_the_same_way(self) -> None:
         X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
         transformer = DateTransformer()
-        fitted = transformer.fit_transform(X).X
+        fitted = transformer.fit_transform(X)
 
         np.testing.assert_array_equal(transformer.transform(X)["date"], fitted["date"])
 
@@ -134,7 +136,7 @@ class TestDurations:
         X = pd.DataFrame({0: pd.to_timedelta([1, 2, 3], unit="D"), 1: [1.0, 2.0, 3.0]})
         X.columns = ["same", "same"]
 
-        out = DateTransformer().fit_transform(X).X
+        out = DateTransformer().fit_transform(X)
 
         assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
         np.testing.assert_array_equal(out.iloc[:, 1], X.iloc[:, 1])
@@ -149,17 +151,20 @@ class TestExpansion:
     def test__date_column__becomes_calendar_features(self) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3, freq="37h"))
 
+        transformer = self._expander()
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            conversion = self._expander().fit_transform(X)
+            out = transformer.fit_transform(X)
 
-        assert conversion.X.shape[0] == 3
-        assert conversion.X.shape[1] > X.shape[1]
+        names = transformer.feature_names_out_
+        assert out.shape[0] == 3
+        assert out.shape[1] > X.shape[1]
+        assert list(out.columns) == names
         # The kept columns come first, in order, then the expansion.
-        assert conversion.feature_names[0] == "num"
-        assert all(name.startswith("date_") for name in conversion.feature_names[1:])
-        assert "date_year" in conversion.feature_names
-        assert conversion.X.notna().all().all()
+        assert names[0] == "num"
+        assert all(name.startswith("date_") for name in names[1:])
+        assert "date_year" in names
+        assert out.notna().all().all()
 
     def test__period_column__is_expanded_from_the_instant_it_starts_at(self) -> None:
         """A period is a span, not an instant; its start is the instant that
@@ -167,10 +172,11 @@ class TestExpansion:
         """
         X = _frame(pd.period_range("2020-01-01", periods=3, freq="D"))
 
-        conversion = self._expander().fit_transform(X)
+        transformer = self._expander()
+        out = transformer.fit_transform(X)
 
-        assert "date_year" in conversion.feature_names
-        assert conversion.X.notna().all().all()
+        assert "date_year" in transformer.feature_names_out_
+        assert out.notna().all().all()
 
     def test__declared_categorical_indices__are_remapped(self) -> None:
         """The expanded column is gone from where it was, so what came after it
@@ -183,18 +189,18 @@ class TestExpansion:
             }
         )
 
-        conversion = self._expander(categorical_indices=[1]).fit_transform(X)
+        transformer = self._expander(categorical_indices=[1])
+        transformer.fit_transform(X)
 
-        assert conversion.categorical_indices == [0]
-        assert conversion.feature_names[0] == "cat"
+        assert transformer.output_indices([1]) == [0]
+        assert transformer.output_indices(None) is None
+        assert transformer.feature_names_out_[0] == "cat"
 
     def test__declared_categorical_date__is_not_expanded(self) -> None:
         """The user's declared intent still wins, flag or no flag."""
         X = _frame(pd.date_range("2020-01-01", periods=3))
 
-        conversion = self._expander(categorical_indices=[1]).fit_transform(X)
-
-        assert conversion.X is X
+        assert self._expander(categorical_indices=[1]).fit_transform(X) is X
 
     def test__refit_on_a_frame_with_nothing_to_expand__forgets_the_last_fit(
         self,
@@ -206,15 +212,14 @@ class TestExpansion:
         transformer.fit_transform(_frame(pd.date_range("2020-01-01", periods=3)))
         transformer.fit_transform(np.zeros((3, 2)))
 
-        assert transformer._expanded_indices == []
+        assert transformer.expanded_indices == []
         assert transformer.transform(_frame([1.0, 2.0, 3.0])).shape[1] == 2
 
     def test__expanded_indices__reports_what_was_expanded(self) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3))
         transformer = self._expander()
-        assert transformer._expanded_indices == []
         transformer.fit_transform(X)
-        assert transformer._expanded_indices == [1]
+        assert transformer.expanded_indices == [1]
 
     def test__generated_name_colliding_with_an_existing_column__is_deduped(
         self,
@@ -226,11 +231,13 @@ class TestExpansion:
             }
         )
 
-        conversion = self._expander().fit_transform(X)
+        transformer = self._expander()
+        transformer.fit_transform(X)
 
-        assert len(set(conversion.feature_names)) == len(conversion.feature_names)
-        assert "date_year" in conversion.feature_names
-        assert "date_year_1" in conversion.feature_names
+        names = transformer.feature_names_out_
+        assert len(set(names)) == len(names)
+        assert "date_year" in names
+        assert "date_year_1" in names
 
 
 class TestExpansionAtPredictTime:
@@ -243,8 +250,8 @@ class TestExpansionAtPredictTime:
 
         out = transformer.transform(X)
 
-        assert list(out.columns) == list(fitted.X.columns)
-        np.testing.assert_array_equal(out.to_numpy(), fitted.X.to_numpy())
+        assert list(out.columns) == list(fitted.columns)
+        np.testing.assert_array_equal(out.to_numpy(), fitted.to_numpy())
 
     def test__predict_data_with_a_time_of_day__keeps_the_fitted_width(self) -> None:
         """The encoder decides how many features it makes when it is fit: a date-only
@@ -260,7 +267,7 @@ class TestExpansionAtPredictTime:
             _frame(pd.date_range("2020-01-01 13:45", periods=3, freq="37h"))
         )
 
-        assert list(out.columns) == list(fitted.X.columns)
+        assert list(out.columns) == list(fitted.columns)
 
     def test__position_that_is_no_longer_a_date__becomes_nan_features(self) -> None:
         transformer = DateTransformer(transform_dates=True)
@@ -270,8 +277,8 @@ class TestExpansionAtPredictTime:
 
         out = transformer.transform(_frame(["not", "a", "date"]))
 
-        assert list(out.columns) == list(fitted.X.columns)
-        assert out[fitted.feature_names[1:]].isna().all().all()
+        assert list(out.columns) == list(fitted.columns)
+        assert out[transformer.feature_names_out_[1:]].isna().all().all()
         # The column that was never a date is untouched.
         assert out["num"].tolist() == [1.0, 2.0, 3.0]
 
@@ -289,6 +296,37 @@ class TestExpansionAtPredictTime:
                     }
                 )
             )
+
+
+class TestInterface:
+    """`fit`, `fit_transform` and `transform` relate the way sklearn's do."""
+
+    def test__fit__returns_itself_and_transform_matches_fit_transform(self) -> None:
+        X = _frame(pd.date_range("2020-01-01", periods=3, freq="37h"))
+
+        fitted = DateTransformer(transform_dates=True).fit(X)
+        via_transform = fitted.transform(X)
+        via_fit_transform = DateTransformer(transform_dates=True).fit_transform(X)
+
+        assert isinstance(fitted, DateTransformer)
+        pd.testing.assert_frame_equal(via_transform, via_fit_transform)
+
+    def test__transform__before_fit__raises(self) -> None:
+        with pytest.raises(NotFittedError):
+            DateTransformer().transform(_frame([1.0, 2.0, 3.0]))
+
+    def test__expanded_indices__before_fit__raises(self) -> None:
+        with pytest.raises(NotFittedError):
+            _ = DateTransformer().expanded_indices
+
+    def test__fit_on_an_array__has_no_output_names(self) -> None:
+        """An array carries no labels, so there are none to report, and no
+        column was expanded, so every index stays where it was.
+        """
+        transformer = DateTransformer(transform_dates=True).fit(np.zeros((3, 2)))
+
+        assert transformer.feature_names_out_ is None
+        assert transformer.output_indices([0, 1]) == [0, 1]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
