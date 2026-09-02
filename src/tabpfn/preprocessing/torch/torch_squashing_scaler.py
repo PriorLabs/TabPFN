@@ -14,18 +14,53 @@ Original skrub attribution:
   All rights reserved.
   SPDX-License-Identifier: BSD-3-Clause
 
-The state is returned explicitly from ``fit`` rather than stored on the
-instance, matching the rest of ``preprocessing/torch``.
+The state is returned explicitly from `fit` rather than stored on the
+instance, matching the rest of `preprocessing/torch`.
 """
 
 from __future__ import annotations
 
 import torch
 
+# Bytes of input one `fit` column block covers. The sort inside
+# `torch.nanquantile` needs a large multiple of what it is given -- it double-buffers
+# both the sorted values and their int64 indices -- so bounding the block by bytes is
+# what bounds fit's peak at every shape. Sits at the knee: larger blocks cost time as
+# well as memory, smaller ones start paying for the extra launches.
+_FIT_BLOCK_BYTES = 128 * 1024 * 1024
+
+# Below this much input, `fit` reduces in a single pass instead. Blocking the sort
+# costs wall time on older torch, so it is only worth doing once the unblocked peak is
+# large enough to be a problem.
+_FIT_UNBLOCKED_BYTES = 512 * 1024 * 1024
+
+# Bytes of output `transform` produces at a time. Its output has to exist in full;
+# none of its intermediates do. Small end of the useful range, because wall time is
+# flat across that range while what the intermediates cost scales with the block.
+_TRANSFORM_BLOCK_BYTES = 32 * 1024 * 1024
+
+
+def _scalar(value: float, like: torch.Tensor) -> torch.Tensor:
+    """A 0-dim tensor of `like`'s dtype and device, to broadcast into `where`.
+
+    `torch.where` takes a Python float directly, but not alongside `out=`; a 0-dim
+    tensor is what lets the result be written straight into an existing buffer.
+    """
+    return torch.full((), value, dtype=like.dtype, device=like.device)
+
 
 def _replace_inf_with_nan(x: torch.Tensor) -> torch.Tensor:
     """Replace ±inf with NaN so percentile/min/max see only finite values."""
-    return torch.where(torch.isinf(x), torch.full_like(x, float("nan")), x)
+    return torch.where(torch.isinf(x), float("nan"), x)
+
+
+def _block_size(x: torch.Tensor, dim: int, budget_bytes: int) -> int:
+    """Slices of `dim` whose data is about `budget_bytes`."""
+    per_slice = x.element_size()
+    for index, size in enumerate(x.shape):
+        if index != dim:
+            per_slice *= size
+    return max(1, budget_bytes // max(1, per_slice))
 
 
 class TorchSquashingScaler:
@@ -85,31 +120,6 @@ class TorchSquashingScaler:
                 "zero_mask": torch.ones(feature_shape, device=device, dtype=torch.bool),
             }
 
-        x_finite = _replace_inf_with_nan(x)
-
-        # nanquantile cannot share its sort with nanmin/nanmax across the same
-        # call, so they're computed separately. The dominant cost is the single
-        # nanquantile call covering all three quartiles at once.
-        col_min = torch.amin(
-            torch.where(
-                torch.isnan(x_finite), torch.full_like(x_finite, float("inf")), x_finite
-            ),
-            dim=0,
-        )
-        col_max = torch.amax(
-            torch.where(
-                torch.isnan(x_finite),
-                torch.full_like(x_finite, float("-inf")),
-                x_finite,
-            ),
-            dim=0,
-        )
-        # All-NaN columns yield ±inf above; surface them as NaN so the masks
-        # below treat them as the "general" path (output stays NaN).
-        all_nan = torch.isnan(x_finite).all(dim=0)
-        col_min = torch.where(all_nan, torch.full_like(col_min, float("nan")), col_min)
-        col_max = torch.where(all_nan, torch.full_like(col_max, float("nan")), col_max)
-
         # torch.nanquantile requires float32 or float64; upcast (e.g. from
         # float16) just for the quantile computation, then cast results back.
         quantile_dtype = (
@@ -121,7 +131,8 @@ class TorchSquashingScaler:
             device=device,
             dtype=quantile_dtype,
         )
-        quantiles = torch.nanquantile(x_finite.to(quantile_dtype), qs, dim=0).to(dtype)
+
+        col_min, col_max, quantiles = self._column_statistics(x, qs, quantile_dtype)
         q_lower, q_median, q_upper = quantiles[0], quantiles[1], quantiles[2]
 
         zero_mask = col_max == col_min
@@ -145,6 +156,65 @@ class TorchSquashingScaler:
             "scale": scale.to(dtype=dtype),
             "zero_mask": zero_mask,
         }
+
+    def _column_statistics(
+        self,
+        x: torch.Tensor,
+        qs: torch.Tensor,
+        quantile_dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Per-column min, max and quantiles, reduced a block of columns at a time.
+
+        Every statistic is reduced over dim 0 and so is independent per column.
+
+        What must not happen here is a whole `_replace_inf_with_nan` copy of `x`:
+        that copy is the input to `nanquantile`, so keeping it to a block is what
+        keeps the sort to a block.
+
+        Returns:
+            min, max, quantiles as torch.Tensor
+        """
+        columns = x.shape[-1]
+        block = _block_size(x, dim=x.ndim - 1, budget_bytes=_FIT_BLOCK_BYTES)
+        if block >= columns or x.element_size() * x.nelement() <= _FIT_UNBLOCKED_BYTES:
+            return self._column_statistics_block(x, qs, quantile_dtype)
+
+        parts = [
+            self._column_statistics_block(
+                x[..., start : start + block], qs, quantile_dtype
+            )
+            for start in range(0, columns, block)
+        ]
+        return (
+            torch.cat([part[0] for part in parts], dim=-1),
+            torch.cat([part[1] for part in parts], dim=-1),
+            torch.cat([part[2] for part in parts], dim=-1),
+        )
+
+    def _column_statistics_block(
+        self,
+        x: torch.Tensor,
+        qs: torch.Tensor,
+        quantile_dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """min, max and quantiles for one block of columns."""
+        x_masked = _replace_inf_with_nan(x)
+
+        is_nan = torch.isnan(x_masked)
+        col_min = torch.amin(torch.where(is_nan, float("inf"), x_masked), dim=0)
+        col_max = torch.amax(torch.where(is_nan, float("-inf"), x_masked), dim=0)
+        # All-NaN columns yield ±inf above; surface them as NaN so the masks
+        # in `fit` treat them as the "general" path (output stays NaN).
+        all_nan = is_nan.all(dim=0)
+        del is_nan
+        col_min = torch.where(all_nan, float("nan"), col_min)
+        col_max = torch.where(all_nan, float("nan"), col_max)
+
+        # the dominant cost
+        quantiles = torch.nanquantile(x_masked.to(quantile_dtype), qs, dim=0).to(
+            x.dtype
+        )
+        return col_min, col_max, quantiles
 
     def transform(
         self,
@@ -173,31 +243,59 @@ class TorchSquashingScaler:
         scale = fitted_cache["scale"]
         zero_mask = fitted_cache["zero_mask"]
 
-        pos_inf = torch.isposinf(x)
-        neg_inf = torch.isneginf(x)
-        nan_mask = torch.isnan(x)
+        # only the output has to exist in full
+        out = torch.empty_like(x)
+        nan = _scalar(float("nan"), x)
+        block = _block_size(x, dim=0, budget_bytes=_TRANSFORM_BLOCK_BYTES)
+        for start in range(0, x.shape[0], block):
+            stop = start + block
+            # rows are safe to split on because every step in
+            # `_transform_block` is elementwise
+            self._transform_block(
+                x[start:stop], out[start:stop], center, scale, zero_mask, nan
+            )
+        return out
+
+    def _transform_block(
+        self,
+        x: torch.Tensor,
+        out: torch.Tensor,
+        center: torch.Tensor,
+        scale: torch.Tensor,
+        zero_mask: torch.Tensor,
+        nan: torch.Tensor,
+    ) -> None:
+        """Transform one block of rows in place, writing through into ``out``.
+
+        ``out`` is a view into the full output.
+        """
+        b = self.max_absolute_value
 
         # Replace ±inf with NaN so the scale ops never produce 0 * inf = nan
         # for what was originally a finite outlier, and so soft-clip operates
         # on the centered/scaled finite distribution.
-        x_finite = _replace_inf_with_nan(x)
+        torch.where(torch.isinf(x), nan, x, out=out)
+        out.sub_(center).div_(scale)
 
-        x_scaled = (x_finite - center) / scale
+        # Zero columns: finite entries become 0 while NaNs are left alone. One mask
+        # buffer holds "is not NaN, and in a zero column".
+        finite_in_zero_column = torch.isnan(x)
+        finite_in_zero_column.logical_not_()
+        finite_in_zero_column &= zero_mask
+        out.masked_fill_(finite_in_zero_column, 0.0)
+        del finite_in_zero_column
 
-        # Broadcast zero_mask up to x's shape so we can zero-out finite
-        # entries column-wise without touching NaNs.
-        zero_broadcast = zero_mask.expand_as(x_scaled)
-        x_scaled = torch.where(
-            zero_broadcast & ~nan_mask,
-            torch.zeros_like(x_scaled),
-            x_scaled,
-        )
+        # In-place form of `z / torch.sqrt(1.0 + (z / b) ** 2)`: the same kernels in
+        # the same order, needing one temporary rather than a chain of them.
+        denominator = out / b
+        denominator.pow_(2)
+        denominator.add_(1.0)
+        denominator.sqrt_()
+        out.div_(denominator)
+        del denominator
 
-        b = self.max_absolute_value
-        x_clipped = x_scaled / torch.sqrt(1.0 + (x_scaled / b) ** 2)
-
-        x_clipped = torch.where(pos_inf, torch.full_like(x_clipped, b), x_clipped)
-        return torch.where(neg_inf, torch.full_like(x_clipped, -b), x_clipped)
+        out.masked_fill_(torch.isposinf(x), b)
+        out.masked_fill_(torch.isneginf(x), -b)
 
     def __call__(
         self,

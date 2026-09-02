@@ -32,9 +32,10 @@ from tabpfn.inference import (
 )
 from tabpfn.inference_config import (
     DEFAULT_SOFTMAX_TEMPERATURE,
+    OVERRIDABLE_FIELDS,
     InferenceConfig,
     cpu_sample_limit,
-    raise_if_softmax_temperatures_differ,
+    raise_if_checkpoints_disagree_on_overridable_fields,
 )
 from tabpfn.model_loading import (
     load_model_criterion_config,
@@ -108,6 +109,7 @@ def initialize_tabpfn_model(
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     softmax_temperature_override: float | None = None,
+    n_estimators_override: int | None = None,
 ) -> tuple[
     list[Architecture],
     list[ArchitectureConfig],
@@ -128,6 +130,7 @@ def initialize_tabpfn_model(
             model, or None if they did not ask for one. Only used to decide whether
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
+        n_estimators_override: Likewise for the number of estimators.
 
     Returns:
         a list of models,
@@ -156,7 +159,9 @@ def initialize_tabpfn_model(
         and len(model_path) > 0
         and all(isinstance(spec, RegressorModelSpecs) for spec in model_path)
     ):
-        _assert_inference_configs_equal(model_path, softmax_temperature_override)
+        _assert_inference_configs_equal(
+            model_path, softmax_temperature_override, n_estimators_override
+        )
         return (  # pyright: ignore[reportReturnType]
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
@@ -169,7 +174,9 @@ def initialize_tabpfn_model(
         and len(model_path) > 0
         and all(isinstance(spec, ClassifierModelSpecs) for spec in model_path)
     ):
-        _assert_inference_configs_equal(model_path, softmax_temperature_override)
+        _assert_inference_configs_equal(
+            model_path, softmax_temperature_override, n_estimators_override
+        )
         return (
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
@@ -206,6 +213,7 @@ def initialize_tabpfn_model(
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
+                    n_estimators_override=n_estimators_override,
                 )
             )
             norm_criterion = None
@@ -220,6 +228,7 @@ def initialize_tabpfn_model(
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
+                    n_estimators_override=n_estimators_override,
                 )
             )
             norm_criterion = bardist
@@ -241,19 +250,23 @@ def initialize_tabpfn_model(
 def _assert_inference_configs_equal(
     model_specs: list[ClassifierModelSpecs] | list[RegressorModelSpecs],
     softmax_temperature_override: float | None,
+    n_estimators_override: int | None,
 ) -> None:
-    # A temperature mismatch is reported separately, as the user can fix that one by
-    # naming a temperature.
+    # A mismatch in an overridable field is reported separately, as the user can fix
+    # those by naming a value.
     if not all(
-        spec.inference_config.equals_ignoring_softmax_temperature(
+        spec.inference_config.equals_ignoring_overridable_fields(
             model_specs[0].inference_config
         )
         for spec in model_specs
     ):
         raise ValueError("All models must have the same inference config")
-    raise_if_softmax_temperatures_differ(
+    raise_if_checkpoints_disagree_on_overridable_fields(
         [spec.inference_config for spec in model_specs],
-        softmax_temperature_override=softmax_temperature_override,
+        overrides={
+            "SOFTMAX_TEMPERATURE": softmax_temperature_override,
+            "N_ESTIMATORS": n_estimators_override,
+        },
     )
 
 
@@ -431,19 +444,17 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     user_config = calling_instance.inference_config
-    # Resolved before loading: checkpoints only have to agree on their temperature
-    # when the user has not named one.
-    softmax_temperature_override = _resolve_softmax_temperature_override(
-        softmax_temperature=calling_instance.softmax_temperature,
-        user_config=user_config,
-    )
+    # Resolved before loading: checkpoints only have to agree on a field when the
+    # user has not named a value for it.
+    overrides = _resolve_overrides(calling_instance, user_config)
 
     models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
             fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
-            softmax_temperature_override=softmax_temperature_override,
+            softmax_temperature_override=overrides["SOFTMAX_TEMPERATURE"],
+            n_estimators_override=overrides["N_ESTIMATORS"],
         )
     )
     calling_instance.models_ = models
@@ -459,10 +470,17 @@ def initialize_model_variables_helper(
     # Only the `softmax_temperature` argument still has to be applied here; an
     # override that came from `user_config` was applied by the call above, and the two
     # cannot both be given.
-    if softmax_temperature_override is not None:
+    if overrides["SOFTMAX_TEMPERATURE"] is not None:
         inference_config = dataclasses.replace(
-            inference_config, SOFTMAX_TEMPERATURE=softmax_temperature_override
+            inference_config, SOFTMAX_TEMPERATURE=overrides["SOFTMAX_TEMPERATURE"]
         )
+
+    # An `n_estimators` argument is deliberately *not* written back into the config.
+    # `inference_config_` is what `save_tabpfn_model` persists into a checkpoint, so
+    # it has to keep describing the model rather than this run's compute budget --
+    # otherwise fine-tuning, which runs a handful of estimators on purpose, would
+    # bake that handful into every checkpoint it writes. The argument still wins,
+    # applied where the count is used (see `_initialize_dataset_preprocessing`).
 
     calling_instance.inference_config_ = inference_config
     calling_instance.softmax_temperature_ = inference_config.SOFTMAX_TEMPERATURE
@@ -470,40 +488,64 @@ def initialize_model_variables_helper(
     return byte_size
 
 
-def _resolve_softmax_temperature_override(
-    *,
-    softmax_temperature: float | Literal["auto"],
+def _resolve_overrides(
+    estimator: TabPFNClassifier | TabPFNRegressor,
     user_config: dict | InferenceConfig | None,
-) -> float | None:
-    """Return the temperature the user asked for, or None if they asked for none.
+) -> dict[str, float | int | None]:
+    """What the user asked for per overridable field, None where they asked nothing.
 
-    A temperature named either way wins over what the checkpoint declares. Naming it
+    Each of `OVERRIDABLE_FIELDS` can be named by its estimator argument or through
+    `inference_config`, and either wins over what the checkpoint declares. Naming one
     both ways is rejected rather than resolved, since the winner would not be
     apparent from the call.
 
     Raises:
-        ValueError: If the temperature is given as the `softmax_temperature` argument
-            and through `inference_config` at the same time.
+        ValueError: If a field is named by its argument and through
+            `inference_config` at the same time.
     """
-    config_temperature: float | None = None
-    if isinstance(user_config, InferenceConfig):
-        # A hand-built config replaces the checkpoint's wholesale, temperature
-        # included, so it always names one.
-        config_temperature = user_config.SOFTMAX_TEMPERATURE
-    elif isinstance(user_config, dict) and "SOFTMAX_TEMPERATURE" in user_config:
-        config_temperature = float(user_config["SOFTMAX_TEMPERATURE"])
+    overrides: dict[str, float | int | None] = {}
+    for field, (_, argument) in OVERRIDABLE_FIELDS.items():
+        from_config: float | int | None = None
+        if isinstance(user_config, InferenceConfig):
+            # A hand-built config replaces the checkpoint's wholesale, so it carries
+            # a value for every field, this one included.
+            from_config = getattr(user_config, field)
+        elif isinstance(user_config, dict) and field in user_config:
+            from_config = user_config[field]
+        if from_config == "auto":
+            # "auto" is the absence of a choice, wherever it comes from.
+            from_config = None
 
-    if softmax_temperature == "auto":
-        return config_temperature
+        from_argument = getattr(estimator, argument)
+        if from_argument == "auto":
+            overrides[field] = from_config
+            continue
 
-    if config_temperature is not None:
-        raise ValueError(
-            f"The softmax temperature was given twice: "
-            f"`softmax_temperature={softmax_temperature}` and "
-            f"`inference_config` with SOFTMAX_TEMPERATURE={config_temperature}. "
-            f"Pass it one way or the other, so which one applies is unambiguous."
-        )
-    return float(softmax_temperature)
+        if from_config is not None:
+            raise ValueError(
+                f"`{argument}` was given twice: `{argument}={from_argument}` and "
+                f"`inference_config` with {field}={from_config}. Pass it one way or "
+                f"the other, so which one applies is unambiguous."
+            )
+        overrides[field] = from_argument
+
+    return overrides
+
+
+def resolved_n_estimators(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+) -> int | Literal["auto"]:
+    """How many estimators `estimator` should run, before feature-coverage scaling.
+
+    The `n_estimators` argument wins; left at `"auto"` the count comes from the
+    checkpoint's `InferenceConfig.N_ESTIMATORS`, which may itself be `"auto"`. Both
+    mean the same thing, so the result is passed straight to
+    `scale_n_estimators_for_feature_coverage`: an int is used as given, `"auto"`
+    resolves to `DEFAULT_N_ESTIMATORS` and may be raised for feature coverage.
+    """
+    if estimator.n_estimators != "auto":
+        return estimator.n_estimators
+    return estimator.inference_config_.N_ESTIMATORS
 
 
 def resolved_softmax_temperature(
