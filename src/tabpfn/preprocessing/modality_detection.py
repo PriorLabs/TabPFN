@@ -51,8 +51,7 @@ def handle_datetime_columns(
     columns = ", ".join(f"{i} ({X.columns[i]!r})" for i in date_indices)
     raise TabPFNUserError(
         f"These columns hold datetimes, which TabPFN does not support: {columns}. "
-        'Set `inference_config={"TRANSFORM_DATES": True}` to expand them into '
-        "calendar features, or preprocess them yourself first."
+        "Preprocess them yourself first."
     )
 
 

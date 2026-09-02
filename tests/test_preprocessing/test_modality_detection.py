@@ -895,9 +895,7 @@ class TestHandleDatetimeColumns:
         )
         with pytest.raises(TabPFNUserError, match="does not support") as excinfo:
             handle_datetime_columns(X, categorical_indices=None)
-        message = str(excinfo.value)
-        assert "1 ('start'), 2 ('end')" in message
-        assert '"TRANSFORM_DATES": True' in message
+        assert "1 ('start'), 2 ('end')" in str(excinfo.value)
 
     def test__date_like_string_column__is_not_rejected(self) -> None:
         """Only a genuine `datetime64` dtype is refused; a string that merely
