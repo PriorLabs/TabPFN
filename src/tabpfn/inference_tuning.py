@@ -336,8 +336,8 @@ def find_optimal_classification_thresholds(
         warnings.warn(
             f"{n_untuned} of {n_classes} classes have no rows in the tuning holdout, "
             "so their decision thresholds could not be tuned and a neutral value is "
-            "used instead. Raise `tuning_n_folds` to pool a larger holdout, or set "
-            "`tune_decision_thresholds=False`.",
+            "used instead. Set `tune_decision_thresholds=False` to skip threshold "
+            "tuning entirely.",
             UserWarning,
             stacklevel=2,
         )
