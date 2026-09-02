@@ -972,7 +972,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    def predict_proba_batched(
+    def predict_proba_batched(  # noqa: C901
         self,
         X_train_list: list[XType],
         y_train_list: list[YType],
@@ -982,16 +982,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Each ``(X_train, y_train, X_test)`` triple is preprocessed exactly as in
         ``fit()`` + ``predict_proba()`` (input validation, CPU and GPU
-        preprocessing, same ensemble configs), then all datasets are stacked along
-        the model's batch dimension and scored with a *single fused forward per
-        estimator*. For the supported cases below this is equivalent to calling
-        ``fit`` + ``predict_proba`` on each dataset independently.
+        preprocessing, same ensemble configs), then compatible model-input shapes
+        are fused. Heterogeneous post-preprocessing shapes run in separate groups.
 
         All datasets must share the same set of classes (they are scored together
-        with a single ``n_classes_``) and the same array shapes: the fused forward
-        stacks them on the batch dimension, and ragged batches are rejected rather
-        than padded (padding would feed the model fake context/query rows and
-        silently corrupt results). Group datasets by shape upstream if needed.
+        with a single ``n_classes_``) and the same raw array shapes. Fitted
+        transforms may produce different model-input shapes; these are grouped
+        internally without padding.
 
         This method does not modify the estimator: the per-dataset fits run on an
         internal clone, so ``self`` is unchanged on return (any prior ``fit`` is
@@ -1025,7 +1022,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         from tabpfn.finetuning.data_util import (  # noqa: PLC0415
             ClassifierBatch,
-            meta_dataset_collator,
+            _collate_same_shape_for_batched_inference,
+            _group_batches_by_shape,
         )
 
         if not len(X_train_list) == len(y_train_list) == len(X_test_list):
@@ -1153,21 +1151,27 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             )
 
-        batch = meta_dataset_collator(items)
-        # The clone now drives the batched executor; set the mode so
-        # fit_from_preprocessed does not warn about switching out of fine-tuning mode.
+        results: list[np.ndarray | None] = [None] * len(items)
         worker.fit_mode = "batched"
-        worker.fit_from_preprocessed(
-            batch.X_context,
-            batch.y_context,
-            batch.cat_indices,
-            batch.configs,
-            performance_options=PerformanceOptions(),
-        )
-        # (n_test, n_datasets, n_classes)
-        out = worker.forward(batch.X_query, use_inference_mode=True)
-        out = out.detach().float().cpu().numpy()
-        return np.transpose(out, (1, 0, 2))  # -> (n_datasets, n_test, n_classes)
+        for group in _group_batches_by_shape(items):
+            indices, group_items = zip(*group, strict=True)
+            batch = _collate_same_shape_for_batched_inference(list(group_items))
+            worker.fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+                performance_options=PerformanceOptions(),
+            )
+            out = worker.forward(batch.X_query, use_inference_mode=True)
+            out = out.detach().float().cpu().numpy().transpose(1, 0, 2)
+            for index, probabilities in zip(indices, out, strict=True):
+                results[index] = probabilities
+
+        expected = (len(np.asarray(X_test_list[0])), len(class_sets[0]))
+        if any(result is None or result.shape != expected for result in results):
+            raise RuntimeError("Internal error: invalid batched prediction shape.")
+        return np.stack(results)  # type: ignore[arg-type]
 
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
