@@ -323,9 +323,6 @@ def find_optimal_classification_thresholds(
     for i in range(n_classes):
         is_class_i = y_true == i
         if not is_class_i.any() or is_class_i.all():
-            # Rare classes can miss the holdout entirely (StratifiedKFold allocates
-            # folds by class count). Every threshold then scores identically and the
-            # search returns an arbitrary value, so assign a neutral one below.
             continue
 
         tuned_by_class[i] = find_optimal_classification_threshold_single_class(
@@ -334,11 +331,8 @@ def find_optimal_classification_thresholds(
             y_pred_probas=y_pred_probas[:, i],
         )
 
-    # Thresholds are applied as a divisive reweight (`probas / threshold`, then
-    # renormalize), so only their ratios matter: the neutral fill is the geometric
-    # mean of the tuned ones, carrying the average multiplier on the log scale where
-    # the reweight is linear. With nothing tuned the thresholds come out uniform,
-    # which the caller's renormalization cancels.
+    # Thresholds act as a divisive reweight, so only their ratios matter and the
+    # neutral fill is the geometric mean rather than the arithmetic one.
     neutral = (
         float(np.exp(np.mean(np.log(list(tuned_by_class.values())))))
         if tuned_by_class
@@ -404,12 +398,9 @@ def select_robust_optimal_threshold(
 
     finite = np.isfinite(losses)
     if not finite.any():
-        # Every threshold scored non-finite (e.g. roc_auc_score returns nan when
-        # y_true holds a single label). np.argmin would return index 0 here, the
-        # smallest threshold in the grid and so the most aggressive reweight
-        # available, rather than a neutral choice. Prefer the midpoint.
+        # argmin over all-nan losses would return index 0, the most aggressive
+        # threshold in the grid.
         return float(np.median(thresholds))
-    # Non-finite losses must never win the argmin below.
     losses = np.where(finite, losses, np.inf)
 
     best_loss = float(np.min(losses))
