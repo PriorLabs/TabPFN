@@ -38,13 +38,7 @@ def handle_datetime_columns(
     *,
     categorical_indices: Sequence[int] | None,
 ) -> None:
-    """Refuse any genuine `datetime64` column in `X`, naming it.
-
-    Must run before `ensure_compatible_fit_inputs`: a `datetime64` dtype has no
-    common numpy dtype with a plain numeric/bool/string column, so validation
-    fails on it with numpy's opaque dtype-promotion error otherwise. Nothing
-    downstream reads a date as a date, so the column is refused outright rather
-    than silently read as a number.
+    """Raise on any genuine `datetime64` column in `X`: dates are unsupported.
 
     Raises:
         TabPFNUserError: Naming each offending column by index and label.
@@ -67,14 +61,9 @@ def detect_datetime_columns(
     *,
     categorical_features_indices: Sequence[int] | None,
 ) -> list[int]:
-    """Indices of real `datetime64` columns in `X`, before validation runs.
+    """Indices of `X`'s `datetime64`-dtype columns, minus those declared categorical.
 
-    Must be computed off the raw input, before `ensure_compatible_fit_inputs`
-    converts it: sklearn's own validation flattens a mixed-dtype DataFrame into
-    one numpy array, so a genuine `datetime64` dtype is only visible here.
-
-    A column already declared categorical is excluded -- the user's declared
-    intent for it wins over treating it as a date.
+    Only the dtype is checked: a string that merely looks like a date is not one.
     """
     if not isinstance(X, pd.DataFrame):
         return []
