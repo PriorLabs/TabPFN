@@ -730,7 +730,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # input here, before any conversion.
         capture_input_shape(X, estimator=self, reset=True)
 
-        # Must run before validation: a real datetime64 column crashes it otherwise.
         date_transformer = DateTransformer(
             categorical_indices=self.categorical_features_indices,
             transform_dates=self.inference_config_.TRANSFORM_DATES,
