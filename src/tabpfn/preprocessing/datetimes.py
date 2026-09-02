@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from skrub import DatetimeEncoder
 
-from tabpfn.errors import TabPFNUserError
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import make_names_unique
 
 if TYPE_CHECKING:
@@ -123,7 +123,7 @@ class DateTransformer:
             `detect_feature_modalities`.
 
         Raises:
-            TabPFNUserError: On a point in time, with `transform_dates` off.
+            TabPFNValidationError: On a point in time, with `transform_dates` off.
         """
         # Cleared before anything else, so that refitting on an input with no
         # columns to expand still forgets the last fit.
@@ -181,7 +181,7 @@ class DateTransformer:
             X: The data, before any dtype fixing.
 
         Raises:
-            TabPFNUserError: On a point in time no fitted encoder covers.
+            TabPFNValidationError: On a point in time no fitted encoder covers.
         """
         if not isinstance(X, pd.DataFrame):
             return X
@@ -304,7 +304,7 @@ def _refuse(X: pd.DataFrame, positions: Sequence[int]) -> None:
     if not positions:
         return
     columns = ", ".join(f"{i} ({X.columns[i]!r})" for i in positions)
-    raise TabPFNUserError(
+    raise TabPFNValidationError(
         f"These columns hold datetimes, which TabPFN does not support: {columns}. "
         'Set `inference_config={"TRANSFORM_DATES": True}` to expand them into '
         "calendar features, or preprocess them yourself first."

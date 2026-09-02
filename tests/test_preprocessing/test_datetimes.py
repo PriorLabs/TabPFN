@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.errors import TabPFNUserError, TabPFNValidationError
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datetimes import DateTransformer, convert_dates
 
 
@@ -53,7 +53,7 @@ class TestRefusal:
             }
         )
 
-        with pytest.raises(TabPFNUserError, match="does not support") as excinfo:
+        with pytest.raises(TabPFNValidationError, match="does not support") as excinfo:
             DateTransformer().fit_transform(X)
 
         message = str(excinfo.value)
@@ -71,7 +71,7 @@ class TestRefusal:
     def test__other_points_in_time__are_refused_too(
         self, dates: pd.DatetimeIndex | pd.PeriodIndex
     ) -> None:
-        with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
+        with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
             DateTransformer().fit_transform(_frame(dates))
 
     def test__date_like_string_column__is_not_refused(self) -> None:
@@ -94,7 +94,7 @@ class TestRefusal:
         transformer = DateTransformer()
         transformer.fit_transform(_frame([1.0, 2.0, 3.0]))
 
-        with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
+        with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
             transformer.transform(_frame(pd.date_range("2020-01-01", periods=3)))
 
 
@@ -281,7 +281,7 @@ class TestExpansionAtPredictTime:
         transformer = DateTransformer(transform_dates=True)
         transformer.fit_transform(_frame(pd.date_range("2020-01-01", periods=3)))
 
-        with pytest.raises(TabPFNUserError, match=r"0 \('num'\)"):
+        with pytest.raises(TabPFNValidationError, match=r"0 \('num'\)"):
             transformer.transform(
                 pd.DataFrame(
                     {
@@ -307,7 +307,7 @@ class TestConvertDates:
     def test__source_without_a_transformer__refuses_a_date(self) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3))
 
-        with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
+        with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
             convert_dates(X, self._Source(categorical_features_indices=None))
 
     def test__source_without_a_transformer__still_converts_a_duration(self) -> None:
@@ -348,7 +348,7 @@ def test__fit_with_real_datetime_column__raises_naming_it(estimator_cls: type) -
     X, y = _estimator_data(estimator_cls, pd.date_range("2020-01-01", periods=120))
 
     model = estimator_cls(n_estimators=1, device="cpu")
-    with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
+    with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
         model.fit(X, y)
 
     model = estimator_cls(
@@ -369,7 +369,7 @@ def test__predict_with_real_datetime_column__raises_naming_it(
     X_numeric = X.assign(date=X["date"].astype("int64"))
 
     model = estimator_cls(n_estimators=1, device="cpu").fit(X_numeric, y)
-    with pytest.raises(TabPFNUserError, match=r"1 \('date'\)"):
+    with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
         model.predict(X)
 
 
