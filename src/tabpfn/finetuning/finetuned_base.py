@@ -53,6 +53,7 @@ from tabpfn.finetuning.train_util import (
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices, infer_random_state
 from tabpfn.validation import (
+    check_input_shape_matches,
     ensure_compatible_fit_inputs_sklearn,
     extract_input_shape,
 )
@@ -872,6 +873,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         if X_val is not None and y_val is not None:
             X_train, y_train = X, y
+            # The validation set has to match the shape the training set recorded
+            # above, not replace it.
+            check_input_shape_matches(X_val, estimator=self)
             X_val, y_val = ensure_compatible_fit_inputs_sklearn(
                 X_val,
                 y_val,
