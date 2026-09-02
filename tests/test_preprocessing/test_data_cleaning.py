@@ -1171,29 +1171,6 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
 
 
-def test__classifier_fit__native_datetime_column__no_longer_crashes() -> None:
-    """A native `datetime64` column mixed with any other dtype used to crash:
-    `validate_data` converts the whole frame to one numpy array, and numpy has
-    no dtype that unifies `datetime64` with a numeric or string column.
-
-    Fixed by `DateTransformer` (see
-    `tests/test_preprocessing/test_datetimes/`), which converts such a
-    column to numeric (nanoseconds since the epoch) before validation runs, so
-    it unifies fine with the rest of the frame.
-    """
-    n = 50
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {"num": rng.normal(size=n), "signed_on": pd.date_range("2020-01-01", periods=n)}
-    )
-    y = rng.integers(0, 2, n)
-
-    clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.warns(UserWarning, match="hold dates"):
-        clf.fit(X, y)
-    clf.predict(X)
-
-
 def test__clean_data_transform__matches_the_general_path_on_numeric_input() -> None:
     """The single-cast shortcut produces exactly what going through pandas does.
 
