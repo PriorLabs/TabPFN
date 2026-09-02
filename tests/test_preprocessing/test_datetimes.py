@@ -78,18 +78,32 @@ class TestRefusal:
         X = _frame(["2020-01-01", "2020-01-02", "2020-01-03"])
         assert DateTransformer().fit_transform(X) is X
 
-    def test__declared_categorical_date__is_left_alone(self) -> None:
-        """The user's declared intent for the column wins over reading it as a
-        date, so it is neither refused nor converted.
-        """
+    def test__declared_categorical_date__is_refused_like_any_other(self) -> None:
+        """Declaring the column categorical does not make it supported."""
         X = _frame(pd.date_range("2020-01-01", periods=3))
-        assert DateTransformer(categorical_indices=[1]).fit_transform(X) is X
+
+        with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
+            DateTransformer(categorical_indices=[1]).fit_transform(X)
 
     def test__non_dataframe_input__is_a_noop(self) -> None:
         X = np.array([[1.0, 2.0], [3.0, 4.0]])
         transformer = DateTransformer()
         assert transformer.fit_transform(X) is X
         assert transformer.transform(X) is X
+
+    @pytest.mark.parametrize("transform_dates", [False, True])
+    def test__datetime64_array__is_refused_pointing_at_a_dataframe(
+        self, transform_dates: bool
+    ) -> None:
+        """An array has no columns to expand, so no flag can help it."""
+        X = np.array(pd.date_range("2020-01-01", periods=3)).reshape(-1, 1)
+        transformer = DateTransformer(transform_dates=transform_dates)
+
+        with pytest.raises(TabPFNValidationError, match="pass a DataFrame"):
+            transformer.fit_transform(X)
+        transformer.fit(np.zeros((3, 1)))
+        with pytest.raises(TabPFNValidationError, match="pass a DataFrame"):
+            transformer.transform(X)
 
     def test__transform__refuses_a_date_too(self) -> None:
         transformer = DateTransformer()
@@ -130,6 +144,16 @@ class TestDurations:
         fitted = transformer.fit_transform(X)
 
         np.testing.assert_array_equal(transformer.transform(X)["date"], fitted["date"])
+
+    def test__timedelta64_array__becomes_seconds(self) -> None:
+        """An array of durations gets the same reading as a column of them."""
+        X = np.array(pd.to_timedelta([1, 2, 3], unit="D")).reshape(-1, 1)
+        transformer = DateTransformer()
+
+        out = transformer.fit_transform(X)
+
+        np.testing.assert_array_equal(out, [[86400.0], [172800.0], [259200.0]])
+        np.testing.assert_array_equal(transformer.transform(X), out)
 
     def test__duplicate_column_labels__are_converted_positionally(self) -> None:
         """Pandas allows repeated labels, so only position identifies a column."""
@@ -196,11 +220,15 @@ class TestExpansion:
         assert transformer.output_indices(None) is None
         assert transformer.feature_names_out_[0] == "cat"
 
-    def test__declared_categorical_date__is_not_expanded(self) -> None:
-        """The user's declared intent still wins, flag or no flag."""
+    def test__declared_categorical_date__is_refused(self) -> None:
+        """Expansion makes many numeric columns of it, so there is no single
+        column the declaration could apply to.
+        """
         X = _frame(pd.date_range("2020-01-01", periods=3))
 
-        assert self._expander(categorical_indices=[1]).fit_transform(X) is X
+        with pytest.raises(TabPFNValidationError, match="listed in") as excinfo:
+            self._expander(categorical_indices=[1]).fit_transform(X)
+        assert "1 ('date')" in str(excinfo.value)
 
     def test__refit_on_a_frame_with_nothing_to_expand__forgets_the_last_fit(
         self,
@@ -334,12 +362,8 @@ def test__fit_with_real_datetime_column__raises_naming_it(estimator_cls: type) -
     """`fit` refuses a genuine `datetime64` column, naming it.
 
     Both estimators share the transformer, so one parametrized test pins the
-    estimator-level behaviour. Declaring the column in
-    `categorical_features_indices` excludes it from the transformer (see
-    `TestRefusal`), so it is left as a real `datetime64` dtype all the way to
-    validation and hits the pre-existing, unrelated `np.result_type` failure
-    instead: an accepted limitation of declaring a genuine date column
-    categorical, not something this silences.
+    estimator-level behaviour, including that declaring the column in
+    `categorical_features_indices` changes nothing about the refusal.
     """
     X, y = _estimator_data(estimator_cls, pd.date_range("2020-01-01", periods=120))
 
@@ -350,7 +374,7 @@ def test__fit_with_real_datetime_column__raises_naming_it(estimator_cls: type) -
     model = estimator_cls(
         n_estimators=1, device="cpu", categorical_features_indices=[1]
     )
-    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
+    with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
         model.fit(X, y)
 
 

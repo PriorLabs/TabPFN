@@ -62,8 +62,9 @@ class DateTransformer:
 
     Args:
         categorical_indices: Indices the caller declared categorical. A point in
-            time among them is left alone entirely, at fit and at predict alike:
-            the user's declared intent for it wins over reading it as a date.
+            time among them is refused at fit: it is expanded into many numeric
+            columns, or refused outright, so there is no single column the
+            declaration could apply to.
         transform_dates: Whether a point in time is expanded into a year, a day
             of year, the seconds since the epoch, and cyclical month, day and
             weekday pairs, so a December and the December before it are near
@@ -110,7 +111,9 @@ class DateTransformer:
             Itself, fitted.
 
         Raises:
-            TabPFNValidationError: On a point in time, with `transform_dates` off.
+            TabPFNValidationError: On a point in time with `transform_dates` off,
+                on one declared categorical, or on a `datetime64` array, which
+                no flag can expand.
         """
         self._fit(X)
         return self
@@ -134,7 +137,7 @@ class DateTransformer:
         """
         blocks = self._fit(X)
         if not isinstance(X, pd.DataFrame):
-            return X
+            return _duration_array_to_seconds(X)
         return self._assemble(X, blocks)
 
     def transform(self, X: XType) -> XType:
@@ -156,7 +159,8 @@ class DateTransformer:
         """
         self._check_is_fitted()
         if not isinstance(X, pd.DataFrame):
-            return X
+            _refuse_datetime_array(X)
+            return _duration_array_to_seconds(X)
         instants = self._instant_positions(X)
         _refuse(X, [i for i in instants if i not in self.fitted_columns_])
         blocks = [
@@ -201,11 +205,15 @@ class DateTransformer:
         self.fitted_columns_ = {}
         self.feature_names_out_ = None
         if not isinstance(X, pd.DataFrame):
+            _refuse_datetime_array(X)
             return []
 
         instants = self._instant_positions(X)
         if not self._transform_dates:
             _refuse(X, instants)
+        _refuse_declared_categorical(
+            X, [i for i in instants if i in self._declared_categorical]
+        )
         kept_names = [
             str(column) for i, column in enumerate(X.columns) if i not in set(instants)
         ]
@@ -236,17 +244,10 @@ class DateTransformer:
             converted.reset_index(drop=True), self.expanded_indices, blocks
         )
 
-    def _instant_positions(self, X: pd.DataFrame) -> list[int]:
-        """The positions of `X`'s points in time, minus the declared categoricals.
-
-        A declared-categorical instant is not among them at all: the user's
-        declared intent for it wins over reading it as a date.
-        """
-        return [
-            i
-            for i, dtype in enumerate(X.dtypes)
-            if is_instant_dtype(dtype) and i not in self._declared_categorical
-        ]
+    @staticmethod
+    def _instant_positions(X: pd.DataFrame) -> list[int]:
+        """The positions of `X`'s points in time."""
+        return [i for i, dtype in enumerate(X.dtypes) if is_instant_dtype(dtype)]
 
     @staticmethod
     def _duration_positions(X: pd.DataFrame) -> list[int]:
@@ -331,6 +332,51 @@ def _refuse(X: pd.DataFrame, positions: Sequence[int]) -> None:
         'Set `inference_config={"TRANSFORM_DATES": True}` to expand them into '
         "calendar features, or preprocess them yourself first."
     )
+
+
+def _refuse_declared_categorical(X: pd.DataFrame, positions: Sequence[int]) -> None:
+    """Raise on the points in time at `positions`, all declared categorical.
+
+    Expansion turns one such column into many numeric ones, so there is no
+    single column the declaration could apply to; refusing is clearer than
+    quietly picking one reading over the other.
+    """
+    if not positions:
+        return
+    columns = ", ".join(f"{i} ({X.columns[i]!r})" for i in positions)
+    raise TabPFNValidationError(
+        f"These columns hold datetimes but are listed in "
+        f"`categorical_features_indices`: {columns}. A datetime column is "
+        "expanded into calendar features, so it cannot be a category as well: "
+        "drop it from `categorical_features_indices`, or cast it to strings "
+        "yourself first."
+    )
+
+
+def _refuse_datetime_array(X: XType) -> None:
+    """Raise on a `datetime64` array: only a `DataFrame` column can be expanded.
+
+    Left alone, it would reach `fix_dtypes`, which rejects the dtype without
+    saying what to do about it.
+    """
+    if isinstance(X, np.ndarray) and X.dtype.kind == "M":
+        raise TabPFNValidationError(
+            f"Got a numpy array of dtype {X.dtype}, which holds datetimes. Only a "
+            "DataFrame column can be expanded into calendar features: pass a "
+            'DataFrame with `inference_config={"TRANSFORM_DATES": True}`, or '
+            "preprocess the dates yourself first."
+        )
+
+
+def _duration_array_to_seconds(X: XType) -> XType:
+    """A `timedelta64` array as its lengths in seconds, or `X` unchanged.
+
+    The same conversion a duration column gets, so an array and a frame holding
+    the same durations reach the model as the same numbers.
+    """
+    if isinstance(X, np.ndarray) and X.dtype.kind == "m":
+        return X / np.timedelta64(1, "s")
+    return X
 
 
 def is_instant_dtype(dtype: Any) -> bool:
