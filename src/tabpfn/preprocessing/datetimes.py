@@ -8,6 +8,12 @@ like one before `check_array`/`check_X_y` run, which is why this tier exists at
 all. A point in time (`datetime64`, tz-aware, or `period`) is expanded into
 calendar features when `TRANSFORM_DATES` is on, and refused with an error naming
 it otherwise. A duration (`timedelta64`) always becomes its length in seconds.
+Only a genuine temporal dtype counts: a string that merely looks like a date is
+not a date here.
+
+Only `TabPFNClassifier` and `TabPFNRegressor` run this. The fine-tuning
+estimators validate their input directly, so a datetime column has to be
+converted before fine-tuning.
 
 The frame surgery is positional throughout, because the labels are the caller's
 and so can repeat (the same duplicate-name case `build_input_feature_names`
