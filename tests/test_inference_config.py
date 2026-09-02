@@ -8,6 +8,7 @@ import inspect
 import io
 import warnings
 from dataclasses import asdict, fields, replace
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -639,16 +640,18 @@ def test__inference_config__asdict_of_a_config__matches_the_object_form(
 # =============================================================================
 
 
-def _classifier_specs_with_n_estimators(n_estimators: int) -> ClassifierModelSpecs:
+def _classifier_specs_with_n_estimators(
+    n_estimators: int | Literal["auto"],
+) -> ClassifierModelSpecs:
     specs = _make_classifier_specs()
     specs.inference_config = replace(specs.inference_config, N_ESTIMATORS=n_estimators)
     return specs
 
 
-def test__n_estimators__omitted_from_config__falls_back_to_legacy_default() -> None:
-    """Checkpoints predating the field must keep the count they shipped with."""
+def test__n_estimators__omitted_from_config__is_auto() -> None:
+    """Checkpoints predating the field leave the count where it was: `"auto"`."""
     config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
-    assert config.N_ESTIMATORS == DEFAULT_N_ESTIMATORS == 8
+    assert config.N_ESTIMATORS == "auto"
 
     for model_version in (ModelVersion.V2, ModelVersion.V2_5):
         for task_type in ("multiclass", "regression"):
@@ -656,7 +659,7 @@ def test__n_estimators__omitted_from_config__falls_back_to_legacy_default() -> N
                 task_type=task_type,  # type: ignore[arg-type]
                 model_version=model_version,
             )
-            assert default.N_ESTIMATORS == DEFAULT_N_ESTIMATORS
+            assert default.N_ESTIMATORS == "auto"
 
 
 def test__classifier_n_estimators__auto__taken_from_checkpoint(
@@ -762,6 +765,36 @@ def test__classifier_n_estimators__checkpoints_disagree__raises(
         clf.fit(X, y)
 
 
+def test__classifier_n_estimators__checkpoint_auto_against_a_count__raises(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """`"auto"` and a count are different requests, and the values sort together."""
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators("auto"),
+        _classifier_specs_with_n_estimators(4),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu")
+    with pytest.raises(ValueError, match=r"different numbers of estimators"):
+        clf.fit(X, y)
+
+
+def test__classifier_n_estimators__checkpoints_both_auto__is_no_disagreement(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators("auto"),
+        _classifier_specs_with_n_estimators("auto"),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu")
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == DEFAULT_N_ESTIMATORS
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -827,3 +860,60 @@ def test__regressor_n_estimators__explicit__overrides_checkpoint() -> None:
 
     assert reg.n_estimators_ == 5
     assert reg.get_inference_config().N_ESTIMATORS == 3
+
+
+@pytest.fixture(scope="module")
+def wide_classification_data() -> tuple[np.ndarray, np.ndarray]:
+    """Wide enough that 8 estimators cannot cover every feature at 2 features each."""
+    return sklearn.datasets.make_classification(
+        n_samples=30,
+        n_classes=3,
+        n_features=20,
+        n_informative=8,
+        n_redundant=0,
+        random_state=0,
+    )
+
+
+def _narrow_estimator_specs(
+    n_estimators: int | Literal["auto"],
+) -> ClassifierModelSpecs:
+    """Specs declaring `n_estimators`, seeing only 2 features per estimator."""
+    specs = _classifier_specs_with_n_estimators(n_estimators)
+    specs.inference_config = replace(
+        specs.inference_config,
+        PREPROCESS_TRANSFORMS=[
+            PreprocessorConfig("none", max_features_per_estimator=2)
+        ],
+    )
+    return specs
+
+
+def test__classifier_n_estimators__checkpoint_auto__scales_for_coverage(
+    wide_classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A checkpoint leaving the count at `"auto"` still gets coverage scaling."""
+    X, y = wide_classification_data
+    clf = TabPFNClassifier(model_path=_narrow_estimator_specs("auto"), device="cpu")
+
+    with pytest.warns(UserWarning, match="Auto-scaling n_estimators"):
+        clf.fit(X, y)
+
+    assert clf.n_estimators_ == 10  # ceil(20 features / 2 per estimator)
+
+
+def test__classifier_n_estimators__checkpoint_count__is_never_scaled(
+    wide_classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A count the checkpoint asks for is honored, exactly like a user's own.
+
+    Coverage scaling would raise it to 10 here; it warns instead, which is what an
+    explicit `n_estimators=3` has always done.
+    """
+    X, y = wide_classification_data
+    clf = TabPFNClassifier(model_path=_narrow_estimator_specs(3), device="cpu")
+
+    with pytest.warns(UserWarning, match="n_estimators=3 covers at most 6 of 20"):
+        clf.fit(X, y)
+
+    assert clf.n_estimators_ == 3

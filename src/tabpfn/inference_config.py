@@ -20,7 +20,6 @@ from tabpfn.preprocessing import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
-from tabpfn.preprocessing.ensemble import DEFAULT_N_ESTIMATORS
 
 DEFAULT_SOFTMAX_TEMPERATURE = 0.9
 """The softmax temperature of every checkpoint released before the temperature became
@@ -114,17 +113,24 @@ class InferenceConfig:
     at once is rejected. With neither, the value comes from the checkpoint, and an
     ensemble whose checkpoints declare different temperatures is rejected too."""
 
-    N_ESTIMATORS: int = DEFAULT_N_ESTIMATORS
+    N_ESTIMATORS: int | Literal["auto"] = "auto"
     """How many estimators to run when the user leaves `n_estimators="auto"`.
 
     An estimator is one forward pass over a differently preprocessed view of the
-    data; more of them costs proportionally more compute. This is the base value,
-    which feature-coverage scaling may still raise for very wide tables (see
-    `scale_n_estimators_for_feature_coverage`).
+    data; more of them costs proportionally more compute.
 
-    The default is the value that shipped as `DEFAULT_N_ESTIMATORS` before this
-    became a config field, so checkpoints that predate the field keep their original
-    behavior. Newer checkpoints are expected to store their own value.
+    This means exactly what the `n_estimators` argument of the estimators means, and
+    is used in its place when the user names no count:
+        - If an int, that many estimators run, and feature-coverage scaling never
+          raises it -- a checkpoint that asks for a count gets that count, the same
+          guarantee a user passing one gets.
+        - If `"auto"` (the default), `DEFAULT_N_ESTIMATORS` estimators run, raised
+          on wide tables so every feature is seen by some estimator (see
+          `scale_n_estimators_for_feature_coverage`).
+
+    The default leaves the decision where it was before this field existed, so
+    checkpoints that predate it keep their original behavior. Newer checkpoints are
+    expected to store a count of their own.
 
     Setting this here overrides the checkpoint, as does
     `TabPFNClassifier(n_estimators=...)`; naming a count both ways at once is
@@ -403,11 +409,16 @@ def raise_if_checkpoints_disagree_on_overridable_fields(
         overrides: What the user asked for, keyed by field name, applied to every
             model. A field is checked only where the user asked for nothing.
     """
+    # A field left at "auto" by every checkpoint is not a disagreement, and neither
+    # is one they all declare the same way.
     for field, (plural, argument) in OVERRIDABLE_FIELDS.items():
         if overrides.get(field) is not None:
             continue
 
-        values = sorted({getattr(config, field) for config in inference_configs})
+        # `key=str` because a field can mix ints with the string "auto".
+        values = sorted(
+            {getattr(config, field) for config in inference_configs}, key=str
+        )
         if len(values) > 1:
             raise ValueError(
                 f"The given model checkpoints declare different {plural} "

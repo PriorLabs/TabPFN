@@ -503,11 +503,14 @@ def _resolve_overrides(
     for field, (_, argument) in OVERRIDABLE_FIELDS.items():
         from_config: float | int | None = None
         if isinstance(user_config, InferenceConfig):
-            # A hand-built config replaces the checkpoint's wholesale, so it names
-            # every field, this one included.
+            # A hand-built config replaces the checkpoint's wholesale, so it carries
+            # a value for every field, this one included.
             from_config = getattr(user_config, field)
         elif isinstance(user_config, dict) and field in user_config:
             from_config = user_config[field]
+        if from_config == "auto":
+            # "auto" is the absence of a choice, wherever it comes from.
+            from_config = None
 
         from_argument = getattr(estimator, argument)
         if from_argument == "auto":
@@ -523,6 +526,22 @@ def _resolve_overrides(
         overrides[field] = from_argument
 
     return overrides
+
+
+def resolved_n_estimators(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+) -> int | Literal["auto"]:
+    """How many estimators `estimator` should run, before feature-coverage scaling.
+
+    The `n_estimators` argument wins; left at `"auto"` the count comes from the
+    checkpoint's `InferenceConfig.N_ESTIMATORS`, which may itself be `"auto"`. Both
+    mean the same thing, so the result is passed straight to
+    `scale_n_estimators_for_feature_coverage`: an int is used as given, `"auto"`
+    resolves to `DEFAULT_N_ESTIMATORS` and may be raised for feature coverage.
+    """
+    if estimator.n_estimators != "auto":
+        return estimator.n_estimators
+    return estimator.inference_config_.N_ESTIMATORS
 
 
 def resolved_softmax_temperature(
