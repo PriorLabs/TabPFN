@@ -20,6 +20,7 @@ from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
 from tabpfn.model_loading import save_tabpfn_model
+from tabpfn.utils import infer_devices
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
@@ -329,7 +330,7 @@ def test_saving_and_loading_with_tuning_config(
     path = tmp_path / "model.tabpfn_fit"
     estimator.fit(X, y)
     estimator.save_fit_state(path)
-    loaded_estimator = TabPFNClassifier.load_from_fit_state(path)
+    loaded_estimator = TabPFNClassifier.load_from_fit_state(path, device="cpu")
     assert loaded_estimator.tuned_classification_thresholds_ is not None
     assert loaded_estimator.softmax_temperature_ is not None
     assert loaded_estimator.eval_metric_ is ClassifierEvalMetrics.F1
@@ -361,7 +362,7 @@ def test_saving_and_loading_regressor_with_tuning_config(
     path = tmp_path / "model.tabpfn_fit"
     estimator.fit(X, y)
     estimator.save_fit_state(path)
-    loaded_estimator = TabPFNRegressor.load_from_fit_state(path)
+    loaded_estimator = TabPFNRegressor.load_from_fit_state(path, device="cpu")
 
     assert loaded_estimator.eval_metric_ is RegressorEvalMetrics.NLL
     assert (
@@ -477,3 +478,32 @@ def test__save_and_load_fit_with_cache_twice__predictions_equal(
     loaded_2 = estimator_class.load_from_fit_state(path_2, device=loading_device)
 
     _assert_roundtrip_predictions(original, loaded_2, X, cross_device=cross_device)
+
+
+@pytest.mark.parametrize("estimator_class", [TabPFNClassifier, TabPFNRegressor])
+def test__load_from_fit_state__without_device__resolves_like_auto(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+    tmp_path: Path,
+) -> None:
+    """Loading without a device must land where the constructor's "auto" points.
+
+    This defaulted to "cpu", so a GPU-fitted model silently reloaded onto CPU
+    and predicted orders of magnitude slower with nothing to signal it. The
+    intuitive repair, assigning to `.device`, cannot help: predict reads
+    `devices_`.
+    """
+    X, y = (
+        _make_regression_data()
+        if estimator_class is TabPFNRegressor
+        else _make_classification_data_with_categoricals()
+    )
+    model = estimator_class(device="cpu", n_estimators=2)
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+    model.save_fit_state(path)
+
+    loaded = estimator_class.load_from_fit_state(path)
+
+    assert loaded.device == "auto"
+    assert loaded.devices_ == infer_devices("auto")
+    assert len(loaded.predict(X)) == len(X)

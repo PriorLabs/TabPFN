@@ -2121,7 +2121,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     @classmethod
     def load_from_fit_state(
-        cls, path: Path | str, *, device: str | torch.device = "cpu"
+        cls, path: Path | str, *, device: DevicesSpecification = "auto"
     ) -> TabPFNRegressor:
         """Restore a fitted regressor, light wrapper around load_fitted_tabpfn_model."""
         est = load_fitted_tabpfn_model(path, device=device)

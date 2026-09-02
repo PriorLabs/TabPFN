@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import ModelPath
+    from tabpfn.utils import DevicesSpecification
 
 logger = logging.getLogger(__name__)
 
@@ -1255,10 +1256,26 @@ def _extract_archive(path: Path, tmp: Path) -> None:
 
 
 def load_fitted_tabpfn_model(
-    path: Path | str, *, device: str | torch.device = "cpu"
+    path: Path | str, *, device: DevicesSpecification = "auto"
 ) -> BaseEstimator:
-    """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
+    """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``.
+
+    Args:
+        path: The ``.tabpfn_fit`` archive to load.
+        device: The device(s) to load the estimator onto. Defaults to ``"auto"``,
+            matching the estimator constructors, which selects CUDA, then MPS,
+            then CPU by availability. The archive does not record the device the
+            model was fitted on, so pass this explicitly to pin the estimator to
+            a device.
+    """
     path = Path(path)
+    # The spec is written to JSON and passed to `to()`, so normalize a
+    # torch.device or a sequence of them to plain strings.
+    device_spec: str | list[str] = (
+        str(device)
+        if isinstance(device, (str, torch.device))
+        else [str(d) for d in device]
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
@@ -1274,7 +1291,7 @@ def load_fitted_tabpfn_model(
         ].startswith("torch."):
             dtype_name = params["inference_precision"].split(".")[1]
             params["inference_precision"] = getattr(torch, dtype_name)
-        params["device"] = str(device)
+        params["device"] = device_spec
 
         if saved_cls_name == "TabPFNClassifier":
             cls = import_module("tabpfn.classifier").TabPFNClassifier
@@ -1296,7 +1313,7 @@ def load_fitted_tabpfn_model(
             tmp / "executor_state.joblib", est.models_
         )
 
-        est.to(str(device))
+        est.to(device_spec)
 
         return est
 
