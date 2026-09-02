@@ -1,11 +1,23 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""The one transformer temporal columns go through, before validation runs."""
+"""Converting temporal columns, before validation ever sees them.
+
+sklearn's array machinery cannot hold a `datetime64` column beside a numeric one
+in one array (no common dtype exists), so a temporal column has to stop looking
+like one before `check_array`/`check_X_y` run, which is why this tier exists at
+all. A point in time (`datetime64`, tz-aware, or `period`) is expanded into
+calendar features when `TRANSFORM_DATES` is on, and refused with an error naming
+it otherwise. A duration (`timedelta64`) always becomes its length in seconds.
+
+The frame surgery is positional throughout, because the labels are the caller's
+and so can repeat (the same duplicate-name case `build_input_feature_names`
+exists for), which makes anything driven by a label ambiguous.
+"""
 
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -13,18 +25,13 @@ from skrub import DatetimeEncoder
 
 from tabpfn.errors import TabPFNUserError
 from tabpfn.preprocessing.datamodel import make_names_unique
-from tabpfn.preprocessing.datetimes.columns import (
-    as_timestamp,
-    drop_and_append,
-    is_instant_dtype,
-    replace_columns_positionally,
-    to_seconds,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from tabpfn.constants import XType
+
+__all__ = ["DateConversion", "DateTransformer", "convert_dates"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -302,3 +309,85 @@ def _refuse(X: pd.DataFrame, positions: Sequence[int]) -> None:
         'Set `inference_config={"TRANSFORM_DATES": True}` to expand them into '
         "calendar features, or preprocess them yourself first."
     )
+
+
+def convert_dates(X: XType, source: object) -> XType:
+    """Convert `X`'s temporal columns via `source`'s fitted `date_transformer_`.
+
+    `source` (a fitted estimator or ensemble worker) may never have set
+    `date_transformer_` at all, e.g. `fit_from_preprocessed` skips the step that
+    would, exactly like the pre-existing `ordinal_encoder_` guard. The fallback
+    has nothing fitted to expand a date with, so it refuses one, and converts a
+    duration as any transformer does.
+    """
+    transformer = getattr(source, "date_transformer_", None) or DateTransformer(
+        categorical_indices=getattr(source, "categorical_features_indices", None)
+    )
+    return transformer.transform(X)
+
+
+def is_instant_dtype(dtype: Any) -> bool:
+    """Whether `dtype` holds points in time: `datetime64`, tz-aware, or `period`."""
+    return pd.api.types.is_datetime64_any_dtype(dtype) or isinstance(
+        dtype, pd.PeriodDtype
+    )
+
+
+def as_timestamp(column: pd.Series) -> pd.Series:
+    """The instant a `period` column starts at, or the column unchanged.
+
+    A period is a span, not an instant; its start is the instant that orders
+    identically, which is all any conversion here needs.
+    """
+    if isinstance(column.dtype, pd.PeriodDtype):
+        return column.dt.to_timestamp()
+    return column
+
+
+def to_seconds(column: pd.Series) -> pd.Series:
+    """Cast one `timedelta64` column to its length in seconds.
+
+    A duration carries no calendar, so its length is the whole of its meaning:
+    unlike a point in time, there is nothing an expansion could add.
+    """
+    return column.dt.total_seconds()
+
+
+def replace_columns_positionally(
+    X: pd.DataFrame,
+    replacements: dict[int, pd.Series],
+) -> pd.DataFrame:
+    """Return `X` with the given column positions replaced, leaving `X` untouched.
+
+    Positional via a temporary integer column axis: numbering the axis makes
+    every label unique and equal to its own position, so a plain assignment is
+    unambiguous, and the caller's labels go back afterwards.
+
+    The copy is shallow and the frame handed in is never written through: each
+    assignment replaces a whole column rather than any value inside one.
+    """
+    if not replacements:
+        return X
+    out = X.copy(deep=False)
+    original_columns = out.columns
+    out.columns = pd.RangeIndex(out.shape[1])
+    for position, values in replacements.items():
+        out[position] = values.to_numpy()
+    out.columns = original_columns
+    return out
+
+
+def drop_and_append(
+    frame: pd.DataFrame,
+    expanded: Sequence[int],
+    blocks: Sequence[pd.DataFrame],
+) -> pd.DataFrame:
+    """Drop every expanded column and append its calendar features instead.
+
+    Positional, not `frame.drop(columns=...)`, which would take the wrong column
+    when labels repeat. Every expanded column's output lands after all the kept
+    ones, in original-position order, which is what makes the appended block's
+    positions predictable.
+    """
+    keep = [i for i in range(frame.shape[1]) if i not in set(expanded)]
+    return pd.concat([frame.iloc[:, keep], *blocks], axis=1)
