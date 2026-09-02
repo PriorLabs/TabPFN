@@ -658,8 +658,9 @@ def _get_subsample_feature_indices(
             "balanced", "random", or "constant_and_balanced".
         constant_feature_count: Number of leading features to always include
             when using the "constant_and_balanced" method.
-        importance_feature_orders: Per-estimator feature indices sorted most->least
-            important. Produced by ``_compute_feature_importance_order``.
+        importance_feature_orders: Unique feature orderings sorted most->least
+            important, cycled across estimators. Produced by
+            ``_compute_feature_importance_order``.
         importance_top_k_count: Number of top features always included per estimator.
             Only used when feature_subsampling_method is "feature_importance".
     """
@@ -878,8 +879,9 @@ def _subsample_features_importance_based(
     Args:
         subsample_sizes: Number of input features to select per estimator.
         n_total_features: Total number of features in the dataset.
-        importance_feature_orders: Per-estimator feature indices sorted most->least
-            important. Produced by ``_compute_feature_importance_order``.
+        importance_feature_orders: Unique feature orderings sorted most->least
+            important, cycled across estimators. Produced by
+            ``_compute_feature_importance_order``.
         top_k_count: Number of top features always included per estimator.
         rng: Random number generator.
     """
@@ -934,20 +936,19 @@ def _collect_importance_orderings(
     fit_ordering_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     rng: np.random.Generator,
 ) -> list[np.ndarray]:
-    """Run ``fit_ordering_fn`` and return one ordering per estimator.
+    """Run ``fit_ordering_fn`` once per unique subsample and return the orderings.
 
-    For datasets that fit within ``max_samples`` a single call is made and its
-    result is repeated.  For larger datasets ``n_subsamples`` independent
-    subsamples of size ``max_samples`` are drawn and cycled to fill
-    ``n_estimators``.
+    Datasets within ``max_samples`` yield a single ordering; larger datasets
+    yield up to ``n_estimators`` orderings fit on independent subsamples.
+    Consumers cycle through the list, so estimators sharing an entry share one
+    subsampling pool.
     """
     n_samples = len(X)
 
     if n_samples <= max_samples:
         # The importance model bins each feature from the values it is handed,
         # but `clean_data` no longer casts: not a no-op
-        ordering = fit_ordering_fn(np.asarray(X, dtype=np.float64), y)
-        return [ordering] * n_estimators
+        return [fit_ordering_fn(np.asarray(X, dtype=np.float64), y)]
 
     from sklearn.model_selection import train_test_split  # noqa: PLC0415
 
@@ -964,7 +965,7 @@ def _collect_importance_orderings(
         # The importance model bins each feature from the values it is handed,
         # but `clean_data` no longer casts: not a no-op
         orderings.append(fit_ordering_fn(np.asarray(X[idx], dtype=np.float64), y[idx]))
-    return [orderings[i % n_subsamples] for i in range(n_estimators)]
+    return orderings
 
 
 def _compute_feature_importance_order(
@@ -978,18 +979,13 @@ def _compute_feature_importance_order(
     categorical_feature_indices: list[int] | None = None,
     rng: np.random.Generator,
 ) -> list[np.ndarray]:
-    """Rank features by LightGBM gain importance, returning one ordering per estimator.
-
-    The returned list always has length ``n_estimators``.  When fewer distinct
-    orderings are computed than there are estimators the list is filled by
-    cycling through the available orderings.
+    """Rank features by LightGBM gain importance.
 
     Args:
         X: Training features, shape (n_samples, n_features).
         y: Training targets, shape (n_samples,).
         task_type: ``"classifier"`` or ``"regressor"`` (matches TabPFN estimator_type).
-        n_estimators: Number of TabPFN ensemble estimators.  The returned list
-            has exactly this length.
+        n_estimators: Upper bound on the number of orderings computed.
         max_samples: Row budget per importance model fit.
         n_tree_estimators: Number of trees in LightGBM models.
         categorical_feature_indices: Column indices of categorical features
@@ -997,8 +993,9 @@ def _compute_feature_importance_order(
         rng: Random number generator.
 
     Returns:
-        List of length ``n_estimators``, each element an array of feature indices
-        sorted from most to least important.
+        The unique orderings, each an array of feature indices sorted from most
+        to least important. Estimators are assigned orderings by cycling
+        through the list.
     """
     model_cls = _get_lightgbm_model_cls(task_type)
     cat_feature: list[int] | str = categorical_feature_indices or "auto"
