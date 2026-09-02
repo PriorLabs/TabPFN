@@ -48,7 +48,7 @@ from tabpfn.utils import (
     infer_devices,
 )
 from tabpfn.validation import (
-    capture_input_shape,
+    check_input_shape_matches,
     ensure_compatible_predict_input_sklearn,
 )
 
@@ -604,7 +604,7 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
-    capture_input_shape(X, estimator=model, reset=False)
+    check_input_shape_matches(X, estimator=model)
     X = model.date_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = clean_data_transform(

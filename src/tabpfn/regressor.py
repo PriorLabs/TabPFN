@@ -99,9 +99,10 @@ from tabpfn.utils import (
     translate_probs_across_borders,
 )
 from tabpfn.validation import (
-    capture_input_shape,
+    check_input_shape_matches,
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
+    extract_input_shape,
     validate_dataset_size,
 )
 
@@ -875,7 +876,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # feature_names_in_/n_features_in_ have to describe what the caller passed,
         # not the wider frame expansion can make of it, so they come off the raw
         # input here, before any conversion.
-        capture_input_shape(X, estimator=self, reset=True)
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
         date_transformer = DateTransformer(
             categorical_indices=self.categorical_features_indices,
@@ -1316,7 +1317,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        capture_input_shape(X, estimator=self, reset=False)
+        check_input_shape_matches(X, estimator=self)
         X = self.date_transformer_.transform(X)
         X = ensure_compatible_predict_input_sklearn(X, self)
 
@@ -1482,7 +1483,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
-            capture_input_shape(X_holdout_NhF, estimator=tuning_regressor, reset=False)
+            check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
             X_holdout_NhF = tuning_regressor.date_transformer_.transform(  # noqa: PLW2901
                 X_holdout_NhF
             )
@@ -1757,7 +1758,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
-            capture_input_shape(X_test, estimator=worker, reset=False)
+            check_input_shape_matches(X_test, estimator=worker)
             X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901

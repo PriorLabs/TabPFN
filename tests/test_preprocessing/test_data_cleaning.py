@@ -29,7 +29,11 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
     get_ordinal_encoder,
 )
-from tabpfn.validation import capture_input_shape, ensure_compatible_fit_inputs
+from tabpfn.validation import (
+    check_input_shape_matches,
+    ensure_compatible_fit_inputs,
+    extract_input_shape,
+)
 
 
 @pytest.fixture
@@ -93,25 +97,50 @@ class TestEnsureCompatibleFitInputsBasic:
         assert len(y) == 3
         assert original_y_name is None
 
-    def test__capture_input_shape__pandas_dataframe(
-        self, classifier: TabPFNClassifier
-    ) -> None:
-        """Column names are taken off the raw frame, before any conversion."""
+    def test__extract_input_shape__pandas_dataframe(self) -> None:
+        """Column names come off the raw frame, before any conversion."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
 
-        capture_input_shape(X, estimator=classifier, reset=True)
+        feature_names, n_features = extract_input_shape(X)
 
-        assert list(classifier.feature_names_in_) == ["feature_a", "feature_b"]
-        assert classifier.n_features_in_ == 2
+        assert list(feature_names) == ["feature_a", "feature_b"]
+        assert n_features == 2
 
-    def test__capture_input_shape__numpy_array(
+    def test__extract_input_shape__numpy_array(self) -> None:
+        """An array has no column names, so only the width is reported."""
+        assert extract_input_shape(np.zeros((3, 2))) == (None, 2)
+
+    def test__extract_input_shape__1d_array__has_no_width(self) -> None:
+        """Left for value validation to reject, with its own clearer message."""
+        assert extract_input_shape(np.zeros(3)) == (None, None)
+
+    def test__check_input_shape_matches__wrong_width__raises(
         self, classifier: TabPFNClassifier
     ) -> None:
-        """An array has no column names, so only the width is recorded."""
-        capture_input_shape(np.zeros((3, 2)), estimator=classifier, reset=True)
+        classifier.n_features_in_ = 2
 
-        assert not hasattr(classifier, "feature_names_in_")
-        assert classifier.n_features_in_ == 2
+        with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
+            check_input_shape_matches(np.zeros((3, 3)), estimator=classifier)
+
+    def test__check_input_shape_matches__wrong_names__raises(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.feature_names_in_ = np.array(["a", "b"])
+        classifier.n_features_in_ = 2
+        X = pd.DataFrame({"a": [1.0], "c": [2.0]})
+
+        with pytest.raises(TabPFNValidationError, match="feature names should match"):
+            check_input_shape_matches(X, estimator=classifier)
+
+    def test__check_input_shape_matches__same_shape__passes(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.feature_names_in_ = np.array(["a", "b"])
+        classifier.n_features_in_ = 2
+
+        check_input_shape_matches(
+            pd.DataFrame({"a": [1.0], "b": [2.0]}), estimator=classifier
+        )
 
     def test__ensure_compatible_fit_inputs__pandas_series_y(
         self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]

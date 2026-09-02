@@ -53,8 +53,8 @@ from tabpfn.finetuning.train_util import (
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices, infer_random_state
 from tabpfn.validation import (
-    capture_input_shape,
     ensure_compatible_fit_inputs_sklearn,
+    extract_input_shape,
 )
 
 logger = logging.getLogger(__name__)
@@ -859,7 +859,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self.finetuned_estimator_._initialize_model_variables()
-        capture_input_shape(X, estimator=self, reset=True)
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
         X_validated, y_validated = ensure_compatible_fit_inputs_sklearn(
             X,
             y,

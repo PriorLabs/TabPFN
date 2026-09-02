@@ -11,13 +11,13 @@ from __future__ import annotations
 import typing
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import pandas as pd
 import torch
 from sklearn.base import is_classifier
 from sklearn.utils.multiclass import check_classification_targets
-from sklearn.utils.validation import _num_features
+from sklearn.utils.validation import _get_feature_names, _num_features
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.misc._sklearn_compat import (
@@ -30,7 +30,9 @@ from tabpfn.settings import settings
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import torch
+    from sklearn.base import BaseEstimator
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
@@ -38,36 +40,62 @@ if TYPE_CHECKING:
     T = TypeVar("T")
 
 
-def capture_input_shape(
-    X: XType,
-    *,
-    estimator: TabPFNRegressor | TabPFNClassifier,
-    reset: bool,
-) -> None:
-    """Set (`reset=True`) or check (`reset=False`) `feature_names_in_`/`n_features_in_`.
+def extract_input_shape(X: XType) -> tuple[npt.NDArray[Any] | None, int | None]:
+    """The `feature_names_in_` and `n_features_in_` a raw fit input implies.
 
-    Call on the raw input, before date resolution (`DateTransformer`) or value
-    validation run: both attributes have to describe what the caller actually
-    passed, not TabPFN's internal, post-expansion representation of it. Only the
-    input's shape and column labels are read here, never its values, so this is
-    safe on an `X` still holding a genuine `datetime64` column, unlike the rest
-    of validation.
+    Read off the raw input, before date conversion (`DateTransformer`) or value
+    validation run: both attributes have to describe what the caller passed, not
+    TabPFN's internal, possibly wider, view of it. Only the shape and the column
+    labels are read here, never the values, so an `X` still holding a genuine
+    `datetime64` column is fine, unlike for the rest of validation.
 
-    An `X` with no determinable column count (e.g. a 1D array) is left for value
-    validation downstream, whose "Reshape your data ..." is the better message.
+    Sets nothing: the caller assigns the two values it gets back, so what an
+    estimator records about its input is written where it can be read.
+
+    Returns:
+        The column labels (`None` for an input that carries none, e.g. an array),
+        and the column count (`None` when it cannot be determined, e.g. for a 1D
+        array, which value validation then rejects with its clearer "Reshape your
+        data" message).
+
+    Raises:
+        TabPFNValidationError: If the labels mix strings with other types, which
+            sklearn rejects too.
     """
     try:
-        _check_feature_names(estimator, X, reset=reset)
+        feature_names = _get_feature_names(X)
     except (ValueError, TypeError) as e:
         raise TabPFNValidationError(str(e)) from e
 
     try:
         n_features = _num_features(X)
     except TypeError:
-        return
+        n_features = None
+    return feature_names, n_features
 
-    if reset:
-        estimator.n_features_in_ = n_features
+
+def check_input_shape_matches(X: XType, *, estimator: BaseEstimator) -> None:
+    """Check a predict input against the `feature_names_in_`/`n_features_in_` of fit.
+
+    The counterpart of `extract_input_shape`, and read-only likewise: it compares
+    and raises, writing nothing back onto `estimator`. Call it on the raw input,
+    before date conversion, for the same reason.
+
+    The labels are checked before the count, so a frame that is both renamed and
+    narrowed reports the name mismatch, as sklearn's own check would.
+
+    Raises:
+        TabPFNValidationError: If `X`'s column labels or count disagree with what
+            fit recorded.
+    """
+    try:
+        _check_feature_names(estimator, X, reset=False)
+    except (ValueError, TypeError) as e:
+        raise TabPFNValidationError(str(e)) from e
+
+    try:
+        n_features = _num_features(X)
+    except TypeError:
         return
     expected = getattr(estimator, "n_features_in_", None)
     if expected is not None and n_features != expected:
@@ -91,9 +119,9 @@ def ensure_compatible_fit_inputs(
 ) -> tuple[np.ndarray, np.ndarray, str | None]:
     """Validate the values of already-shape-captured, already-date-resolved inputs.
 
-    `capture_input_shape` must already have run, on the raw `X`, to set
-    `feature_names_in_`/`n_features_in_`: nothing here touches those, so they are
-    never taken from the shape of the (possibly wider) `X` handed over here.
+    `feature_names_in_`/`n_features_in_` were read off the raw `X` by
+    `extract_input_shape`: nothing here touches them, so they are never taken from
+    the shape of the (possibly wider) `X` handed over here.
 
     Args:
         X: The input data.
@@ -140,8 +168,8 @@ def ensure_compatible_predict_input_sklearn(
 ) -> np.ndarray:
     """Validate the values of an already-shape-checked, already-date-resolved input.
 
-    `capture_input_shape` must already have run, on the raw input, to check it
-    against `feature_names_in_`/`n_features_in_`; this checks values only, via
+    `check_input_shape_matches` must already have run, on the raw input, to check
+    it against `feature_names_in_`/`n_features_in_`; this checks values only, via
     `check_array` rather than `validate_data`, so it never re-reads those two
     attributes off the (possibly wider) `X` handed over here.
 
