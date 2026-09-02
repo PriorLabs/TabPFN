@@ -872,9 +872,8 @@ def _subsample_features_importance_based(
 ) -> list[np.ndarray | None]:
     """Always include top-K important features; fill the rest from a balanced pool.
 
-    Every estimator shares one importance ordering, so the non-top features are
-    dealt round-robin from a single pool: each is drawn once before any is drawn
-    twice, and the ensemble covers all of them whenever the combined budget allows.
+    All estimators share one ordering, so the non-top features are dealt from a
+    single pool: each is drawn once before any is drawn twice.
 
     Args:
         subsample_sizes: Number of input features to select per estimator.
@@ -927,13 +926,9 @@ def _fit_importance_ordering(
     fit_ordering_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """Fit one feature-importance ordering, subsampling rows to ``max_samples``.
+    """Fit one feature-importance ordering, on at most ``max_samples`` rows.
 
-    ``max_samples`` is a compute budget for the importance model, so larger
-    datasets are subsampled to it (stratified for classification) before fitting.
-    The single ordering is shared by every estimator, which is what lets
-    ``_subsample_features_importance_based`` deal their non-top features from one
-    pool and so cover every feature across the ensemble.
+    The subsample is stratified for classification.
     """
     n_samples = len(X)
 

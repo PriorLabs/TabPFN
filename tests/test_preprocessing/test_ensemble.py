@@ -1184,11 +1184,7 @@ def test___fit_importance_ordering__large_data_fits_once_on_max_samples():
 
 @pytest.mark.parametrize("n_samples", [50, 500])
 def test__subsample_features_importance_based__covers_all_features(n_samples):
-    """Every feature reaches some estimator, on both sides of ``max_samples``.
-
-    Above ``max_samples`` this used to fit one ordering per estimator, giving each
-    a private pool and degenerating to independent uniform draws.
-    """
+    """Every feature reaches some estimator, on both sides of ``max_samples``."""
     n_features, top_k, size, n_estimators = 12, 4, 8, 2
 
     for seed in range(20):
