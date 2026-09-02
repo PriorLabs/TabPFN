@@ -257,25 +257,30 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                  predictions of `n_estimators`-many forward passes of TabPFN. Each
                  forward pass has (slightly) different input data. Think of this as an
                  ensemble of `n_estimators`-many "prompts" of the input data.
-                 With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
-                 on wide datasets so every feature is seen by some estimator (i.e.
-                 when the data has more than `max_features_per_estimator` features
-                 per estimator), to the smallest value that lets every feature
-                 appear in at least one ensemble member, emitting a warning when it
-                 does so. That auto-scaled value is capped at
+                 With the default `"auto"`, this is the count the checkpoint
+                 declares (`InferenceConfig.N_ESTIMATORS`, which is
+                 `DEFAULT_N_ESTIMATORS` for every checkpoint predating that
+                 field), raised on wide datasets so every feature is seen by some
+                 estimator (i.e. when the data has more than
+                 `max_features_per_estimator` features per estimator), to the
+                 smallest value that lets every feature appear in at least one
+                 ensemble member, emitting a warning when it does so. That
+                 auto-scaled value is capped at
                  `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
                  be sampled unless you raise `n_estimators` yourself. An explicit
                  integer is never overridden — if it is too small to cover every
                  feature, a warning is emitted at fit time and the value is used
-                 as given.
+                 as given. An explicit integer cannot be combined with an
+                 `N_ESTIMATORS` in `inference_config`, which is the other way of
+                 naming a count.
 
             auto_scale_n_estimators:
                 Deprecated, removed in v9 — pass an explicit `n_estimators`
                 instead. Only applies when `n_estimators="auto"`, where `False`
-                keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
-                it for feature coverage, exactly what passing
-                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
-                `FutureWarning` at fit time.
+                keeps the auto value at the checkpoint's count rather than raising
+                it for feature coverage, exactly what passing that count as
+                `n_estimators` does. Passing `False` emits a `FutureWarning` at
+                fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -695,6 +700,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
+            default_n_estimators=self.inference_config_.N_ESTIMATORS,
         )
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,
@@ -771,6 +777,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
+            default_n_estimators=self.inference_config_.N_ESTIMATORS,
         )
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,

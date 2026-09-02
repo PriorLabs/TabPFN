@@ -38,7 +38,7 @@ from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
 from tabpfn.inference_config import (
     InferenceConfig,
-    raise_if_softmax_temperatures_differ,
+    raise_if_checkpoints_disagree_on_overridable_fields,
 )
 from tabpfn.settings import settings
 
@@ -594,6 +594,7 @@ def load_model_criterion_config(
     estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
+    n_estimators_override: int | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
@@ -612,6 +613,7 @@ def load_model_criterion_config(
     estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
+    n_estimators_override: int | None = None,
 ) -> tuple[
     list[Architecture],
     FullSupportBarDistribution,
@@ -629,6 +631,7 @@ def load_model_criterion_config(
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
+    n_estimators_override: int | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -638,8 +641,8 @@ def load_model_criterion_config(
     """Load the model(s), criterion(s), and config(s) from the given path.
 
     If multiple model paths are provided, then all models must use the same criterion
-    and inference config. They may only disagree on the softmax temperature if
-    `softmax_temperature_override` says which temperature to use instead.
+    and inference config. They may only disagree on a field the caller overrides,
+    which the `*_override` arguments name.
 
     Args:
         model_path: The path to the model, or list of paths if multiple models should be
@@ -657,6 +660,7 @@ def load_model_criterion_config(
             model, or None if they did not ask for one. Only used to decide whether
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
+        n_estimators_override: Likewise for the number of estimators.
 
     Returns:
         list of models, the criterion, list of architecture configs, the inference
@@ -738,9 +742,9 @@ def load_model_criterion_config(
 
     first_inference_config = inference_configs[0]
     for inference_config in inference_configs[1:]:
-        # A temperature mismatch is reported separately below, as the user can fix
-        # that one by naming a temperature.
-        if not inference_config.equals_ignoring_softmax_temperature(
+        # A mismatch in an overridable field is reported separately below, as the
+        # user can fix those by naming a value.
+        if not inference_config.equals_ignoring_overridable_fields(
             first_inference_config
         ):
             raise ValueError(
@@ -749,8 +753,12 @@ def load_model_criterion_config(
                 "Inference configs for different models are different, which is not "
                 "supported. See above."
             )
-    raise_if_softmax_temperatures_differ(
-        inference_configs, softmax_temperature_override=softmax_temperature_override
+    raise_if_checkpoints_disagree_on_overridable_fields(
+        inference_configs,
+        overrides={
+            "SOFTMAX_TEMPERATURE": softmax_temperature_override,
+            "N_ESTIMATORS": n_estimators_override,
+        },
     )
 
     return loaded_models, first_criterion, architecture_configs, first_inference_config

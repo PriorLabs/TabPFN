@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Literal
 
@@ -20,12 +20,22 @@ from tabpfn.preprocessing import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
+from tabpfn.preprocessing.ensemble import DEFAULT_N_ESTIMATORS
 
 DEFAULT_SOFTMAX_TEMPERATURE = 0.9
 """The softmax temperature of every checkpoint released before the temperature became
 part of the inference config. Also the value used when the temperature cannot be
 resolved from a checkpoint at all. Do not change this, see
 `InferenceConfig.SOFTMAX_TEMPERATURE`."""
+
+OVERRIDABLE_FIELDS: dict[str, tuple[str, str]] = {
+    # field -> (how to name several of them, the estimator argument that sets one)
+    "SOFTMAX_TEMPERATURE": ("softmax temperatures", "softmax_temperature"),
+    "N_ESTIMATORS": ("numbers of estimators", "n_estimators"),
+}
+"""Fields a user can set from the estimator interface, and which the checkpoints of
+one ensemble may therefore disagree on -- the user can break the tie. Every other
+field has to match across an ensemble."""
 
 
 # By default Pydantic dataclasses will ignore unrecognised config items, extra="forbid"
@@ -103,6 +113,23 @@ class InferenceConfig:
     does `TabPFNClassifier(softmax_temperature=...)`; naming a temperature both ways
     at once is rejected. With neither, the value comes from the checkpoint, and an
     ensemble whose checkpoints declare different temperatures is rejected too."""
+
+    N_ESTIMATORS: int = DEFAULT_N_ESTIMATORS
+    """How many estimators to run when the user leaves `n_estimators="auto"`.
+
+    An estimator is one forward pass over a differently preprocessed view of the
+    data; more of them costs proportionally more compute. This is the base value,
+    which feature-coverage scaling may still raise for very wide tables (see
+    `scale_n_estimators_for_feature_coverage`).
+
+    The default is the value that shipped as `DEFAULT_N_ESTIMATORS` before this
+    became a config field, so checkpoints that predate the field keep their original
+    behavior. Newer checkpoints are expected to store their own value.
+
+    Setting this here overrides the checkpoint, as does
+    `TabPFNClassifier(n_estimators=...)`; naming a count both ways at once is
+    rejected. With neither, the value comes from the checkpoint, and an ensemble
+    whose checkpoints declare different counts is rejected too."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
@@ -306,17 +333,16 @@ class InferenceConfig:
             f"{user_config=}\nUnknown user config provided, see config above."
         )
 
-    def equals_ignoring_softmax_temperature(self, other: InferenceConfig) -> bool:
-        """Whether this config and `other` agree on every field but the temperature.
+    def equals_ignoring_overridable_fields(self, other: InferenceConfig) -> bool:
+        """Whether this config and `other` agree on every non-overridable field.
 
-        A temperature mismatch between the checkpoints of one ensemble gets its own
-        error (see `raise_if_softmax_temperatures_differ`), since the user can
-        resolve it by naming a temperature; any other mismatch is unfixable.
+        A mismatch in one of `OVERRIDABLE_FIELDS` between the checkpoints of one
+        ensemble gets its own error (see
+        `raise_if_checkpoints_disagree_on_overridable_fields`), since the user can
+        resolve it by naming a value; any other mismatch is unfixable.
         """
-        neutral = 1.0
-        return dataclasses.replace(
-            self, SOFTMAX_TEMPERATURE=neutral
-        ) == dataclasses.replace(other, SOFTMAX_TEMPERATURE=neutral)
+        mine = {field: getattr(self, field) for field in OVERRIDABLE_FIELDS}
+        return dataclasses.replace(other, **mine) == self
 
     def get_resolved_outlier_removal_std(
         self,
@@ -361,33 +387,34 @@ class InferenceConfig:
         )
 
 
-def raise_if_softmax_temperatures_differ(
+def raise_if_checkpoints_disagree_on_overridable_fields(
     inference_configs: Sequence[InferenceConfig],
     *,
-    softmax_temperature_override: float | None,
+    overrides: Mapping[str, float | int | None],
 ) -> None:
-    """Reject an ensemble whose checkpoints disagree on the softmax temperature.
+    """Reject an ensemble whose checkpoints disagree on an overridable field.
 
-    One temperature is applied to the whole ensemble, so there is nothing sensible
+    One value of each is applied to the whole ensemble, so there is nothing sensible
     to do with two of them. The user can say which one to use, and then the
     checkpoints no longer have to agree.
 
     Args:
         inference_configs: The config of each model in the ensemble.
-        softmax_temperature_override: The temperature the user asked for, applied to
-            every model, or None if they did not ask for one.
+        overrides: What the user asked for, keyed by field name, applied to every
+            model. A field is checked only where the user asked for nothing.
     """
-    if softmax_temperature_override is not None:
-        return
+    for field, (plural, argument) in OVERRIDABLE_FIELDS.items():
+        if overrides.get(field) is not None:
+            continue
 
-    temperatures = sorted({config.SOFTMAX_TEMPERATURE for config in inference_configs})
-    if len(temperatures) > 1:
-        raise ValueError(
-            f"The given model checkpoints declare different softmax temperatures "
-            f"({temperatures}), and one temperature is applied to the whole "
-            f"ensemble. Pick the one to use for all of them and pass it explicitly, "
-            f"e.g. `TabPFNClassifier(softmax_temperature={temperatures[0]}, ...)`."
-        )
+        values = sorted({getattr(config, field) for config in inference_configs})
+        if len(values) > 1:
+            raise ValueError(
+                f"The given model checkpoints declare different {plural} "
+                f"({values}), and one value is applied to the whole ensemble. Pick "
+                f"the one to use for all of them and pass it explicitly, e.g. "
+                f"`TabPFNClassifier({argument}={values[0]}, ...)`."
+            )
 
 
 def cpu_sample_limit(model_version: ModelVersion) -> int:
