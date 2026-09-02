@@ -1315,8 +1315,7 @@ def test__fit_with_roc_auc_metric_with_temperature_calibration__warns() -> None:
 
     with pytest.warns(
         UserWarning,
-        match=r".*temperature calibration.*optimizes log loss regardless of "
-        r"eval_metric.*",
+        match=r".*temperature calibration.*ROC AUC is independent of this tuning.*",
     ):
         clf.fit(X, y)
 
