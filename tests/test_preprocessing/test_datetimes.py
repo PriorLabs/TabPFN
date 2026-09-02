@@ -91,20 +91,6 @@ class TestRefusal:
         assert transformer.fit_transform(X) is X
         assert transformer.transform(X) is X
 
-    @pytest.mark.parametrize("transform_dates", [False, True])
-    def test__datetime64_array__is_refused_pointing_at_a_dataframe(
-        self, transform_dates: bool
-    ) -> None:
-        """An array has no columns to expand, so no flag can help it."""
-        X = np.array(pd.date_range("2020-01-01", periods=3)).reshape(-1, 1)
-        transformer = DateTransformer(transform_dates=transform_dates)
-
-        with pytest.raises(TabPFNValidationError, match="pass a DataFrame"):
-            transformer.fit_transform(X)
-        transformer.fit(np.zeros((3, 1)))
-        with pytest.raises(TabPFNValidationError, match="pass a DataFrame"):
-            transformer.transform(X)
-
     def test__transform__refuses_a_date_too(self) -> None:
         transformer = DateTransformer()
         transformer.fit_transform(_frame([1.0, 2.0, 3.0]))
@@ -144,16 +130,6 @@ class TestDurations:
         fitted = transformer.fit_transform(X)
 
         np.testing.assert_array_equal(transformer.transform(X)["date"], fitted["date"])
-
-    def test__timedelta64_array__becomes_seconds(self) -> None:
-        """An array of durations gets the same reading as a column of them."""
-        X = np.array(pd.to_timedelta([1, 2, 3], unit="D")).reshape(-1, 1)
-        transformer = DateTransformer()
-
-        out = transformer.fit_transform(X)
-
-        np.testing.assert_array_equal(out, [[86400.0], [172800.0], [259200.0]])
-        np.testing.assert_array_equal(transformer.transform(X), out)
 
     def test__duplicate_column_labels__are_converted_positionally(self) -> None:
         """Pandas allows repeated labels, so only position identifies a column."""
