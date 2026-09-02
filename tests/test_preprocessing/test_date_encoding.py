@@ -315,6 +315,23 @@ def test__predict__datetime_column_that_was_not_a_date_at_fit__is_rejected() -> 
         expander.transform(_numeric_and_date_frame(_dates()))
 
 
+def test__predict__array_after_a_fit_that_expanded__is_rejected() -> None:
+    """An array has the raw width, so the shape check upstream passes, yet only
+    a DataFrame can carry the datetime columns to expand. Without this, the
+    mismatch surfaces deep in the ordinal encoder with no mention of dates.
+    """
+    X_fit = _numeric_and_date_frame(_dates())
+    expander = DateTimeExpander(transform_dates=True).fit(X_fit)
+
+    with pytest.raises(TabPFNValidationError, match="pandas DataFrame"):
+        expander.transform(X_fit.to_numpy())
+
+    # An expander that expanded nothing still passes arrays through untouched.
+    plain = DateTimeExpander(transform_dates=True).fit(X_fit.iloc[:, :1])
+    arr = X_fit.iloc[:, :1].to_numpy()
+    assert plain.transform(arr) is arr
+
+
 def test__predict__native_value_has_a_missing_row__only_that_row_becomes_nan() -> None:
     """A still-genuine datetime column can carry a per-row `NaT`; that row
     degrades to NaN and the rest of the column is unaffected.
@@ -444,6 +461,27 @@ def test__fit__datetime64_numpy_array__points_at_a_dataframe() -> None:
 
     with pytest.raises(ValueError, match=r"pandas DataFrame.*TRANSFORM_DATES"):
         TabPFNClassifier(n_estimators=1, device="cpu").fit(X, y)
+
+
+def test__predict__with_an_array_after_a_dataframe_fit_that_expanded__raises() -> None:
+    """`X.to_numpy()` at predict after a DataFrame fit is ordinary sklearn usage;
+    it has to fail at the door, naming the DataFrame requirement.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
+        }
+    )
+    y = rng.integers(0, 2, size=n)
+    model = TabPFNClassifier(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
+    ).fit(X, y)
+
+    with pytest.raises(TabPFNValidationError, match="pandas DataFrame"):
+        model.predict(X.to_numpy())
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])

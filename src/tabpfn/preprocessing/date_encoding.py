@@ -183,7 +183,9 @@ class DateTimeExpander:
             NotFittedError: If `fit` has not run yet -- which columns are
                 expanded is its decision to make, not this one's.
             TabPFNValidationError: If `X` holds a datetime column at a position
-                `fit` did not expand, i.e. one that was not a date at fit time.
+                `fit` did not expand, i.e. one that was not a date at fit time;
+                or if `fit` expanded columns and `X` is not a `DataFrame`, which
+                is the only input that can carry them.
         """
         # Checked by hand rather than with sklearn's `check_is_fitted`, which
         # requires its argument to be a `BaseEstimator`; this is a plain
@@ -194,6 +196,15 @@ class DateTimeExpander:
                 "`fit` before using `transform`."
             )
         if not isinstance(X, pd.DataFrame):
+            if self.encoders_:
+                # Same raw width as at fit, so the shape check upstream passed,
+                # but nothing here can widen an array to the expanded layout.
+                raise TabPFNValidationError(
+                    f"`fit` expanded datetime columns at positions "
+                    f"{self.expanded_input_indices} into calendar features, so "
+                    f"predict input must be a pandas DataFrame carrying those "
+                    f"columns with a datetime dtype; got {type(X).__name__}."
+                )
             return X
 
         date_indices = _datetime_column_indices(X)
