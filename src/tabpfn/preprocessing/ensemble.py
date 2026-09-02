@@ -1255,16 +1255,16 @@ def scale_n_estimators_for_feature_coverage(
 
     ``auto_scale_n_estimators`` (the deprecated constructor argument of the same
     name) is redundant now that scaling is opt-out by passing an explicit
-    ``n_estimators``: ``False`` merely resolves ``"auto"`` to
-    ``DEFAULT_N_ESTIMATORS``, exactly what passing that integer does. Passing
-    ``False`` emits a ``FutureWarning``; the argument is removed in v9.
+    ``n_estimators``: it only affects ``"auto"``, which ``False`` resolves to
+    ``DEFAULT_N_ESTIMATORS`` without scaling, exactly what passing that integer
+    does. Passing ``False`` emits a ``FutureWarning``; the argument is removed in
+    v9.
     """
     if not auto_scale_n_estimators:
         warnings.warn(
-            "auto_scale_n_estimators is deprecated and will be removed in v9. "
-            f"auto_scale_n_estimators=False is equivalent to passing "
-            f"n_estimators={DEFAULT_N_ESTIMATORS}, which also disables "
-            f"feature-coverage scaling; pass that instead.",
+            "auto_scale_n_estimators is deprecated and will be removed in v9. It "
+            'only affects n_estimators="auto", where False skips feature-coverage '
+            "scaling; pass an explicit n_estimators instead, which also skips it.",
             FutureWarning,
             stacklevel=2,
         )
@@ -1274,16 +1274,19 @@ def scale_n_estimators_for_feature_coverage(
         else 0
     )
     if n_estimators != "auto":
-        # A value the user chose explicitly is never overridden, only warned about.
+        # A count that was named explicitly -- by the user, or by the checkpoint it
+        # was resolved from -- is never overridden, only warned about. The warning
+        # names no source, since it cannot tell them apart and the remedy is the
+        # same either way: an explicit `n_estimators` wins over a checkpoint's.
         n_covered = n_estimators * min_max_features
         if 0 < n_covered < n_total_features:
             warnings.warn(
-                f"n_estimators={n_estimators} covers at most {n_covered} of "
+                f"Running {n_estimators} estimators covers at most {n_covered} of "
                 f"{n_total_features} features (max_features_per_estimator="
                 f"{min_max_features}); the remaining features are never sampled by "
                 f"any ensemble member. Pass n_estimators >= "
-                f"{math.ceil(n_total_features / min_max_features)}, or "
-                f'n_estimators="auto" to let TabPFN pick a covering value.',
+                f"{math.ceil(n_total_features / min_max_features)} to cover all "
+                f"features.",
                 UserWarning,
                 stacklevel=2,
             )

@@ -913,7 +913,7 @@ def test__classifier_n_estimators__checkpoint_count__is_never_scaled(
     X, y = wide_classification_data
     clf = TabPFNClassifier(model_path=_narrow_estimator_specs(3), device="cpu")
 
-    with pytest.warns(UserWarning, match="n_estimators=3 covers at most 6 of 20"):
+    with pytest.warns(UserWarning, match="Running 3 estimators covers at most 6 of 20"):
         clf.fit(X, y)
 
     assert clf.n_estimators_ == 3
