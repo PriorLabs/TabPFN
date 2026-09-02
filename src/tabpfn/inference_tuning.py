@@ -331,6 +331,17 @@ def find_optimal_classification_thresholds(
             y_pred_probas=y_pred_probas[:, i],
         )
 
+    n_untuned = n_classes - len(tuned_by_class)
+    if n_untuned:
+        warnings.warn(
+            f"{n_untuned} of {n_classes} classes have no rows in the tuning holdout, "
+            "so their decision thresholds could not be tuned and a neutral value is "
+            "used instead. Raise `tuning_n_folds` to pool a larger holdout, or set "
+            "`tune_decision_thresholds=False`.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # Thresholds act as a divisive reweight, so only their ratios matter and the
     # neutral fill is the geometric mean rather than the arithmetic one.
     neutral = (

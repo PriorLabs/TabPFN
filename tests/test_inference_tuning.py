@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 
 import numpy as np
 import pytest
@@ -185,25 +186,31 @@ _PROBAS_ABSENT_CLASS = np.array(
 )
 
 
+def test__find_optimal_classification_thresholds__no_warning_when_all_tunable() -> None:
+    """Every class present in the holdout means nothing to warn about."""
+    y_true = np.array([0, 0, 1, 1, 2, 2])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        find_optimal_classification_thresholds(
+            metric_name=ClassifierEvalMetrics.ACCURACY,
+            y_true=y_true,
+            y_pred_probas=_PROBAS_ABSENT_CLASS[:, :3],
+            n_classes=3,
+        )
+
+
 @pytest.mark.parametrize("metric_name", list(ClassifierEvalMetrics))
 def test__find_optimal_classification_thresholds__absent_class_is_neutral(
     metric_name: ClassifierEvalMetrics,
 ) -> None:
-    """A class with no holdout rows gets the tuned geometric mean, not a searched one.
-
-    Searching on such a class yields a degenerate threshold: roc_auc collapses to
-    the smallest threshold in the grid (nan losses making argmin return 0), which
-    is a large boost applied to the class with the least evidence, while the
-    remaining metrics converge on a negatives-driven plateau that suppresses it.
-    The geometric mean is the neutral fill because thresholds act as divisive
-    reweights, so only their ratios matter.
-    """
-    thresholds = find_optimal_classification_thresholds(
-        metric_name=metric_name,
-        y_true=_Y_TRUE_ABSENT_CLASS,
-        y_pred_probas=_PROBAS_ABSENT_CLASS,
-        n_classes=4,
-    )
+    """A class with no holdout rows gets the geometric mean, not a searched value."""
+    with pytest.warns(UserWarning, match=r"1 of 4 classes have no rows"):
+        thresholds = find_optimal_classification_thresholds(
+            metric_name=metric_name,
+            y_true=_Y_TRUE_ABSENT_CLASS,
+            y_pred_probas=_PROBAS_ABSENT_CLASS,
+            n_classes=4,
+        )
 
     assert thresholds.shape == (4,)
     assert np.isfinite(thresholds).all()
