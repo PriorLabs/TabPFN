@@ -1271,11 +1271,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
-            # Thresholds cannot move ROC AUC: for binary targets the predict-time
-            # reweighting is a monotone transform of the positive-class
-            # probability, so the ranking, and hence the AUC, is unchanged. The
-            # threshold search scores thresholded 0/1 predictions, whose ROC AUC
-            # is (TPR + TNR) / 2 -- balanced accuracy, a different metric.
             if tuning_config_resolved.tune_decision_thresholds:
                 raise ValueError(
                     "eval_metric='roc_auc' does not support "
