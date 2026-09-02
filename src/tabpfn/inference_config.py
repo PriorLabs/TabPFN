@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from collections.abc import Sequence
 from copy import deepcopy
 from typing import Literal
@@ -279,12 +280,25 @@ class InferenceConfig:
                 If a dictionary, then the keys must match attributes of
                     `InferenceConfig` and will be used to override these attributes.
                 If an `InferenceConfig` object, then the whole config is overridden with
-                    the values from the user config.
+                    the values from the user config. Deprecated.
                 If None, then a copy of this config is returned with no fields changed.
         """
         if user_config is None:
             return deepcopy(self)
         if isinstance(user_config, InferenceConfig):
+            warnings.warn(
+                "Passing an `InferenceConfig` object as `inference_config` is "
+                "deprecated and will be removed in a future version. It replaces "
+                "the checkpoint's config as a whole, so any field not set on it "
+                "takes a class default rather than the value the checkpoint "
+                "declares, which can silently degrade predictions. Pass a dict "
+                "naming only the settings to change instead, e.g. "
+                '`inference_config={"POLYNOMIAL_FEATURES": "all"}`, which leaves '
+                "every other field at the checkpoint's value. To keep replacing the "
+                "whole config, pass `dataclasses.asdict(config)`.",
+                FutureWarning,
+                stacklevel=2,
+            )
             return deepcopy(user_config)
         if isinstance(user_config, dict):
             return dataclasses.replace(self, **user_config)
