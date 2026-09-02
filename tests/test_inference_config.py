@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import inspect
 import io
 import warnings
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, replace
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -20,10 +22,12 @@ from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import (
     DEFAULT_SOFTMAX_TEMPERATURE,
+    OVERRIDABLE_FIELDS,
     InferenceConfig,
     cpu_sample_limit,
 )
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.preprocessing.ensemble import DEFAULT_N_ESTIMATORS
 
 
 def test__save_and_load__loaded_value_equal_to_saved() -> None:
@@ -230,28 +234,42 @@ def test__softmax_temperature__omitted_from_config__falls_back_to_legacy_default
             assert default.SOFTMAX_TEMPERATURE == DEFAULT_SOFTMAX_TEMPERATURE
 
 
-def test__equals_ignoring_softmax_temperature__only_temperature_differs__is_equal() -> (
-    None
-):
+def test__equals_ignoring_overridable_fields__only_those_differ__is_equal() -> None:
     config = InferenceConfig.get_default(
         task_type="multiclass", model_version=ModelVersion.V2_5
     )
-    other = replace(config, SOFTMAX_TEMPERATURE=0.5)
+    other = replace(config, SOFTMAX_TEMPERATURE=0.5, N_ESTIMATORS=3)
 
     assert other != config
-    assert other.equals_ignoring_softmax_temperature(config)
-    assert config.equals_ignoring_softmax_temperature(other)
+    assert other.equals_ignoring_overridable_fields(config)
+    assert config.equals_ignoring_overridable_fields(other)
 
 
-def test__equals_ignoring_softmax_temperature__other_field_differs__is_not_equal() -> (
+def test__equals_ignoring_overridable_fields__other_field_differs__is_not_equal() -> (
     None
 ):
     config = InferenceConfig.get_default(
         task_type="multiclass", model_version=ModelVersion.V2_5
     )
-    other = replace(config, SOFTMAX_TEMPERATURE=0.5, POLYNOMIAL_FEATURES="all")
+    other = replace(
+        config, SOFTMAX_TEMPERATURE=0.5, N_ESTIMATORS=3, POLYNOMIAL_FEATURES="all"
+    )
 
-    assert not other.equals_ignoring_softmax_temperature(config)
+    assert not other.equals_ignoring_overridable_fields(config)
+
+
+def test__overridable_fields__name_real_fields_and_arguments() -> None:
+    """The table drives both error messages and the resolution, so it must line up.
+
+    Each key is a config field and each argument is the estimator argument that
+    sets it, which `_resolve_overrides` reads off the estimator by name.
+    """
+    field_names = {f.name for f in fields(InferenceConfig)}
+    for field, (plural, argument) in OVERRIDABLE_FIELDS.items():
+        assert field in field_names
+        assert plural
+        assert argument in inspect.signature(TabPFNClassifier).parameters
+        assert argument in inspect.signature(TabPFNRegressor).parameters
 
 
 def _classifier_specs(temperature: float | None = None) -> ClassifierModelSpecs:
@@ -350,7 +368,7 @@ def test__classifier_softmax_temperature__named_twice__raises(
         softmax_temperature=1.5,
         inference_config=inference_config,
     )
-    with pytest.raises(ValueError, match="softmax temperature was given twice"):
+    with pytest.raises(ValueError, match="`softmax_temperature` was given twice"):
         clf.fit(X, y)
 
 
@@ -615,3 +633,287 @@ def test__inference_config__asdict_of_a_config__matches_the_object_form(
         from_dict.fit(X, y)
 
     assert from_dict.get_inference_config() == from_object.get_inference_config()
+
+
+# =============================================================================
+# N_ESTIMATORS
+# =============================================================================
+
+
+def _classifier_specs_with_n_estimators(
+    n_estimators: int | Literal["auto"],
+) -> ClassifierModelSpecs:
+    specs = _make_classifier_specs()
+    specs.inference_config = replace(specs.inference_config, N_ESTIMATORS=n_estimators)
+    return specs
+
+
+def test__n_estimators__omitted_from_config__is_auto() -> None:
+    """Checkpoints predating the field leave the count where it was: `"auto"`."""
+    config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    assert config.N_ESTIMATORS == "auto"
+
+    for model_version in (ModelVersion.V2, ModelVersion.V2_5):
+        for task_type in ("multiclass", "regression"):
+            default = InferenceConfig.get_default(
+                task_type=task_type,  # type: ignore[arg-type]
+                model_version=model_version,
+            )
+            assert default.N_ESTIMATORS == "auto"
+
+
+def test__classifier_n_estimators__auto__taken_from_checkpoint(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs_with_n_estimators(3), device="cpu"
+    )
+    clf.fit(X, y)
+
+    assert clf.n_estimators == "auto"
+    assert clf.n_estimators_ == 3
+    assert clf.get_inference_config().N_ESTIMATORS == 3
+
+
+def test__classifier_n_estimators__auto__unset_checkpoint_runs_legacy_default(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    clf = TabPFNClassifier(model_path=_make_classifier_specs(), device="cpu")
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == DEFAULT_N_ESTIMATORS
+
+
+def test__classifier_n_estimators__explicit__overrides_checkpoint(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs_with_n_estimators(3),
+        device="cpu",
+        n_estimators=5,
+    )
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == 5
+
+
+def test__classifier_n_estimators__explicit__stays_out_of_the_config(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """`inference_config_` is persisted into checkpoints by `save_tabpfn_model`.
+
+    It therefore has to keep describing the model, not this run's compute budget --
+    fine-tuning runs a handful of estimators on purpose, and that handful must not
+    end up declared by every checkpoint it writes.
+    """
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs_with_n_estimators(3),
+        device="cpu",
+        n_estimators=5,
+    )
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == 5
+    assert clf.get_inference_config().N_ESTIMATORS == 3
+
+
+def test__classifier_n_estimators__inference_config__overrides_checkpoint(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs_with_n_estimators(3),
+        device="cpu",
+        inference_config={"N_ESTIMATORS": 6},
+    )
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == 6
+
+
+def test__classifier_n_estimators__named_twice__raises(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Which of the two would win is not apparent from the call, so neither does."""
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs_with_n_estimators(3),
+        device="cpu",
+        n_estimators=5,
+        inference_config={"N_ESTIMATORS": 6},
+    )
+    with pytest.raises(ValueError, match="`n_estimators` was given twice"):
+        clf.fit(X, y)
+
+
+def test__classifier_n_estimators__checkpoints_disagree__raises(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """One count is applied to the whole ensemble, so two of them is an error."""
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators(3),
+        _classifier_specs_with_n_estimators(4),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu")
+    with pytest.raises(ValueError, match="different numbers of estimators"):
+        clf.fit(X, y)
+
+
+def test__classifier_n_estimators__checkpoint_auto_against_a_count__raises(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """`"auto"` and a count are different requests, and the values sort together."""
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators("auto"),
+        _classifier_specs_with_n_estimators(4),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu")
+    with pytest.raises(ValueError, match=r"different numbers of estimators"):
+        clf.fit(X, y)
+
+
+def test__classifier_n_estimators__checkpoints_both_auto__is_no_disagreement(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators("auto"),
+        _classifier_specs_with_n_estimators("auto"),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu")
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == DEFAULT_N_ESTIMATORS
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"n_estimators": 2},
+        {"inference_config": {"N_ESTIMATORS": 2}},
+    ],
+)
+def test__classifier_n_estimators__disagreeing_checkpoints_and_override__is_used(
+    classification_data: tuple[np.ndarray, np.ndarray],
+    kwargs: dict,
+) -> None:
+    """Naming a count is what the error tells the user to do, so it must work."""
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators(3),
+        _classifier_specs_with_n_estimators(4),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu", **kwargs)
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == 2
+
+
+def test__classifier_n_estimators__checkpoints_agree__is_used(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    specs = [
+        _classifier_specs_with_n_estimators(3),
+        _classifier_specs_with_n_estimators(3),
+    ]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu")
+    clf.fit(X, y)
+
+    assert clf.n_estimators_ == 3
+
+
+def test__regressor_n_estimators__auto__taken_from_checkpoint() -> None:
+    X, y = sklearn.datasets.make_regression(
+        n_samples=30, n_features=4, noise=10.0, random_state=0
+    )
+    specs = _make_regressor_specs(max_num_classes=0)
+    specs.inference_config = replace(specs.inference_config, N_ESTIMATORS=3)
+
+    reg = TabPFNRegressor(model_path=specs, device="cpu")
+    reg.fit(X, y)
+
+    assert reg.n_estimators == "auto"
+    assert reg.n_estimators_ == 3
+
+
+def test__regressor_n_estimators__explicit__overrides_checkpoint() -> None:
+    X, y = sklearn.datasets.make_regression(
+        n_samples=30, n_features=4, noise=10.0, random_state=0
+    )
+    specs = _make_regressor_specs(max_num_classes=0)
+    specs.inference_config = replace(specs.inference_config, N_ESTIMATORS=3)
+
+    reg = TabPFNRegressor(model_path=specs, device="cpu", n_estimators=5)
+    reg.fit(X, y)
+
+    assert reg.n_estimators_ == 5
+    assert reg.get_inference_config().N_ESTIMATORS == 3
+
+
+@pytest.fixture(scope="module")
+def wide_classification_data() -> tuple[np.ndarray, np.ndarray]:
+    """Wide enough that 8 estimators cannot cover every feature at 2 features each."""
+    return sklearn.datasets.make_classification(
+        n_samples=30,
+        n_classes=3,
+        n_features=20,
+        n_informative=8,
+        n_redundant=0,
+        random_state=0,
+    )
+
+
+def _narrow_estimator_specs(
+    n_estimators: int | Literal["auto"],
+) -> ClassifierModelSpecs:
+    """Specs declaring `n_estimators`, seeing only 2 features per estimator."""
+    specs = _classifier_specs_with_n_estimators(n_estimators)
+    specs.inference_config = replace(
+        specs.inference_config,
+        PREPROCESS_TRANSFORMS=[
+            PreprocessorConfig("none", max_features_per_estimator=2)
+        ],
+    )
+    return specs
+
+
+def test__classifier_n_estimators__checkpoint_auto__scales_for_coverage(
+    wide_classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A checkpoint leaving the count at `"auto"` still gets coverage scaling."""
+    X, y = wide_classification_data
+    clf = TabPFNClassifier(model_path=_narrow_estimator_specs("auto"), device="cpu")
+
+    with pytest.warns(UserWarning, match="Auto-scaling n_estimators"):
+        clf.fit(X, y)
+
+    assert clf.n_estimators_ == 10  # ceil(20 features / 2 per estimator)
+
+
+def test__classifier_n_estimators__checkpoint_count__is_never_scaled(
+    wide_classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A count the checkpoint asks for is honored, exactly like a user's own.
+
+    Coverage scaling would raise it to 10 here; it warns instead, which is what an
+    explicit `n_estimators=3` has always done.
+    """
+    X, y = wide_classification_data
+    clf = TabPFNClassifier(model_path=_narrow_estimator_specs(3), device="cpu")
+
+    with pytest.warns(UserWarning, match="Running 3 estimators covers at most 6 of 20"):
+        clf.fit(X, y)
+
+    assert clf.n_estimators_ == 3
