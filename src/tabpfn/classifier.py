@@ -40,6 +40,8 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolved_n_estimators,
+    resolved_softmax_temperature,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -77,10 +79,7 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import (
-    fix_dtypes,
-    process_text_na_dataframe,
-)
+from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import DateTimeExpander
 from tabpfn.preprocessing.ensemble import (
@@ -209,8 +208,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The validated evaluation metric to optimize for during prediction."""
 
     softmax_temperature_: float
-    """The softmax temperature used for prediction. This is set to the default softmax
-    temperature if no temperature tuning is done"""
+    """The softmax temperature used for prediction. This is the resolved
+    `softmax_temperature`, i.e. the one the checkpoint declares when no temperature
+    tuning is done."""
 
     ensemble_configs_: list[ClassifierEnsembleConfig]
     """The ensemble configurations used during fit.
@@ -222,7 +222,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        softmax_temperature: float = 0.9,
+        softmax_temperature: float | Literal["auto"] = "auto",
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
         model_path: str
@@ -265,25 +265,31 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                  predictions of `n_estimators`-many forward passes of TabPFN. Each
                  forward pass has (slightly) different input data. Think of this as an
                  ensemble of `n_estimators`-many "prompts" of the input data.
-                 With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
-                 on wide datasets so every feature is seen by some estimator (i.e.
-                 when the data has more than `max_features_per_estimator` features
-                 per estimator), to the smallest value that lets every feature
-                 appear in at least one ensemble member, emitting a warning when it
-                 does so. That auto-scaled value is capped at
+                 With the default `"auto"`, the count comes from the checkpoint
+                 (`InferenceConfig.N_ESTIMATORS`), which is itself `"auto"` unless
+                 the checkpoint names a count.
+                 `"auto"` means `DEFAULT_N_ESTIMATORS`, raised
+                 on wide datasets so every feature is seen by some
+                 estimator (i.e. when the data has more than
+                 `max_features_per_estimator` features per estimator), to the
+                 smallest value that lets every feature appear in at least one
+                 ensemble member, emitting a warning when it does so. That
+                 auto-scaled value is capped at
                  `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
                  be sampled unless you raise `n_estimators` yourself. An explicit
-                 integer is never overridden — if it is too small to cover every
-                 feature, a warning is emitted at fit time and the value is used
-                 as given.
+                 integer — yours or the checkpoint's — is never overridden: if it is
+                 too small to cover every feature, a warning is emitted at fit time
+                 and the value is used as given. Your integer cannot be combined
+                 with an `N_ESTIMATORS` in `inference_config`, which is the other
+                 way of naming a count.
 
             auto_scale_n_estimators:
                 Deprecated, removed in v9 — pass an explicit `n_estimators`
                 instead. Only applies when `n_estimators="auto"`, where `False`
                 keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
-                it for feature coverage, exactly what passing
-                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
-                `FutureWarning` at fit time.
+                it for feature coverage, exactly what passing that count as
+                `n_estimators` does. Passing `False` emits a `FutureWarning` at
+                fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -305,6 +311,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 a post-processing step. Set `softmax_temperature=1.0` for no effect. Be
                 advised that `.predict()` does not currently sample, so this setting is
                 only relevant for `.predict_proba()` and `.predict_logits()`.
+
+                If `"auto"` (the default), the temperature is taken from the
+                checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
+                every checkpoint released up to and including v8.5.0. Passing a float
+                overrides the checkpoint for every model in the ensemble; it cannot be
+                combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
+                the other way of naming one.
 
             balance_probabilities:
                 Whether to balance the probabilities based on the class distribution
@@ -489,7 +502,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 - If `None`, the default InferenceConfig is used.
                 - If `dict`, the key-value pairs are used to update the default
                   `InferenceConfig`. Raises an error if an unknown key is passed.
-                - If `InferenceConfig`, the object is used as the configuration.
+                - If `InferenceConfig`, the object replaces the checkpoint's config
+                  as a whole, so any field not set on it takes a class default
+                  rather than the value the checkpoint declares. Deprecated.
 
             differentiable_input:
                 If true, the preprocessing will be adapted to be end-to-end
@@ -564,7 +579,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v2().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -572,7 +586,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v2_5().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -580,7 +593,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v2_6().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
             options = {
@@ -588,7 +600,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v3().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -697,7 +708,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -798,7 +809,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Ensemble definition
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -1143,14 +1154,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X_test = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 worker.date_expander_.transform(X_test), worker
             )
-            X_test = fix_dtypes(  # noqa: PLW2901
+            X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X_test = process_text_na_dataframe(  # noqa: PLW2901
-                X=X_test,
                 ord_encoder=getattr(worker, "ordinal_encoder_", None),
             )
             members = worker.executor_.ensemble_members
@@ -1283,8 +1291,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert self.eval_metric_ is not None
 
         # Always set this to stay compatible with sklearn interface.
+        # `softmax_temperature_` is already resolved by `_initialize_model_variables`.
         self.tuned_classification_thresholds_ = None
-        self.softmax_temperature_ = self.softmax_temperature
 
         tuning_config_resolved = resolve_tuning_config(
             tuning_config=self.tuning_config,
@@ -1338,6 +1346,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 holdout_raw_logits=holdout_raw_logits,
                 holdout_y_true=holdout_y_true,
             )
+            # The calibrated temperature is fitted on this dataset and replaces
+            # whatever the checkpoint declared.
             self.softmax_temperature_ = calibrated_softmax_temperature
 
         if tuning_config_resolved.tune_decision_thresholds:
@@ -1435,14 +1445,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = ensure_compatible_predict_input_sklearn(
                 self.date_expander_.transform(X), self
             )
-            X = fix_dtypes(
+            X = clean_data_transform(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X = process_text_na_dataframe(
-                X=X,
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
                 passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
             )
@@ -1607,7 +1614,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
         """Scales logits by the softmax temperature."""
-        temp = getattr(self, "softmax_temperature_", self.softmax_temperature)
+        temp = resolved_softmax_temperature(self)
         if temp != 1.0:
             return logits / temp
         return logits
@@ -1654,9 +1661,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else torch.from_numpy(np.asarray(raw_logits))
         )
         used_temperature = (
-            softmax_temperature
-            if softmax_temperature is not None
-            else getattr(self, "softmax_temperature_", self.softmax_temperature)
+            resolved_softmax_temperature(self)
+            if softmax_temperature is None
+            else softmax_temperature
         )
         use_average_before_softmax = (
             self.average_before_softmax

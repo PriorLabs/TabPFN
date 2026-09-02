@@ -568,11 +568,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         ...
 
     @abstractmethod
-    def _setup_estimator(self) -> None:
-        """Perform any task-specific setup after estimator creation."""
-        ...
-
-    @abstractmethod
     def _setup_batch(self, batch: ClassifierBatch | RegressorBatch) -> None:
         """Perform any batch-specific setup before the forward pass."""
         ...
@@ -864,8 +859,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 finetuning_estimator_config["model_path"] = checkpoint_path
 
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
-        self._setup_estimator()
-
         self.finetuned_estimator_._initialize_model_variables()
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
         X_validated, y_validated = ensure_compatible_fit_inputs_sklearn(

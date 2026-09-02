@@ -347,10 +347,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         )
 
     @override
-    def _setup_estimator(self) -> None:
-        """No additional setup needed for regressor at creation time."""
-
-    @override
     def _should_skip_batch(self, batch: RegressorBatch) -> bool:  # type: ignore[override]
         """Never skip a batch for regression."""
         return False

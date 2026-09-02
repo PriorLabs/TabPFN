@@ -48,6 +48,8 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolved_n_estimators,
+    resolved_softmax_temperature,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -79,10 +81,7 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import (
-    fix_dtypes,
-    process_text_na_dataframe,
-)
+from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import DateTimeExpander
 from tabpfn.preprocessing.ensemble import (
@@ -247,13 +246,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     time, after the per-estimator `softmax_temperature`. This is `1.0`, a no-op, when
     no temperature calibration is done."""
 
+    softmax_temperature_: float
+    """The resolved per-estimator `softmax_temperature`, i.e. the one the checkpoint
+    declares unless it was overridden."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        softmax_temperature: float = 0.9,
+        softmax_temperature: float | Literal["auto"] = "auto",
         average_before_softmax: bool = False,
         model_path: str
         | Path
@@ -295,25 +298,30 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 predictions of `n_estimators`-many forward passes of TabPFN.
                 Each forward pass has (slightly) different input data. Think of this
                 as an ensemble of `n_estimators`-many "prompts" of the input data.
-                With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
-                on wide datasets so every feature is seen by some estimator (i.e.
-                when the data has more than `max_features_per_estimator` features
-                per estimator), to the smallest value that lets every feature
-                appear in at least one ensemble member, emitting a warning when it
-                does so. That auto-scaled value is capped at
+                With the default `"auto"`, the count comes from the checkpoint
+                (`InferenceConfig.N_ESTIMATORS`), which is itself `"auto"` unless
+                the checkpoint names a count. `"auto"` means
+                `DEFAULT_N_ESTIMATORS`,
+                raised on wide datasets so every feature is seen by some estimator
+                (i.e. when the data has more than `max_features_per_estimator`
+                features per estimator), to the smallest value that lets every
+                feature appear in at least one ensemble member, emitting a warning
+                when it does so. That auto-scaled value is capped at
                 `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
                 be sampled unless you raise `n_estimators` yourself. An explicit
-                integer is never overridden — if it is too small to cover every
-                feature, a warning is emitted at fit time and the value is used
-                as given.
+                integer — yours or the checkpoint's — is never overridden: if it
+                is too small to cover every feature, a warning is emitted at fit
+                time and the value is used as given. Your integer cannot be
+                combined with an `N_ESTIMATORS` in `inference_config`, which is the
+                other way of naming a count.
 
             auto_scale_n_estimators:
                 Deprecated, removed in v9 — pass an explicit `n_estimators`
                 instead. Only applies when `n_estimators="auto"`, where `False`
                 keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
-                it for feature coverage, exactly what passing
-                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
-                `FutureWarning` at fit time.
+                it for feature coverage, exactly what passing that count as
+                `n_estimators` does. Passing `False` emits a `FutureWarning` at
+                fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -333,6 +341,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 confidence of the model's predictions. Lower values make the model's
                 predictions more confident. This is only applied when predicting during
                 a post-processing step. Set `softmax_temperature=1.0` for no effect.
+
+                If `"auto"` (the default), the temperature is taken from the
+                checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
+                every checkpoint released up to and including v8.5.0. Passing a float
+                overrides the checkpoint for every model in the ensemble; it cannot be
+                combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
+                the other way of naming one.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of
@@ -512,7 +527,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - If `None`, the default InferenceConfig is used.
                 - If `dict`, the key-value pairs are used to update the default
                   `InferenceConfig`. Raises an error if an unknown key is passed.
-                - If `InferenceConfig`, the object is used as the configuration.
+                - If `InferenceConfig`, the object replaces the checkpoint's config
+                  as a whole, so any field not set on it takes a class default
+                  rather than the value the checkpoint declares. Deprecated.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -587,7 +604,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -595,7 +611,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_5().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -603,7 +618,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_6().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
             options = {
@@ -611,7 +625,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v3().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -827,7 +840,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -943,7 +956,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -1540,9 +1553,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
-        X = fix_dtypes(X, cat_indices=cat_indices)
-        X = process_text_na_dataframe(
+        X = clean_data_transform(
             X,
+            cat_indices=cat_indices,
             ord_encoder=getattr(self, "ordinal_encoder_", None),
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
@@ -1766,14 +1779,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X_test = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 worker.date_expander_.transform(X_test), worker
             )
-            X_test = fix_dtypes(  # noqa: PLW2901
+            X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X_test = process_text_na_dataframe(  # noqa: PLW2901
-                X=X_test,
                 ord_encoder=getattr(worker, "ordinal_encoder_", None),
                 passthrough_inf=worker.inference_config_.PASSTHROUGH_INF,
             )
@@ -1890,8 +1900,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         (estimator, dataset) pair of the fused forward.
         """
         out_d = output.float()
-        if self.softmax_temperature != 1:
-            out_d = out_d / self.softmax_temperature
+        temperature = resolved_softmax_temperature(self)
+        if temperature != 1:
+            out_d = out_d / temperature
         if config.target_transform is None:
             borders_t = std_borders.copy()
             logit_cancel_mask = None
@@ -2002,12 +2013,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             actual_inference_mode = use_inference_mode and not self.differentiable_input
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
+        temperature = resolved_softmax_temperature(self)
         for output, config in self.executor_.iter_outputs(
             X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
-            if self.softmax_temperature != 1:
-                output = output / self.softmax_temperature  # noqa: PLW2901
+            if temperature != 1:
+                output = output / temperature  # noqa: PLW2901
 
             # BSz.= 1 Scenario, the same as normal predict() function
             # Handled by first if-statement

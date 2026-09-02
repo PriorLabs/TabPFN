@@ -26,7 +26,7 @@ from tabpfn import TabPFNClassifier
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
-from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_config import DEFAULT_SOFTMAX_TEMPERATURE, InferenceConfig
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
@@ -1182,7 +1182,7 @@ def test__fit_with_tuning_config__works_with_different_eval_metrics(
         assert (
             tabpfn_with_tuning.softmax_temperature_
             == tabpfn_no_tuning.softmax_temperature_
-            == tabpfn_with_tuning.softmax_temperature
+            == DEFAULT_SOFTMAX_TEMPERATURE
         )
 
 
@@ -1322,7 +1322,7 @@ def test__create_default_for_version__v2__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNClassifier)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v2-" in estimator.model_path
@@ -1333,7 +1333,7 @@ def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNClassifier)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v2.5-" in estimator.model_path
@@ -1344,7 +1344,7 @@ def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNClassifier)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v2.6-" in estimator.model_path
@@ -1355,7 +1355,7 @@ def test__create_default_for_version__v3__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNClassifier)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v3-" in estimator.model_path
@@ -1367,7 +1367,7 @@ def test__create_default_for_version__passes_through_overrides() -> None:
     )
 
     assert estimator.n_estimators == 16
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
 
 
 # =============================================================================
@@ -1488,8 +1488,8 @@ def test__predict_proba_batched__rejects_mismatched_classes() -> None:
 def test__predict_proba_batched__matches_per_dataset_dataframe(device: str) -> None:
     """Batched prediction matches per-dataset on non-numeric DataFrame inputs.
 
-    The standard predict path runs fix_dtypes / process_text_na_dataframe /
-    ordinal encoding on X_test before the member preprocessors; predict_proba_batched
+    The standard predict path runs `clean_data_transform` -- dtype fixing and
+    ordinal encoding -- on X_test before the member preprocessors; predict_proba_batched
     must apply the same validation or non-numeric inputs would diverge from (or
     crash relative to) predict_proba. To actually exercise those paths the frames
     here mix dtypes that need conversion: a categorical-dtype column, an
