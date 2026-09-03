@@ -14,6 +14,8 @@ from sklearn.exceptions import NotFittedError
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
+from tabpfn.inference_tuning import ClassifierTuningConfig, RegressorTuningConfig
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.datetimes import DateTransformer
 
 
@@ -483,3 +485,59 @@ def test__fit_with_differentiable_input__sets_a_date_transformer(
     ).fit_with_differentiable_input(X, y)
 
     assert model.date_transformer_.transform(np.zeros((2, 3))).shape == (2, 3)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_transform_dates_and_tuning__tuning_estimator_gets_shifted_indices(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tuning estimators are fit on the expanded array, where a declared
+    categorical column has moved down past the expanded date, so they must be
+    handed the shifted index rather than the caller's.
+    """
+    n = 80
+    rng = np.random.default_rng(seed=0)
+    X = pd.DataFrame(
+        {
+            "date": pd.date_range("2020-01-01", periods=n, freq="D"),
+            "cat": rng.choice(["a", "b", "c"], size=n),
+            "num": rng.normal(size=n),
+        }
+    )
+    is_classifier = estimator_cls is TabPFNClassifier
+    y = rng.integers(0, 2, size=n) if is_classifier else rng.normal(size=n)
+    config_cls = ClassifierTuningConfig if is_classifier else RegressorTuningConfig
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[1],
+        inference_config={"TRANSFORM_DATES": True},
+        tuning_config=config_cls(
+            calibrate_temperature=True, tuning_holdout_frac=0.25, tuning_n_folds=1
+        ),
+    )
+    getter = "_get_tuning_classifier" if is_classifier else "_get_tuning_regressor"
+    tuning_estimators: list[TabPFNClassifier | TabPFNRegressor] = []
+    original = getattr(model, getter)
+
+    def capture(**kwargs: object) -> TabPFNClassifier | TabPFNRegressor:
+        tuning_estimators.append(original(**kwargs))
+        return tuning_estimators[-1]
+
+    monkeypatch.setattr(model, getter, capture)
+    with warnings.catch_warnings():
+        # Tuning on this few rows warns; the point here is the index bookkeeping.
+        warnings.simplefilter("ignore", UserWarning)
+        model.fit(X, y)
+
+    # Expansion drops "date" from position 0 and appends its features, so "cat"
+    # sits at 0 in the array the tuning estimator sees.
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        0
+    ]
+    assert len(tuning_estimators) == 1
+    tuning = tuning_estimators[0]
+    assert tuning.categorical_features_indices == [0]
+    assert tuning.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        0
+    ]

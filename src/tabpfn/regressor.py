@@ -992,6 +992,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_mode": "fit_preprocessors",
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
+            # Fit on the already-expanded array, where a declared column may
+            # have moved down past an expanded date.
+            "categorical_features_indices": self.date_transformer_.output_indices(
+                self.categorical_features_indices
+            ),
         }
 
         params.update(forced)
