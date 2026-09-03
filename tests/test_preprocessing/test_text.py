@@ -20,7 +20,7 @@ from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.text import _MAX_COLUMNS_IN_WARNING, TextTransformer
 
 #: The default width a text column is expanded to.
-N_COMPONENTS = InferenceConfig().TEXTN_COMPONENTS
+N_COMPONENTS = InferenceConfig.TEXT_N_COMPONENTS
 
 #: Above the default `MIN_CARDINALITY_FOR_TEXT` of 30, so the column is text.
 N_DISTINCT = 40
