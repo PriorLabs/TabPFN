@@ -87,7 +87,11 @@ from tabpfn.preprocessing.ensemble import (
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
-from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.modality_detection import (
+    declared_categorical_indices,
+    detect_feature_modalities,
+)
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -201,6 +205,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     date_transformer_: DateTransformer
     """The transformer that converted every temporal column before validation."""
+
+    text_transformer_: TextTransformer
+    """The transformer that expanded every text column before validation."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -704,9 +711,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             for i in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
-        # A tensor holds no dates, so this fits nothing; set anyway, so every
-        # predict path converts through it without first checking for one.
+        # A tensor holds no dates or strings, so these fit nothing; set anyway, so
+        # every predict path converts through them without first checking.
         self.date_transformer_ = DateTransformer().fit(X)
+        self.text_transformer_ = TextTransformer().fit(X)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -752,6 +760,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
         X = date_transformer.fit_transform(X)
+        categorical_indices = date_transformer.output_indices(
+            self.categorical_features_indices
+        )
+        text_transformer = TextTransformer(
+            categorical_indices=categorical_indices,
+            transform_text=self.inference_config_.TRANSFORM_TEXT,
+            min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
+        )
+        X = text_transformer.fit_transform(X)
+        categorical_indices = declared_categorical_indices(
+            X, text_transformer.output_indices(categorical_indices)
+        )
 
         # Data validation and cleaning
         X, y, original_y_name = ensure_compatible_fit_inputs(
@@ -768,10 +788,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=date_transformer.feature_names_out_,
-            provided_categorical_indices=date_transformer.output_indices(
-                self.categorical_features_indices
-            ),
+            feature_names=text_transformer.feature_names_out_,
+            provided_categorical_indices=categorical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -785,6 +803,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
         self.date_transformer_ = date_transformer
+        self.text_transformer_ = text_transformer
         self.n_train_samples_ = len(X)
 
         # Label encoding
@@ -844,9 +863,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
             # Fit on the already-expanded array, where a declared column may
-            # have moved down past an expanded date.
-            "categorical_features_indices": self.date_transformer_.output_indices(
-                self.categorical_features_indices
+            # have moved down past an expanded date or text column.
+            "categorical_features_indices": self.text_transformer_.output_indices(
+                self.date_transformer_.output_indices(self.categorical_features_indices)
             ),
         }
 
@@ -985,9 +1004,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
-        # Preprocessed tensors hold no dates either, so this fits nothing: the
-        # transformer refuses a date and converts a duration, like any fitted one.
+        # Preprocessed tensors hold no dates or strings either, so these fit
+        # nothing: the date transformer still refuses a date and converts a
+        # duration, like any fitted one.
         self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
+        self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
@@ -1143,6 +1164,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             check_input_shape_matches(X_test, estimator=worker)
             X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
+            X_test = worker.text_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
@@ -1451,6 +1473,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if not self.differentiable_input:
             check_input_shape_matches(X, estimator=self)
             X = self.date_transformer_.transform(X)
+            X = self.text_transformer_.transform(X)
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = clean_data_transform(
                 X,

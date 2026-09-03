@@ -87,7 +87,9 @@ class InferenceConfig:
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
     """Number of distinct values above which a string column is read as text
-    rather than as a category. A separate decision from
+    rather than as a category, unless it is declared categorical: a column listed
+    in `categorical_features_indices` or carrying pandas' `category` dtype is a
+    category at any cardinality. A separate decision from
     `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
     that one describes when a *number* is few enough to be a category, this one
     describes when a *string* is varied enough to be text rather than a category,
@@ -150,6 +152,17 @@ class InferenceConfig:
     refused with an error saying so rather than guessed at. The fine-tuning
     estimators do not run this conversion, whatever `inference_config` they are
     handed, so a datetime column has to be converted before fine-tuning."""
+
+    TRANSFORM_TEXT: bool = False
+    """Whether a text column is expanded into numeric features via
+    `skrub.StringEncoder`: tf-idf over its character n-grams, reduced by a
+    truncated SVD to at most 30 features. A column is text when it has pandas'
+    `string` dtype (the default for strings from pandas 3.0) and more than
+    `MIN_CARDINALITY_FOR_TEXT` distinct values; an `object` column is never
+    expanded, whatever it holds, nor is a declared categorical one. Off, a text
+    column is ordinal-encoded as a high-cardinality category and `fit` warns
+    about it by name. Like `TRANSFORM_DATES`, not run by the fine-tuning
+    estimators."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.

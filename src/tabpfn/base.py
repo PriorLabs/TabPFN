@@ -648,6 +648,7 @@ def get_embeddings(
 
     check_input_shape_matches(X, estimator=model)
     X = model.date_transformer_.transform(X)
+    X = model.text_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = clean_data_transform(
         X,
