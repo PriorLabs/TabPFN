@@ -6,6 +6,15 @@ from __future__ import annotations
 
 import torch
 
+# ``torch.nanquantile`` maps the reference positions onto sample indices in
+# double precision (torch >= 2.14). A float32 reference then lands just short
+# of an exact order statistic - e.g. ``linspace(0, 1, 30)[12]`` scaled by 29
+# gives 11.999999523 instead of 12 - so the result is interpolated where
+# sklearn, which works in float64 throughout, returns the sample exactly.
+# Near-duplicate samples amplify that error by orders of magnitude, so the fit
+# is computed in float64 and cast back afterwards.
+_FIT_DTYPE = torch.float64
+
 
 class TorchQuantileTransformer:
     """Quantile transformer for PyTorch tensors with NaN handling.
@@ -66,24 +75,28 @@ class TorchQuantileTransformer:
 
         n_quantiles_effective = min(self.n_quantiles, n_samples)
 
-        # torch.nanquantile requires float32 or float64; cast up if needed
-        # (e.g. when inference_precision is float16).
+        # The cache is returned in the input dtype, so that ``transform``,
+        # which computes in the cache's dtype, keeps the input's precision.
+        # Low-precision inputs (e.g. float16 from inference_precision) get a
+        # float32 cache instead - float16 is too coarse for quantile positions.
         compute_dtype = x.dtype
         if x.dtype not in (torch.float32, torch.float64):
             compute_dtype = torch.float32
 
         references = torch.linspace(
-            0, 1, n_quantiles_effective, device=x.device, dtype=compute_dtype
+            0, 1, n_quantiles_effective, device=x.device, dtype=_FIT_DTYPE
         )
 
-        x_compute = x.to(compute_dtype)
-        quantiles = self._nanquantile_chunked(x_compute, references)
+        quantiles = self._nanquantile_chunked(x, references)
 
         # Ensure monotonicity (handle floating point issues)
         # Use cumulative maximum along the quantile dimension
         quantiles = torch.cummax(quantiles, dim=0).values
 
-        return {"quantiles": quantiles, "references": references}
+        return {
+            "quantiles": quantiles.to(compute_dtype),
+            "references": references.to(compute_dtype),
+        }
 
     def _nanquantile_chunked(
         self,
@@ -95,6 +108,10 @@ class TorchQuantileTransformer:
         Each column is independent so we process subsets of columns to keep
         peak memory at O(N * chunk_cols) instead of O(N * F).  The chunk size
         is determined by ``_get_fit_chunk_cols``.
+
+        ``torch.nanquantile`` requires ``references`` and the data to share a
+        dtype, so each chunk is cast to ``_FIT_DTYPE`` as it is processed
+        rather than copying the whole tensor up front.
         """
         original_shape = x.shape  # [N, ...]
         n_samples = x.shape[0]
@@ -107,12 +124,14 @@ class TorchQuantileTransformer:
         process_all_at_once = n_features <= chunk_cols
 
         if process_all_at_once:
-            quantiles = torch.nanquantile(x, references, dim=0)
+            quantiles = torch.nanquantile(x.to(_FIT_DTYPE), references, dim=0)
         else:
             chunks = []
             for col_start in range(0, n_features, chunk_cols):
                 q_chunk = torch.nanquantile(
-                    x_flat[:, col_start : col_start + chunk_cols], references, dim=0
+                    x_flat[:, col_start : col_start + chunk_cols].to(_FIT_DTYPE),
+                    references,
+                    dim=0,
                 )
                 chunks.append(q_chunk)
             quantiles = torch.cat(chunks, dim=-1)
@@ -126,12 +145,13 @@ class TorchQuantileTransformer:
         """Compute a column-chunk size that keeps nanquantile peak memory bounded.
 
         ``torch.nanquantile`` internally sorts the data along dim=0, requiring
-        roughly 10x the input size as temporary memory (sort buffer + indexing).
-        We target ~2 GB of intermediates so that 100k x 500 fits in one shot
-        while 1M-row datasets stay bounded at ~2 GB of workspace per chunk.
+        roughly 10x the chunk size as temporary memory (sort buffer + indexing).
+        The chunk is cast to ``_FIT_DTYPE`` for that call, so the budget uses
+        that dtype's element size rather than the input's.  We target ~2 GB of
+        intermediates per chunk, so even 1M-row datasets stay bounded.
         """
         n_samples = x_flat.shape[0]
-        element_size = x_flat.element_size()
+        element_size = _FIT_DTYPE.itemsize
         overhead_factor = 10
         target_bytes = 2 * 1024**3  # 2 GB
         bytes_per_col = n_samples * element_size * overhead_factor
