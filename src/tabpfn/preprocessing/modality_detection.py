@@ -51,14 +51,16 @@ def detect_feature_modalities(
     Args:
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
-        provided_categorical_indices: User-provided indices considered categorical.
+        provided_categorical_indices: User-provided indices read as categorical,
+            whatever their cardinality.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
         min_cardinality_for_text: Unique-value count above which a candidate
-            string column (not parsed as a number) is `TEXT` rather than
-            `CATEGORICAL` -- independent of the two thresholds above.
+            string column (not parsed as a number, not declared categorical) is
+            `TEXT` rather than `CATEGORICAL` -- independent of the two thresholds
+            above.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -80,7 +82,7 @@ def detect_feature_modalities(
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema, declared_cat_indices=provided_categorical_indices)
+    _warn_on_text(feature_schema)
     return feature_schema
 
 
@@ -93,27 +95,17 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_on_text(
-    feature_schema: FeatureSchema,
-    *,
-    declared_cat_indices: Sequence[int] | None = None,
-) -> None:
+def _warn_on_text(feature_schema: FeatureSchema) -> None:
     """Warn about any free-text columns.
 
     A converted date is numeric by the time detection runs (see
-    `datetimes.DateTransformer`), so it is never reported here.
-
-    Args:
-        feature_schema: The schema produced by detection.
-        declared_cat_indices: Indices passed as `categorical_features_indices`;
-            never reported, since declaring a column categorical means the user
-            already intends its non-numeric values as categories.
+    `datetimes.DateTransformer`), and a declared categorical column is never
+    `TEXT`, so neither is reported here.
     """
-    declared = set(declared_cat_indices or ())
     text_names = [
         feature.name.removeprefix(INPUT_FEATURE_PREFIX)
-        for index, feature in enumerate(feature_schema.features)
-        if feature.modality is FeatureModality.TEXT and index not in declared
+        for feature in feature_schema.features
+        if feature.modality is FeatureModality.TEXT
     ]
     if not text_names:
         return
@@ -123,13 +115,12 @@ def _warn_on_text(
         f"high-cardinality categoricals, which usually adds noise rather than "
         f"signal: {_format_names_for_warning(text_names)}.\n"
         "If such a column holds numbers stored as strings, convert it to a numeric "
-        "dtype. If it is a category rather than text, raise "
+        "dtype. If it is a category rather than text, pass its index in "
+        "`categorical_features_indices`, or raise "
         '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
         "distinct values. If it holds genuine text, this package has no text "
         "handling -- consider the tabpfn-client API, which embeds text natively: "
-        "https://github.com/PriorLabs/tabpfn-client \n"
-        "To silence this for a column that is genuinely a high-cardinality category, "
-        "pass its index in `categorical_features_indices`.",
+        "https://github.com/PriorLabs/tabpfn-client",
         UserWarning,
         # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
         # `warning.filename` asserts in the tests.
@@ -188,10 +179,9 @@ def _detect_feature_modality(
         s.dtype, pd.CategoricalDtype
     )
     if is_string_like:
-        if n_unique <= min_cardinality_for_text:
+        if reported_categorical or n_unique <= min_cardinality_for_text:
             return FeatureModality.CATEGORICAL
-        else:  # noqa: RET505
-            return FeatureModality.TEXT
+        return FeatureModality.TEXT
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
