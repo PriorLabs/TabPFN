@@ -75,12 +75,8 @@ def extract_input_shape(X: XType) -> tuple[npt.NDArray[Any] | None, int | None]:
 def check_input_shape_matches(X: XType, *, estimator: BaseEstimator) -> None:
     """Check a predict input against the `feature_names_in_`/`n_features_in_` of fit.
 
-    The counterpart of `extract_input_shape`, and read-only likewise: it compares
-    and raises, writing nothing back onto `estimator`. Call it on the raw input,
-    before date conversion, for the same reason.
-
-    The labels are checked before the count, so a frame that is both renamed and
-    narrowed reports the name mismatch, as sklearn's own check would.
+    Read-only, like `extract_input_shape`, and called on the raw input for the
+    same reason. Labels are checked before the count, as sklearn does.
 
     Raises:
         TabPFNValidationError: If `X`'s column labels or count disagree with what
