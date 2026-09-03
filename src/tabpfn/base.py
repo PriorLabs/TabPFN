@@ -43,6 +43,9 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.modality_detection import declared_categorical_indices
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
@@ -411,6 +414,42 @@ def create_inference_engine(  # noqa: PLR0913
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
+
+
+def expand_dates_and_text(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+    inference_config: InferenceConfig,
+) -> tuple[XType, DateTransformer, TextTransformer, list[int]]:
+    """Expand the datetime and text columns of a fit input, before validation.
+
+    An expanded column is dropped and its features appended, so every column
+    after it moves down. The declared categorical positions move with them, and
+    the `category` dtype columns join them, so the returned positions address the
+    returned input.
+
+    Returns:
+        The expanded input, the two fitted transformers, and the categorical
+        positions in the expanded input.
+    """
+    date_transformer = DateTransformer(
+        categorical_indices=categorical_features_indices,
+        transform_dates=inference_config.TRANSFORM_DATES,
+    )
+    X = date_transformer.fit_transform(X)
+    categorical_indices = date_transformer.output_indices(categorical_features_indices)
+    text_transformer = TextTransformer(
+        categorical_indices=categorical_indices,
+        transform_text=inference_config.TRANSFORM_TEXT,
+        min_cardinality_for_text=inference_config.MIN_CARDINALITY_FOR_TEXT,
+        n_components=inference_config.TEXT_N_COMPONENTS,
+    )
+    X = text_transformer.fit_transform(X)
+    categorical_indices = declared_categorical_indices(
+        X, text_transformer.output_indices(categorical_indices)
+    )
+    return X, date_transformer, text_transformer, categorical_indices
 
 
 def reject_categoricals_for_differentiable_input(

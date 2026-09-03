@@ -45,6 +45,7 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     estimator_to_device,
+    expand_dates_and_text,
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
@@ -88,10 +89,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.modality_detection import (
-    declared_categorical_indices,
-    detect_feature_modalities,
-)
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -898,23 +896,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
         validate_categorical_features_indices(self.categorical_features_indices)
-        date_transformer = DateTransformer(
-            categorical_indices=self.categorical_features_indices,
-            transform_dates=self.inference_config_.TRANSFORM_DATES,
-        )
-        X = date_transformer.fit_transform(X)
-        categorical_indices = date_transformer.output_indices(
-            self.categorical_features_indices
-        )
-        text_transformer = TextTransformer(
-            categorical_indices=categorical_indices,
-            transform_text=self.inference_config_.TRANSFORM_TEXT,
-            min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
-            n_components=self.inference_config_.TEXT_N_COMPONENTS,
-        )
-        X = text_transformer.fit_transform(X)
-        categorical_indices = declared_categorical_indices(
-            X, text_transformer.output_indices(categorical_indices)
+        X, date_transformer, text_transformer, categorical_indices = (
+            expand_dates_and_text(
+                X,
+                categorical_features_indices=self.categorical_features_indices,
+                inference_config=self.inference_config_,
+            )
         )
 
         X, y, _ = ensure_compatible_fit_inputs(

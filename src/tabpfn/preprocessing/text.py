@@ -327,9 +327,9 @@ def _warn_on_text(
         "tabpfn-client API, which embeds text natively: "
         "https://github.com/PriorLabs/tabpfn-client",
         UserWarning,
-        # stacklevel=7 reaches the `estimator.fit(X, y)` call site; pinned by the
+        # stacklevel=8 reaches the `estimator.fit(X, y)` call site; pinned by the
         # `warning.filename` assert in the tests.
-        stacklevel=7,
+        stacklevel=8,
     )
 
 
