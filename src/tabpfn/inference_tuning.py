@@ -304,6 +304,9 @@ def find_optimal_classification_thresholds(
 ) -> np.ndarray:
     """Finds the optimal thresholds for each class in a one-vs-rest (OvR) fashion.
 
+    Classes with no positive (or no negative) rows in the holdout carry no signal
+    to tune on and are assigned a neutral threshold instead of a searched one.
+
     Args:
         metric_name: The name of the metric to optimize.
         y_true: The true labels of shape [n_samples].
@@ -313,22 +316,41 @@ def find_optimal_classification_thresholds(
     Returns:
         The optimal thresholds of shape [n_classes].
     """
-    optimal_thresholds = []
+    tuned_by_class: dict[int, float] = {}
 
     # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
     for i in range(n_classes):
-        y_true_ovr = (y_true == i).astype(int)
-        y_pred_probas_ovr = y_pred_probas[:, i]
-        best_thresh = find_optimal_classification_threshold_single_class(
+        is_class_i = y_true == i
+        if not is_class_i.any() or is_class_i.all():
+            continue
+
+        tuned_by_class[i] = find_optimal_classification_threshold_single_class(
             metric_name=metric_name,
-            y_true=y_true_ovr,
-            y_pred_probas=y_pred_probas_ovr,
+            y_true=is_class_i.astype(int),
+            y_pred_probas=y_pred_probas[:, i],
         )
 
-        optimal_thresholds.append(best_thresh)
+    n_untuned = n_classes - len(tuned_by_class)
+    if n_untuned:
+        warnings.warn(
+            f"{n_untuned} of {n_classes} classes have no rows in the tuning holdout, "
+            "so their decision thresholds could not be tuned and a neutral value is "
+            "used instead. Set `tune_decision_thresholds=False` to skip threshold "
+            "tuning entirely.",
+            UserWarning,
+            stacklevel=2,
+        )
 
-    return np.array(optimal_thresholds)
+    # Thresholds act as a divisive reweight, so only their ratios matter and the
+    # neutral fill is the geometric mean rather than the arithmetic one.
+    neutral = (
+        float(np.exp(np.mean(np.log(list(tuned_by_class.values())))))
+        if tuned_by_class
+        else 1.0
+    )
+
+    return np.array([tuned_by_class.get(i, neutral) for i in range(n_classes)])
 
 
 def find_optimal_classification_threshold_single_class(
@@ -384,6 +406,14 @@ def select_robust_optimal_threshold(
     """
     thresholds = np.array([t for t, _ in thresholds_and_losses], dtype=float)
     losses = np.array([f for _, f in thresholds_and_losses], dtype=float)
+
+    finite = np.isfinite(losses)
+    if not finite.any():
+        # argmin over all-nan losses would return index 0, the most aggressive
+        # threshold in the grid.
+        return float(np.median(thresholds))
+    losses = np.where(finite, losses, np.inf)
+
     best_loss = float(np.min(losses))
     close_mask = losses <= (best_loss + plateau_delta)
 

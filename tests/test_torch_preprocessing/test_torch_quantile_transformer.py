@@ -58,13 +58,15 @@ class TestTorchQuantileTransformerSklearnEquivalence:
         torch_result = torch_qt(x_torch)
 
         assert torch_result.shape == x_torch.shape
-        # Windows' torch interpolation can differ from sklearn by about 1e-4
-        # because of platform-specific floating-point evaluation order.
-        atol = 2e-4 if sys.platform == "win32" else 1e-5
+        # torch >= 2.14 computes the quantile's sample index in double, so a
+        # float32 ``references`` value can interpolate between two order
+        # statistics instead of landing on one.  The resulting output error
+        # scales with 1 / (gap between adjacent values), so it is data
+        # dependent; 1e-3 clears the worst observed case (1.1e-4) with margin.
         assert torch.allclose(
             torch_result,
             torch.from_numpy(sklearn_result),
-            atol=atol,
+            atol=1e-3,
             rtol=1e-5,
         ), (
             f"Mismatch for shape ({n_samples}, {n_features}) with "
