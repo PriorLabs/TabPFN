@@ -53,16 +53,15 @@ def detect_feature_modalities(
     Args:
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
-        provided_categorical_indices: User-provided indices read as categorical,
-            whatever their cardinality (see `declared_categorical_indices`).
+        provided_categorical_indices: User-provided indices read as categorical.
+            Always respected.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
         min_cardinality_for_text: Unique-value count above which a candidate
             string column (not parsed as a number, not declared categorical) is
-            `TEXT` rather than `CATEGORICAL` -- independent of the two thresholds
-            above.
+            `TEXT` rather than `CATEGORICAL`.
 
     Returns:
         The inferred `FeatureSchema`.
