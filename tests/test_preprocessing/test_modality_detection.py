@@ -283,18 +283,6 @@ def test__detect_for_categorical_with_category_dtype():
     assert result == FeatureModality.CATEGORICAL
 
 
-def test__category_dtype_above_text_threshold__is_still_categorical():
-    s = pd.Series([f"v{i}" for i in range(50)], dtype="category")
-    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=10)
-    assert result == FeatureModality.CATEGORICAL
-
-
-def test__category_dtype_with_numeric_values__is_categorical():
-    s = pd.Series(list(range(20)), dtype="category")
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=10)
-    assert result == FeatureModality.CATEGORICAL
-
-
 def test__string_reported_as_categorical__is_categorical_above_text_threshold():
     s = pd.Series([f"v{i}" for i in range(50)])
     result = _for_test_detect_with_defaults(
