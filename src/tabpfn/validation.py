@@ -50,9 +50,6 @@ def extract_input_shape(X: XType) -> tuple[npt.NDArray[Any] | None, int | None]:
     labels are read here, never the values, so an `X` still holding a genuine
     `datetime64` column is fine, unlike for the rest of validation.
 
-    Sets nothing: the caller assigns the two values it gets back, so what an
-    estimator records about its input is written where it can be read.
-
     Returns:
         The column labels (`None` for an input that carries none, e.g. an array),
         and the column count (`None` when it cannot be determined, e.g. for a 1D
