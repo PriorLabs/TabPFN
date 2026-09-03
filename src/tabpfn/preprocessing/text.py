@@ -2,13 +2,15 @@
 
 """Expand a DataFrame's text columns into numeric features before validation.
 
-A column is text by its dtype and its values: a pandas `string` column (the
-default for strings from pandas 3.0) with more than a cutoff of distinct values.
-An `object` column is never text here, whatever it holds, nor is a `category`
-column or one declared in `categorical_features_indices`. With `TRANSFORM_TEXT`
-on, a text column becomes tf-idf features over its character n-grams, reduced
-by a truncated SVD (`skrub.StringEncoder`); off, it passes through unchanged and
-modality detection later warns about it.
+A column is text by its dtype and its values: a `string` or `object` column with
+more than a cutoff of distinct values that do not all parse as numbers. A
+`category` column is never text, nor is one declared in
+`categorical_features_indices`. With `TRANSFORM_TEXT` on, a `string` column (the
+default for strings from pandas 3.0) becomes tf-idf features over its character
+n-grams, reduced by a truncated SVD (`skrub.StringEncoder`). Any other text
+column passes through unchanged, with a warning naming it: the model then reads
+it as a number, the alphabetical rank of each string. An `object` column is not
+expanded yet, whatever it holds.
 Only `DataFrame` columns are inspected: any other input passes through unchanged.
 
 Only `TabPFNClassifier` and `TabPFNRegressor` run this, right after
@@ -29,6 +31,10 @@ from skrub import StringEncoder
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import make_names_unique
+from tabpfn.preprocessing.modality_detection import (
+    _get_unique_with_sklearn_compatible_error,
+    _is_numeric_pandas_series,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -40,6 +46,10 @@ __all__ = ["TextTransformer"]
 #: Features a text column is encoded into, at most: skrub's own default. A column
 #: whose n-gram vocabulary is smaller than this yields fewer.
 _N_COMPONENTS = 30
+
+#: Cap on how many column names the text warning lists, so a wide frame of text
+#: columns does not produce an unreadable multi-kilobyte message.
+_MAX_COLUMNS_IN_WARNING = 10
 
 
 @dataclasses.dataclass
@@ -59,10 +69,10 @@ class TextTransformer:
     Args:
         categorical_indices: Indices the caller declared categorical, as positions
             in the `X` handed here. Never text, whatever they hold.
-        transform_text: Whether a text column is expanded into tf-idf features
-            over its character n-grams, reduced by a truncated SVD. Off, every
-            column passes through unchanged.
-        min_cardinality_for_text: Distinct-value count above which a `string`
+        transform_text: Whether a `string` text column is expanded into tf-idf
+            features over its character n-grams, reduced by a truncated SVD.
+            Off, every column passes through unchanged.
+        min_cardinality_for_text: Distinct-value count above which a string
             column counts as text.
 
     Attributes:
@@ -94,6 +104,9 @@ class TextTransformer:
 
     def fit(self, X: XType) -> TextTransformer:
         """Fit one encoder per text column in `X`, if `transform_text` is on.
+
+        Warns about every text column left unexpanded, by name: the model reads
+        it as a number.
 
         Args:
             X: The input data, before any dtype fixing.
@@ -193,7 +206,21 @@ class TextTransformer:
         if not isinstance(X, pd.DataFrame):
             return []
 
-        positions = self._text_positions(X) if self._transform_text else []
+        text = _text_positions(
+            X,
+            declared=self._declared_categorical,
+            min_cardinality=self._min_cardinality_for_text,
+        )
+        positions = [
+            i
+            for i in text
+            if self._transform_text and isinstance(X.dtypes.iloc[i], pd.StringDtype)
+        ]
+        _warn_on_text(
+            X,
+            [i for i in text if i not in positions],
+            transform_text=self._transform_text,
+        )
         kept_names = [
             str(column) for i, column in enumerate(X.columns) if i not in set(positions)
         ]
@@ -207,18 +234,6 @@ class TextTransformer:
             blocks.append(block)
         self.feature_names_out_ = kept_names + expanded_names
         return blocks
-
-    def _text_positions(self, X: pd.DataFrame) -> list[int]:
-        """Positions of `X`'s text columns: `string` dtype, not declared
-        categorical, and more distinct values than the cutoff.
-        """
-        return [
-            i
-            for i, dtype in enumerate(X.dtypes)
-            if isinstance(dtype, pd.StringDtype)
-            and i not in self._declared_categorical
-            and X.iloc[:, i].nunique(dropna=False) > self._min_cardinality_for_text
-        ]
 
     @staticmethod
     def _fit_one(
@@ -254,6 +269,65 @@ class TextTransformer:
         """Reapply one fitted encoder, naming its features as at fit."""
         encoded = pd.DataFrame(fitted.encoder.transform(column.astype("string")))
         return encoded.set_axis(fitted.output_names, axis=1).reset_index(drop=True)
+
+
+def _text_positions(
+    X: pd.DataFrame, *, declared: set[int], min_cardinality: int
+) -> list[int]:
+    """Positions of `X`'s text columns: `string` or `object` dtype, not declared
+    categorical, more distinct values than the cutoff, and not all numbers.
+    """
+    positions = []
+    for i, dtype in enumerate(X.dtypes):
+        if i in declared:
+            continue
+        if not (
+            isinstance(dtype, pd.StringDtype) or pd.api.types.is_object_dtype(dtype)
+        ):
+            continue
+        column = X.iloc[:, i]
+        if _get_unique_with_sklearn_compatible_error(column) <= min_cardinality:
+            continue
+        if _is_numeric_pandas_series(column):
+            continue
+        positions.append(i)
+    return positions
+
+
+def _warn_on_text(
+    X: pd.DataFrame, positions: Sequence[int], *, transform_text: bool
+) -> None:
+    """Warn about the text columns at `positions`, which nothing expands."""
+    if not positions:
+        return
+    names = [str(X.columns[i]) for i in positions]
+    shown = ", ".join(repr(name) for name in names[:_MAX_COLUMNS_IN_WARNING])
+    if len(names) > _MAX_COLUMNS_IN_WARNING:
+        shown += f" (and {len(names) - _MAX_COLUMNS_IN_WARNING} more)"
+    if transform_text:
+        remedy = "give it pandas' `string` dtype to have `TRANSFORM_TEXT` encode it"
+    else:
+        remedy = (
+            "give it pandas' `string` dtype and set "
+            '`inference_config={"TRANSFORM_TEXT": True}` to encode it into numeric '
+            "features"
+        )
+    warnings.warn(
+        f"These columns look like free text and are being read as numbers, by the "
+        f"alphabetical rank of each string, which usually adds noise rather than "
+        f"signal: {shown}.\n"
+        "If such a column holds numbers stored as strings, convert it to a numeric "
+        "dtype. If it is a category rather than text, pass its index in "
+        "`categorical_features_indices`, give it the `category` dtype, or raise "
+        '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
+        f"distinct values. If it holds genuine text, {remedy}, or consider the "
+        "tabpfn-client API, which embeds text natively: "
+        "https://github.com/PriorLabs/tabpfn-client",
+        UserWarning,
+        # stacklevel=7 reaches the `estimator.fit(X, y)` call site; pinned by the
+        # `warning.filename` assert in the tests.
+        stacklevel=7,
+    )
 
 
 def _drop_and_append(

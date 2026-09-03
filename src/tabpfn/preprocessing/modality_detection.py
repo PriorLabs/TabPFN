@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -14,7 +13,6 @@ import pandas as pd
 from tabpfn.errors import TabPFNUserError
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
-    INPUT_FEATURE_PREFIX,
     Feature,
     FeatureModality,
     FeatureSchema,
@@ -27,10 +25,6 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
-
-#: Cap on how many column names the likely-text warning lists, so a wide frame of
-#: text columns does not produce an unreadable multi-kilobyte message.
-_MAX_TEXT_COLUMNS_IN_WARNING = 10
 
 
 def detect_feature_modalities(
@@ -82,9 +76,7 @@ def detect_feature_modalities(
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
-    feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema)
-    return feature_schema
+    return FeatureSchema(features=features)
 
 
 def declared_categorical_indices(X: XType, indices: Sequence[int] | None) -> list[int]:
@@ -100,48 +92,6 @@ def declared_categorical_indices(X: XType, indices: Sequence[int] | None) -> lis
             if isinstance(dtype, pd.CategoricalDtype):
                 declared.add(i)
     return sorted(declared)
-
-
-def _format_names_for_warning(names: list[str]) -> str:
-    """Render column names for a warning, capped so it stays readable."""
-    shown = names[:_MAX_TEXT_COLUMNS_IN_WARNING]
-    printed = ", ".join(repr(name) for name in shown)
-    if len(names) > len(shown):
-        printed += f" (and {len(names) - len(shown)} more)"
-    return printed
-
-
-def _warn_on_text(feature_schema: FeatureSchema) -> None:
-    """Warn about any free-text columns.
-
-    A declared categorical column is never `TEXT`, and a column expanded into
-    text features is numeric by the time detection runs, so neither is reported.
-    """
-    text_names = [
-        feature.name.removeprefix(INPUT_FEATURE_PREFIX)
-        for feature in feature_schema.features
-        if feature.modality is FeatureModality.TEXT
-    ]
-    if not text_names:
-        return
-
-    warnings.warn(
-        f"These columns look like free text and are being ordinal-encoded as "
-        f"high-cardinality categoricals, which usually adds noise rather than "
-        f"signal: {_format_names_for_warning(text_names)}.\n"
-        "If such a column holds numbers stored as strings, convert it to a numeric "
-        "dtype. If it is a category rather than text, pass its index in "
-        "`categorical_features_indices`, give it the `category` dtype, or raise "
-        '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
-        "distinct values. If it holds genuine text, give it pandas' `string` dtype "
-        'and set `inference_config={"TRANSFORM_TEXT": True}` to encode it into '
-        "numeric features, or consider the tabpfn-client API, which embeds text "
-        "natively: https://github.com/PriorLabs/tabpfn-client",
-        UserWarning,
-        # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
-        # `warning.filename` asserts in the tests.
-        stacklevel=6,
-    )
 
 
 def _detect_feature_modality(

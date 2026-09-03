@@ -16,7 +16,11 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference_tuning import ClassifierTuningConfig, RegressorTuningConfig
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.text import _N_COMPONENTS, TextTransformer
+from tabpfn.preprocessing.text import (
+    _MAX_COLUMNS_IN_WARNING,
+    _N_COMPONENTS,
+    TextTransformer,
+)
 
 #: Above the default `MIN_CARDINALITY_FOR_TEXT` of 30, so the column is text.
 N_DISTINCT = 40
@@ -280,6 +284,122 @@ class TestExpansionAtPredictTime:
         assert transformer.transform(X) is X
 
 
+class TestWarning:
+    """A text column nothing expands is warned about here, off the raw frame,
+    before validation flattens the dtypes away. The model reads it as a number.
+    """
+
+    def test__string_column_with_the_flag_off__warns_by_name(self) -> None:
+        with pytest.warns(UserWarning, match="look like free text") as record:
+            TextTransformer().fit_transform(_frame(_sentences()))
+
+        message = str(record[0].message)
+        assert "'text'" in message
+        # The message must state every remedy.
+        assert "numeric dtype" in message
+        assert "categorical_features_indices" in message
+        assert "`category` dtype" in message
+        assert "MIN_CARDINALITY_FOR_TEXT" in message
+        assert "TRANSFORM_TEXT" in message
+        assert "https://github.com/PriorLabs/tabpfn-client" in message
+
+    @pytest.mark.parametrize("transform_text", [False, True])
+    def test__object_column__warns_whatever_the_flag(
+        self, transform_text: bool
+    ) -> None:
+        X = _frame(_sentences(), dtype=object)
+
+        with pytest.warns(UserWarning, match="look like free text") as record:
+            TextTransformer(transform_text=transform_text).fit_transform(X)
+
+        assert "'text'" in str(record[0].message)
+
+    def test__expanded_column__does_not_warn(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _expander().fit_transform(_frame(_sentences()))
+
+    @pytest.mark.parametrize(
+        ("column", "declared"),
+        [
+            (pd.Series(_sentences(), dtype="string"), [1]),
+            (pd.Series(_sentences(), dtype="category"), None),
+            (pd.Series(_sentences(30), dtype="string"), None),
+            (pd.Series([str(i / 7) for i in range(N_DISTINCT)], dtype="string"), None),
+            (pd.Series([str(i / 7) for i in range(N_DISTINCT)], dtype=object), None),
+            (pd.Series(np.arange(N_DISTINCT, dtype=float)), None),
+        ],
+        ids=[
+            "declared",
+            "category_dtype",
+            "at_the_cutoff",
+            "numeric_strings",
+            "numeric_object_strings",
+            "numbers",
+        ],
+    )
+    def test__non_text_columns__do_not_warn(
+        self, column: pd.Series, declared: list[int] | None
+    ) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            TextTransformer(categorical_indices=declared).fit_transform(
+                _frame(column, dtype=None)
+            )
+
+    def test__numeric_column_with_one_stray_token__warns(self) -> None:
+        """One non-numeric token makes a numeric column text: every value has to
+        parse for it to be a number. The fix the warning asks for is a numeric
+        dtype.
+        """
+        values = np.random.default_rng(2).normal(size=200)
+        mostly_numeric = [str(round(float(v), 4)) for v in values]
+        mostly_numeric[7] = "N/A"
+
+        with pytest.warns(UserWarning, match="look like free text") as record:
+            TextTransformer().fit_transform(_frame(mostly_numeric, dtype=object))
+
+        assert "'text'" in str(record[0].message)
+
+    def test__column_with_a_crash_prone_token__does_not_crash(self) -> None:
+        """A value that used to segfault `pandas.to_numeric` must not crash the fit.
+
+        `"8e2569614270f3d8b9e7038efac9f116"` reads as scientific notation with an
+        exponent in `[2**31, 2**32)`, which crashes `pandas.to_numeric` outright on
+        some pandas/numpy versions. Surviving the call is the assertion.
+        """
+        values = [f"id_{i}" for i in range(200)]
+        values[7] = "8e2569614270f3d8b9e7038efac9f116"
+
+        with pytest.warns(UserWarning, match="look like free text"):
+            TextTransformer().fit_transform(_frame(values, dtype=object))
+
+    def test__many_text_columns__message_is_truncated(self) -> None:
+        n_extra = 5
+        n_columns = _MAX_COLUMNS_IN_WARNING + n_extra
+        X = pd.DataFrame(
+            {f"t{i}": pd.Series(_sentences(), dtype="string") for i in range(n_columns)}
+        )
+
+        with pytest.warns(UserWarning, match="look like free text") as record:
+            TextTransformer().fit_transform(X)
+
+        message = str(record[0].message)
+        assert f"(and {n_extra} more)" in message
+        assert f"'t{_MAX_COLUMNS_IN_WARNING - 1}'" in message
+        assert f"'t{_MAX_COLUMNS_IN_WARNING}'" not in message
+
+    def test__transform__does_not_warn_again(self) -> None:
+        X = _frame(_sentences())
+        transformer = TextTransformer()
+        with pytest.warns(UserWarning, match="look like free text"):
+            transformer.fit_transform(X)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            transformer.transform(X)
+
+
 class TestInterface:
     """`fit`, `fit_transform` and `transform` relate the way sklearn's do."""
 
@@ -353,6 +473,34 @@ def test__fit_with_transform_text__reports_the_caller_s_own_columns(
     # The right width, but no columns to expand.
     with pytest.raises(TabPFNValidationError, match="has to be a DataFrame"):
         model.predict(np.zeros((10, 2)))
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
+    """`fit` runs the transformer before validation, so a text column warns from
+    there, blaming this file's `fit` call (the stacklevel); declaring the column
+    in `categorical_features_indices` silences it, and `predict` stays quiet.
+    """
+    X, y = _estimator_data(estimator_cls, _review_column())
+
+    model = estimator_cls(n_estimators=1, device="cpu")
+    with pytest.warns(UserWarning, match="look like free text") as record:
+        model.fit(X, y)
+    assert "'review'" in str(record[0].message)
+    assert record[0].filename == __file__
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model.predict(X)
+    assert not [w for w in caught if "look like free text" in str(w.message)]
+
+    model = estimator_cls(
+        n_estimators=1, device="cpu", categorical_features_indices=[1]
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model.fit(X, y)
+    assert not [w for w in caught if "look like free text" in str(w.message)]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
