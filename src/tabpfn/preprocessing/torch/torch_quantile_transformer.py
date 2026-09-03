@@ -16,6 +16,17 @@ import torch
 _FIT_DTYPE = torch.float64
 
 
+def _fit_device(device: torch.device) -> torch.device:
+    """The device the fit runs on, which is not always the input's.
+
+    MPS has no float64, so a float64 fit has to happen on the CPU there.
+    ``TorchTruncatedSVD.fit`` moves to the CPU for the same kind of reason
+    (unsupported ops), and ``TorchQuantileTransformerStep`` already runs the
+    whole quantile transform on the CPU for MPS inputs because it is faster.
+    """
+    return torch.device("cpu") if device.type == "mps" else device
+
+
 class TorchQuantileTransformer:
     """Quantile transformer for PyTorch tensors with NaN handling.
 
@@ -75,6 +86,9 @@ class TorchQuantileTransformer:
 
         n_quantiles_effective = min(self.n_quantiles, n_samples)
 
+        orig_device = x.device
+        x = x.to(_fit_device(orig_device))
+
         # The cache is returned in the input dtype, so that ``transform``,
         # which computes in the cache's dtype, keeps the input's precision.
         # Low-precision inputs (e.g. float16 from inference_precision) get a
@@ -94,8 +108,8 @@ class TorchQuantileTransformer:
         quantiles = torch.cummax(quantiles, dim=0).values
 
         return {
-            "quantiles": quantiles.to(compute_dtype),
-            "references": references.to(compute_dtype),
+            "quantiles": quantiles.to(device=orig_device, dtype=compute_dtype),
+            "references": references.to(device=orig_device, dtype=compute_dtype),
         }
 
     def _nanquantile_chunked(
