@@ -38,10 +38,14 @@ __all__ = ["DateTransformer"]
 
 @dataclasses.dataclass
 class FittedDateColumn:
-    """One input column's fitted encoder and the names of the features it makes."""
+    """One input column's fitted encoder, its timezone, and its features' names."""
 
     encoder: DatetimeEncoder
     output_names: list[str]
+    timezone: str | None
+    """The column's timezone by name, or `None` for a naive column. Calendar
+    features are read in the column's own timezone, so `transform` refuses a
+    column that arrives in another."""
 
 
 class DateTransformer:
@@ -61,8 +65,9 @@ class DateTransformer:
             weekday pairs. Off, such a column is refused with an error naming it.
 
     Attributes:
-        fitted_columns_: Input position -> the encoder fitted on that column and
-            the names of the features it makes. Empty when nothing was expanded.
+        fitted_columns_: Input position -> the encoder fitted on that column, its
+            timezone, and the names of the features it makes. Empty when nothing
+            was expanded.
         feature_names_out_: The transformed frame's column labels as strings, or
             `None` when the input was not a `DataFrame` and so has no labels.
     """
@@ -124,8 +129,8 @@ class DateTransformer:
     def transform(self, X: XType) -> XType:
         """Reapply the conversion `fit` decided on, so the width holds.
 
-        Which positions hold a point in time has to match what `fit` saw; either
-        mismatch is refused rather than guessed at.
+        Which positions hold a point in time, and in which timezone, has to match
+        what `fit` saw; any mismatch is refused rather than guessed at.
 
         Args:
             X: The data, before any dtype fixing.
@@ -133,8 +138,9 @@ class DateTransformer:
         Raises:
             NotFittedError: If `fit` has not run yet.
             TabPFNValidationError: If `X`'s points in time sit at other positions
-                than at fit, or if `fit` expanded columns and `X` is not a
-                `DataFrame`, the only input that can carry them.
+                than at fit or come in another timezone, or if `fit` expanded
+                columns and `X` is not a `DataFrame`, the only input that can
+                carry them.
         """
         self._check_is_fitted()
         if not isinstance(X, pd.DataFrame):
@@ -149,6 +155,12 @@ class DateTransformer:
         _refuse_missing_dates(
             X, [i for i in self.expanded_indices if i not in instants]
         )
+        mismatched_timezones = {}
+        for i in self.expanded_indices:
+            timezone = _timezone_of(_as_timestamp(X.iloc[:, i]))
+            if timezone != self.fitted_columns_[i].timezone:
+                mismatched_timezones[i] = (self.fitted_columns_[i].timezone, timezone)
+        _refuse_other_timezone(X, mismatched_timezones)
         blocks = [
             self._apply_one(X.iloc[:, i], self.fitted_columns_[i])
             for i in self.expanded_indices
@@ -254,7 +266,11 @@ class DateTransformer:
         )
         return (
             encoded.set_axis(output_names, axis=1).reset_index(drop=True),
-            FittedDateColumn(encoder=encoder, output_names=output_names),
+            FittedDateColumn(
+                encoder=encoder,
+                output_names=output_names,
+                timezone=_timezone_of(column),
+            ),
         )
 
     @staticmethod
@@ -279,6 +295,12 @@ def _as_timestamp(column: pd.Series) -> pd.Series:
     if isinstance(column.dtype, pd.PeriodDtype):
         return column.dt.to_timestamp()
     return column
+
+
+def _timezone_of(column: pd.Series) -> str | None:
+    """The datetime column's timezone by name, or `None` for a naive column."""
+    timezone = column.dt.tz
+    return None if timezone is None else str(timezone)
 
 
 def _replace_columns_positionally(
@@ -357,6 +379,23 @@ def _refuse_missing_dates(X: pd.DataFrame, positions: Sequence[int]) -> None:
         f"{_name_columns(X, positions)}. A column expanded into calendar features "
         "at fit needs datetimes at predict too: convert it first (e.g. with "
         "`pd.to_datetime`) rather than passing strings or numbers."
+    )
+
+
+def _refuse_other_timezone(
+    X: pd.DataFrame, mismatches: dict[int, tuple[str | None, str | None]]
+) -> None:
+    """Raise on positions whose timezone differs from fit: `{position: (fit, now)}`."""
+    if not mismatches:
+        return
+    described = ", ".join(
+        f"{i} ({X.columns[i]!r}: {now or 'naive'}, was {fit or 'naive'})"
+        for i, (fit, now) in mismatches.items()
+    )
+    raise TabPFNValidationError(
+        f"These columns hold datetimes in another timezone than when `fit` ran: "
+        f"{described}. Calendar features are read in the column's own timezone, "
+        "so bring it back to the timezone it had at fit first."
     )
 
 

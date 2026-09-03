@@ -303,6 +303,40 @@ class TestExpansionAtPredictTime:
         assert "0 ('num')" in str(excinfo.value)
         assert "TRANSFORM_DATES" not in str(excinfo.value)
 
+    @pytest.mark.parametrize(
+        ("fit_tz", "predict_tz"),
+        [("UTC", "America/Los_Angeles"), ("UTC", None), (None, "UTC")],
+        ids=["other_zone", "aware_to_naive", "naive_to_aware"],
+    )
+    def test__column_in_another_timezone_than_at_fit__is_refused(
+        self, fit_tz: str | None, predict_tz: str | None
+    ) -> None:
+        """The encoder reads calendar features in the column's own timezone, so
+        the same instants in another zone come out as other days and hours.
+        """
+
+        def frame(tz: str | None) -> pd.DataFrame:
+            dates = pd.date_range("2020-08-28 03:00", periods=3, freq="D", tz="UTC")
+            return _frame(
+                dates.tz_localize(None) if tz is None else dates.tz_convert(tz)
+            )
+
+        transformer = DateTransformer(transform_dates=True)
+        transformer.fit_transform(frame(fit_tz))
+
+        with pytest.raises(TabPFNValidationError, match="another timezone") as excinfo:
+            transformer.transform(frame(predict_tz))
+        assert f"1 ('date': {predict_tz or 'naive'}, was {fit_tz or 'naive'})" in str(
+            excinfo.value
+        )
+
+    def test__same_timezone_as_at_fit__passes(self) -> None:
+        X = _frame(pd.date_range("2020-08-28 03:00", periods=3, freq="D", tz="UTC"))
+        transformer = DateTransformer(transform_dates=True)
+        fitted = transformer.fit_transform(X)
+
+        pd.testing.assert_frame_equal(transformer.transform(X), fitted)
+
     def test__array_after_an_expanding_fit__is_refused(self) -> None:
         """Its raw width matches the fit input, so only the transformer can tell
         that it cannot be widened to the expanded layout.
