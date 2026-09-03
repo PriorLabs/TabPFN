@@ -8,6 +8,7 @@ as well as input format validation.
 
 from __future__ import annotations
 
+import numbers
 import typing
 import warnings
 from collections.abc import Sequence
@@ -103,6 +104,24 @@ def check_input_shape_matches(X: XType, *, estimator: BaseEstimator) -> None:
             f"X has {n_features} features, but {estimator.__class__.__name__} "
             f"is expecting {expected} features as input."
         )
+
+
+def validate_categorical_features_indices(indices: Sequence[int] | None) -> None:
+    """Check that `categorical_features_indices` holds integer column positions.
+
+    Every consumer works positionally, so a column label in the list would be
+    ignored at best and crash the index arithmetic at worst.
+
+    Raises:
+        TabPFNValidationError: On an entry that is not an integer.
+    """
+    for entry in indices or ():
+        if not isinstance(entry, numbers.Integral):
+            raise TabPFNValidationError(
+                "`categorical_features_indices` must hold integer column positions, "
+                f"got {entry!r} ({type(entry).__name__}). Pass the position of each "
+                "categorical column, not its label."
+            )
 
 
 def ensure_compatible_fit_inputs(

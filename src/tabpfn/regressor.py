@@ -104,6 +104,7 @@ from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
     extract_input_shape,
+    validate_categorical_features_indices,
     validate_dataset_size,
 )
 
@@ -886,6 +887,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
+        validate_categorical_features_indices(self.categorical_features_indices)
         date_transformer = DateTransformer(
             categorical_indices=self.categorical_features_indices,
             transform_dates=self.inference_config_.TRANSFORM_DATES,

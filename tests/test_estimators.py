@@ -24,6 +24,7 @@ from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribut
 from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
 from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.model_loading import download_model, resolve_model_path
 from tabpfn.settings import settings
@@ -484,3 +485,20 @@ def _get_stand_in_model_specs(
             torch.linspace(-5.0, 5.0, STAND_IN_NUM_BUCKETS + 1)
         ),
     )
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_column_labels_as_categorical_indices__raises_naming_the_label(
+    estimator_cls: type,
+) -> None:
+    """`categorical_features_indices` is positional; a label is refused clearly
+    rather than ignored or tripping the index arithmetic of date expansion.
+    """
+    X = pd.DataFrame({"c": ["a", "b", "c"] * 10, "f": np.arange(30.0)})
+    y = np.arange(30) % 2
+
+    with pytest.raises(TabPFNValidationError, match="integer column positions") as e:
+        estimator_cls(
+            n_estimators=1, device="cpu", categorical_features_indices=["c"]
+        ).fit(X, y)
+    assert "'c' (str)" in str(e.value)
