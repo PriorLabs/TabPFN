@@ -104,6 +104,8 @@ from tabpfn.validation import (
     validate_dataset_size,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     import numpy.typing as npt
     from sklearn.pipeline import Pipeline
@@ -1600,14 +1602,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Predict for several independent datasets in one pass.
 
         Each triple is preprocessed exactly as ``fit()`` + ``predict()`` does,
-        then all datasets are stacked on the model's batch dimension and scored
-        with a single fused forward per estimator. Equivalent to fitting and
-        predicting each dataset independently. Runs on an internal clone, so
-        ``self`` is unchanged on return.
+        then compatible model-input shapes are fused. Heterogeneous
+        post-preprocessing shapes run in separate groups. This is equivalent to
+        independent prediction and leaves ``self`` unchanged.
 
         Datasets need not share a target scale (each is decoded with its own
-        bar distribution) but must share array shapes; ragged batches are
-        rejected rather than padded.
+        bar distribution) but must share raw array shapes. Fitted transforms may
+        produce different shapes; these are grouped internally without padding.
 
         Args:
             X_train_list: Training features, one array per dataset (all same shape).
@@ -1643,7 +1644,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         from tabpfn.finetuning.data_util import (  # noqa: PLC0415
             RegressorBatch,
-            meta_dataset_collator,
+            _collate_same_shape_for_batched_inference,
+            _group_batches_by_shape,
         )
 
         if not len(X_train_list) == len(y_train_list) == len(X_test_list):
@@ -1701,12 +1703,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # loop below reuses them instead of preprocessing twice.
         worker.fit_mode = "fit_preprocessors"
 
-        # Constant-target datasets contribute no item to the fused batch, so
-        # ``fused_index`` maps a batch position back to its input index.
         results: list[RegressionResultType | None] = [None] * len(X_train_list)
         items: list[RegressorBatch] = []
-        fused_index: list[int] = []
-        raw_space_bardists: list[FullSupportBarDistribution] = []
+        item_indices: list[int] = []
         znorm_borders: torch.Tensor | None = None
 
         for idx, (X, y, X_test) in enumerate(
@@ -1723,7 +1722,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 continue
 
             # Rebuilt fresh on every fit, so each dataset keeps its own object.
-            raw_space_bardists.append(worker.raw_space_bardist_)
             # Fixed by the checkpoint, so identical across datasets.
             if znorm_borders is None:
                 znorm_borders = worker.znorm_space_bardist_.borders.clone()
@@ -1782,58 +1780,69 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     y_query_raw=torch.zeros(n_test),
                 )
             )
-            fused_index.append(idx)
+            item_indices.append(idx)
 
         if items:
-            # The collator keeps only the first item's bar distributions; harmless
-            # because each dataset's own one is tracked in raw_space_bardists.
-            batch = meta_dataset_collator(items)
-            # Set before fit_from_preprocessed so it does not warn about switching.
             worker.fit_mode = "batched"
-            worker.fit_from_preprocessed(
-                batch.X_context,
-                batch.y_context,
-                batch.cat_indices,
-                batch.configs,
-                performance_options=PerformanceOptions(),
-            )
             assert znorm_borders is not None
             std_borders = znorm_borders.cpu().numpy()
-            # One fused forward per estimator, each output
-            # (n_test, n_fused_datasets, n_buckets) with one config per dataset.
-            # Estimators are consumed one at a time and folded straight into the
-            # per-dataset accumulators, so peak memory holds a single estimator's
-            # output rather than every estimator's.
-            accumulated: list[torch.Tensor | None] = [None] * len(fused_index)
-            n_estimators = 0
-            for output, configs_for_est in worker.executor_.iter_outputs(
-                batch.X_query, autocast=worker.use_autocast_, task_type="regression"
-            ):
-                for fused_pos in range(len(fused_index)):
-                    contribution = worker._translate_batched_logits(
-                        output=output[:, fused_pos, :],
-                        config=configs_for_est[fused_pos],
-                        znorm_borders=znorm_borders,
-                        std_borders=std_borders,
-                    )
-                    previous = accumulated[fused_pos]
-                    accumulated[fused_pos] = (
-                        contribution if previous is None else previous + contribution
-                    )
-                n_estimators += 1
-                del output
-
-            for fused_pos, idx in enumerate(fused_index):
-                dataset_logits = accumulated[fused_pos]
-                assert dataset_logits is not None
-                accumulated[fused_pos] = None
-                results[idx] = worker._decode_batched_dataset(
-                    accumulated_logits=dataset_logits,
-                    n_estimators=n_estimators,
-                    raw_space_bardist=raw_space_bardists[fused_pos],
-                    output_type=output_type,
-                    quantiles=quantiles,
+            groups = _group_batches_by_shape(items)
+            if len(groups) > 1:
+                logger.debug(
+                    "predict_batched split %d datasets into %d post-preprocessing "
+                    "shape groups with sizes %s; running one inference pass per "
+                    "group may be slower than homogeneous batched inference.",
+                    len(items),
+                    len(groups),
+                    [len(group) for group in groups],
                 )
+            for group in groups:
+                positions, group_items = zip(*group, strict=True)
+                batch = _collate_same_shape_for_batched_inference(list(group_items))
+                worker.fit_from_preprocessed(
+                    batch.X_context,
+                    batch.y_context,
+                    batch.cat_indices,
+                    batch.configs,
+                    performance_options=PerformanceOptions(),
+                )
+                accumulated: list[torch.Tensor | None] = [None] * len(group)
+                n_estimators = 0
+                for output, configs in worker.executor_.iter_outputs(
+                    batch.X_query,
+                    autocast=worker.use_autocast_,
+                    task_type="regression",
+                ):
+                    for lane in range(len(group)):
+                        contribution = worker._translate_batched_logits(
+                            output=output[:, lane, :],
+                            config=configs[lane],
+                            znorm_borders=znorm_borders,
+                            std_borders=std_borders,
+                        )
+                        previous = accumulated[lane]
+                        accumulated[lane] = (
+                            contribution
+                            if previous is None
+                            else previous + contribution
+                        )
+                    n_estimators += 1
+                    del output
+
+                for lane, position in enumerate(positions):
+                    logits = accumulated[lane]
+                    assert logits is not None
+                    # Release each lane's bucket logits as it is decoded instead of
+                    # retaining every dataset's tensor through the whole decode loop.
+                    accumulated[lane] = None
+                    item = items[position]
+                    results[item_indices[position]] = worker._decode_batched_dataset(
+                        accumulated_logits=logits,
+                        n_estimators=n_estimators,
+                        raw_space_bardist=item.raw_space_bardist,
+                        output_type=output_type,
+                        quantiles=quantiles,
+                    )
 
         assert all(r is not None for r in results)
         return typing.cast("list[RegressionResultType]", results)
