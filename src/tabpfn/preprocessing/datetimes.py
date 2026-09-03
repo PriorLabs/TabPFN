@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Convert temporal columns before validation sees them.
+"""Convert a DataFrame's temporal columns before validation sees them.
 
 sklearn's `check_array`/`check_X_y` cannot hold a `datetime64` column beside a
 numeric one in a single array, so a temporal column has to stop looking like one
@@ -8,6 +8,7 @@ first. A point in time (`datetime64`, tz-aware, or `period`) is expanded into
 calendar features when `TRANSFORM_DATES` is on and refused with an error naming
 it otherwise; a duration (`timedelta64`) always becomes its length in seconds.
 Only a genuine temporal dtype counts: a string that looks like a date is a string.
+Only `DataFrame` columns are inspected: any other input passes through unchanged.
 
 Only `TabPFNClassifier` and `TabPFNRegressor` run this. The fine-tuning
 estimators validate their input directly, so a datetime column has to be
