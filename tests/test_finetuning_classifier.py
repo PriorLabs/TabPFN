@@ -31,6 +31,7 @@ from tabpfn import TabPFNClassifier
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3
 from tabpfn.constants import ModelVersion
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
     DatasetCollectionWithPreprocessing,
@@ -47,6 +48,7 @@ from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
 from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
+from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.settings import settings
 
 from .utils import (
@@ -1538,6 +1540,7 @@ def test__tabpfn_classifier__fit_from_preprocessed_runs(
             batch.configs,
             performance_options=PerformanceOptions(),
         )
+        assert isinstance(clf.date_transformer_, DateTransformer)
         preds = clf.forward(batch.X_query)
         assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
         assert preds.shape[0] == batch.X_query[0].shape[0]
@@ -1901,3 +1904,26 @@ def test__batched_inference__matches_single_dataset(device: str) -> None:
         ).detach()
         assert single.shape[1] == 1
         assert torch.allclose(fused[:, i, :], single[:, 0, :], atol=1e-4)
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test__finetuned_tabpfn_classifier__validation_set_of_another_width__raises(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The validation set is checked against the training set's shape up front,
+    before any epoch runs, rather than failing inside the first evaluation.
+    """
+    X, y = synthetic_data
+    finetuned_clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=1,
+        n_finetune_ctx_plus_query_samples=50,
+        n_inference_subsample_samples=100,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        random_state=42,
+    )
+
+    with pytest.raises(TabPFNValidationError, match="expecting"):
+        finetuned_clf.fit(X, y, X_val=X[:, :-1], y_val=y)

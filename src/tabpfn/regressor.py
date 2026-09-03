@@ -48,6 +48,8 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolved_n_estimators,
+    resolved_softmax_temperature,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -79,14 +81,14 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
-from tabpfn.preprocessing.multimodal_encoding import encode_multimodal_data
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -98,10 +100,15 @@ from tabpfn.utils import (
     translate_probs_across_borders,
 )
 from tabpfn.validation import (
+    check_input_shape_matches,
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
+    extract_input_shape,
+    validate_categorical_features_indices,
     validate_dataset_size,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -116,11 +123,9 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
-    from tabpfn.preprocessing.date_encoding import FittedDatetimeEncoder
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
-    from tabpfn.preprocessing.string_encoding import FittedStringEncoder
 
     try:
         from sklearn.base import Tags
@@ -233,11 +238,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
-    date_encoders_: dict[int, FittedDatetimeEncoder]
-    """Date encoders by column index, if `USE_DATES` is on and dates are found."""
-
-    text_encoders_: dict[int, FittedStringEncoder]
-    """Text encoders by column index, if `USE_TEXT` is on and text is found."""
+    date_transformer_: DateTransformer
+    """The transformer that converted every temporal column before validation."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -247,13 +249,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     time, after the per-estimator `softmax_temperature`. This is `1.0`, a no-op, when
     no temperature calibration is done."""
 
+    softmax_temperature_: float
+    """The resolved per-estimator `softmax_temperature`, i.e. the one the checkpoint
+    declares unless it was overridden."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        softmax_temperature: float = 0.9,
+        softmax_temperature: float | Literal["auto"] = "auto",
         average_before_softmax: bool = False,
         model_path: str
         | Path
@@ -295,25 +301,30 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 predictions of `n_estimators`-many forward passes of TabPFN.
                 Each forward pass has (slightly) different input data. Think of this
                 as an ensemble of `n_estimators`-many "prompts" of the input data.
-                With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
-                on wide datasets so every feature is seen by some estimator (i.e.
-                when the data has more than `max_features_per_estimator` features
-                per estimator), to the smallest value that lets every feature
-                appear in at least one ensemble member, emitting a warning when it
-                does so. That auto-scaled value is capped at
+                With the default `"auto"`, the count comes from the checkpoint
+                (`InferenceConfig.N_ESTIMATORS`), which is itself `"auto"` unless
+                the checkpoint names a count. `"auto"` means
+                `DEFAULT_N_ESTIMATORS`,
+                raised on wide datasets so every feature is seen by some estimator
+                (i.e. when the data has more than `max_features_per_estimator`
+                features per estimator), to the smallest value that lets every
+                feature appear in at least one ensemble member, emitting a warning
+                when it does so. That auto-scaled value is capped at
                 `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
                 be sampled unless you raise `n_estimators` yourself. An explicit
-                integer is never overridden — if it is too small to cover every
-                feature, a warning is emitted at fit time and the value is used
-                as given.
+                integer — yours or the checkpoint's — is never overridden: if it
+                is too small to cover every feature, a warning is emitted at fit
+                time and the value is used as given. Your integer cannot be
+                combined with an `N_ESTIMATORS` in `inference_config`, which is the
+                other way of naming a count.
 
             auto_scale_n_estimators:
                 Deprecated, removed in v9 — pass an explicit `n_estimators`
                 instead. Only applies when `n_estimators="auto"`, where `False`
                 keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
-                it for feature coverage, exactly what passing
-                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
-                `FutureWarning` at fit time.
+                it for feature coverage, exactly what passing that count as
+                `n_estimators` does. Passing `False` emits a `FutureWarning` at
+                fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -333,6 +344,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 confidence of the model's predictions. Lower values make the model's
                 predictions more confident. This is only applied when predicting during
                 a post-processing step. Set `softmax_temperature=1.0` for no effect.
+
+                If `"auto"` (the default), the temperature is taken from the
+                checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
+                every checkpoint released up to and including v8.5.0. Passing a float
+                overrides the checkpoint for every model in the ensemble; it cannot be
+                combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
+                the other way of naming one.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of
@@ -512,7 +530,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - If `None`, the default InferenceConfig is used.
                 - If `dict`, the key-value pairs are used to update the default
                   `InferenceConfig`. Raises an error if an unknown key is passed.
-                - If `InferenceConfig`, the object is used as the configuration.
+                - If `InferenceConfig`, the object replaces the checkpoint's config
+                  as a whole, so any field not set on it takes a class default
+                  rather than the value the checkpoint declares. Deprecated.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -587,7 +607,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -595,7 +614,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_5().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -603,7 +621,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_6().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
             options = {
@@ -611,7 +628,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v3().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -819,11 +835,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             for _ in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
+        # A tensor holds no dates, so this fits nothing; set anyway, so every
+        # predict path converts through it without first checking for one.
+        self.date_transformer_ = DateTransformer().fit(X)
         self.n_features_in_ = n_features
 
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -865,7 +884,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
+        # feature_names_in_/n_features_in_ have to describe what the caller passed,
+        # not the wider frame expansion can make of it, so they come off the raw
+        # input here, before any conversion.
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+
+        validate_categorical_features_indices(self.categorical_features_indices)
+        date_transformer = DateTransformer(
+            categorical_indices=self.categorical_features_indices,
+            transform_dates=self.inference_config_.TRANSFORM_DATES,
+        )
+        X = date_transformer.fit_transform(X)
+
+        X, y, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -877,26 +908,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             devices=self.devices_,
         )
         # Set class variables for sklearn compatibility
-        self.feature_names_in_ = feature_names
-        self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=feature_names,
-            provided_categorical_indices=self.categorical_features_indices,
+            feature_names=date_transformer.feature_names_out_,
+            provided_categorical_indices=date_transformer.output_indices(
+                self.categorical_features_indices
+            ),
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
-            use_dates=self.inference_config_.USE_DATES,
-            use_text=self.inference_config_.USE_TEXT,
-        )
-        X, feature_schema, date_encoders, text_encoders = encode_multimodal_data(
-            X,
-            feature_schema,
-            use_text=self.inference_config_.USE_TEXT,
-            provided_categorical_indices=self.categorical_features_indices,
         )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
@@ -905,8 +928,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.date_encoders_ = date_encoders
-        self.text_encoders_ = text_encoders
+        self.date_transformer_ = date_transformer
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -926,7 +948,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -972,6 +994,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_mode": "fit_preprocessors",
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
+            # Fit on the already-expanded array, where a declared column may
+            # have moved down past an expanded date.
+            "categorical_features_indices": self.date_transformer_.output_indices(
+                self.categorical_features_indices
+            ),
         }
 
         params.update(forced)
@@ -1025,6 +1052,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             batch_of_cat_indices=cat_ix,
             num_features=X_preprocessed[0].shape[1],
         )
+
+        # Preprocessed tensors hold no dates either, so this fits nothing: the
+        # transformer refuses a date and converts a duration, like any fitted one.
+        self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
@@ -1303,6 +1334,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
+        check_input_shape_matches(X, estimator=self)
+        X = self.date_transformer_.transform(X)
         X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
@@ -1467,6 +1500,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
+            check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
+            X_holdout_NhF = tuning_regressor.date_transformer_.transform(  # noqa: PLW2901
+                X_holdout_NhF
+            )
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
             )
@@ -1508,25 +1545,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
-        X, _, _, _ = encode_multimodal_data(
-            X,
-            feature_schema=None,
-            date_fitted=self.date_encoders_,
-            text_fitted=self.text_encoders_,
-        )
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
-        X = fix_dtypes(X, cat_indices=cat_indices)
-        X = process_text_na_dataframe(
+        X = clean_data_transform(
             X,
+            cat_indices=cat_indices,
             ord_encoder=getattr(self, "ordinal_encoder_", None),
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
         n_estimators = 0
         accumulated_logits: torch.Tensor | None = None
-        with handle_oom_errors(self.devices_, X, model_type="regressor"):
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="regressor",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+        ):
             for borders_t, output in tqdm(
                 self._iter_forward_executor(X, use_inference_mode=True),
                 total=self.n_estimators_,
@@ -1609,14 +1645,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Predict for several independent datasets in one pass.
 
         Each triple is preprocessed exactly as ``fit()`` + ``predict()`` does,
-        then all datasets are stacked on the model's batch dimension and scored
-        with a single fused forward per estimator. Equivalent to fitting and
-        predicting each dataset independently. Runs on an internal clone, so
-        ``self`` is unchanged on return.
+        then compatible model-input shapes are fused. Heterogeneous
+        post-preprocessing shapes run in separate groups. This is equivalent to
+        independent prediction and leaves ``self`` unchanged.
 
         Datasets need not share a target scale (each is decoded with its own
-        bar distribution) but must share array shapes; ragged batches are
-        rejected rather than padded.
+        bar distribution) but must share raw array shapes. Fitted transforms may
+        produce different shapes; these are grouped internally without padding.
 
         Args:
             X_train_list: Training features, one array per dataset (all same shape).
@@ -1652,7 +1687,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         from tabpfn.finetuning.data_util import (  # noqa: PLC0415
             RegressorBatch,
-            meta_dataset_collator,
+            _collate_same_shape_for_batched_inference,
+            _group_batches_by_shape,
         )
 
         if not len(X_train_list) == len(y_train_list) == len(X_test_list):
@@ -1710,12 +1746,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # loop below reuses them instead of preprocessing twice.
         worker.fit_mode = "fit_preprocessors"
 
-        # Constant-target datasets contribute no item to the fused batch, so
-        # ``fused_index`` maps a batch position back to its input index.
         results: list[RegressionResultType | None] = [None] * len(X_train_list)
         items: list[RegressorBatch] = []
-        fused_index: list[int] = []
-        raw_space_bardists: list[FullSupportBarDistribution] = []
+        item_indices: list[int] = []
         znorm_borders: torch.Tensor | None = None
 
         for idx, (X, y, X_test) in enumerate(
@@ -1732,28 +1765,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 continue
 
             # Rebuilt fresh on every fit, so each dataset keeps its own object.
-            raw_space_bardists.append(worker.raw_space_bardist_)
             # Fixed by the checkpoint, so identical across datasets.
             if znorm_borders is None:
                 znorm_borders = worker.znorm_space_bardist_.borders.clone()
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
+            check_input_shape_matches(X_test, estimator=worker)
+            X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test, _, _, _ = encode_multimodal_data(  # noqa: PLW2901
-                X_test,
-                feature_schema=None,
-                date_fitted=worker.date_encoders_,
-                text_fitted=worker.text_encoders_,
-            )
-            X_test = fix_dtypes(  # noqa: PLW2901
+            X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X_test = process_text_na_dataframe(  # noqa: PLW2901
-                X=X_test,
                 ord_encoder=getattr(worker, "ordinal_encoder_", None),
                 passthrough_inf=worker.inference_config_.PASSTHROUGH_INF,
             )
@@ -1800,58 +1825,69 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     y_query_raw=torch.zeros(n_test),
                 )
             )
-            fused_index.append(idx)
+            item_indices.append(idx)
 
         if items:
-            # The collator keeps only the first item's bar distributions; harmless
-            # because each dataset's own one is tracked in raw_space_bardists.
-            batch = meta_dataset_collator(items)
-            # Set before fit_from_preprocessed so it does not warn about switching.
             worker.fit_mode = "batched"
-            worker.fit_from_preprocessed(
-                batch.X_context,
-                batch.y_context,
-                batch.cat_indices,
-                batch.configs,
-                performance_options=PerformanceOptions(),
-            )
             assert znorm_borders is not None
             std_borders = znorm_borders.cpu().numpy()
-            # One fused forward per estimator, each output
-            # (n_test, n_fused_datasets, n_buckets) with one config per dataset.
-            # Estimators are consumed one at a time and folded straight into the
-            # per-dataset accumulators, so peak memory holds a single estimator's
-            # output rather than every estimator's.
-            accumulated: list[torch.Tensor | None] = [None] * len(fused_index)
-            n_estimators = 0
-            for output, configs_for_est in worker.executor_.iter_outputs(
-                batch.X_query, autocast=worker.use_autocast_, task_type="regression"
-            ):
-                for fused_pos in range(len(fused_index)):
-                    contribution = worker._translate_batched_logits(
-                        output=output[:, fused_pos, :],
-                        config=configs_for_est[fused_pos],
-                        znorm_borders=znorm_borders,
-                        std_borders=std_borders,
-                    )
-                    previous = accumulated[fused_pos]
-                    accumulated[fused_pos] = (
-                        contribution if previous is None else previous + contribution
-                    )
-                n_estimators += 1
-                del output
-
-            for fused_pos, idx in enumerate(fused_index):
-                dataset_logits = accumulated[fused_pos]
-                assert dataset_logits is not None
-                accumulated[fused_pos] = None
-                results[idx] = worker._decode_batched_dataset(
-                    accumulated_logits=dataset_logits,
-                    n_estimators=n_estimators,
-                    raw_space_bardist=raw_space_bardists[fused_pos],
-                    output_type=output_type,
-                    quantiles=quantiles,
+            groups = _group_batches_by_shape(items)
+            if len(groups) > 1:
+                logger.debug(
+                    "predict_batched split %d datasets into %d post-preprocessing "
+                    "shape groups with sizes %s; running one inference pass per "
+                    "group may be slower than homogeneous batched inference.",
+                    len(items),
+                    len(groups),
+                    [len(group) for group in groups],
                 )
+            for group in groups:
+                positions, group_items = zip(*group, strict=True)
+                batch = _collate_same_shape_for_batched_inference(list(group_items))
+                worker.fit_from_preprocessed(
+                    batch.X_context,
+                    batch.y_context,
+                    batch.cat_indices,
+                    batch.configs,
+                    performance_options=PerformanceOptions(),
+                )
+                accumulated: list[torch.Tensor | None] = [None] * len(group)
+                n_estimators = 0
+                for output, configs in worker.executor_.iter_outputs(
+                    batch.X_query,
+                    autocast=worker.use_autocast_,
+                    task_type="regression",
+                ):
+                    for lane in range(len(group)):
+                        contribution = worker._translate_batched_logits(
+                            output=output[:, lane, :],
+                            config=configs[lane],
+                            znorm_borders=znorm_borders,
+                            std_borders=std_borders,
+                        )
+                        previous = accumulated[lane]
+                        accumulated[lane] = (
+                            contribution
+                            if previous is None
+                            else previous + contribution
+                        )
+                    n_estimators += 1
+                    del output
+
+                for lane, position in enumerate(positions):
+                    logits = accumulated[lane]
+                    assert logits is not None
+                    # Release each lane's bucket logits as it is decoded instead of
+                    # retaining every dataset's tensor through the whole decode loop.
+                    accumulated[lane] = None
+                    item = items[position]
+                    results[item_indices[position]] = worker._decode_batched_dataset(
+                        accumulated_logits=logits,
+                        n_estimators=n_estimators,
+                        raw_space_bardist=item.raw_space_bardist,
+                        output_type=output_type,
+                        quantiles=quantiles,
+                    )
 
         assert all(r is not None for r in results)
         return typing.cast("list[RegressionResultType]", results)
@@ -1870,8 +1906,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         (estimator, dataset) pair of the fused forward.
         """
         out_d = output.float()
-        if self.softmax_temperature != 1:
-            out_d = out_d / self.softmax_temperature
+        temperature = resolved_softmax_temperature(self)
+        if temperature != 1:
+            out_d = out_d / temperature
         if config.target_transform is None:
             borders_t = std_borders.copy()
             logit_cancel_mask = None
@@ -1982,12 +2019,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             actual_inference_mode = use_inference_mode and not self.differentiable_input
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
+        temperature = resolved_softmax_temperature(self)
         for output, config in self.executor_.iter_outputs(
             X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
-            if self.softmax_temperature != 1:
-                output = output / self.softmax_temperature  # noqa: PLW2901
+            if temperature != 1:
+                output = output / temperature  # noqa: PLW2901
 
             # BSz.= 1 Scenario, the same as normal predict() function
             # Handled by first if-statement

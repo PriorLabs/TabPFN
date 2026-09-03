@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.preprocessing import modality_detection
+from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
     Feature,
@@ -22,8 +24,9 @@ from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
     _detect_feature_modality,
-    _warn_on_dates,
-    _warn_on_texts,
+    _is_numeric_or_missing_for_old_pandas,
+    _is_numeric_pandas_series,
+    _warn_on_text,
     detect_feature_modalities,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
@@ -471,6 +474,106 @@ def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
     assert result == FeatureModality.TEXT
 
 
+def _reference_is_numeric(s: pd.Series) -> bool:
+    """`_is_numeric_pandas_series` without the prefix rejection."""
+    if pd.api.types.is_numeric_dtype(s.dtype):
+        return True
+    if PANDAS_BELOW_3:
+        return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
+    coerced = pd.to_numeric(s, errors="coerce")
+    return bool((coerced.notna() | s.isna()).all())
+
+
+#: Prefix these tests run the rejection at. The logic is identical at any size,
+#: so a smaller one than production keeps the columns below cheap to build and
+#: easy to reason about. Only `test__prefix_rejection__fires_within_the_real_prefix`
+#: uses the production value, since that is the one thing a shrunk prefix cannot
+#: check.
+_TEST_PREFIX_ROWS = 50
+
+
+@pytest.fixture
+def small_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shrink the rejection prefix so test columns can stay a handful of rows."""
+    monkeypatch.setattr(
+        modality_detection, "_EARLY_EXIT_PREFIX_ROWS", _TEST_PREFIX_ROWS
+    )
+
+
+#: Columns whose prefix and tail disagree, so the rejection either has to fire
+#: correctly or fall through. Named by where the disagreement sits. Every column
+#: is longer than `_TEST_PREFIX_ROWS`, or the guard would not run at all.
+_TAIL = 10
+_NUMBERS = [str(i) for i in range(_TEST_PREFIX_ROWS + _TAIL)]
+_PROBE_COLUMNS: dict[str, list[Any]] = {
+    # Fails on its very first value.
+    "text": [f"a sentence, number {i}" for i in range(_TEST_PREFIX_ROWS + _TAIL)],
+    "missing_prefix_then_text": [None] * _TEST_PREFIX_ROWS + ["not a number"] * _TAIL,
+    "all_missing": [None] * (_TEST_PREFIX_ROWS + _TAIL),
+    # Numeric strings, with the offending value on either side of the prefix.
+    "numeric_strings": _NUMBERS,
+    "non_numeric_inside_prefix": [*_NUMBERS[: _TEST_PREFIX_ROWS - 1], "abc", *_NUMBERS],
+    "non_numeric_beyond_prefix": [*_NUMBERS, "abc"],
+}
+
+
+@pytest.mark.parametrize("name", list(_PROBE_COLUMNS))
+@pytest.mark.usefixtures("small_prefix")
+def test__prefix_rejection__agrees_with_parsing_the_whole_column(name: str) -> None:
+    """The prefix rejection is exact, not an approximation.
+
+    One non-numeric value settles an all-or-nothing check, so rejecting on a
+    prefix can only skip work. A clean prefix proves nothing about the tail and
+    must fall through, including when the prefix is entirely missing.
+    """
+    s = pd.Series(_PROBE_COLUMNS[name], dtype=object)
+    assert _is_numeric_pandas_series(s) == _reference_is_numeric(s)
+
+
+@pytest.mark.skipif(
+    PANDAS_BELOW_3,
+    reason=(
+        "Below pandas 3 the numeric check walks values through an `all(...)` "
+        "generator that already stops at the first non-numeric one, so it has "
+        "no prefix guard to skip and never calls `_all_numeric_or_missing`."
+    ),
+)
+@pytest.mark.usefixtures("small_prefix")
+def test__prefix_rejection__skips_the_guard_on_a_short_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A column no longer than the prefix is parsed once, not twice.
+
+    Counting the parses rather than the answer, since parsing twice gives the
+    same answer. A longer column that clears its prefix is parsed twice, which
+    is the cost this trade accepts.
+    """
+    real = modality_detection._all_numeric_or_missing
+    parses = []
+
+    def counting(s: pd.Series) -> bool:
+        parses.append(len(s))
+        return real(s)
+
+    monkeypatch.setattr(modality_detection, "_all_numeric_or_missing", counting)
+
+    def passing_values(n: int) -> list[str]:
+        return [str(i) for i in range(n)]
+
+    s = pd.Series(passing_values(_TEST_PREFIX_ROWS), dtype=object)
+    assert _is_numeric_pandas_series(s) is True
+    assert len(parses) == 1
+
+    parses.clear()
+    assert (
+        _is_numeric_pandas_series(
+            pd.Series(passing_values(_TEST_PREFIX_ROWS + 2), dtype=object)
+        )
+        is True
+    )
+    assert len(parses) == 2
+
+
 def _text_schema(*names: str) -> FeatureSchema:
     """Schema of TEXT features with the `input_` prefix real input names carry."""
     return FeatureSchema(
@@ -481,8 +584,8 @@ def _text_schema(*names: str) -> FeatureSchema:
     )
 
 
-class TestWarnOnTexts:
-    """Schema-level unit tests for `_warn_on_texts`."""
+class TestWarnOnText:
+    """Schema-level unit tests for `_warn_on_text`."""
 
     def test__no_text_features__does_not_warn(self) -> None:
         schema = FeatureSchema(
@@ -494,11 +597,11 @@ class TestWarnOnTexts:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_texts(schema)
+            _warn_on_text(schema)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_texts(_text_schema("review"))
+            _warn_on_text(_text_schema("review"))
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -506,21 +609,21 @@ class TestWarnOnTexts:
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
         assert "numeric dtype" in message
-        assert "USE_TEXT" in message
+        assert "https://github.com/PriorLabs/tabpfn-client" in message
         assert "categorical_features_indices" in message
 
     def test__declared_cat_indices__are_not_reported(self) -> None:
         schema = _text_schema("sku", "review")
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_texts(schema, declared_cat_indices=[0])
+            _warn_on_text(schema, declared_cat_indices=[0])
         message = str(record[0].message)
         assert "'review'" in message
         assert "'sku'" not in message
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_texts(schema, declared_cat_indices=[0, 1])
+            _warn_on_text(schema, declared_cat_indices=[0, 1])
 
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
@@ -528,23 +631,12 @@ class TestWarnOnTexts:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_texts(schema)
+            _warn_on_text(schema)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
         assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING - 1}'" in message
         assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING}'" not in message
-
-
-class TestWarnOnDates:
-    """Schema-level unit tests for `_warn_on_dates`. Only ever called with a
-    non-empty list; the empty case is the caller's job to skip.
-    """
-
-    def test__demoted_dates__warn_with_column_names(self) -> None:
-        with pytest.warns(UserWarning, match="hold dates") as record:
-            _warn_on_dates(["signed_on"])
-        assert "'signed_on'" in str(record[0].message)
 
 
 class TestDetectFeatureModalitiesWarnsOnText:
@@ -562,11 +654,7 @@ class TestDetectFeatureModalitiesWarnsOnText:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
     def _detect(
-        self,
-        X: pd.DataFrame,
-        declared: list[int] | None = None,
-        *,
-        use_text: bool = False,
+        self, X: pd.DataFrame, declared: list[int] | None = None
     ) -> FeatureSchema:
         """Run modality detection over a frame, as `fit()` does."""
         return detect_feature_modalities(
@@ -577,7 +665,6 @@ class TestDetectFeatureModalitiesWarnsOnText:
             max_unique_for_category=30,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
-            use_text=use_text,
         )
 
     def test__free_text_column__warns(self) -> None:
@@ -592,20 +679,6 @@ class TestDetectFeatureModalitiesWarnsOnText:
             self._detect(X)
 
         assert "'review'" in str(record[0].message)
-
-    def test__use_text__free_text_column__does_not_warn(self) -> None:
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
-            }
-        )
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = self._detect(X, use_text=True)
-
-        assert schema.features[1].modality is FeatureModality.TEXT
 
     def test__ordinary_columns__do_not_warn(self) -> None:
         """Neither low-cardinality strings nor fully numeric strings are TEXT.
@@ -765,154 +838,3 @@ def test__category_and_text_thresholds__move_independently() -> None:
 
     assert schema.features[0].modality is FeatureModality.NUMERICAL
     assert schema.features[1].modality is FeatureModality.CATEGORICAL
-
-
-class TestDateLikeColumnDetection:
-    """`detect_feature_modalities` recognizing date-like string columns.
-
-    Nothing expands a date into calendar features yet, so a recognized date is
-    always demoted to whichever of CATEGORICAL/TEXT its cardinality implies --
-    exactly the modality a non-date string of the same shape would get. The
-    only observable difference recognizing it makes right now is the warning:
-    a demoted date is named as a date, not reported as generic free text.
-    """
-
-    n_rows = 200
-
-    def _numeric_column(self) -> np.ndarray:
-        return np.random.default_rng(0).normal(size=self.n_rows)
-
-    def _detect(
-        self, X: pd.DataFrame, *, use_dates: bool = False, use_text: bool = False
-    ) -> FeatureSchema:
-        return detect_feature_modalities(
-            X=X.to_numpy(dtype=object),
-            feature_names=list(X.columns),
-            min_samples_for_inference=100,
-            max_unique_for_category=30,
-            min_unique_for_numerical=4,
-            min_cardinality_for_text=30,
-            use_dates=use_dates,
-            use_text=use_text,
-        )
-
-    def _dates(self, n_unique: int) -> list[str]:
-        pool = pd.date_range("2020-01-01", periods=n_unique).strftime("%Y-%m-%d")
-        return [pool[i % n_unique] for i in range(self.n_rows)]
-
-    def test__high_cardinality_date__is_text_like_a_same_shaped_string(self) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
-
-    def test__use_text__high_cardinality_date__demotes_to_categorical_not_text(
-        self,
-    ) -> None:
-        """With `USE_TEXT` on, a demoted date must never land on `TEXT`: that
-        would sweep a calendar string into `StringEncoder` right along with
-        genuine free text.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X, use_text=True)
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
-
-    def test__low_cardinality_date__is_categorical(self) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
-
-    def test__use_dates__high_cardinality_date__stays_date_and_does_not_warn(
-        self,
-    ) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = self._detect(X, use_dates=True)
-        assert schema.features[1].modality is FeatureModality.DATE
-
-    def test__use_dates__low_cardinality_date__is_still_expanded(self) -> None:
-        """`_demote_dates` never runs once `use_dates` is on, low-cardinality
-        or not: every detected date is left for the caller to expand.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = self._detect(X, use_dates=True)
-        assert schema.features[1].modality is FeatureModality.DATE
-
-    def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:
-        """The date warning fires; the free-text warning must not repeat it."""
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._detect(X)
-        date_warnings = [w for w in caught if "hold dates" in str(w.message)]
-        text_warnings = [w for w in caught if "look like free text" in str(w.message)]
-        assert len(date_warnings) == 1
-        assert not text_warnings
-
-    def test__genuine_free_text__is_not_a_date(self) -> None:
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
-            }
-        )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-
-    def test__mostly_dates_with_one_bad_value__is_not_a_date(self) -> None:
-        """All-or-nothing, like the numeric check: one bad value disqualifies it."""
-        values = self._dates(60)
-        values[0] = "not a date at all"
-        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._detect(X)
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-
-    def test__numeric_string_column__is_not_a_date(self) -> None:
-        """The numeric check runs first and wins, even for an 8-digit date shape."""
-        values = [f"2024010{i % 9 + 1}" for i in range(self.n_rows)]
-        X = pd.DataFrame({"num": self._numeric_column(), "code": values})
-        schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.NUMERICAL
-
-    def test__mixed_date_and_datetime_string_formats__is_still_a_date(self) -> None:
-        """Regression: naive `pd.to_datetime` infers a format from an early
-        value and silently coerces a later, differently-shaped but valid value
-        to NaT, which would otherwise fail the all-or-nothing date check.
-        """
-        values = self._dates(60)
-        values[0] = "2020-06-15 13:45:30"  # date-only pool plus one full datetime
-        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
-
-    def test__declared_categorical_date_column__declaration_has_no_effect(
-        self,
-    ) -> None:
-        """A declared-categorical date gets no special treatment once demoted,
-        exactly like a declared-categorical non-date string already doesn't
-        (see `test__declared_categorical_columns__do_not_warn`): only
-        `min_cardinality_for_text` decides, `max_unique_for_category` is not
-        even consulted, even though it would have saved this column.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(40)})
-        schema = detect_feature_modalities(
-            X=X.to_numpy(dtype=object),
-            feature_names=list(X.columns),
-            provided_categorical_indices=[1],
-            min_samples_for_inference=100,
-            max_unique_for_category=50,
-            min_unique_for_numerical=4,
-            min_cardinality_for_text=30,
-        )
-        assert schema.features[1].modality is FeatureModality.TEXT

@@ -7,12 +7,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Patch
 from scipy.ndimage import uniform_filter1d
 
 if TYPE_CHECKING:
-    import matplotlib.pyplot as plt
-
     from tabpfn.regressor import FullOutputDict
 
 _STAT_STYLES = {
@@ -90,16 +90,6 @@ def plot_regression_distribution(
     _validate_args(
         prediction, sample_idx, statistics, quantile_interval, zoom_quantile, smooth
     )
-
-    # Local import because matplotlib is an optional dependency.
-    try:
-        import matplotlib.pyplot as plt  # noqa: PLC0415
-        from matplotlib.patches import Patch  # noqa: PLC0415
-    except ModuleNotFoundError as err:
-        raise ModuleNotFoundError(
-            "matplotlib is required for plotting. "
-            'Install it with `pip install "tabpfn[viz]"`'
-        ) from err
 
     logits = prediction["logits"][sample_idx : sample_idx + 1]
     criterion = prediction["criterion"]

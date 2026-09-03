@@ -20,13 +20,20 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
-    _owned_float64_values,
+    clean_data_transform,
     fix_dtypes,
     process_text_na_dataframe,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
-from tabpfn.validation import ensure_compatible_fit_inputs
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    EfficientColumnTransformer,
+    get_ordinal_encoder,
+)
+from tabpfn.validation import (
+    check_input_shape_matches,
+    ensure_compatible_fit_inputs,
+    extract_input_shape,
+)
 
 
 @pytest.fixture
@@ -76,7 +83,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        X, y, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -88,28 +95,52 @@ class TestEnsureCompatibleFitInputsBasic:
 
         assert X.shape == (3, 2)
         assert len(y) == 3
-        assert n_features == 2
-        assert feature_names is None
         assert original_y_name is None
 
-    def test__ensure_compatible_fit_inputs__pandas_dataframe(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
-        """Test that pandas DataFrames preserve column names."""
+    def test__extract_input_shape__pandas_dataframe(self) -> None:
+        """Column names come off the raw frame, before any conversion."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
-        y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
+        feature_names, n_features = extract_input_shape(X)
+
+        assert list(feature_names) == ["feature_a", "feature_b"]
+        assert n_features == 2
+
+    def test__extract_input_shape__numpy_array(self) -> None:
+        """An array has no column names, so only the width is reported."""
+        assert extract_input_shape(np.zeros((3, 2))) == (None, 2)
+
+    def test__extract_input_shape__1d_array__has_no_width(self) -> None:
+        """Left for value validation to reject, with its own clearer message."""
+        assert extract_input_shape(np.zeros(3)) == (None, None)
+
+    def test__check_input_shape_matches__wrong_width__raises(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.n_features_in_ = 2
+
+        with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
+            check_input_shape_matches(np.zeros((3, 3)), estimator=classifier)
+
+    def test__check_input_shape_matches__wrong_names__raises(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.feature_names_in_ = np.array(["a", "b"])
+        classifier.n_features_in_ = 2
+        X = pd.DataFrame({"a": [1.0], "c": [2.0]})
+
+        with pytest.raises(TabPFNValidationError, match="feature names should match"):
+            check_input_shape_matches(X, estimator=classifier)
+
+    def test__check_input_shape_matches__same_shape__passes(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.feature_names_in_ = np.array(["a", "b"])
+        classifier.n_features_in_ = 2
+
+        check_input_shape_matches(
+            pd.DataFrame({"a": [1.0], "b": [2.0]}), estimator=classifier
         )
-
-        assert list(feature_names) == ["feature_a", "feature_b"]  # type: ignore
 
     def test__ensure_compatible_fit_inputs__pandas_series_y(
         self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
@@ -118,7 +149,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
+        _, _, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -342,7 +373,10 @@ class TestTagFeaturesAndSanitizeData:
         )
         assert isinstance(X_out, np.ndarray)
         assert X_out.shape == input_data.shape
-        assert X_out.dtype == np.float64
+        # Numeric, rather than float64 specifically: a numeric ndarray with nothing
+        # to encode is handed back at its own dtype, and the widening to float64
+        # happens in the copy the preprocessing pipeline takes before its steps run.
+        assert X_out.dtype.kind in "biuf"
         assert ord_encoder is not None
 
     @pytest.mark.parametrize(
@@ -739,11 +773,14 @@ def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> 
 
 # --- all-numeric fast path ------------------------------------------------------
 #
-# A numeric ndarray with no categorical columns has nothing to ordinally encode, so
-# `clean_data` converts it straight to float64 instead of building the intermediate
-# DataFrame and copying it back out. These pin the properties that shortcut has to
-# keep: same values, same layout, an owned array, and an encoder that is fitted
-# exactly as the general path leaves it.
+# A numeric ndarray with no categorical columns has nothing to ordinally encode and
+# no dtype to infer, so `clean_data` hands it straight back instead of building an
+# intermediate DataFrame and copying it out into a float64 table of its own. The
+# widening happens later, in the copy `PreprocessingPipeline._process_steps` takes
+# before the steps mutate anything, so that table exists once rather than twice.
+# These pin what the shortcut owes: the same values, an encoder fitted exactly as
+# the general path leaves it, and -- since the array handed back is the caller's --
+# that nothing downstream writes into it.
 
 
 def _numeric_schema(n_cols: int, cat_indices: tuple[int, ...] = ()) -> FeatureSchema:
@@ -762,10 +799,19 @@ def _numeric_schema(n_cols: int, cat_indices: tuple[int, ...] = ()) -> FeatureSc
 
 @pytest.mark.parametrize("dtype", ["float32", "float64", "int64", "bool", "float16"])
 @pytest.mark.parametrize("passthrough_inf", [False, True])
-def test__clean_data__numeric_array_converts_without_intermediate_copy(
+def test__clean_data__numeric_array_is_handed_back_untouched(
     dtype: str, *, passthrough_inf: bool
 ) -> None:
-    """The shortcut returns exactly the float64 cast of its input."""
+    """The shortcut neither copies nor casts: cleaning such an array is a no-op.
+
+    The float64 table the steps read is made by
+    `PreprocessingPipeline._process_steps`, which copies before the steps mutate
+    it. Making one here as well would keep a second full-size table alive for the
+    whole of `fit` -- 10.67 GB of it on the profiled shape, under everything else
+    fit does. What that leaves is a contract: nobody writes into the array handed
+    back, since it is the caller's own
+    (`test__fit_predict__do_not_write_into_the_callers_array`).
+    """
     rng = np.random.default_rng(0)
     X = (rng.standard_normal((20, 4)) * 3).astype(dtype)
 
@@ -773,12 +819,8 @@ def test__clean_data__numeric_array_converts_without_intermediate_copy(
         X=X, feature_schema=_numeric_schema(4), passthrough_inf=passthrough_inf
     )
 
-    np.testing.assert_array_equal(out, X.astype(np.float64))
-    assert out.dtype == np.float64
+    assert out is X
     assert schema.num_columns == 4
-    # Owned and writeable: callers mutate the cleaned array in place downstream.
-    assert not np.shares_memory(out, X)
-    assert out.flags.writeable
     # Nothing was selected for encoding, so the encoder learned no categories.
     assert not hasattr(encoder.named_transformers_["encoder"], "categories_")
     assert encoder.n_features_in_ == 4
@@ -819,8 +861,9 @@ def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
     # the original small integers, so the two agree everywhere.
     assert encoder.named_transformers_["encoder"].categories_[0].size == 4
     np.testing.assert_array_equal(shortcut, general)
-    assert shortcut.dtype == general.dtype
-    assert shortcut.flags.f_contiguous == general.flags.f_contiguous
+    # Only the values have to agree. The shortcut hands the caller's array back,
+    # so its dtype and layout are the caller's, while the general path builds its
+    # own float64 frame and gets pandas' column-major one.
 
 
 def test__fix_dtypes__numeric_array_stays_consolidated() -> None:
@@ -850,89 +893,16 @@ def test__fix_dtypes__mixed_numeric_dtypes_are_still_cast() -> None:
     assert np.isnan(frame["a"].to_numpy()[2])
 
 
-# --- ownership of the identity path's output -------------------------------------
+# --- the frozen shortcut, end to end --------------------------------------------
 #
-# The identity path hands its array straight to the caller, who writes into it, so it
-# has to own it. How many copies that takes depends on the frame's block layout,
-# which is what these two pin.
-
-
-def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
-    """A float frame held as one block per column, as a recast frame is left."""
-    frame = pd.DataFrame(values)
-    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
-    return frame
-
-
-def test__owned_float64_values__assembles_a_multi_block_frame_in_one_buffer() -> None:
-    """A frame of many blocks is assembled directly, never routed through `to_numpy`.
-
-    Asserted through the frame rather than the result, because what the result looks
-    like depends on the pandas: `to_numpy` consolidates the frame in place before
-    pandas 3, so a run that went through it would cost a second full-size buffer and
-    leave the frame holding one block instead of many.
-    """
-    values = np.random.default_rng(0).standard_normal((8, 5))
-    frame = _fragmented_float_frame(values)
-    assert not _is_single_float_block(frame)
-
-    out = _owned_float64_values(frame)
-
-    np.testing.assert_array_equal(out, values)
-    assert out.flags.writeable
-    assert out.flags.f_contiguous
-    assert not np.shares_memory(out, values)
-    # Still one block per column: nothing consolidated it on the way.
-    assert not _is_single_float_block(frame)
-    # And the buffer is the caller's alone -- writing into it cannot reach the frame.
-    assert not any(
-        np.shares_memory(out, frame.iloc[:, position].to_numpy(copy=False))
-        for position in range(frame.shape[1])
-    )
-
-
-def test__owned_float64_values__copies_a_single_block_frame() -> None:
-    """A single-block frame is handed out as a view of the array it was built from."""
-    values = np.random.default_rng(0).standard_normal((8, 5))
-    frame = pd.DataFrame(values, copy=False)
-    assert _is_single_float_block(frame)
-    assert np.shares_memory(frame.to_numpy(dtype=np.float64, copy=False), values)
-
-    out = _owned_float64_values(frame)
-
-    np.testing.assert_array_equal(out, values)
-    assert out.flags.writeable
-    assert out.flags.f_contiguous
-    # Writing into the result must not reach the caller's array. Under copy-on-write
-    # the view is read-only, but on pandas 2 it is writeable and aliases `values`.
-    assert not np.shares_memory(out, values)
-    out[0, 0] = 12345.0
-    assert values[0, 0] != 12345.0
-
-
-# --- the frozen shortcut's preconditions -----------------------------------------
-#
-# At predict time the encoding step is skipped when a fitted encoder selected no
-# columns. Skipping `transform` skips its checks too, so the shortcut is only taken
-# for a frame `transform` would have handled the same way.
+# At predict time the encoding step is a cast whenever the fitted encoder selected no
+# columns. Skipping `transform` skips its checks too, so the shortcut is only taken for
+# a frame `transform` would have handled the same way -- see
+# `EfficientColumnTransformer._changes_no_value`, which decides it.
 
 
 def _float_frame(**columns: list[float]) -> pd.DataFrame:
     return pd.DataFrame({name: np.array(values) for name, values in columns.items()})
-
-
-def test__encoding_is_identity__an_unfitted_encoder_is_not_an_empty_selection() -> None:
-    """An encoder that never selected anything because it was never fitted.
-
-    It has no selection to read, which must not be mistaken for having selected no
-    columns -- that would hand the frame back unencoded instead of failing.
-    """
-    with pytest.raises(AttributeError):
-        clean_module._encoding_is_identity(
-            _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]),
-            get_ordinal_encoder(),
-            fit_encoder=False,
-        )
 
 
 def test__process_text_na_dataframe__frozen_shortcut_rejects_a_narrower_frame() -> None:
@@ -969,11 +939,14 @@ def test__process_text_na_dataframe__frozen_shortcut_taken_when_lined_up() -> No
     encoder.fit(frame)
 
     with mock.patch.object(
-        clean_module, "_owned_float64_values", wraps=clean_module._owned_float64_values
+        EfficientColumnTransformer,
+        "_assemble",
+        autospec=True,
+        side_effect=EfficientColumnTransformer._assemble,
     ) as shortcut:
         out = process_text_na_dataframe(frame, ord_encoder=encoder)
 
-    assert shortcut.call_count == 1
+    assert shortcut.call_count == 1, "went through ColumnTransformer.transform"
     np.testing.assert_array_equal(out, frame.to_numpy())
 
 
@@ -1003,9 +976,11 @@ def test__clean_data__mixed_columns_take_the_assembly_path() -> None:
     """The assembly is used, and its result is placed by column, not by transformer."""
     X, schema = _mixed_frame_inputs()
 
-    with mock.patch(
-        "tabpfn.preprocessing.clean._encode_into_preallocated",
-        wraps=clean_module._encode_into_preallocated,
+    with mock.patch.object(
+        EfficientColumnTransformer,
+        "_assemble",
+        autospec=True,
+        side_effect=EfficientColumnTransformer._assemble,
     ) as assembled:
         out, _encoder, _ = clean_data(X=X, feature_schema=schema)
 
@@ -1079,9 +1054,8 @@ def test__clean_data__object_passthrough_falls_back_to_the_encoder() -> None:
     )
     encoder = get_ordinal_encoder()
 
-    assert not clean_module._can_write_encoded_columns(
-        frame, clean_module._encoder_selection(encoder.fit(frame.iloc[:1]))
-    )
+    encoder.fit(frame.iloc[:1])
+    assert not encoder._can_assemble(frame, frame.iloc[:1], encoder.selected_columns())
     # The real call still works, through sklearn, and learns the categories exactly
     # once. Declining the assembly *after* fitting them would pay for a second pass
     # over the data and then discard it, since `fit_transform` fits again itself.
@@ -1122,6 +1096,13 @@ def test__cast_columns__a_shared_block_is_never_assigned_into() -> None:
 
     assert list(out.dtypes[1::2].map(str)) == ["category"] * 3
     assert list(out.dtypes[0::2].map(str)) == ["object"] * 3
+
+
+def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
+    """A float frame held as one block per column, as a recast frame is left."""
+    frame = pd.DataFrame(values)
+    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
+    return frame
 
 
 def test__cast_columns__a_block_per_column_frame_keeps_its_own_columns() -> None:
@@ -1219,23 +1200,105 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
 
 
-def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
-    """Documents a known, pre-existing bug rather than fixing it here.
+def test__clean_data_transform__matches_the_general_path_on_numeric_input() -> None:
+    """The single-cast shortcut produces exactly what going through pandas does.
 
-    A native `datetime64` column mixed with any other dtype crashes: `validate_data`
-    converts the whole frame to one numpy array, and numpy has no dtype that unifies
-    `datetime64` with a numeric or string column. A fix would need to convert such a
-    column to a string (or otherwise numpy-unifiable type) before validation, which
-    is lossy for `datetime64[ns]` (no string format captures full nanosecond
-    precision) and is deferred to a follow-up rather than solved in this PR.
+    `clean_data_transform` skips `fix_dtypes` + `process_text_na_dataframe` for a
+    numeric array that nothing is encoded from, to avoid holding two full-size
+    float64 buffers to produce one. The shortcut is only worth taking if it is
+    indistinguishable from the path it replaces -- values, dtype, memory order and
+    ownership, since callers write into the result in place.
     """
-    n = 50
     rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {"num": rng.normal(size=n), "signed_on": pd.date_range("2020-01-01", periods=n)}
-    )
-    y = rng.integers(0, 2, n)
+    X = rng.standard_normal((40, 6)).astype(np.float32)
+    X[3, 2] = np.nan
+    encoder = get_ordinal_encoder()
+    encoder.fit(fix_dtypes(X=X[:1], cat_indices=None))
 
-    clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
-        clf.fit(X, y)
+    shortcut = clean_data_transform(X, cat_indices=None, ord_encoder=encoder)
+    general = process_text_na_dataframe(
+        X=fix_dtypes(X=X, cat_indices=None), ord_encoder=encoder
+    )
+
+    np.testing.assert_array_equal(shortcut, general)
+    assert general.dtype == np.float64
+    # The shortcut hands the caller's array straight back rather than casting it;
+    # the widening happens in the copy the pipeline takes before the steps run.
+    assert shortcut is X
+
+
+def test__clean_data_transform__still_encodes_a_text_column_fit_as_strings() -> None:
+    """A numeric predict array does not escape an encoder that was fitted on it.
+
+    The shortcut cannot be decided from the incoming array's categorical indices:
+    a column detected as *text* is ordinal-encoded at fit yet never appears in
+    `indices_for(CATEGORICAL)`, so a predict-time array of the same field arriving
+    numeric would look encoding-free while the fitted encoder still holds it. Gating
+    on the encoder keeps such a column on the general path, where its values are
+    matched against the fit-time categories instead of being read as raw numbers.
+    """
+    n, n_unique = 60, 30
+    # An object array, as `validate_data` hands one over for a mixed frame, so the
+    # encoder's column keys are the integer positions a numpy predict input has too.
+    X_fit = np.empty((n, 2), dtype=object)
+    X_fit[:, 0] = np.arange(n, dtype="float64")
+    X_fit[:, 1] = [f"s{i % n_unique}" for i in range(n)]
+    encoder = get_ordinal_encoder()
+    process_text_na_dataframe(
+        fix_dtypes(X=X_fit, cat_indices=None), ord_encoder=encoder, fit_encoder=True
+    )
+    assert encoder.selected_columns() == [1]
+
+    X_pred = np.column_stack(
+        [
+            np.arange(n, dtype="float64"),
+            np.array([float(i % n_unique) for i in range(n)], dtype="float64"),
+        ]
+    )
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        out = clean_data_transform(X_pred, cat_indices=None, ord_encoder=encoder)
+
+    # Encoded against the fit categories, so the codes are not the raw numbers.
+    assert not np.array_equal(out[:, 1], X_pred[:, 1])
+
+
+def test__fit_predict__do_not_write_into_the_callers_array() -> None:
+    """Neither fit nor predict may change the array they were handed.
+
+    `clean_data` hands a numeric array back uncopied, so the array the wrapper
+    carries through `fit` *is* the caller's. What keeps that safe is the copy
+    `PreprocessingPipeline._process_steps` takes before any step mutates
+    anything -- and this is the test that says so, rather than the copy
+    `clean_data` used to make on the way past.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((80, 5)).astype(np.float32)
+    X[2, 3] = np.nan
+    y = rng.integers(0, 2, 80)
+    before = X.copy()
+
+    model = TabPFNClassifier(n_estimators=2, device="cpu", random_state=0).fit(X, y)
+    model.predict_proba(X)
+
+    np.testing.assert_array_equal(X, before)
+
+
+def test__fit_predict__a_float32_input_predicts_as_its_float64_equal() -> None:
+    """The input's dtype does not reach the steps, so it cannot change the output.
+
+    `clean_data` no longer widens, but the pipeline's copy does, and widening a
+    float32 value to float64 is exact. So the same table offered at either
+    precision has to come out the same, bit for bit -- which is what makes the
+    move of the cast a memory change rather than a numerical one.
+    """
+    rng = np.random.default_rng(0)
+    X32 = rng.standard_normal((80, 5)).astype(np.float32)
+    X64 = X32.astype(np.float64)
+    y = rng.integers(0, 2, 80)
+
+    def proba(X: np.ndarray) -> np.ndarray:
+        model = TabPFNClassifier(n_estimators=2, device="cpu", random_state=0)
+        return model.fit(X, y).predict_proba(X)
+
+    np.testing.assert_array_equal(proba(X32), proba(X64))
