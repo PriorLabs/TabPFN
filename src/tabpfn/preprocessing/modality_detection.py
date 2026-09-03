@@ -114,9 +114,8 @@ def _format_names_for_warning(names: list[str]) -> str:
 def _warn_on_text(feature_schema: FeatureSchema) -> None:
     """Warn about any free-text columns.
 
-    A declared categorical column is never `TEXT`, and a column expanded by
-    `text.TextTransformer` is numeric by the time detection runs, so neither is
-    reported here.
+    A declared categorical column is never `TEXT`, and a column expanded into
+    text features is numeric by the time detection runs, so neither is reported.
     """
     text_names = [
         feature.name.removeprefix(INPUT_FEATURE_PREFIX)
