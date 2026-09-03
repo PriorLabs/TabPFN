@@ -1614,12 +1614,16 @@ def test__predict_batched__folds_estimators_one_at_a_time(
     Collecting the fused outputs first would keep every estimator's
     (n_test, n_datasets, n_buckets) tensor alive at once.
     """
-    data = [_mk_reg_dataset(s) for s in range(3)]
-    X_list = [d[0] for d in data]
-    y_list = [d[1] for d in data]
-    X_tests = [d[0][:5] for d in data]
+    rng = np.random.default_rng(0)
+    constant = rng.normal(size=(60, 12)).astype(np.float32)
+    constant[:, :5] = 0
+    dense = rng.normal(size=(60, 12)).astype(np.float32)
+    X_list = [constant, dense, constant.copy()]
+    y_list = [X[:, 5] - X[:, 6] for X in X_list]
+    X_tests = [X[:5] for X in X_list]
 
     n_folded = 0
+    group_sizes: list[int] = []
     translate = TabPFNRegressor._translate_batched_logits
 
     def counting_translate(self: TabPFNRegressor, **kwargs: typing.Any) -> torch.Tensor:
@@ -1634,8 +1638,11 @@ def test__predict_batched__folds_estimators_one_at_a_time(
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> typing.Iterator[typing.Any]:
+        folded_before_group = n_folded
+        group_size = self.X_trains[0].shape[0]
+        group_sizes.append(group_size)
         for estimator, item in enumerate(iter_outputs(self, *args, **kwargs)):
-            assert n_folded == estimator * len(X_list), (
+            assert n_folded == folded_before_group + estimator * group_size, (
                 "outputs are being materialized instead of folded in as they arrive"
             )
             yield item
@@ -1651,6 +1658,7 @@ def test__predict_batched__folds_estimators_one_at_a_time(
         n_estimators=3, device="cpu", random_state=42, inference_precision=torch.float32
     )
     reg.predict_batched(X_list, y_list, X_tests)
+    assert group_sizes == [2, 1]
     assert n_folded == 3 * len(X_list)
 
 

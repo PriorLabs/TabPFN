@@ -1168,7 +1168,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             for index, probabilities in zip(indices, out, strict=True):
                 results[index] = probabilities
 
-        expected = (len(np.asarray(X_test_list[0])), len(class_sets[0]))
+        test_shape = next(iter(test_shapes))
+        expected = (test_shape[0], len(class_sets[0]))
         if any(result is None or result.shape != expected for result in results):
             raise RuntimeError("Internal error: invalid batched prediction shape.")
         return np.stack(results)  # type: ignore[arg-type]

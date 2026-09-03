@@ -1820,6 +1820,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 for lane, position in enumerate(positions):
                     logits = accumulated[lane]
                     assert logits is not None
+                    # Release each lane's bucket logits as it is decoded instead of
+                    # retaining every dataset's tensor through the whole decode loop.
+                    accumulated[lane] = None
                     item = items[position]
                     results[item_indices[position]] = worker._decode_batched_dataset(
                         accumulated_logits=logits,

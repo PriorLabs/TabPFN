@@ -5,13 +5,10 @@ from __future__ import annotations
 from unittest import mock
 
 import numpy as np
-import pytest
 import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.finetuning.data_util import _group_batches_by_shape
-
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
 
 def _features() -> list[np.ndarray]:
@@ -32,7 +29,7 @@ def test_classifier_heterogeneous_widths_match_serial() -> None:
     labels = np.tile(np.arange(3), 20)
     kwargs = {
         "n_estimators": 2,
-        "device": "cuda",
+        "device": "cpu",
         "random_state": 42,
         "inference_precision": torch.float32,
     }
@@ -57,7 +54,7 @@ def test_regressor_heterogeneous_widths_match_serial() -> None:
     targets = [X[:, 5] - X[:, 6] for X in features]
     kwargs = {
         "n_estimators": 2,
-        "device": "cuda",
+        "device": "cpu",
         "random_state": 42,
         "inference_precision": torch.float32,
     }
