@@ -114,8 +114,8 @@ def _encoder_selects_nothing(
     """Whether a *fitted* encoder would leave every column alone.
 
     Asked of the encoder rather than of the incoming frame's categorical indices,
-    because the two can disagree: a column detected as text is encoded at fit but
-    never appears in `indices_for(FeatureModality.CATEGORICAL)`, and a column that
+    because the two can disagree: a string column above the text cutoff is encoded
+    at fit but never appears in `indices_for(FeatureModality.CATEGORICAL)`, and one that
     was string at fit can arrive numeric at predict. Only the encoder knows what
     it was fitted to touch.
     """

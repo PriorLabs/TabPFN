@@ -450,7 +450,7 @@ def test__fit_with_transform_text__expands_the_text_column(estimator_cls: type) 
     assert sum(name.split("input_")[-1].startswith("review_") for name in names) == (
         _N_COMPONENTS
     )
-    assert schema.indices_for(FeatureModality.TEXT) == []
+    assert schema.indices_for(FeatureModality.CATEGORICAL) == []
     assert len(predictions) == len(X)
 
 
@@ -517,7 +517,10 @@ def test__fit_without_transform_text__warns_and_keeps_the_width(
         model.fit(X, y)
 
     assert "TRANSFORM_TEXT" in str(record[0].message)
-    assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == [1]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.NUMERICAL) == [
+        0,
+        1,
+    ]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
@@ -535,7 +538,10 @@ def test__fit_with_transform_text_and_an_object_column__does_not_expand_it(
         model.fit(X, y)
 
     assert model.text_transformer_.expanded_indices == []
-    assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == [1]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.NUMERICAL) == [
+        0,
+        1,
+    ]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])

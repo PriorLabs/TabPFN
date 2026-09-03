@@ -55,7 +55,7 @@ def detect_feature_modalities(
         min_unique_for_numerical: Min unique values for a feature to be numerical.
         min_cardinality_for_text: Unique-value count above which a candidate
             string column (not parsed as a number, not declared categorical) is
-            `TEXT` rather than `CATEGORICAL`.
+            `NUMERICAL` rather than `CATEGORICAL`.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -144,7 +144,11 @@ def _detect_feature_modality(
     if pd.api.types.is_string_dtype(s.dtype):
         if reported_categorical or n_unique <= min_cardinality_for_text:
             return FeatureModality.CATEGORICAL
-        return FeatureModality.TEXT
+        # Too many distinct strings for a category, and nothing here turns them
+        # into text features, so the model gets each string's alphabetical rank
+        # as a number. That carries no meaning; it is only the least bad option
+        # left. The text transformer warns about such a column.
+        return FeatureModality.NUMERICAL
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )

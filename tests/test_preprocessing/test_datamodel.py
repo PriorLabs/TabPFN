@@ -59,20 +59,20 @@ class TestFeatureSchema:
             Feature(name="num1", modality=FeatureModality.NUMERICAL),
             Feature(name="cat1", modality=FeatureModality.CATEGORICAL),
             Feature(name="num2", modality=FeatureModality.NUMERICAL),
-            Feature(name="txt1", modality=FeatureModality.TEXT),
+            Feature(name="const1", modality=FeatureModality.CONSTANT),
         ]
         schema = FeatureSchema(features=features)
 
         assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
         assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
-        assert schema.indices_for(FeatureModality.TEXT) == [3]
+        assert schema.indices_for(FeatureModality.CONSTANT) == [3]
 
     def test__indices_for__missing_modality(self) -> None:
         """Test indices_for returns empty list for missing modality."""
         features = [Feature(name="a", modality=FeatureModality.NUMERICAL)]
         schema = FeatureSchema(features=features)
 
-        assert schema.indices_for(FeatureModality.TEXT) == []
+        assert schema.indices_for(FeatureModality.CONSTANT) == []
 
 
 class TestFeatureSchemaAddColumns:
@@ -167,7 +167,7 @@ class TestFeatureSchemaApplyPermutation:
         features = [
             Feature(name="a", modality=FeatureModality.NUMERICAL),
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
-            Feature(name="c", modality=FeatureModality.TEXT),
+            Feature(name="c", modality=FeatureModality.CONSTANT),
         ]
         schema = FeatureSchema(features=features)
 
@@ -175,7 +175,7 @@ class TestFeatureSchemaApplyPermutation:
         new_schema = schema.apply_permutation([2, 0, 1])
 
         assert new_schema.feature_names == ["c", "a", "b"]
-        assert new_schema.indices_for(FeatureModality.TEXT) == [0]
+        assert new_schema.indices_for(FeatureModality.CONSTANT) == [0]
         assert new_schema.indices_for(FeatureModality.NUMERICAL) == [1]
         assert new_schema.indices_for(FeatureModality.CATEGORICAL) == [2]
 
@@ -202,7 +202,7 @@ class TestFeatureSchemaSliceForIndices:
             Feature(name="a", modality=FeatureModality.NUMERICAL),
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
             Feature(name="c", modality=FeatureModality.NUMERICAL),
-            Feature(name="d", modality=FeatureModality.TEXT),
+            Feature(name="d", modality=FeatureModality.CONSTANT),
         ]
         schema = FeatureSchema(features=features)
 
@@ -212,7 +212,7 @@ class TestFeatureSchemaSliceForIndices:
         assert sliced.num_columns == 2
         assert sliced.feature_names == ["b", "d"]
         assert sliced.indices_for(FeatureModality.CATEGORICAL) == [0]
-        assert sliced.indices_for(FeatureModality.TEXT) == [1]
+        assert sliced.indices_for(FeatureModality.CONSTANT) == [1]
 
     def test__slice_for_indices__preserves_names(self) -> None:
         """Test slicing preserves feature names."""
@@ -231,7 +231,7 @@ class TestFeatureSchemaSliceForIndices:
         features = [
             Feature(name="a", modality=FeatureModality.NUMERICAL),
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
-            Feature(name="c", modality=FeatureModality.TEXT),
+            Feature(name="c", modality=FeatureModality.CONSTANT),
         ]
         schema = FeatureSchema(features=features)
 
@@ -281,7 +281,7 @@ class TestFeatureSchemaUpdateFromPreprocessingStepResult:
         features = [
             Feature(name="a", modality=FeatureModality.NUMERICAL),
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
-            Feature(name="c", modality=FeatureModality.TEXT),
+            Feature(name="c", modality=FeatureModality.CONSTANT),
         ]
         schema = FeatureSchema(features=features)
 
@@ -298,7 +298,7 @@ class TestFeatureSchemaUpdateFromPreprocessingStepResult:
         assert updated.features[0].name == "a"
         assert updated.features[0].modality == FeatureModality.NUMERICAL
         assert updated.features[2].name == "c"
-        assert updated.features[2].modality == FeatureModality.TEXT
+        assert updated.features[2].modality == FeatureModality.CONSTANT
 
     def test__update_from_preprocessing_step_result__immutability(self) -> None:
         """Test that update returns new instance, doesn't modify original."""

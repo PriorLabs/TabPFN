@@ -86,14 +86,16 @@ class InferenceConfig:
     be categorical."""
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
-    """Number of distinct values above which a string column is read as text
-    rather than as a category, unless it is declared categorical: a column listed
-    in `categorical_features_indices` or carrying pandas' `category` dtype is a
-    category at any cardinality. A separate decision from
-    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
-    that one describes when a *number* is few enough to be a category, this one
-    describes when a *string* is varied enough to be text rather than a category,
-    and there is no reason the two should move together.
+    """Number of distinct values above which a string column is text rather than
+    a category: expanded into numeric features with `TRANSFORM_TEXT`, and
+    otherwise read as a number, the alphabetical rank of each string, with a
+    warning. A column listed in `categorical_features_indices` or carrying
+    pandas' `category` dtype is a category at any cardinality. A separate
+    decision from `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs
+    numerical-vs-categorical: that one describes when a *number* is few enough
+    to be a category, this one describes when a *string* is varied enough to be
+    text rather than a category, and there is no reason the two should move
+    together.
 
     Set equal to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` for now, so decoupling the
     two into a separate field does not itself change any default behavior. A
@@ -160,8 +162,8 @@ class InferenceConfig:
     `string` dtype (the default for strings from pandas 3.0) and more than
     `MIN_CARDINALITY_FOR_TEXT` distinct values; an `object` column is never
     expanded, whatever it holds, nor is a declared categorical one. Off, a text
-    column is ordinal-encoded as a high-cardinality category and `fit` warns
-    about it by name. Like `TRANSFORM_DATES`, not run by the fine-tuning
+    column is read as a number, the alphabetical rank of each string, and `fit`
+    warns about it by name. Like `TRANSFORM_DATES`, not run by the fine-tuning
     estimators."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"

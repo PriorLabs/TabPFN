@@ -45,9 +45,9 @@ def test__detect_feature_modalities_basic():
         min_unique_for_numerical=5,
         min_cardinality_for_text=3,
     )
-    assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0]
+    # "text" has too many distinct strings for a category, so it is numerical.
+    assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0, 3]
     assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
-    assert feature_schema.indices_for(FeatureModality.TEXT) == [3]
     assert feature_schema.indices_for(FeatureModality.CONSTANT) == [4]
     # Input column names are namespaced with the "input_" prefix so they cannot
     # collide with names generated for features added by preprocessing steps.
@@ -305,10 +305,10 @@ class TestDeclaredCategoricalIndices:
         assert declared_categorical_indices(X, None) == []
 
 
-def test__detect_textual_feature():
+def test__string_above_text_threshold__is_numerical():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
 
 
 def test__detect_long_texts():
@@ -329,7 +329,7 @@ def test__detect_long_texts():
         ]
     )
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
@@ -338,7 +338,7 @@ def test__detect_text_as_object():
     s = pd.Series(["a", "b", "c", "e", "f"], dtype=object)
     s = s.astype(object)
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
@@ -477,7 +477,7 @@ def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
     above both, a string column whose prefix already clears the first two, but
     not the text threshold, stopped scanning early and used the undercounted
     prefix value to decide category-vs-text -- silently leaving a genuinely
-    high-cardinality column CATEGORICAL instead of TEXT.
+    high-cardinality column CATEGORICAL instead of NUMERICAL.
     """
     # Prefix cycles through only 8 distinct values, clearing
     # max_unique_for_category (5) and min_unique_for_numerical (3) alone, but
@@ -493,7 +493,7 @@ def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
         min_unique_for_numerical=3,
         min_cardinality_for_text=10,
     )
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
 
 
 def _reference_is_numeric(s: pd.Series) -> bool:
@@ -617,7 +617,7 @@ class TestDetectFeatureModalitiesOnStrings:
             min_cardinality_for_text=30,
         )
 
-    def test__free_text_column__is_text(self) -> None:
+    def test__free_text_column__is_numerical(self) -> None:
         X = pd.DataFrame(
             {
                 "num": self._numeric_column(),
@@ -625,7 +625,7 @@ class TestDetectFeatureModalitiesOnStrings:
             }
         )
         schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
     def test__ordinary_columns__are_categorical_or_numerical(self) -> None:
         """Low-cardinality strings are categories, fully numeric strings numbers."""
@@ -641,7 +641,7 @@ class TestDetectFeatureModalitiesOnStrings:
         assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
         assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
 
-    def test__numeric_column_with_one_stray_token__is_text(self) -> None:
+    def test__numeric_column_with_one_stray_token__is_numerical(self) -> None:
         """A single non-numeric token flips a whole numeric column: every value
         has to parse for the column to be a number.
         """
@@ -652,7 +652,7 @@ class TestDetectFeatureModalitiesOnStrings:
             {"num": self._numeric_column(), "mostly_numeric": mostly_numeric}
         )
         schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
     def test__column_with_a_crash_prone_token__does_not_crash(self) -> None:
         """A value that used to segfault `pandas.to_numeric` must not crash the fit.
@@ -667,7 +667,7 @@ class TestDetectFeatureModalitiesOnStrings:
         values[7] = "8e2569614270f3d8b9e7038efac9f116"
         X = pd.DataFrame({"num": self._numeric_column(), "ids": values})
         schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
     def test__declared_categorical_columns__are_categorical(self) -> None:
         """Declaring a column categorical settles it: the text threshold does not
@@ -687,11 +687,10 @@ class TestDetectFeatureModalitiesOnStrings:
         )
         declared = [1, 2]
 
-        assert self._detect(X).indices_for(FeatureModality.TEXT) == declared
+        assert self._detect(X).indices_for(FeatureModality.CATEGORICAL) == []
 
         schema = self._detect(X, declared)
         assert schema.indices_for(FeatureModality.CATEGORICAL) == declared
-        assert schema.indices_for(FeatureModality.TEXT) == []
 
 
 def test__category_and_text_thresholds__move_independently() -> None:
