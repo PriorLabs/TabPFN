@@ -43,10 +43,6 @@ if TYPE_CHECKING:
 
 __all__ = ["TextTransformer"]
 
-#: Features a text column is encoded into, at most: skrub's own default. A column
-#: whose n-gram vocabulary is smaller than this yields fewer.
-_N_COMPONENTS = 30
-
 #: Cap on how many column names the text warning lists, so a wide frame of text
 #: columns does not produce an unreadable multi-kilobyte message.
 _MAX_COLUMNS_IN_WARNING = 10
@@ -74,6 +70,8 @@ class TextTransformer:
             Off, every column passes through unchanged.
         min_cardinality_for_text: Distinct-value count above which a string
             column counts as text.
+        n_components: Features a text column is expanded into, at most: fewer
+            when its n-gram vocabulary is smaller.
 
     Attributes:
         fitted_columns_: Input position -> the encoder fitted on that column and
@@ -91,10 +89,12 @@ class TextTransformer:
         categorical_indices: Sequence[int] | None = None,
         transform_text: bool = False,
         min_cardinality_for_text: int = 30,
+        n_components: int = 30,
     ) -> None:
         self._declared_categorical = set(categorical_indices or ())
         self._transform_text = transform_text
         self._min_cardinality_for_text = min_cardinality_for_text
+        self._n_components = n_components
 
     @property
     def expanded_indices(self) -> list[int]:
@@ -228,7 +228,9 @@ class TextTransformer:
         blocks: list[pd.DataFrame] = []
         for position in positions:
             column = X.iloc[:, position].rename(str(X.columns[position]))
-            block, fitted = self._fit_one(column, kept_names + expanded_names)
+            block, fitted = self._fit_one(
+                column, kept_names + expanded_names, self._n_components
+            )
             self.fitted_columns_[position] = fitted
             expanded_names += fitted.output_names
             blocks.append(block)
@@ -239,16 +241,17 @@ class TextTransformer:
     def _fit_one(
         column: pd.Series,
         existing_names: Sequence[str],
+        n_components: int,
     ) -> tuple[pd.DataFrame, _FittedTextColumn]:
         """Fit an encoder on one column, naming its output after that column.
 
-        skrub keeps fewer than `_N_COMPONENTS` features when the column's n-gram
+        skrub keeps fewer than `n_components` features when the column's n-gram
         vocabulary is smaller, so how many there are is settled here, which is why
         `transform` reuses this encoder rather than fitting a fresh one.
         """
         # Seeded on its own: the features a column turns into are a property of
         # the data, and should not move with the estimator's seed.
-        encoder = StringEncoder(n_components=_N_COMPONENTS, random_state=0)
+        encoder = StringEncoder(n_components=n_components, random_state=0)
         with warnings.catch_warnings():
             # skrub warns when it keeps fewer features; the caller did not choose
             # the count and cannot act on it.

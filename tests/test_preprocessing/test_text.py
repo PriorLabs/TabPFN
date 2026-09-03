@@ -14,13 +14,13 @@ from sklearn.exceptions import NotFittedError
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import ClassifierTuningConfig, RegressorTuningConfig
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.text import (
-    _MAX_COLUMNS_IN_WARNING,
-    _N_COMPONENTS,
-    TextTransformer,
-)
+from tabpfn.preprocessing.text import _MAX_COLUMNS_IN_WARNING, TextTransformer
+
+#: The default width a text column is expanded to.
+N_COMPONENTS = InferenceConfig().TEXTN_COMPONENTS
 
 #: Above the default `MIN_CARDINALITY_FOR_TEXT` of 30, so the column is text.
 N_DISTINCT = 40
@@ -123,7 +123,7 @@ class TestExpansion:
             out = transformer.fit_transform(X)
 
         names = transformer.feature_names_out_
-        assert out.shape == (N_DISTINCT, 1 + _N_COMPONENTS)
+        assert out.shape == (N_DISTINCT, 1 + N_COMPONENTS)
         assert list(out.columns) == names
         # The kept columns come first, in order, then the expansion.
         assert names[0] == "num"
@@ -143,7 +143,7 @@ class TestExpansion:
             warnings.simplefilter("error")
             out = transformer.fit_transform(X)
 
-        assert 1 < out.shape[1] < 1 + _N_COMPONENTS
+        assert 1 < out.shape[1] < 1 + N_COMPONENTS
         assert transformer.transform(X).shape == out.shape
 
     def test__missing_values__are_encoded(self) -> None:
@@ -211,7 +211,7 @@ class TestExpansion:
         out = transformer.fit_transform(X)
 
         assert transformer.expanded_indices == [0]
-        assert out.shape[1] == 1 + _N_COMPONENTS
+        assert out.shape[1] == 1 + N_COMPONENTS
         assert transformer.feature_names_out_[0] == "same"
 
     def test__caller_s_frame__is_left_untouched(self) -> None:
@@ -446,12 +446,27 @@ def test__fit_with_transform_text__expands_the_text_column(estimator_cls: type) 
 
     schema = model.inferred_feature_schema_
     names = [feature.name for feature in schema.features]
-    assert len(names) == 1 + _N_COMPONENTS
+    assert len(names) == 1 + N_COMPONENTS
     assert sum(name.split("input_")[-1].startswith("review_") for name in names) == (
-        _N_COMPONENTS
+        N_COMPONENTS
     )
     assert schema.indices_for(FeatureModality.CATEGORICAL) == []
     assert len(predictions) == len(X)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_text_n_components__sets_the_expanded_width(
+    estimator_cls: type,
+) -> None:
+    X, y = _estimator_data(estimator_cls, _review_column())
+
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"TRANSFORM_TEXT": True, "TEXT_N_COMPONENTS": 5},
+    ).fit(X, y)
+
+    assert len(model.inferred_feature_schema_.features) == 1 + 5
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])

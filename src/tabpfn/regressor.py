@@ -910,6 +910,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             categorical_indices=categorical_indices,
             transform_text=self.inference_config_.TRANSFORM_TEXT,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
+            n_components=self.inference_config_.TEXT_N_COMPONENTS,
         )
         X = text_transformer.fit_transform(X)
         categorical_indices = declared_categorical_indices(
