@@ -762,8 +762,8 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
         Covers both a plain string column and an explicit pandas `category`
         dtype, each above the cardinality threshold. `to_numpy` flattens the
-        `category` dtype away, as validation does, so the declaration is what
-        `fit` derives from it via `declared_categorical_indices`.
+        `category` dtype away, as validation does, so here the declaration has
+        to be passed in, the way `fit` derives it from the frame.
         """
         X = pd.DataFrame(
             {

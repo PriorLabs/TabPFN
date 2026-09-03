@@ -88,24 +88,17 @@ def detect_feature_modalities(
 
 
 def declared_categorical_indices(X: XType, indices: Sequence[int] | None) -> list[int]:
-    """`indices` plus the positions of `X`'s `category` columns, ascending.
+    """`indices` plus the positions of `X`'s `category` columns.
 
-    An explicit `category` dtype is a declaration, like a position in
-    `categorical_features_indices`, so detection reads the two the same way.
-    Read off the frame before validation flattens it into one array, where the
-    dtype would be gone. Any input other than a `DataFrame` adds nothing.
-
-    Args:
-        X: The input data, as handed to validation.
-        indices: Positions declared categorical, or `None` for none.
+    A `category` dtype declares a column categorical as much as listing its
+    index does. Only a DataFrame carries dtypes, and validation drops them,
+    so this runs before it.
     """
     declared = set(indices or ())
     if isinstance(X, pd.DataFrame):
-        declared.update(
-            i
-            for i, dtype in enumerate(X.dtypes)
-            if isinstance(dtype, pd.CategoricalDtype)
-        )
+        for i, dtype in enumerate(X.dtypes):
+            if isinstance(dtype, pd.CategoricalDtype):
+                declared.add(i)
     return sorted(declared)
 
 
