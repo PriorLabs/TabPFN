@@ -1253,23 +1253,12 @@ def test__fit_with_small_dataset_and_tuning__warns() -> None:
         clf.fit(X, y)
 
 
-def test__fit_with_roc_auc_metric_with_threshold_tuning__warns() -> None:
-    """Test that warning is issued when ROC AUC metric used with threshold tuning."""
-    n_classes = 2
-    X, y = sklearn.datasets.make_classification(
-        n_samples=30 * n_classes,
-        n_classes=n_classes,
-        n_features=2,
-        n_informative=2,
-        n_redundant=0,
-        random_state=0,
-    )
-
-    clf = TabPFNClassifier(
+def _roc_auc_clf(y, *, tune_decision_thresholds: bool) -> TabPFNClassifier:
+    return TabPFNClassifier(
         eval_metric="roc_auc",
         tuning_config={
-            "tune_decision_thresholds": True,
-            "calibrate_temperature": False,
+            "tune_decision_thresholds": tune_decision_thresholds,
+            "calibrate_temperature": not tune_decision_thresholds,
             "tuning_holdout_frac": 0.1,
             "tuning_n_folds": 1,
         },
@@ -1281,12 +1270,45 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__warns() -> None:
         random_state=0,
     )
 
+
+def test__fit_with_roc_auc_metric_with_threshold_tuning__raises() -> None:
+    """roc_auc with tune_decision_thresholds=True is rejected."""
+    n_classes = 2
+    X, y = sklearn.datasets.make_classification(
+        n_samples=30 * n_classes,
+        n_classes=n_classes,
+        n_features=2,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
+
+    clf = _roc_auc_clf(y, tune_decision_thresholds=True)
+
+    with pytest.raises(
+        ValueError,
+        match=r".*roc_auc.*does not support tune_decision_thresholds=True.*",
+    ):
+        clf.fit(X, y)
+
+
+def test__fit_with_roc_auc_metric_with_temperature_calibration__warns() -> None:
+    """Temperature calibration stays allowed for roc_auc, but still warns."""
+    n_classes = 2
+    X, y = sklearn.datasets.make_classification(
+        n_samples=30 * n_classes,
+        n_classes=n_classes,
+        n_features=2,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
+
+    clf = _roc_auc_clf(y, tune_decision_thresholds=False)
+
     with pytest.warns(
         UserWarning,
-        match=(
-            r".*with threshold tuning or temperature calibration "
-            r"enabled.*is independent of these tunings.*"
-        ),
+        match=r".*temperature calibration.*ROC AUC is independent of this tuning.*",
     ):
         clf.fit(X, y)
 
