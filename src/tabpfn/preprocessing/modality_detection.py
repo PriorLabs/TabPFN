@@ -53,9 +53,10 @@ def detect_feature_modalities(
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
-        min_cardinality_for_text: Unique-value count above which a candidate
-            string column (not parsed as a number, not declared categorical) is
-            `NUMERICAL` rather than `CATEGORICAL`.
+        min_cardinality_for_text: Distinct-value count above which a string
+            column is text rather than a category. Text reaching detection was
+            not expanded, so it is labelled `NUMERICAL`: the model reads the
+            alphabetical rank of each string.
 
     Returns:
         The inferred `FeatureSchema`.

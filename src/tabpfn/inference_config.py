@@ -87,20 +87,11 @@ class InferenceConfig:
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
     """Number of distinct values above which a string column is text rather than
-    a category: expanded into numeric features with `TRANSFORM_TEXT`, and
-    otherwise read as a number, the alphabetical rank of each string, with a
-    warning. A column listed in `categorical_features_indices` or carrying
-    pandas' `category` dtype is a category at any cardinality. A separate
-    decision from `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs
-    numerical-vs-categorical: that one describes when a *number* is few enough
-    to be a category, this one describes when a *string* is varied enough to be
-    text rather than a category, and there is no reason the two should move
-    together.
-
-    Set equal to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` for now, so decoupling the
-    two into a separate field does not itself change any default behavior. A
-    follow-up that adds an actual text-encoding capability is expected to raise
-    this default independently."""
+    a category, unless it is declared categorical (`categorical_features_indices`
+    or the `category` dtype). Text is expanded with `TRANSFORM_TEXT`; otherwise
+    the model reads the alphabetical rank of each string, with a warning. Kept
+    apart from `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which decides when a
+    *number* is a category, since the two need not move together."""
 
     SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
     """The temperature applied to the model's logits at predict time. Lower values
