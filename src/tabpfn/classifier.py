@@ -1354,11 +1354,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         ):
             raise ValueError(
                 "eval_metric='log_loss' does not support "
-                "tune_decision_thresholds=True: the threshold search scores hard "
-                "labels, under which log loss reduces to a multiple of the error "
-                "rate, so it tunes for accuracy instead. Pass "
-                "calibrate_temperature=True, which optimizes log loss directly, "
-                "or tune_decision_thresholds=False."
+                "tune_decision_thresholds=True. Pass calibrate_temperature=True, "
+                "which optimizes log loss directly, or "
+                "tune_decision_thresholds=False."
             )
 
         holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
