@@ -57,10 +57,9 @@ def detect_feature_modalities(
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
-        min_cardinality_for_text: Unique-value count above which a candidate
-            string column (not parsed as a number, not declared categorical) is
-            `TEXT` rather than `CATEGORICAL` -- independent of the two thresholds
-            above.
+        min_cardinality_for_text: Unique-value count above which a string column
+            is `TEXT` rather than `CATEGORICAL`, unless it is declared categorical
+            or has a `category` dtype -- independent of the two thresholds above.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -159,6 +158,10 @@ def _detect_feature_modality(
         # constant numeric column when predict sees an unseen string value.
         return FeatureModality.CONSTANT
 
+    if isinstance(s.dtype, pd.CategoricalDtype):
+        # An explicit category dtype settles it, whatever the values or their count.
+        return FeatureModality.CATEGORICAL
+
     if _is_numeric_pandas_series(s):
         if _detect_numeric_as_categorical(
             n_unique=n_unique,
@@ -170,10 +173,7 @@ def _detect_feature_modality(
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
 
-    is_string_like = pd.api.types.is_string_dtype(s.dtype) or isinstance(
-        s.dtype, pd.CategoricalDtype
-    )
-    if is_string_like:
+    if pd.api.types.is_string_dtype(s.dtype):
         if reported_categorical or n_unique <= min_cardinality_for_text:
             return FeatureModality.CATEGORICAL
         return FeatureModality.TEXT
