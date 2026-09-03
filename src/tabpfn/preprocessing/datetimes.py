@@ -37,7 +37,7 @@ __all__ = ["DateTransformer"]
 
 
 @dataclasses.dataclass
-class FittedDateColumn:
+class _FittedDateColumn:
     """One input column's fitted encoder, its timezone, and its features' names."""
 
     encoder: DatetimeEncoder
@@ -72,7 +72,7 @@ class DateTransformer:
             `None` when the input was not a `DataFrame` and so has no labels.
     """
 
-    fitted_columns_: dict[int, FittedDateColumn]
+    fitted_columns_: dict[int, _FittedDateColumn]
     feature_names_out_: list[str] | None
 
     def __init__(
@@ -247,7 +247,7 @@ class DateTransformer:
     def _fit_one(
         column: pd.Series,
         existing_names: Sequence[str],
-    ) -> tuple[pd.DataFrame, FittedDateColumn]:
+    ) -> tuple[pd.DataFrame, _FittedDateColumn]:
         """Fit an encoder on one column, naming its output after that column.
 
         skrub drops the features a column cannot vary in (e.g. the time of day of
@@ -266,7 +266,7 @@ class DateTransformer:
         )
         return (
             encoded.set_axis(output_names, axis=1).reset_index(drop=True),
-            FittedDateColumn(
+            _FittedDateColumn(
                 encoder=encoder,
                 output_names=output_names,
                 timezone=_timezone_of(column),
@@ -274,7 +274,7 @@ class DateTransformer:
         )
 
     @staticmethod
-    def _apply_one(column: pd.Series, fitted: FittedDateColumn) -> pd.DataFrame:
+    def _apply_one(column: pd.Series, fitted: _FittedDateColumn) -> pd.DataFrame:
         """Reapply one fitted encoder, naming its features as at fit."""
         encoded = pd.DataFrame(fitted.encoder.transform(_as_timestamp(column)))
         return encoded.set_axis(fitted.output_names, axis=1).reset_index(drop=True)
