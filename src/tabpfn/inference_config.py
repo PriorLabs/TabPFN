@@ -137,6 +137,20 @@ class InferenceConfig:
     rejected. With neither, the value comes from the checkpoint, and an ensemble
     whose checkpoints declare different counts is rejected too."""
 
+    TRANSFORM_DATES: bool = False
+    """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
+    or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`.
+    Off, such a column is refused with an error naming it: cast or expand it
+    yourself first. Only a real datetime dtype counts: a string column that merely
+    looks like a date (e.g. "2020-01-01") is read as a plain category or text
+    either way.
+
+    On, the same columns have to hold datetimes at predict, in a DataFrame, and
+    none of them may be listed in `categorical_features_indices`; each of these is
+    refused with an error saying so rather than guessed at. The fine-tuning
+    estimators do not run this conversion, whatever `inference_config` they are
+    handed, so a datetime column has to be converted before fine-tuning."""
+
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
         - If None, no outliers are removed.

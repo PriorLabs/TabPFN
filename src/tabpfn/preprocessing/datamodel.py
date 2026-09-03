@@ -100,7 +100,6 @@ class FeatureModality(str, Enum):
     CATEGORICAL = "categorical"
     TEXT = "text"
     CONSTANT = "constant"
-    DATE = "date"
 
 
 class GPUTransformType(str, Enum):

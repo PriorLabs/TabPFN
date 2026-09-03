@@ -52,7 +52,11 @@ from tabpfn.finetuning.train_util import (
 )
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices, infer_random_state
-from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
+from tabpfn.validation import (
+    check_input_shape_matches,
+    ensure_compatible_fit_inputs_sklearn,
+    extract_input_shape,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -856,13 +860,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self.finetuned_estimator_._initialize_model_variables()
-        X_validated, y_validated, self.feature_names_in_, self.n_features_in_ = (
-            ensure_compatible_fit_inputs_sklearn(
-                X,
-                y,
-                estimator=self.finetuned_estimator_,
-                ensure_y_numeric=self._model_type == "regressor",
-            )
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        X_validated, y_validated = ensure_compatible_fit_inputs_sklearn(
+            X,
+            y,
+            estimator=self.finetuned_estimator_,
+            ensure_y_numeric=self._model_type == "regressor",
         )
         self.X_ = X
         self.y_ = y
@@ -870,7 +873,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         if X_val is not None and y_val is not None:
             X_train, y_train = X, y
-            X_val, y_val, _, _ = ensure_compatible_fit_inputs_sklearn(
+            # The validation set has to match the shape the training set recorded
+            # above, not replace it.
+            check_input_shape_matches(X_val, estimator=self)
+            X_val, y_val = ensure_compatible_fit_inputs_sklearn(
                 X_val,
                 y_val,
                 estimator=self.finetuned_estimator_,

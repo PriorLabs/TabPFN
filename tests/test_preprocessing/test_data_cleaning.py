@@ -29,7 +29,11 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
     get_ordinal_encoder,
 )
-from tabpfn.validation import ensure_compatible_fit_inputs
+from tabpfn.validation import (
+    check_input_shape_matches,
+    ensure_compatible_fit_inputs,
+    extract_input_shape,
+)
 
 
 @pytest.fixture
@@ -79,7 +83,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        X, y, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -91,28 +95,52 @@ class TestEnsureCompatibleFitInputsBasic:
 
         assert X.shape == (3, 2)
         assert len(y) == 3
-        assert n_features == 2
-        assert feature_names is None
         assert original_y_name is None
 
-    def test__ensure_compatible_fit_inputs__pandas_dataframe(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
-        """Test that pandas DataFrames preserve column names."""
+    def test__extract_input_shape__pandas_dataframe(self) -> None:
+        """Column names come off the raw frame, before any conversion."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
-        y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
+        feature_names, n_features = extract_input_shape(X)
+
+        assert list(feature_names) == ["feature_a", "feature_b"]
+        assert n_features == 2
+
+    def test__extract_input_shape__numpy_array(self) -> None:
+        """An array has no column names, so only the width is reported."""
+        assert extract_input_shape(np.zeros((3, 2))) == (None, 2)
+
+    def test__extract_input_shape__1d_array__has_no_width(self) -> None:
+        """Left for value validation to reject, with its own clearer message."""
+        assert extract_input_shape(np.zeros(3)) == (None, None)
+
+    def test__check_input_shape_matches__wrong_width__raises(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.n_features_in_ = 2
+
+        with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
+            check_input_shape_matches(np.zeros((3, 3)), estimator=classifier)
+
+    def test__check_input_shape_matches__wrong_names__raises(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.feature_names_in_ = np.array(["a", "b"])
+        classifier.n_features_in_ = 2
+        X = pd.DataFrame({"a": [1.0], "c": [2.0]})
+
+        with pytest.raises(TabPFNValidationError, match="feature names should match"):
+            check_input_shape_matches(X, estimator=classifier)
+
+    def test__check_input_shape_matches__same_shape__passes(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        classifier.feature_names_in_ = np.array(["a", "b"])
+        classifier.n_features_in_ = 2
+
+        check_input_shape_matches(
+            pd.DataFrame({"a": [1.0], "b": [2.0]}), estimator=classifier
         )
-
-        assert list(feature_names) == ["feature_a", "feature_b"]  # type: ignore
 
     def test__ensure_compatible_fit_inputs__pandas_series_y(
         self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
@@ -121,7 +149,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
+        _, _, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -1170,28 +1198,6 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     out = fix_dtypes(frame, cat_indices=None)
 
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
-
-
-def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
-    """Documents a known, pre-existing bug rather than fixing it here.
-
-    A native `datetime64` column mixed with any other dtype crashes: `validate_data`
-    converts the whole frame to one numpy array, and numpy has no dtype that unifies
-    `datetime64` with a numeric or string column. A fix would need to convert such a
-    column to a string (or otherwise numpy-unifiable type) before validation, which
-    is lossy for `datetime64[ns]` (no string format captures full nanosecond
-    precision) and is deferred to a follow-up rather than solved in this PR.
-    """
-    n = 50
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {"num": rng.normal(size=n), "signed_on": pd.date_range("2020-01-01", periods=n)}
-    )
-    y = rng.integers(0, 2, n)
-
-    clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
-        clf.fit(X, y)
 
 
 def test__clean_data_transform__matches_the_general_path_on_numeric_input() -> None:

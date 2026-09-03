@@ -41,13 +41,17 @@ from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
 )
-from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.clean import clean_data_transform
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
     infer_devices,
 )
-from tabpfn.validation import ensure_compatible_predict_input_sklearn
+from tabpfn.validation import (
+    check_input_shape_matches,
+    ensure_compatible_predict_input_sklearn,
+)
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
@@ -642,9 +646,17 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
+    check_input_shape_matches(X, estimator=model)
+    X = model.date_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
-    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
-    X = model.ordinal_encoder_.transform(X)
+    X = clean_data_transform(
+        X,
+        cat_indices=model.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        ),
+        ord_encoder=getattr(model, "ordinal_encoder_", None),
+        passthrough_inf=model.get_inference_config().PASSTHROUGH_INF,
+    )
 
     embeddings: list[np.ndarray] = []
 

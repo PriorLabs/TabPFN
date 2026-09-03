@@ -81,6 +81,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -94,8 +95,11 @@ from tabpfn.utils import (
     infer_random_state,
 )
 from tabpfn.validation import (
+    check_input_shape_matches,
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
+    extract_input_shape,
+    validate_categorical_features_indices,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -194,6 +198,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
+
+    date_transformer_: DateTransformer
+    """The transformer that converted every temporal column before validation."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -697,6 +704,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             for i in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
+        # A tensor holds no dates, so this fits nothing; set anyway, so every
+        # predict path converts through it without first checking for one.
+        self.date_transformer_ = DateTransformer().fit(X)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -731,8 +741,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
+        # feature_names_in_/n_features_in_ have to describe what the caller passed,
+        # not the wider frame expansion can make of it, so they come off the raw
+        # input here, before any conversion.
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+
+        validate_categorical_features_indices(self.categorical_features_indices)
+        date_transformer = DateTransformer(
+            categorical_indices=self.categorical_features_indices,
+            transform_dates=self.inference_config_.TRANSFORM_DATES,
+        )
+        X = date_transformer.fit_transform(X)
+
         # Data validation and cleaning
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        X, y, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -746,8 +768,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=feature_names,
-            provided_categorical_indices=self.categorical_features_indices,
+            feature_names=date_transformer.feature_names_out_,
+            provided_categorical_indices=date_transformer.output_indices(
+                self.categorical_features_indices
+            ),
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -760,8 +784,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.feature_names_in_ = feature_names
-        self.n_features_in_ = n_features
+        self.date_transformer_ = date_transformer
         self.n_train_samples_ = len(X)
 
         # Label encoding
@@ -820,6 +843,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "fit_mode": "fit_preprocessors",
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
+            # Fit on the already-expanded array, where a declared column may
+            # have moved down past an expanded date.
+            "categorical_features_indices": self.date_transformer_.output_indices(
+                self.categorical_features_indices
+            ),
         }
 
         params.update(forced)
@@ -956,6 +984,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             batch_of_cat_indices=cat_ix,
             num_features=X_preprocessed[0].shape[1],
         )
+
+        # Preprocessed tensors hold no dates either, so this fits nothing: the
+        # transformer refuses a date and converts a duration, like any fitted one.
+        self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
@@ -1109,6 +1141,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
+            check_input_shape_matches(X_test, estimator=worker)
+            X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
@@ -1415,6 +1449,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
+            check_input_shape_matches(X, estimator=self)
+            X = self.date_transformer_.transform(X)
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = clean_data_transform(
                 X,
@@ -1430,7 +1466,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X,
             model_type="classifier",
             n_train_samples=getattr(self, "n_train_samples_", None),
-            n_features=getattr(self, "n_features_in_", None),
         ):
             return self.forward(
                 X,
