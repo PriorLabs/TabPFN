@@ -104,6 +104,8 @@ from tabpfn.validation import (
     validate_dataset_size,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     import numpy.typing as npt
     from sklearn.pipeline import Pipeline
@@ -1784,7 +1786,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             worker.fit_mode = "batched"
             assert znorm_borders is not None
             std_borders = znorm_borders.cpu().numpy()
-            for group in _group_batches_by_shape(items):
+            groups = _group_batches_by_shape(items)
+            if len(groups) > 1:
+                logger.debug(
+                    "predict_batched split %d datasets into %d post-preprocessing "
+                    "shape groups with sizes %s; running one inference pass per "
+                    "group may be slower than homogeneous batched inference.",
+                    len(items),
+                    len(groups),
+                    [len(group) for group in groups],
+                )
+            for group in groups:
                 positions, group_items = zip(*group, strict=True)
                 batch = _collate_same_shape_for_batched_inference(list(group_items))
                 worker.fit_from_preprocessed(

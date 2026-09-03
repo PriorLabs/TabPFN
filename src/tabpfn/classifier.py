@@ -100,6 +100,8 @@ from tabpfn.validation import (
     validate_num_classes,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     import numpy.typing as npt
     from torch.types import _dtype
@@ -972,7 +974,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    def predict_proba_batched(  # noqa: C901
+    def predict_proba_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
         y_train_list: list[YType],
@@ -1153,7 +1155,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         results: list[np.ndarray | None] = [None] * len(items)
         worker.fit_mode = "batched"
-        for group in _group_batches_by_shape(items):
+        groups = _group_batches_by_shape(items)
+        if len(groups) > 1:
+            logger.debug(
+                "predict_proba_batched split %d datasets into %d "
+                "post-preprocessing shape groups with sizes %s; running one "
+                "inference pass per group may be slower than homogeneous batched "
+                "inference.",
+                len(items),
+                len(groups),
+                [len(group) for group in groups],
+            )
+        for group in groups:
             indices, group_items = zip(*group, strict=True)
             batch = _collate_same_shape_for_batched_inference(list(group_items))
             worker.fit_from_preprocessed(

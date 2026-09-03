@@ -24,6 +24,11 @@ def _assert_two_stable_groups(spy: mock.Mock) -> None:
     assert [[index for index, _ in group] for group in groups] == [[0, 2], [1]]
 
 
+def _assert_group_debug(spy: mock.Mock) -> None:
+    spy.assert_called_once()
+    assert spy.call_args.args[1:] == (3, 2, [2, 1])
+
+
 def test_classifier_heterogeneous_widths_match_serial() -> None:
     features = _features()
     labels = np.tile(np.arange(3), 20)
@@ -33,14 +38,18 @@ def test_classifier_heterogeneous_widths_match_serial() -> None:
         "random_state": 42,
         "inference_precision": torch.float32,
     }
-    with mock.patch(
-        "tabpfn.finetuning.data_util._group_batches_by_shape",
-        wraps=_group_batches_by_shape,
-    ) as spy:
+    with (
+        mock.patch(
+            "tabpfn.finetuning.data_util._group_batches_by_shape",
+            wraps=_group_batches_by_shape,
+        ) as group_spy,
+        mock.patch("tabpfn.classifier.logger.debug") as log_spy,
+    ):
         batched = TabPFNClassifier(**kwargs).predict_proba_batched(
             features, [labels] * 3, [X[:6] for X in features]
         )
-    _assert_two_stable_groups(spy)
+    _assert_two_stable_groups(group_spy)
+    _assert_group_debug(log_spy)
     for index in range(2):
         reference = TabPFNClassifier(**kwargs).fit(features[index], labels)
         np.testing.assert_allclose(
@@ -58,14 +67,18 @@ def test_regressor_heterogeneous_widths_match_serial() -> None:
         "random_state": 42,
         "inference_precision": torch.float32,
     }
-    with mock.patch(
-        "tabpfn.finetuning.data_util._group_batches_by_shape",
-        wraps=_group_batches_by_shape,
-    ) as spy:
+    with (
+        mock.patch(
+            "tabpfn.finetuning.data_util._group_batches_by_shape",
+            wraps=_group_batches_by_shape,
+        ) as group_spy,
+        mock.patch("tabpfn.regressor.logger.debug") as log_spy,
+    ):
         batched = TabPFNRegressor(**kwargs).predict_batched(
             features, targets, [X[:6] for X in features]
         )
-    _assert_two_stable_groups(spy)
+    _assert_two_stable_groups(group_spy)
+    _assert_group_debug(log_spy)
     for index in range(2):
         reference = TabPFNRegressor(**kwargs).fit(features[index], targets[index])
         np.testing.assert_allclose(
