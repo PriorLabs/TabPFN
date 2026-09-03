@@ -96,12 +96,7 @@ def _format_names_for_warning(names: list[str]) -> str:
 
 
 def _warn_on_text(feature_schema: FeatureSchema) -> None:
-    """Warn about any free-text columns.
-
-    A converted date is numeric by the time detection runs (see
-    `datetimes.DateTransformer`), and a declared categorical column is never
-    `TEXT`, so neither is reported here.
-    """
+    """Warn about any free-text columns."""
     text_names = [
         feature.name.removeprefix(INPUT_FEATURE_PREFIX)
         for feature in feature_schema.features
