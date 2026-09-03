@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 import torch
@@ -56,10 +58,13 @@ class TestTorchQuantileTransformerSklearnEquivalence:
         torch_result = torch_qt(x_torch)
 
         assert torch_result.shape == x_torch.shape
+        # Windows' torch interpolation can differ from sklearn by about 1e-4
+        # because of platform-specific floating-point evaluation order.
+        atol = 2e-4 if sys.platform == "win32" else 1e-5
         assert torch.allclose(
             torch_result,
             torch.from_numpy(sklearn_result),
-            atol=1e-5,
+            atol=atol,
             rtol=1e-5,
         ), (
             f"Mismatch for shape ({n_samples}, {n_features}) with "
