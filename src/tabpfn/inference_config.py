@@ -93,10 +93,8 @@ class InferenceConfig:
     describes when a *string* is varied enough to be text rather than a category,
     and there is no reason the two should move together.
 
-    Set equal to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` for now, so decoupling the
-    two into a separate field does not itself change any default behavior. A
-    follow-up that adds an actual text-encoding capability is expected to raise
-    this default independently."""
+    Text is expanded into numeric features with `TRANSFORM_TEXT`; off, it is
+    ordinal-encoded as a high-cardinality category and `fit` warns about it."""
 
     SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
     """The temperature applied to the model's logits at predict time. Lower values
@@ -150,6 +148,19 @@ class InferenceConfig:
     refused with an error saying so rather than guessed at. The fine-tuning
     estimators do not run this conversion, whatever `inference_config` they are
     handed, so a datetime column has to be converted before fine-tuning."""
+
+    TRANSFORM_TEXT: bool = False
+    """Whether a text column, a pandas `string` or pyarrow string column with more
+    than `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
+    `TEXT_N_COMPONENTS` numeric features via `skrub.StringEncoder` (tf-idf over
+    character n-grams, truncated SVD). Off, such a column is ordinal-encoded as a
+    high-cardinality category and `fit` warns about it. An `object` column is
+    never expanded. Not run by the fine-tuning estimators."""
+
+    TEXT_N_COMPONENTS: int = 30
+    """Features a text column is expanded into with `TRANSFORM_TEXT`: the leading
+    components of a truncated SVD over its tf-idf matrix. Fewer when the column
+    has fewer character n-grams than that."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
