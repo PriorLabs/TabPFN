@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install torch 2.14.0 only
-        run: python -m pip install --quiet --only-binary=:all: torch==2.14.0
+        run: "python -m pip install --quiet --only-binary=:all: torch==2.14.0"
       - name: Probe MPS kernels
         run: |
           python - <<'PY'
