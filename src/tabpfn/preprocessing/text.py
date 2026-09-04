@@ -12,6 +12,11 @@ nor is an `object` or `category` column, whatever it holds. Every other column
 passes through unchanged, as does everything with the flag off. Only `DataFrame`
 columns are inspected: any other input passes through unchanged.
 
+A missing value is encoded as the empty string, and a string that shares no
+character n-gram with the fit column encodes the same way: as an all-zero row.
+The model never sees a missing value in an expanded column, then, and cannot tell
+a missing string from an unseen one.
+
 Only `TabPFNClassifier` and `TabPFNRegressor` run this, right after
 `DateTransformer`. The fine-tuning estimators validate their input directly.
 
