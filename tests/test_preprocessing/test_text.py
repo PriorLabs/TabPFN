@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import warnings
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -60,6 +61,13 @@ def _review_column(n: int = 120, dtype: str = "string") -> pd.Series:
     )
 
 
+def _pyarrow() -> ModuleType:
+    # pyarrow is deliberately not a dependency, not even of the tests, so the
+    # tests that need it run wherever it happens to be installed and skip
+    # elsewhere, CI included.
+    return pytest.importorskip("pyarrow")
+
+
 class TestSelection:
     """What counts as text: the dtype first, then the distinct-value count.
 
@@ -104,7 +112,7 @@ class TestSelection:
         """`read_csv(dtype_backend="pyarrow")` and parquet readers hand out this
         dtype, a sibling of `string` rather than a storage of it.
         """
-        pa = pytest.importorskip("pyarrow")
+        pa = _pyarrow()
         X = _frame(_sentences(), dtype=pd.ArrowDtype(pa.string()))
 
         transformer = _expander()
@@ -114,7 +122,7 @@ class TestSelection:
         assert out.shape[1] == 1 + N_COMPONENTS
 
     def test__pyarrow_numeric_strings__are_not_expanded(self) -> None:
-        pa = pytest.importorskip("pyarrow")
+        pa = _pyarrow()
         X = _frame(
             [str(i / 7) for i in range(N_DISTINCT)], dtype=pd.ArrowDtype(pa.string())
         )
@@ -271,7 +279,7 @@ class TestExpansionAtPredictTime:
         np.testing.assert_allclose(out.to_numpy(), fitted.to_numpy())
 
     def test__pyarrow_string_column_at_predict__is_read_as_strings(self) -> None:
-        pa = pytest.importorskip("pyarrow")
+        pa = _pyarrow()
         transformer = _expander()
         fitted = transformer.fit_transform(_frame(_sentences()))
 
