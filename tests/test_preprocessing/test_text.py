@@ -17,7 +17,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import ClassifierTuningConfig, RegressorTuningConfig
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import INPUT_FEATURE_PREFIX, FeatureModality
 from tabpfn.preprocessing.text import TextTransformer
 
 #: The default width a text column is expanded to.
@@ -66,6 +66,23 @@ def _pyarrow() -> ModuleType:
     # tests that need it run wherever it happens to be installed and skip
     # elsewhere, CI included.
     return pytest.importorskip("pyarrow")
+
+
+def _captured_tuning_estimators(
+    model: TabPFNClassifier | TabPFNRegressor, monkeypatch: pytest.MonkeyPatch
+) -> list[TabPFNClassifier | TabPFNRegressor]:
+    """Every tuning estimator `model.fit` builds, collected as it is built."""
+    is_classifier = isinstance(model, TabPFNClassifier)
+    getter = "_get_tuning_classifier" if is_classifier else "_get_tuning_regressor"
+    captured: list[TabPFNClassifier | TabPFNRegressor] = []
+    original = getattr(model, getter)
+
+    def capture(**kwargs: object) -> TabPFNClassifier | TabPFNRegressor:
+        captured.append(original(**kwargs))
+        return captured[-1]
+
+    monkeypatch.setattr(model, getter, capture)
+    return captured
 
 
 class TestSelection:
@@ -597,21 +614,65 @@ def test__fit_with_transform_text_and_tuning__tuning_estimator_gets_shifted_indi
             calibrate_temperature=True, tuning_holdout_frac=0.25, tuning_n_folds=1
         ),
     )
-    getter = "_get_tuning_classifier" if is_classifier else "_get_tuning_regressor"
-    tuning_estimators: list[TabPFNClassifier | TabPFNRegressor] = []
-    original = getattr(model, getter)
-
-    def capture(**kwargs: object) -> TabPFNClassifier | TabPFNRegressor:
-        tuning_estimators.append(original(**kwargs))
-        return tuning_estimators[-1]
-
-    monkeypatch.setattr(model, getter, capture)
+    tuning_estimators = _captured_tuning_estimators(model, monkeypatch)
     model.fit(X, y)
 
     assert tuning_estimators
     assert all(
         estimator.categorical_features_indices == [0] for estimator in tuning_estimators
     )
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_dates_and_text__declared_categorical_moves_past_both(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declared categorical column behind an expanded date and an expanded text
+    column moves down once per expansion, since both append their features at
+    the end. The stored indices, the schema and the tuning estimators must all
+    find it where it ends up.
+    """
+    n = 80
+    rng = np.random.default_rng(seed=0)
+    X = pd.DataFrame(
+        {
+            "when": pd.date_range("2021-01-01", periods=n, freq="D"),
+            "review": _review_column(n),
+            "cat": rng.choice(["a", "b", "c"], size=n),
+            "num": rng.normal(size=n),
+        }
+    )
+    is_classifier = estimator_cls is TabPFNClassifier
+    y = rng.integers(0, 2, size=n) if is_classifier else rng.normal(size=n)
+    config_cls = ClassifierTuningConfig if is_classifier else RegressorTuningConfig
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[2],
+        inference_config={"TRANSFORM_DATES": True, "TRANSFORM_TEXT": True},
+        tuning_config=config_cls(
+            calibrate_temperature=True, tuning_holdout_frac=0.25, tuning_n_folds=1
+        ),
+    )
+    tuning_estimators = _captured_tuning_estimators(model, monkeypatch)
+    model.fit(X, y)
+
+    schema = model.inferred_feature_schema_
+    names = [
+        feature.name.removeprefix(INPUT_FEATURE_PREFIX) for feature in schema.features
+    ]
+    assert names[:2] == ["cat", "num"]
+    assert all(name.startswith(("when_", "review_")) for name in names[2:])
+    assert model.date_transformer_.expanded_indices == [0]
+    # `review` sat at 1 and moved down once the date column ahead of it was dropped.
+    assert model.text_transformer_.expanded_indices == [0]
+    assert model.categorical_features_indices_ == [0]
+    assert schema.indices_for(FeatureModality.CATEGORICAL) == [0]
+    assert tuning_estimators
+    assert all(
+        estimator.categorical_features_indices == [0] for estimator in tuning_estimators
+    )
+    assert len(model.predict(X)) == n
 
 
 def test__predict_proba_batched_with_transform_text__expands_the_test_frames() -> None:
