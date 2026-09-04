@@ -43,6 +43,8 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
@@ -413,6 +415,45 @@ def create_inference_engine(  # noqa: PLR0913
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
+def expand_dates_and_text(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+    inference_config: InferenceConfig,
+) -> tuple[XType, DateTransformer, TextTransformer, list[str] | None, list[int] | None]:
+    """Expand the datetime and text columns of a fit input, before validation.
+
+    An expanded column is dropped and its features appended, so every column
+    after it moves down. The returned labels and categorical positions describe
+    the returned input, so no caller needs to know which transformer ran last.
+
+    Returns:
+        The expanded input, the two fitted transformers, the expanded input's
+        column labels (`None` when `X` is not a `DataFrame`), and the declared
+        categorical positions in it (`None` when none were declared).
+    """
+    date_transformer = DateTransformer(
+        categorical_indices=categorical_features_indices,
+        transform_dates=inference_config.TRANSFORM_DATES,
+    )
+    X = date_transformer.fit_transform(X)
+    categorical_indices = date_transformer.output_indices(categorical_features_indices)
+    text_transformer = TextTransformer(
+        categorical_indices=categorical_indices,
+        transform_text=inference_config.TRANSFORM_TEXT,
+        min_cardinality_for_text=inference_config.MIN_CARDINALITY_FOR_TEXT,
+        n_components=inference_config.TEXT_N_COMPONENTS,
+    )
+    X = text_transformer.fit_transform(X)
+    return (
+        X,
+        date_transformer,
+        text_transformer,
+        text_transformer.feature_names_out_,
+        text_transformer.output_indices(categorical_indices),
+    )
+
+
 def reject_categoricals_for_differentiable_input(
     categorical_features_indices: Sequence[int] | None,
 ) -> None:
@@ -648,6 +689,7 @@ def get_embeddings(
 
     check_input_shape_matches(X, estimator=model)
     X = model.date_transformer_.transform(X)
+    X = model.text_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = clean_data_transform(
         X,

@@ -39,7 +39,6 @@ from tabpfn.inference_tuning import (
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
-from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
@@ -1730,9 +1729,9 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
         device="cpu",
         model_path=_create_dummy_regressor_model_specs(),
     )
-    # The tuning regressors take their categorical indices from the fitted date
-    # transformer, which `fit` sets before it reaches this method.
-    regressor.date_transformer_ = DateTransformer().fit(X)
+    # The tuning regressors take their categorical indices from this attribute,
+    # which `fit` sets before it reaches this method.
+    regressor.categorical_features_indices_ = None
 
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2
@@ -1774,9 +1773,9 @@ def test__compute_holdout_validation_data__skips_constant_training_targets() -> 
         device="cpu",
         model_path=_create_dummy_regressor_model_specs(),
     )
-    # The tuning regressors take their categorical indices from the fitted date
-    # transformer, which `fit` sets before it reaches this method.
-    regressor.date_transformer_ = DateTransformer().fit(X)
+    # The tuning regressors take their categorical indices from this attribute,
+    # which `fit` sets before it reaches this method.
+    regressor.categorical_features_indices_ = None
 
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2

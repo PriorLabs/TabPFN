@@ -49,6 +49,7 @@ from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
 from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.settings import settings
 
 from .utils import (
@@ -1541,6 +1542,7 @@ def test__tabpfn_classifier__fit_from_preprocessed_runs(
             performance_options=PerformanceOptions(),
         )
         assert isinstance(clf.date_transformer_, DateTransformer)
+        assert isinstance(clf.text_transformer_, TextTransformer)
         preds = clf.forward(batch.X_query)
         assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
         assert preds.shape[0] == batch.X_query[0].shape[0]
