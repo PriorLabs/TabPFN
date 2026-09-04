@@ -29,7 +29,7 @@ jobs:
       - name: Probe MPS kernels
         run: |
           python - <<'PY'
-          import platform, torch
+          import itertools, platform, torch
           import torch.nn.functional as F
           print("macOS", platform.mac_ver()[0], "| torch", torch.__version__,
                 "| mps available:", torch.backends.mps.is_available())
@@ -42,19 +42,26 @@ jobs:
               except Exception as e:  # noqa: BLE001
                   failures.append(name)
                   msg = str(e).replace("\n", " ")
-                  print(f"FAIL  {name}: {type(e).__name__}: {msg[:200]}")
-          r = lambda *s, dtype=torch.float32: torch.randn(*s, device=d, dtype=dtype)
-          probe("elementwise add 1024", lambda: (r(1024) + r(1024)).sum().item())
-          probe("matmul 2x2 fp32", lambda: (r(2, 2) @ r(2, 2)).sum().item())
-          probe("matmul 8x8 fp32", lambda: (r(8, 8) @ r(8, 8)).sum().item())
-          probe("matmul 64x64 fp32", lambda: (r(64, 64) @ r(64, 64)).sum().item())
-          probe("matmul 512x512 fp32", lambda: (r(512, 512) @ r(512, 512)).sum().item())
-          probe("matmul 2048x2048 fp32", lambda: (r(2048, 2048) @ r(2048, 2048)).sum().item())
-          probe("matmul 64x64 fp16", lambda: (r(64, 64, dtype=torch.float16) @ r(64, 64, dtype=torch.float16)).sum().item())
-          probe("matmul 64x64 bf16", lambda: (r(64, 64, dtype=torch.bfloat16) @ r(64, 64, dtype=torch.bfloat16)).sum().item())
-          probe("linear 8x192 with bias fp32", lambda: F.linear(r(8, 192), r(192, 192), r(192)).sum().item())
-          probe("bmm 4x64x64 fp32", lambda: torch.bmm(r(4, 64, 64), r(4, 64, 64)).sum().item())
-          probe("sdpa 1x4x32x48 fp32", lambda: F.scaled_dot_product_attention(r(1, 4, 32, 48), r(1, 4, 32, 48), r(1, 4, 32, 48)).sum().item())
-          probe("layer_norm 32x192", lambda: F.layer_norm(r(32, 192), (192,)).sum().item())
-          print("FAILED:", failures or "none")
+                  print(f"FAIL  {name}: {type(e).__name__}: {msg[:120]}")
+          # TabPFN's MPS attention backend: q/k/v shaped (B, H, S, D) with D padded to
+          # a supported head dim, attn_mask=None, an explicit scale, optional GQA.
+          def sdpa(dtype, D, S, gqa):
+              H = 4
+              q = torch.randn(1, H, S, D, device=d, dtype=dtype)
+              kv_heads = 1 if gqa else H
+              k = torch.randn(1, kv_heads, S, D, device=d, dtype=dtype)
+              v = torch.randn(1, kv_heads, S, D, device=d, dtype=dtype)
+              F.scaled_dot_product_attention(q, k, v, attn_mask=None, enable_gqa=gqa, scale=D**-0.5).sum().item()
+          for dtype, D, S, gqa in itertools.product(
+              (torch.float16, torch.bfloat16, torch.float32), (32, 64, 96, 128, 256), (16, 128, 1024), (False, True)
+          ):
+              probe(f"sdpa {str(dtype).split('.')[-1]:8s} D={D:3d} S={S:4d} gqa={gqa}", lambda: sdpa(dtype, D, S, gqa))
+          # Same thing under autocast, as the estimators run it.
+          for dtype in (torch.float16, torch.bfloat16):
+              def under_autocast(dtype=dtype):
+                  with torch.autocast("mps", dtype=dtype):
+                      q = torch.randn(1, 4, 128, 64, device=d)
+                      F.scaled_dot_product_attention(q, q, q, attn_mask=None, scale=64**-0.5).sum().item()
+              probe(f"sdpa fp32 inputs under autocast({str(dtype).split('.')[-1]})", under_autocast)
+          print("FAILED:", len(failures), failures[:8])
           PY
