@@ -130,7 +130,8 @@ class TextTransformer:
 
         Each expanded position is read as strings whatever its dtype now: a
         `string` column at fit can arrive as `object` at predict on an older
-        pandas, or as `category`. Only a numeric column is refused.
+        pandas, or as `category`. Only a column holding numbers is refused; one
+        that is all missing arrives as float, and is read as missing strings.
 
         Args:
             X: The data, before any dtype fixing.
@@ -153,6 +154,7 @@ class TextTransformer:
                 i
                 for i in self.expanded_indices
                 if pd.api.types.is_numeric_dtype(X.dtypes.iloc[i])
+                and X.iloc[:, i].notna().any()
             ],
         )
         blocks = [

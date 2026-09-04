@@ -261,6 +261,19 @@ class TestExpansionAtPredictTime:
         assert list(out.columns) == list(fitted.columns)
         assert out.notna().all().all()
 
+    def test__all_missing_column_at_predict__is_read_as_missing_strings(self) -> None:
+        """A column with no values arrives as float, which is how pandas reads an
+        empty column, not as a column of numbers: its rows are encoded like any
+        missing value.
+        """
+        transformer = _expander()
+        fitted = transformer.fit_transform(_frame(_sentences()))
+
+        out = transformer.transform(_frame([np.nan] * 3, dtype=None))
+
+        assert list(out.columns) == list(fitted.columns)
+        assert out.notna().all().all()
+
     def test__numeric_column_at_a_text_position__is_refused(self) -> None:
         transformer = _expander()
         transformer.fit_transform(_frame(_sentences()))
@@ -356,6 +369,24 @@ def test__fit_with_text_n_components__sets_the_expanded_width(
     ).fit(X, y)
 
     assert len(model.inferred_feature_schema_.features) == 1 + 5
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__predict_with_an_all_missing_text_column__is_not_refused(
+    estimator_cls: type,
+) -> None:
+    """A predict frame whose text column is entirely missing, as `read_csv` or a
+    `.loc` slice can produce, holds no numbers and is scored, not refused.
+    """
+    X, y = _estimator_data(estimator_cls, _review_column())
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": True}
+    ).fit(X, y)
+    X_predict = X.head(5).copy()
+    X_predict["review"] = np.nan
+    assert X_predict["review"].dtype == float
+
+    assert len(model.predict(X_predict)) == 5
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
