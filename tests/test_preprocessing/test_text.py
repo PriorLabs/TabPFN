@@ -453,6 +453,7 @@ def test__fit_without_transform_text__reads_the_column_as_before(
         model.fit(X, y)
 
     assert "'review'" in str(record[0].message)
+    assert "TRANSFORM_TEXT" in str(record[0].message)
     assert model.text_transformer_.expanded_indices == []
     assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == [1]
 

@@ -122,9 +122,10 @@ def _warn_on_text(
         "If such a column holds numbers stored as strings, convert it to a numeric "
         "dtype. If it is a category rather than text, raise "
         '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
-        "distinct values. If it holds genuine text, this package has no text "
-        "handling -- consider the tabpfn-client API, which embeds text natively: "
-        "https://github.com/PriorLabs/tabpfn-client \n"
+        "distinct values. If it holds genuine text, give it pandas' `string` dtype "
+        'and set `inference_config={"TRANSFORM_TEXT": True}` to expand it into '
+        "numeric features, or consider the tabpfn-client API, which embeds text "
+        "natively: https://github.com/PriorLabs/tabpfn-client \n"
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,

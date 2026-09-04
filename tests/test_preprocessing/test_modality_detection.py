@@ -609,6 +609,7 @@ class TestWarnOnText:
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
         assert "numeric dtype" in message
+        assert "TRANSFORM_TEXT" in message
         assert "https://github.com/PriorLabs/tabpfn-client" in message
         assert "categorical_features_indices" in message
 
