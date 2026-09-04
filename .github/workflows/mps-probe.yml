@@ -1,0 +1,60 @@
+# Throwaway experiment for the torch 2.14 / macos-26 runner investigation: does a
+# cheap MPS probe detect the Metal 4 cooperative-tensor compile failure on the
+# hosted macos-26 (virtual GPU) image, and does the same probe pass on macos-15?
+name: MPS probe
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: MPS probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15]
+    steps:
+      - name: Runner hardware
+        run: |
+          sw_vers
+          system_profiler SPDisplaysDataType | grep -E "Chipset Model|Metal" || true
+          echo "IMAGE=$ImageOS $ImageVersion"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install torch 2.14.0 only
+        run: python -m pip install --quiet --only-binary=:all: torch==2.14.0
+      - name: Probe MPS kernels
+        run: |
+          python - <<'PY'
+          import platform, torch
+          import torch.nn.functional as F
+          print("macOS", platform.mac_ver()[0], "| torch", torch.__version__,
+                "| mps available:", torch.backends.mps.is_available())
+          d = "mps"
+          failures = []
+          def probe(name, fn):
+              try:
+                  fn()
+                  print(f"OK    {name}")
+              except Exception as e:  # noqa: BLE001
+                  failures.append(name)
+                  msg = str(e).replace("\n", " ")
+                  print(f"FAIL  {name}: {type(e).__name__}: {msg[:200]}")
+          r = lambda *s, dtype=torch.float32: torch.randn(*s, device=d, dtype=dtype)
+          probe("elementwise add 1024", lambda: (r(1024) + r(1024)).sum().item())
+          probe("matmul 2x2 fp32", lambda: (r(2, 2) @ r(2, 2)).sum().item())
+          probe("matmul 8x8 fp32", lambda: (r(8, 8) @ r(8, 8)).sum().item())
+          probe("matmul 64x64 fp32", lambda: (r(64, 64) @ r(64, 64)).sum().item())
+          probe("matmul 512x512 fp32", lambda: (r(512, 512) @ r(512, 512)).sum().item())
+          probe("matmul 2048x2048 fp32", lambda: (r(2048, 2048) @ r(2048, 2048)).sum().item())
+          probe("matmul 64x64 fp16", lambda: (r(64, 64, dtype=torch.float16) @ r(64, 64, dtype=torch.float16)).sum().item())
+          probe("matmul 64x64 bf16", lambda: (r(64, 64, dtype=torch.bfloat16) @ r(64, 64, dtype=torch.bfloat16)).sum().item())
+          probe("linear 8x192 with bias fp32", lambda: F.linear(r(8, 192), r(192, 192), r(192)).sum().item())
+          probe("bmm 4x64x64 fp32", lambda: torch.bmm(r(4, 64, 64), r(4, 64, 64)).sum().item())
+          probe("sdpa 1x4x32x48 fp32", lambda: F.scaled_dot_product_attention(r(1, 4, 32, 48), r(1, 4, 32, 48), r(1, 4, 32, 48)).sum().item())
+          probe("layer_norm 32x192", lambda: F.layer_norm(r(32, 192), (192,)).sum().item())
+          print("FAILED:", failures or "none")
+          PY
