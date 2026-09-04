@@ -1361,6 +1361,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 UserWarning,
                 stacklevel=2,
             )
+        elif (
+            self.eval_metric_ is ClassifierEvalMetrics.LOG_LOSS
+            and tuning_config_resolved.tune_decision_thresholds
+        ):
+            raise ValueError(
+                "eval_metric='log_loss' does not support "
+                "tune_decision_thresholds=True. Pass calibrate_temperature=True, "
+                "which optimizes log loss directly, or "
+                "tune_decision_thresholds=False."
+            )
 
         holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
             X=X,

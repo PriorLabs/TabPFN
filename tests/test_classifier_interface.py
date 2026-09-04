@@ -1292,6 +1292,65 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__raises() -> None:
         clf.fit(X, y)
 
 
+def test__fit_with_log_loss_metric_with_threshold_tuning__raises() -> None:
+    """log_loss with tune_decision_thresholds=True is rejected."""
+    n_classes = 2
+    X, y = sklearn.datasets.make_classification(
+        n_samples=30 * n_classes,
+        n_classes=n_classes,
+        n_features=2,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
+
+    clf = TabPFNClassifier(
+        eval_metric="log_loss",
+        tuning_config={
+            "tune_decision_thresholds": True,
+            "calibrate_temperature": False,
+            "tuning_holdout_frac": 0.1,
+            "tuning_n_folds": 1,
+        },
+        n_estimators=1,
+        random_state=0,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r".*log_loss.*does not support tune_decision_thresholds=True.*",
+    ):
+        clf.fit(X, y)
+
+
+def test__fit_with_log_loss_metric_with_temperature_calibration__is_allowed() -> None:
+    """Temperature calibration is the supported way to target log loss."""
+    n_classes = 2
+    X, y = sklearn.datasets.make_classification(
+        n_samples=30 * n_classes,
+        n_classes=n_classes,
+        n_features=2,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
+
+    clf = TabPFNClassifier(
+        eval_metric="log_loss",
+        tuning_config={
+            "tune_decision_thresholds": False,
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.1,
+            "tuning_n_folds": 1,
+        },
+        n_estimators=1,
+        random_state=0,
+    )
+
+    clf.fit(X, y)
+    assert clf.predict_proba(X[:3]).shape == (3, n_classes)
+
+
 def test__fit_with_roc_auc_metric_with_temperature_calibration__warns() -> None:
     """Temperature calibration stays allowed for roc_auc, but still warns."""
     n_classes = 2
