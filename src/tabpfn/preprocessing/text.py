@@ -12,10 +12,12 @@ nor is an `object` or `category` column, whatever it holds. Every other column
 passes through unchanged, as does everything with the flag off. Only `DataFrame`
 columns are inspected: any other input passes through unchanged.
 
-A missing value is encoded as the empty string, and a string that shares no
-character n-gram with the fit column encodes the same way: as an all-zero row.
-The model never sees a missing value in an expanded column, then, and cannot tell
-a missing string from an unseen one.
+At predict, a string is encoded by the character n-grams it shares with the fit
+column, so an unseen sentence in the same language lands near its neighbours. A
+missing value is encoded as the empty string, which shares none, and so becomes
+an all-zero row, like an ID or a string in another script with no n-gram in
+common. The model never sees a missing value in an expanded column, then, and
+cannot tell a missing string from one with nothing in common.
 
 Only `TabPFNClassifier` and `TabPFNRegressor` run this, right after
 `DateTransformer`. The fine-tuning estimators validate their input directly.
