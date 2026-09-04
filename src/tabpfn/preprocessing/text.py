@@ -5,8 +5,9 @@
 With `TRANSFORM_TEXT` on, a text column becomes tf-idf features over its
 character n-grams, reduced by a truncated SVD (`skrub.StringEncoder`). A column
 is text by its dtype and its values: a `string` column (the default for strings
-from pandas 3.0) with more than a cutoff of distinct values that do not all parse
-as numbers. A column declared in `categorical_features_indices` is never text,
+from pandas 3.0), in any storage, or a pyarrow string column, with more than a
+cutoff of distinct values that do not all parse as numbers. A column declared in
+`categorical_features_indices` is never text,
 nor is an `object` or `category` column, whatever it holds. Every other column
 passes through unchanged, as does everything with the flag off. Only `DataFrame`
 columns are inspected: any other input passes through unchanged.
@@ -212,7 +213,7 @@ class TextTransformer:
         expanded_names: list[str] = []
         blocks: list[pd.DataFrame] = []
         for position in positions:
-            column = X.iloc[:, position].rename(str(X.columns[position]))
+            column = _as_strings(X.iloc[:, position]).rename(str(X.columns[position]))
             block, fitted = self._fit_one(
                 column, kept_names + expanded_names, self._n_components
             )
@@ -255,21 +256,37 @@ class TextTransformer:
     @staticmethod
     def _apply_one(column: pd.Series, fitted: _FittedTextColumn) -> pd.DataFrame:
         """Reapply one fitted encoder, naming its features as at fit."""
-        encoded = pd.DataFrame(fitted.encoder.transform(column.astype("string")))
+        encoded = pd.DataFrame(fitted.encoder.transform(_as_strings(column)))
         return encoded.set_axis(fitted.output_names, axis=1).reset_index(drop=True)
+
+
+def _is_string_dtype(dtype: object) -> bool:
+    """Whether `dtype` holds strings and nothing else: pandas' `string` dtype in
+    any storage, or a pyarrow string dtype. Not `object`, which may hold anything.
+    """
+    return isinstance(dtype, pd.api.extensions.ExtensionDtype) and dtype.type is str
+
+
+def _as_strings(column: pd.Series) -> pd.Series:
+    """`column` as pandas' `string` dtype, whatever string dtype it arrived in.
+
+    The encoder and the numeric check read that one alike; a pyarrow string
+    column parses differently, since its `NaN` counts as a value, not a missing.
+    """
+    return column.astype("string")
 
 
 def _text_positions(
     X: pd.DataFrame, *, declared: set[int], min_cardinality: int
 ) -> list[int]:
-    """Positions of `X`'s text columns: `string` dtype, not declared categorical,
+    """Positions of `X`'s text columns: a string dtype, not declared categorical,
     more distinct values than the cutoff, and not all numbers.
     """
     positions = []
     for i, dtype in enumerate(X.dtypes):
-        if i in declared or not isinstance(dtype, pd.StringDtype):
+        if i in declared or not _is_string_dtype(dtype):
             continue
-        column = X.iloc[:, i]
+        column = _as_strings(X.iloc[:, i])
         if _get_unique_with_sklearn_compatible_error(column) <= min_cardinality:
             continue
         if _is_numeric_pandas_series(column):

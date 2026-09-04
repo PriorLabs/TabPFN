@@ -30,9 +30,7 @@ def _sentences(n: int = N_DISTINCT) -> list[str]:
     return [f"review {i}, a fairly long sentence" for i in range(n)]
 
 
-def _frame(
-    values: list | pd.Series, dtype: str | type | None = "string"
-) -> pd.DataFrame:
+def _frame(values: list | pd.Series, dtype: object = "string") -> pd.DataFrame:
     """A numeric column beside `values`, a `string` column unless told otherwise."""
     column = values if dtype is None else pd.Series(values, dtype=dtype)
     return pd.DataFrame({"num": np.arange(len(column), dtype=float), "text": column})
@@ -100,6 +98,26 @@ class TestSelection:
     def test__numeric_strings__are_not_expanded(self) -> None:
         """Numbers stored as strings are numbers, not text."""
         X = _frame([str(i / 7) for i in range(N_DISTINCT)])
+        assert _expander().fit_transform(X) is X
+
+    def test__pyarrow_string_column__is_expanded(self) -> None:
+        """`read_csv(dtype_backend="pyarrow")` and parquet readers hand out this
+        dtype, a sibling of `string` rather than a storage of it.
+        """
+        pa = pytest.importorskip("pyarrow")
+        X = _frame(_sentences(), dtype=pd.ArrowDtype(pa.string()))
+
+        transformer = _expander()
+        out = transformer.fit_transform(X)
+
+        assert transformer.expanded_indices == [1]
+        assert out.shape[1] == 1 + N_COMPONENTS
+
+    def test__pyarrow_numeric_strings__are_not_expanded(self) -> None:
+        pa = pytest.importorskip("pyarrow")
+        X = _frame(
+            [str(i / 7) for i in range(N_DISTINCT)], dtype=pd.ArrowDtype(pa.string())
+        )
         assert _expander().fit_transform(X) is X
 
     def test__flag_off__expands_nothing(self) -> None:
@@ -249,6 +267,17 @@ class TestExpansionAtPredictTime:
         fitted = transformer.fit_transform(_frame(_sentences()))
 
         out = transformer.transform(_frame(_sentences(), dtype=object))
+
+        np.testing.assert_allclose(out.to_numpy(), fitted.to_numpy())
+
+    def test__pyarrow_string_column_at_predict__is_read_as_strings(self) -> None:
+        pa = pytest.importorskip("pyarrow")
+        transformer = _expander()
+        fitted = transformer.fit_transform(_frame(_sentences()))
+
+        out = transformer.transform(
+            _frame(_sentences(), dtype=pd.ArrowDtype(pa.string()))
+        )
 
         np.testing.assert_allclose(out.to_numpy(), fitted.to_numpy())
 

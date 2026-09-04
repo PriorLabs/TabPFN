@@ -150,8 +150,8 @@ class InferenceConfig:
     handed, so a datetime column has to be converted before fine-tuning."""
 
     TRANSFORM_TEXT: bool = False
-    """Whether a text column, a `string` column with more than
-    `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
+    """Whether a text column, a pandas `string` or pyarrow string column with more
+    than `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
     `TEXT_N_COMPONENTS` numeric features via `skrub.StringEncoder` (tf-idf over
     character n-grams, truncated SVD). Off, such a column is ordinal-encoded as a
     high-cardinality category and `fit` warns about it. An `object` column is
