@@ -86,17 +86,12 @@ class InferenceConfig:
     be categorical."""
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
-    """Number of distinct values above which a string column is read as text
-    rather than as a category. A separate decision from
-    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
-    that one describes when a *number* is few enough to be a category, this one
-    describes when a *string* is varied enough to be text rather than a category,
-    and there is no reason the two should move together.
-
-    Set equal to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` for now, so decoupling the
-    two into a separate field does not itself change any default behavior. A
-    follow-up that adds an actual text-encoding capability is expected to raise
-    this default independently."""
+    """Number of distinct values above which a string column is text rather than
+    a category, unless it is declared categorical (`categorical_features_indices`
+    or the `category` dtype). Text is expanded with `TRANSFORM_TEXT`; otherwise
+    the model reads the alphabetical rank of each string, with a warning. Kept
+    apart from `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which decides when a
+    *number* is a category, since the two need not move together."""
 
     SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
     """The temperature applied to the model's logits at predict time. Lower values
@@ -150,6 +145,19 @@ class InferenceConfig:
     refused with an error saying so rather than guessed at. The fine-tuning
     estimators do not run this conversion, whatever `inference_config` they are
     handed, so a datetime column has to be converted before fine-tuning."""
+
+    TRANSFORM_TEXT: bool = False
+    """Whether a text column, a `string` column with more than
+    `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
+    `TEXT_N_COMPONENTS` numeric features via `skrub.StringEncoder` (tf-idf over
+    character n-grams, truncated SVD). Off, the model reads the alphabetical rank
+    of each string and `fit` warns about it. An `object` column is never
+    expanded. Not run by the fine-tuning estimators."""
+
+    TEXT_N_COMPONENTS: int = 30
+    """Features a text column is expanded into with `TRANSFORM_TEXT`: the leading
+    components of a truncated SVD over its tf-idf matrix. Fewer when the column
+    has fewer character n-grams than that."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.

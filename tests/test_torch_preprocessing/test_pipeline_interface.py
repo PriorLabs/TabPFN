@@ -73,7 +73,7 @@ def get_test_feature_schema(
     *,
     num_numericals: int = 0,
     num_categoricals: int = 0,
-    num_text: int = 0,
+    num_constants: int = 0,
 ) -> FeatureSchema:
     """Create FeatureSchema for tests from modality counts."""
     features = (
@@ -86,8 +86,8 @@ def get_test_feature_schema(
             for i in range(num_categoricals)
         ]
         + [
-            Feature(name=f"txt{i}", modality=FeatureModality.TEXT)
-            for i in range(num_text)
+            Feature(name=f"const{i}", modality=FeatureModality.CONSTANT)
+            for i in range(num_constants)
         ]
     )
     return FeatureSchema(features=features)
@@ -133,7 +133,7 @@ def test__call__step_skipped_for_empty_indices():
     """Test that steps with no matching columns are skipped."""
     step = MockStep(factor=2.0)
     pipeline = TorchPreprocessingPipeline(
-        steps=[(step, {FeatureModality.TEXT})]  # No TEXT columns in metadata
+        steps=[(step, {FeatureModality.CONSTANT})]  # No CONSTANT columns in metadata
     )
     metadata = get_test_feature_schema(num_numericals=2)
     x = torch.ones(10, 1, 2)
@@ -170,7 +170,7 @@ def test__call__step_targeting_multiple_modalities():
     metadata = get_test_feature_schema(
         num_numericals=1,
         num_categoricals=1,
-        num_text=1,
+        num_constants=1,
     )
     x = torch.ones(10, 1, 3)
 

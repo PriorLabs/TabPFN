@@ -4,29 +4,24 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import modality_detection
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
-    INPUT_FEATURE_PREFIX,
-    Feature,
     FeatureModality,
     FeatureSchema,
 )
 from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
-    _MAX_TEXT_COLUMNS_IN_WARNING,
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
-    _warn_on_text,
+    declared_categorical_indices,
     detect_feature_modalities,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
@@ -50,9 +45,9 @@ def test__detect_feature_modalities_basic():
         min_unique_for_numerical=5,
         min_cardinality_for_text=3,
     )
-    assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0]
+    # "text" has too many distinct strings for a category, so it is numerical.
+    assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0, 3]
     assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
-    assert feature_schema.indices_for(FeatureModality.TEXT) == [3]
     assert feature_schema.indices_for(FeatureModality.CONSTANT) == [4]
     # Input column names are namespaced with the "input_" prefix so they cannot
     # collide with names generated for features added by preprocessing steps.
@@ -277,16 +272,43 @@ def test__detected_categorical_without_reporting():
     assert result == FeatureModality.CATEGORICAL
 
 
-def test__detect_for_categorical_with_category_dtype():
-    s = pd.Series(["a", "b", "c", "a", "b", "c"], dtype="category")
-    result = _for_test_detect_with_defaults(s)
+def test__string_reported_as_categorical__is_categorical_above_text_threshold():
+    s = pd.Series([f"v{i}" for i in range(50)])
+    result = _for_test_detect_with_defaults(
+        s, reported_categorical=True, min_cardinality_for_text=30
+    )
     assert result == FeatureModality.CATEGORICAL
 
 
-def test__detect_textual_feature():
+class TestDeclaredCategoricalIndices:
+    """`declared_categorical_indices` reads a `category` dtype as a declaration."""
+
+    def test__category_columns__join_the_declared_positions_in_order(self) -> None:
+        X = pd.DataFrame(
+            {
+                "num": [1.0, 2.0],
+                "cat": pd.Series(["a", "b"], dtype="category"),
+                "str": ["a", "b"],
+                "cat_num": pd.Series([1, 2], dtype="category"),
+            }
+        )
+        assert declared_categorical_indices(X, [2]) == [1, 2, 3]
+        assert declared_categorical_indices(X, None) == [1, 3]
+
+    def test__duplicate_declaration__is_listed_once(self) -> None:
+        X = pd.DataFrame({"cat": pd.Series(["a", "b"], dtype="category")})
+        assert declared_categorical_indices(X, [0]) == [0]
+
+    def test__non_dataframe_input__adds_nothing(self) -> None:
+        X = np.array([[1.0, 2.0], [3.0, 4.0]])
+        assert declared_categorical_indices(X, [1]) == [1]
+        assert declared_categorical_indices(X, None) == []
+
+
+def test__string_above_text_threshold__is_numerical():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
 
 
 def test__detect_long_texts():
@@ -307,7 +329,7 @@ def test__detect_long_texts():
         ]
     )
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
@@ -316,7 +338,7 @@ def test__detect_text_as_object():
     s = pd.Series(["a", "b", "c", "e", "f"], dtype=object)
     s = s.astype(object)
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
@@ -455,7 +477,7 @@ def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
     above both, a string column whose prefix already clears the first two, but
     not the text threshold, stopped scanning early and used the undercounted
     prefix value to decide category-vs-text -- silently leaving a genuinely
-    high-cardinality column CATEGORICAL instead of TEXT.
+    high-cardinality column CATEGORICAL instead of NUMERICAL.
     """
     # Prefix cycles through only 8 distinct values, clearing
     # max_unique_for_category (5) and min_unique_for_numerical (3) alone, but
@@ -471,7 +493,7 @@ def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
         min_unique_for_numerical=3,
         min_cardinality_for_text=10,
     )
-    assert result == FeatureModality.TEXT
+    assert result == FeatureModality.NUMERICAL
 
 
 def _reference_is_numeric(s: pd.Series) -> bool:
@@ -574,79 +596,8 @@ def test__prefix_rejection__skips_the_guard_on_a_short_column(
     assert len(parses) == 2
 
 
-def _text_schema(*names: str) -> FeatureSchema:
-    """Schema of TEXT features with the `input_` prefix real input names carry."""
-    return FeatureSchema(
-        features=[
-            Feature(name=f"{INPUT_FEATURE_PREFIX}{name}", modality=FeatureModality.TEXT)
-            for name in names
-        ]
-    )
-
-
-class TestWarnOnText:
-    """Schema-level unit tests for `_warn_on_text`."""
-
-    def test__no_text_features__does_not_warn(self) -> None:
-        schema = FeatureSchema(
-            features=[
-                Feature(name="input_a", modality=FeatureModality.NUMERICAL),
-                Feature(name="input_b", modality=FeatureModality.CATEGORICAL),
-            ]
-        )
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_on_text(schema)
-
-    def test__text_features__warn_with_column_names_and_remedies(self) -> None:
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(_text_schema("review"))
-
-        message = str(record[0].message)
-        # Column names are shown as the user wrote them, without the input_ prefix.
-        assert "'review'" in message
-        assert INPUT_FEATURE_PREFIX not in message
-        # The message must state all remedies.
-        assert "numeric dtype" in message
-        assert "https://github.com/PriorLabs/tabpfn-client" in message
-        assert "categorical_features_indices" in message
-
-    def test__declared_cat_indices__are_not_reported(self) -> None:
-        schema = _text_schema("sku", "review")
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(schema, declared_cat_indices=[0])
-        message = str(record[0].message)
-        assert "'review'" in message
-        assert "'sku'" not in message
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_on_text(schema, declared_cat_indices=[0, 1])
-
-    def test__many_text_columns__message_is_truncated(self) -> None:
-        n_extra = 5
-        n_columns = _MAX_TEXT_COLUMNS_IN_WARNING + n_extra
-        schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(schema)
-
-        message = str(record[0].message)
-        assert f"(and {n_extra} more)" in message
-        assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING - 1}'" in message
-        assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING}'" not in message
-
-
-class TestDetectFeatureModalitiesWarnsOnText:
-    """`detect_feature_modalities` emits the text warning over real columns.
-
-    The warning is now produced inside `detect_feature_modalities`, so these
-    exercise the whole path: which columns actually get labelled TEXT and thus
-    reach the warning, which the schema-level tests above cannot (they build
-    schemas by hand).
-    """
+class TestDetectFeatureModalitiesOnStrings:
+    """`detect_feature_modalities` over real string columns, as `fit()` runs it."""
 
     n_rows = 200
 
@@ -656,7 +607,6 @@ class TestDetectFeatureModalitiesWarnsOnText:
     def _detect(
         self, X: pd.DataFrame, declared: list[int] | None = None
     ) -> FeatureSchema:
-        """Run modality detection over a frame, as `fit()` does."""
         return detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
@@ -667,25 +617,18 @@ class TestDetectFeatureModalitiesWarnsOnText:
             min_cardinality_for_text=30,
         )
 
-    def test__free_text_column__warns(self) -> None:
+    def test__free_text_column__is_numerical(self) -> None:
         X = pd.DataFrame(
             {
                 "num": self._numeric_column(),
                 "review": [f"review {i}, a fairly long sentence" for i in range(200)],
             }
         )
+        schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            self._detect(X)
-
-        assert "'review'" in str(record[0].message)
-
-    def test__ordinary_columns__do_not_warn(self) -> None:
-        """Neither low-cardinality strings nor fully numeric strings are TEXT.
-
-        The former are ordinary categoricals and the latter are
-        detected NUMERICAL.
-        """
+    def test__ordinary_columns__are_categorical_or_numerical(self) -> None:
+        """Low-cardinality strings are categories, fully numeric strings numbers."""
         values = np.random.default_rng(1).normal(size=200)
         X = pd.DataFrame(
             {
@@ -694,17 +637,13 @@ class TestDetectFeatureModalitiesWarnsOnText:
                 "as_str": [str(round(float(v), 4)) for v in values],
             }
         )
+        schema = self._detect(X)
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
+        assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            self._detect(X)
-
-    def test__numeric_column_with_one_stray_token__warns(self) -> None:
-        """A single non-numeric token flips a whole numeric column to TEXT.
-
-        `_is_numeric_pandas_series` requires *every* value to be coercible, so one
-        stray "N/A" makes the column ordinal-encoded as a near-unique categorical.
-        Warning here is the point of the feature: the fix is a numeric dtype.
+    def test__numeric_column_with_one_stray_token__is_numerical(self) -> None:
+        """A single non-numeric token flips a whole numeric column: every value
+        has to parse for the column to be a number.
         """
         values = np.random.default_rng(2).normal(size=200)
         mostly_numeric = [str(round(float(v), 4)) for v in values]
@@ -712,11 +651,8 @@ class TestDetectFeatureModalitiesWarnsOnText:
         X = pd.DataFrame(
             {"num": self._numeric_column(), "mostly_numeric": mostly_numeric}
         )
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            self._detect(X)
-
-        assert "'mostly_numeric'" in str(record[0].message)
+        schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
     def test__column_with_a_crash_prone_token__does_not_crash(self) -> None:
         """A value that used to segfault `pandas.to_numeric` must not crash the fit.
@@ -725,22 +661,20 @@ class TestDetectFeatureModalitiesWarnsOnText:
         digits read as scientific notation with an exponent in `[2**31, 2**32)`,
         which crashes `pandas.to_numeric` outright on some pandas/numpy versions.
         A crash cannot be caught with `pytest.raises`, so surviving this call at all
-        is the assertion; the column is otherwise unremarkable free text.
+        is the assertion.
         """
         values = [f"id_{i}" for i in range(200)]
         values[7] = "8e2569614270f3d8b9e7038efac9f116"
         X = pd.DataFrame({"num": self._numeric_column(), "ids": values})
+        schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            self._detect(X)
-
-        assert "'ids'" in str(record[0].message)
-
-    def test__declared_categorical_columns__do_not_warn(self) -> None:
-        """Declaring a column categorical states intent, so it must stay quiet.
-
-        Covers both a plain string column and an explicit pandas `category`
-        dtype, each above the cardinality threshold.
+    def test__declared_categorical_columns__are_categorical(self) -> None:
+        """Declaring a column categorical settles it: the text threshold does not
+        apply. Covers a plain string column and an explicit pandas `category`
+        dtype, each above the cardinality threshold. `to_numpy` flattens the
+        `category` dtype away, as validation does, so here the declaration has
+        to be passed in, the way `fit` derives it from the frame.
         """
         X = pd.DataFrame(
             {
@@ -753,62 +687,10 @@ class TestDetectFeatureModalitiesWarnsOnText:
         )
         declared = [1, 2]
 
-        # Without the declaration the columns really are detected as TEXT and warn.
-        with pytest.warns(UserWarning, match="look like free text"):
-            self._detect(X)
+        assert self._detect(X).indices_for(FeatureModality.CATEGORICAL) == []
 
-        # Declaring them silences the warning; the columns are still labelled TEXT.
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = self._detect(X, declared)
-        assert schema.indices_for(FeatureModality.TEXT) == declared
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
-    """`fit` runs `detect_feature_modalities`, so a free-text column warns.
-
-    Both estimators share the detection path, so one parametrized test pins the
-    estimator-level behaviour: `fit` emits the warning naming the column and
-    blaming this file's `fit` call (the stacklevel), declaring the column in
-    `categorical_features_indices` silences it, and `predict` stays quiet.
-    """
-    n = 120
-    rng = np.random.default_rng(seed=42)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "review": [f"review {i}, a fairly long sentence" for i in range(n)],
-        }
-    )
-    y = (
-        rng.integers(0, 2, size=n)
-        if estimator_cls is TabPFNClassifier
-        else rng.normal(size=n)
-    )
-
-    model = estimator_cls(n_estimators=1, device="cpu")
-    with pytest.warns(UserWarning, match="look like free text") as record:
-        model.fit(X, y)
-    assert "'review'" in str(record[0].message)
-    # Pins the stacklevel: the warning must blame this file's `fit` call, not a
-    # frame inside tabpfn or the contextlib wrapper around `fit`.
-    assert record[0].filename == __file__
-
-    # Only `fit` runs modality detection, so `predict` must not warn again.
-    # catch_warnings collects any warning instead of failing on unrelated ones.
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model.predict(X)
-    assert not [w for w in caught if "look like free text" in str(w.message)]
-
-    model = estimator_cls(
-        n_estimators=1, device="cpu", categorical_features_indices=[1]
-    )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model.fit(X, y)
-    assert not [w for w in caught if "look like free text" in str(w.message)]
+        schema = self._detect(X, declared)
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == declared
 
 
 def test__category_and_text_thresholds__move_independently() -> None:

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -14,7 +13,6 @@ import pandas as pd
 from tabpfn.errors import TabPFNUserError
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
-    INPUT_FEATURE_PREFIX,
     Feature,
     FeatureModality,
     FeatureSchema,
@@ -24,11 +22,9 @@ from tabpfn.preprocessing.datamodel import (
 if TYPE_CHECKING:
     import numpy as np
 
-_EARLY_EXIT_PREFIX_ROWS = 1024
+    from tabpfn.constants import XType
 
-#: Cap on how many column names the likely-text warning lists, so a wide frame of
-#: text columns does not produce an unreadable multi-kilobyte message.
-_MAX_TEXT_COLUMNS_IN_WARNING = 10
+_EARLY_EXIT_PREFIX_ROWS = 1024
 
 
 def detect_feature_modalities(
@@ -51,14 +47,16 @@ def detect_feature_modalities(
     Args:
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
-        provided_categorical_indices: User-provided indices considered categorical.
+        provided_categorical_indices: User-provided indices read as categorical.
+            Always respected.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
-        min_cardinality_for_text: Unique-value count above which a candidate
-            string column (not parsed as a number) is `TEXT` rather than
-            `CATEGORICAL` -- independent of the two thresholds above.
+        min_cardinality_for_text: Distinct-value count above which a string
+            column is text rather than a category. Text reaching detection was
+            not expanded, so it is labelled `NUMERICAL`: the model reads the
+            alphabetical rank of each string.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -79,59 +77,22 @@ def detect_feature_modalities(
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
-    feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema, declared_cat_indices=provided_categorical_indices)
-    return feature_schema
+    return FeatureSchema(features=features)
 
 
-def _format_names_for_warning(names: list[str]) -> str:
-    """Render column names for a warning, capped so it stays readable."""
-    shown = names[:_MAX_TEXT_COLUMNS_IN_WARNING]
-    printed = ", ".join(repr(name) for name in shown)
-    if len(names) > len(shown):
-        printed += f" (and {len(names) - len(shown)} more)"
-    return printed
+def declared_categorical_indices(X: XType, indices: Sequence[int] | None) -> list[int]:
+    """`indices` plus the positions of `X`'s `category` columns.
 
-
-def _warn_on_text(
-    feature_schema: FeatureSchema,
-    *,
-    declared_cat_indices: Sequence[int] | None = None,
-) -> None:
-    """Warn about any free-text columns.
-
-    Args:
-        feature_schema: The schema produced by detection.
-        declared_cat_indices: Indices passed as `categorical_features_indices`;
-            never reported, since declaring a column categorical means the user
-            already intends its non-numeric values as categories.
+    A `category` dtype declares a column categorical as much as listing its
+    index does. Only a DataFrame carries dtypes, and validation drops them,
+    so this runs before it.
     """
-    declared = set(declared_cat_indices or ())
-    text_names = [
-        feature.name.removeprefix(INPUT_FEATURE_PREFIX)
-        for index, feature in enumerate(feature_schema.features)
-        if feature.modality is FeatureModality.TEXT and index not in declared
-    ]
-    if not text_names:
-        return
-
-    warnings.warn(
-        f"These columns look like free text and are being ordinal-encoded as "
-        f"high-cardinality categoricals, which usually adds noise rather than "
-        f"signal: {_format_names_for_warning(text_names)}.\n"
-        "If such a column holds numbers stored as strings, convert it to a numeric "
-        "dtype. If it is a category rather than text, raise "
-        '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
-        "distinct values. If it holds genuine text, this package has no text "
-        "handling -- consider the tabpfn-client API, which embeds text natively: "
-        "https://github.com/PriorLabs/tabpfn-client \n"
-        "To silence this for a column that is genuinely a high-cardinality category, "
-        "pass its index in `categorical_features_indices`.",
-        UserWarning,
-        # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
-        # `warning.filename` asserts in the tests.
-        stacklevel=6,
-    )
+    declared = set(indices or ())
+    if isinstance(X, pd.DataFrame):
+        for i, dtype in enumerate(X.dtypes):
+            if isinstance(dtype, pd.CategoricalDtype):
+                declared.add(i)
+    return sorted(declared)
 
 
 def _detect_feature_modality(
@@ -181,14 +142,14 @@ def _detect_feature_modality(
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
 
-    is_string_like = pd.api.types.is_string_dtype(s.dtype) or isinstance(
-        s.dtype, pd.CategoricalDtype
-    )
-    if is_string_like:
-        if n_unique <= min_cardinality_for_text:
+    if pd.api.types.is_string_dtype(s.dtype):
+        if reported_categorical or n_unique <= min_cardinality_for_text:
             return FeatureModality.CATEGORICAL
-        else:  # noqa: RET505
-            return FeatureModality.TEXT
+        # Too many distinct strings for a category, and nothing here turns them
+        # into text features, so the model gets each string's alphabetical rank
+        # as a number. That carries no meaning; it is only the least bad option
+        # left. The text transformer warns about such a column.
+        return FeatureModality.NUMERICAL
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )

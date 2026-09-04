@@ -93,12 +93,11 @@ class FeatureModality(str, Enum):
     This denotes what the column actually represents, not how it is stored. For
     instance, a numerical dtype could represent numerical features
     or categorical features, while a string could represent categorical
-    or text features.
+    features or, with too many distinct values for that, numerical ones.
     """
 
     NUMERICAL = "numerical"
     CATEGORICAL = "categorical"
-    TEXT = "text"
     CONSTANT = "constant"
 
 

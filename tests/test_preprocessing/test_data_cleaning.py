@@ -54,7 +54,6 @@ def cpu_devices() -> tuple[torch.device, ...]:
 def _get_schema(
     n_numerical_features: int = 0,
     n_categorical_features: int = 0,
-    n_text_features: int = 0,
     n_constant_features: int = 0,
 ) -> FeatureSchema:
     features = []
@@ -66,8 +65,6 @@ def _get_schema(
         features.append(
             Feature(name=f"feature_{i}", modality=FeatureModality.CATEGORICAL)
         )
-    for i in range(n_text_features):
-        features.append(Feature(name=f"feature_{i}", modality=FeatureModality.TEXT))
     for i in range(n_constant_features):
         features.append(Feature(name=f"feature_{i}", modality=FeatureModality.CONSTANT))
     return FeatureSchema(features=features)
@@ -452,7 +449,7 @@ class TestTagFeaturesAndSanitizeData:
         schema = FeatureSchema(
             features=[
                 Feature(name="ratio", modality=FeatureModality.NUMERICAL),
-                Feature(name="risk", modality=FeatureModality.TEXT),
+                Feature(name="risk", modality=FeatureModality.NUMERICAL),
                 Feature(name="amount", modality=FeatureModality.NUMERICAL),
                 Feature(name="type", modality=FeatureModality.CATEGORICAL),
             ]
