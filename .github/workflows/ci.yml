@@ -34,10 +34,6 @@ jobs:
     # This job will only start after linting succeeds
     needs: check_python_linting
     timeout-minutes: 30
-    outputs:
-      # Written only by the macOS "highest" leg. The other legs leave it empty,
-      # and GitHub skips empty matrix outputs, so this is that leg's verdict.
-      mps_runner_broken: ${{ steps.mps_check.outputs.broken }}
     strategy:
       fail-fast: false
       matrix:
@@ -198,54 +194,12 @@ jobs:
               print(f"  bit {bit:>2} {name:<16} {bool(mask >> bit & 1)}")
           '
 
-      # GitHub's macos-latest image runs on a virtual GPU that cannot compile the
-      # Metal 4 attention kernel torch >= 2.14 uses for fp16/bf16 on macOS 26,
-      # although physical Macs run it fine. Try it once, with the call TabPFN's MPS
-      # attention backend makes. If it fails that way, warn and skip the tests
-      # here: the macos-15 fallback job below runs them on MPS instead, and stops
-      # running the day this check passes again. Any other failure is real and
-      # fails this job.
-      - name: Check that MPS can run TabPFN's attention (macOS, highest only)
-        id: mps_check
-        if: ${{ runner.os == 'macOS' && matrix.dependency-set == 'highest' }}
-        shell: bash
-        run: |
-          set +e
-          uv run --no-sync python - <<'PY'
-          import torch
-          import torch.nn.functional as F
-
-          print("torch", torch.__version__, "| mps available:", torch.backends.mps.is_available())
-          if not torch.backends.mps.is_available():
-              print("No MPS device: the tests will not use one either.")
-              raise SystemExit(0)
-          q = torch.randn(1, 4, 128, 64, device="mps", dtype=torch.float16)
-          try:
-              F.scaled_dot_product_attention(q, q, q, attn_mask=None, scale=64**-0.5).sum().item()
-          except RuntimeError as e:
-              if "Failed to created pipeline state object" in str(e):
-                  print(f"MPS kernel compile failed: {str(e)[:300]}")
-                  raise SystemExit(3) from e
-              raise
-          print("MPS attention kernel compiled and ran.")
-          PY
-          status=$?
-          set -e
-          if [ "$status" -eq 0 ]; then
-            echo "broken=false" >> "$GITHUB_OUTPUT"
-          elif [ "$status" -eq 3 ]; then
-            echo "::warning title=MPS tests moved to macos-15::This $ImageOS runner's virtual GPU cannot compile torch's MPS attention kernel (see the step log). The tests were skipped here and run in the job 'Test Package Compatibility (macos-15, 3.14, highest, MPS fallback)' instead."
-            echo "broken=true" >> "$GITHUB_OUTPUT"
-          else
-            exit "$status"
-          fi
-
       - name: Run Tests (all tests)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && steps.mps_check.outputs.broken != 'true' }}
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && steps.mps_check.outputs.broken != 'true' }}
+        if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.6 (see tabpfn.utils.infer_devices()), thus
@@ -273,51 +227,6 @@ jobs:
           path: ${{ github.workspace }}/hf_cache
           key: hf-cache-${{ hashFiles('hf_cache/**') }}
           enableCrossOsArchive: true
-
-  # -------------------------------------------------------------------
-  # macos-15 fallback for the MPS tests, see the "Check that MPS can run" step
-  # above. Skipped whenever macos-latest can run torch's MPS attention kernel.
-  # -------------------------------------------------------------------
-  test_compatibility_mps_fallback:
-    name: Test Package Compatibility (macos-15, 3.14, highest, MPS fallback)
-    needs: test_compatibility
-    if: ${{ always() && needs.test_compatibility.outputs.mps_runner_broken == 'true' }}
-    runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
-
-      - name: Set up Python 3.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --group ci --resolution highest
-
-      - *restore-hf-cache
-      - *restore-model-cache
-      - *download-models
-      - *save-model-cache
-
-      - name: Run Tests (all tests)
-        if: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
-        run: uv run --no-sync pytest tests/
-
-      - name: Run Tests (PR tests only)
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-        run: uv run --no-sync pytest -m "not slow" tests/
-
-      - *save-hf-cache
 
   # -------------------------------------------------------------------
   # Ubuntu-latest + highest dependencies (used as gate for GPU)
