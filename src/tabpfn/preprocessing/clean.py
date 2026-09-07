@@ -32,18 +32,23 @@ if TYPE_CHECKING:
     )
     from tabpfn.preprocessing.torch import FeatureSchema
 
+# An array's dtype is told apart by numpy's one-letter dtype kind:
 # https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
 
+# `?` bool, `b` signed byte, `B` unsigned byte, `i` signed integer, `u` unsigned
+# integer, `f` float, `m` timedelta.
 NUMERIC_DTYPE_KINDS = "?bBiufm"
 # The subset of the above that numpy casts to float64 the same way pandas does, so
 # a frame need not be built to convert it. Timedeltas ("m") are excluded: pandas
 # converts those through its own units rather than numpy's raw integers.
 FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
-OBJECT_DTYPE_KINDS = "OV"
-# numpy's fixed-width unicode strings; pandas reads them as string columns.
-UNICODE_DTYPE_KINDS = "U"
-BYTES_DTYPE_KINDS = "S"
-UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
+# `O` object, `V` void (structured records), `U` fixed-width unicode strings: pandas
+# reads the cells to work out each column's dtype.
+OBJECT_OR_STRING_DTYPE_KINDS = "OVU"
+# `S` fixed-width byte strings and `a`, its legacy alias: refused.
+BYTES_DTYPE_KINDS = "Sa"
+# `c` complex, `M` datetime64. Not needed, just for completeness.
+UNSUPPORTED_DTYPE_KINDS = "cM"
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
@@ -243,10 +248,9 @@ def fix_dtypes(  # noqa: D103
             # It's a numeric type, just wrap the array in pandas with the correct dtype
             X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
             convert_dtype = False
-        elif X.dtype.kind in OBJECT_DTYPE_KINDS + UNICODE_DTYPE_KINDS:
-            # If numpy and object dtype, we rely on pandas to handle introspection
-            # of columns and rows to determine the dtypes. A unicode array holds
-            # strings the same way an object array of `str` does.
+        elif X.dtype.kind in OBJECT_OR_STRING_DTYPE_KINDS:
+            # For an object or string array we rely on pandas to introspect the
+            # cells and determine each column's dtype.
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
         elif X.dtype.kind in BYTES_DTYPE_KINDS:
