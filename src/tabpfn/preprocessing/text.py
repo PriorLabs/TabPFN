@@ -2,16 +2,25 @@
 
 """Expand a DataFrame's text columns into numeric features before validation.
 
-A column is text by its dtype and its values: a `string` or `object` column with
-more than a cutoff of distinct values that do not all parse as numbers. A
-`category` column is never text, nor is one declared in
-`categorical_features_indices`. With `TRANSFORM_TEXT` on, a `string` column (the
-default for strings from pandas 3.0) becomes tf-idf features over its character
-n-grams, reduced by a truncated SVD (`skrub.StringEncoder`). Any other text
-column passes through unchanged, with a warning naming it: the model then reads
-it as a number, the alphabetical rank of each string. An `object` column is not
-expanded yet, whatever it holds.
-Only `DataFrame` columns are inspected: any other input passes through unchanged.
+A column is text by its dtype and its values: a `string` column (the default
+for strings from pandas 3.0), in any storage, a pyarrow string column, an
+`object` column or a `category` column, with more than a cutoff of distinct
+values that do not all parse as numbers. A column declared in
+`categorical_features_indices` is never text, whatever it holds; the estimators
+declare every `category` column that way by default. With `TRANSFORM_TEXT` on, a
+`string` or pyarrow string text column becomes tf-idf features over its
+character n-grams, reduced by a truncated SVD (`skrub.StringEncoder`). Any other
+text column passes through unchanged, with a warning naming it: the model then
+reads it as a number, the alphabetical rank of each string. An `object` or
+`category` column is never expanded. Only `DataFrame` columns are inspected: any
+other input passes through unchanged.
+
+At predict, a string is encoded by the character n-grams it shares with the fit
+column, so an unseen sentence in the same language lands near its neighbours. A
+missing value is encoded as the empty string, which shares none, and so becomes
+an all-zero row, like an ID or a string in another script with no n-gram in
+common. The model never sees a missing value in an expanded column, then, and
+cannot tell a missing string from one with nothing in common.
 
 Only `TabPFNClassifier` and `TabPFNRegressor` run this, right after
 `DateTransformer`. The fine-tuning estimators validate their input directly.
@@ -61,6 +70,7 @@ class TextTransformer:
 
     Used like `DateTransformer`, and right after it: `fit_transform` once at fit
     time, keep the instance as `text_transformer_`, `transform` at predict time.
+    Warns at fit about every text column it leaves unexpanded, by name.
 
     Args:
         categorical_indices: Indices the caller declared categorical, as positions
@@ -139,7 +149,8 @@ class TextTransformer:
 
         Each expanded position is read as strings whatever its dtype now: a
         `string` column at fit can arrive as `object` at predict on an older
-        pandas, or as `category`. Only a numeric column is refused.
+        pandas, or as `category`. Only a column holding numbers is refused; one
+        that is all missing arrives as float, and is read as missing strings.
 
         Args:
             X: The data, before any dtype fixing.
@@ -162,6 +173,7 @@ class TextTransformer:
                 i
                 for i in self.expanded_indices
                 if pd.api.types.is_numeric_dtype(X.dtypes.iloc[i])
+                and X.iloc[:, i].notna().any()
             ],
         )
         blocks = [
@@ -214,7 +226,7 @@ class TextTransformer:
         positions = [
             i
             for i in text
-            if self._transform_text and isinstance(X.dtypes.iloc[i], pd.StringDtype)
+            if self._transform_text and _is_string_dtype(X.dtypes.iloc[i])
         ]
         _warn_on_text(
             X,
@@ -227,7 +239,7 @@ class TextTransformer:
         expanded_names: list[str] = []
         blocks: list[pd.DataFrame] = []
         for position in positions:
-            column = X.iloc[:, position].rename(str(X.columns[position]))
+            column = _as_strings(X.iloc[:, position]).rename(str(X.columns[position]))
             block, fitted = self._fit_one(
                 column, kept_names + expanded_names, self._n_components
             )
@@ -270,25 +282,45 @@ class TextTransformer:
     @staticmethod
     def _apply_one(column: pd.Series, fitted: _FittedTextColumn) -> pd.DataFrame:
         """Reapply one fitted encoder, naming its features as at fit."""
-        encoded = pd.DataFrame(fitted.encoder.transform(column.astype("string")))
+        encoded = pd.DataFrame(fitted.encoder.transform(_as_strings(column)))
         return encoded.set_axis(fitted.output_names, axis=1).reset_index(drop=True)
+
+
+def _is_string_dtype(dtype: object) -> bool:
+    """Whether `dtype` holds strings and nothing else: pandas' `string` dtype in
+    any storage, or a pyarrow string dtype. Not `object`, which may hold anything.
+    """
+    return isinstance(dtype, pd.api.extensions.ExtensionDtype) and dtype.type is str
+
+
+def _as_strings(column: pd.Series) -> pd.Series:
+    """`column` as pandas' `string` dtype, whatever string dtype it arrived in.
+
+    The encoder and the numeric check read that one alike; a pyarrow string
+    column parses differently, since its `NaN` counts as a value, not a missing.
+    """
+    return column.astype("string")
 
 
 def _text_positions(
     X: pd.DataFrame, *, declared: set[int], min_cardinality: int
 ) -> list[int]:
-    """Positions of `X`'s text columns: `string` or `object` dtype, not declared
-    categorical, more distinct values than the cutoff, and not all numbers.
+    """Positions of `X`'s text columns: a string, `object` or `category` dtype,
+    not declared categorical, more distinct values than the cutoff, and not all
+    numbers.
     """
     positions = []
     for i, dtype in enumerate(X.dtypes):
         if i in declared:
             continue
-        if not (
-            isinstance(dtype, pd.StringDtype) or pd.api.types.is_object_dtype(dtype)
+        if _is_string_dtype(dtype):
+            column = _as_strings(X.iloc[:, i])
+        elif pd.api.types.is_object_dtype(dtype) or isinstance(
+            dtype, pd.CategoricalDtype
         ):
+            column = X.iloc[:, i]
+        else:
             continue
-        column = X.iloc[:, i]
         if _get_unique_with_sklearn_compatible_error(column) <= min_cardinality:
             continue
         if _is_numeric_pandas_series(column):

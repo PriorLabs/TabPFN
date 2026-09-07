@@ -88,10 +88,28 @@ class InferenceConfig:
     MIN_CARDINALITY_FOR_TEXT: int = 30
     """Number of distinct values above which a string column is text rather than
     a category, unless it is declared categorical (`categorical_features_indices`
-    or the `category` dtype). Text is expanded with `TRANSFORM_TEXT`; otherwise
-    the model reads the alphabetical rank of each string, with a warning. Kept
-    apart from `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which decides when a
-    *number* is a category, since the two need not move together."""
+    or, with `CATEGORY_DTYPE_IS_CATEGORICAL`, the `category` dtype). Text is
+    expanded with `TRANSFORM_TEXT`; otherwise the model reads the alphabetical
+    rank of each string, with a warning. Kept apart from
+    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which decides when a *number* is a
+    category, since the two need not move together."""
+
+    CATEGORY_DTYPE_IS_CATEGORICAL: bool = True
+    """Whether a pandas `category` column counts as declared categorical, as if
+    its position were listed in `categorical_features_indices`. Off, the dtype is
+    ignored and the column is read by its values, like any string column."""
+
+    DECLARED_STRINGS_ARE_CATEGORICAL: bool = True
+    """Whether a string column declared categorical is categorical at any number
+    of distinct values. Off, above `MIN_CARDINALITY_FOR_TEXT` it is text like an
+    undeclared column, only without the warning. A declared *numeric* column is
+    categorical only up to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` either way."""
+
+    TEXT_AS_NUMERICAL: bool = True
+    """Whether a text column left unexpanded is labelled `NUMERICAL`, which is
+    what the model always got: each string's alphabetical rank, as a number. Off,
+    it keeps its own `TEXT` modality, which the preprocessing steps keyed on
+    numerical features skip."""
 
     SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
     """The temperature applied to the model's logits at predict time. Lower values
@@ -147,8 +165,8 @@ class InferenceConfig:
     handed, so a datetime column has to be converted before fine-tuning."""
 
     TRANSFORM_TEXT: bool = False
-    """Whether a text column, a `string` column with more than
-    `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
+    """Whether a text column, a pandas `string` or pyarrow string column with more
+    than `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
     `TEXT_N_COMPONENTS` numeric features via `skrub.StringEncoder` (tf-idf over
     character n-grams, truncated SVD). Off, the model reads the alphabetical rank
     of each string and `fit` warns about it. An `object` column is never

@@ -207,6 +207,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     text_transformer_: TextTransformer
     """The transformer that expanded every text column before validation."""
 
+    categorical_features_indices_: list[int] | None
+    """`categorical_features_indices` as positions in the validated input, where
+    an expanded date or text column has moved everything after it down."""
+
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
     specified."""
@@ -753,7 +757,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
         validate_categorical_features_indices(self.categorical_features_indices)
-        X, date_transformer, text_transformer, categorical_indices = (
+        X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
                 X,
                 categorical_features_indices=self.categorical_features_indices,
@@ -776,12 +780,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=text_transformer.feature_names_out_,
+            feature_names=feature_names,
             provided_categorical_indices=categorical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
+            text_as_numerical=self.inference_config_.TEXT_AS_NUMERICAL,
+            declared_strings_are_categorical=self.inference_config_.DECLARED_STRINGS_ARE_CATEGORICAL,
         )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
@@ -792,6 +798,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.ordinal_encoder_ = ordinal_encoder
         self.date_transformer_ = date_transformer
         self.text_transformer_ = text_transformer
+        self.categorical_features_indices_ = categorical_indices
         self.n_train_samples_ = len(X)
 
         # Label encoding
@@ -852,9 +859,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "tuning_config": None,  # never tune inside tuning
             # Fit on the already-expanded array, where a declared column may
             # have moved down past an expanded date or text column.
-            "categorical_features_indices": self.text_transformer_.output_indices(
-                self.date_transformer_.output_indices(self.categorical_features_indices)
-            ),
+            "categorical_features_indices": self.categorical_features_indices_,
         }
 
         params.update(forced)
@@ -1342,13 +1347,31 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
+            if tuning_config_resolved.tune_decision_thresholds:
+                raise ValueError(
+                    "eval_metric='roc_auc' does not support "
+                    "tune_decision_thresholds=True: thresholds cannot change ROC "
+                    "AUC, which scores the ranking of the predicted probabilities. "
+                    "Pass eval_metric='balanced_accuracy' to keep the previous "
+                    "behaviour, or tune_decision_thresholds=False."
+                )
             warnings.warn(
                 f"You specified '{self.eval_metric_}' as the eval metric with "
-                "threshold tuning or temperature calibration enabled. "
-                "ROC AUC is independent of these tunings and they will not "
-                "improve this metric. Consider disabling them.",
+                "temperature calibration enabled. ROC AUC is independent of this "
+                "tuning and it will not improve this metric. Consider disabling "
+                "it.",
                 UserWarning,
                 stacklevel=2,
+            )
+        elif (
+            self.eval_metric_ is ClassifierEvalMetrics.LOG_LOSS
+            and tuning_config_resolved.tune_decision_thresholds
+        ):
+            raise ValueError(
+                "eval_metric='log_loss' does not support "
+                "tune_decision_thresholds=True. Pass calibrate_temperature=True, "
+                "which optimizes log loss directly, or "
+                "tune_decision_thresholds=False."
             )
 
         holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(

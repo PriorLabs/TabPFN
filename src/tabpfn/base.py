@@ -421,17 +421,19 @@ def expand_dates_and_text(
     *,
     categorical_features_indices: Sequence[int] | None,
     inference_config: InferenceConfig,
-) -> tuple[XType, DateTransformer, TextTransformer, list[int]]:
+) -> tuple[XType, DateTransformer, TextTransformer, list[str] | None, list[int] | None]:
     """Expand the datetime and text columns of a fit input, before validation.
 
     An expanded column is dropped and its features appended, so every column
-    after it moves down. The declared categorical positions move with them, and
-    the `category` dtype columns join them, so the returned positions address the
-    returned input.
+    after it moves down. The returned labels and categorical positions describe
+    the returned input, so no caller needs to know which transformer ran last.
+    With `CATEGORY_DTYPE_IS_CATEGORICAL`, the `category` columns join the
+    declared positions here, while the frame still carries its dtypes.
 
     Returns:
-        The expanded input, the two fitted transformers, and the categorical
-        positions in the expanded input.
+        The expanded input, the two fitted transformers, the expanded input's
+        column labels (`None` when `X` is not a `DataFrame`), and the declared
+        categorical positions in it (`None` when none were declared).
     """
     date_transformer = DateTransformer(
         categorical_indices=categorical_features_indices,
@@ -439,6 +441,8 @@ def expand_dates_and_text(
     )
     X = date_transformer.fit_transform(X)
     categorical_indices = date_transformer.output_indices(categorical_features_indices)
+    if inference_config.CATEGORY_DTYPE_IS_CATEGORICAL:
+        categorical_indices = declared_categorical_indices(X, categorical_indices)
     text_transformer = TextTransformer(
         categorical_indices=categorical_indices,
         transform_text=inference_config.TRANSFORM_TEXT,
@@ -446,10 +450,13 @@ def expand_dates_and_text(
         n_components=inference_config.TEXT_N_COMPONENTS,
     )
     X = text_transformer.fit_transform(X)
-    categorical_indices = declared_categorical_indices(
-        X, text_transformer.output_indices(categorical_indices)
+    return (
+        X,
+        date_transformer,
+        text_transformer,
+        text_transformer.feature_names_out_,
+        text_transformer.output_indices(categorical_indices),
     )
-    return X, date_transformer, text_transformer, categorical_indices
 
 
 def reject_categoricals_for_differentiable_input(

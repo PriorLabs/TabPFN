@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import warnings
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import ClassifierTuningConfig, RegressorTuningConfig
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import INPUT_FEATURE_PREFIX, FeatureModality
 from tabpfn.preprocessing.text import _MAX_COLUMNS_IN_WARNING, TextTransformer
 
 #: The default width a text column is expanded to.
@@ -30,9 +31,7 @@ def _sentences(n: int = N_DISTINCT) -> list[str]:
     return [f"review {i}, a fairly long sentence" for i in range(n)]
 
 
-def _frame(
-    values: list | pd.Series, dtype: str | type | None = "string"
-) -> pd.DataFrame:
+def _frame(values: list | pd.Series, dtype: object = "string") -> pd.DataFrame:
     """A numeric column beside `values`, a `string` column unless told otherwise."""
     column = values if dtype is None else pd.Series(values, dtype=dtype)
     return pd.DataFrame({"num": np.arange(len(column), dtype=float), "text": column})
@@ -62,6 +61,30 @@ def _review_column(n: int = 120, dtype: str = "string") -> pd.Series:
     )
 
 
+def _pyarrow() -> ModuleType:
+    # pyarrow is deliberately not a dependency, not even of the tests, so the
+    # tests that need it run wherever it happens to be installed and skip
+    # elsewhere, CI included.
+    return pytest.importorskip("pyarrow")
+
+
+def _captured_tuning_estimators(
+    model: TabPFNClassifier | TabPFNRegressor, monkeypatch: pytest.MonkeyPatch
+) -> list[TabPFNClassifier | TabPFNRegressor]:
+    """Every tuning estimator `model.fit` builds, collected as it is built."""
+    is_classifier = isinstance(model, TabPFNClassifier)
+    getter = "_get_tuning_classifier" if is_classifier else "_get_tuning_regressor"
+    captured: list[TabPFNClassifier | TabPFNRegressor] = []
+    original = getattr(model, getter)
+
+    def capture(**kwargs: object) -> TabPFNClassifier | TabPFNRegressor:
+        captured.append(original(**kwargs))
+        return captured[-1]
+
+    monkeypatch.setattr(model, getter, capture)
+    return captured
+
+
 class TestSelection:
     """What counts as text: the dtype first, then the distinct-value count.
 
@@ -86,21 +109,50 @@ class TestSelection:
         assert X["text"].dtype == object
 
         transformer = _expander()
-        assert transformer.fit_transform(X) is X
+        with pytest.warns(UserWarning, match="look like free text"):
+            assert transformer.fit_transform(X) is X
         assert transformer.expanded_indices == []
 
     def test__category_column__is_never_expanded(self) -> None:
         X = _frame(_sentences(), dtype="category")
-        assert _expander().fit_transform(X) is X
+        with pytest.warns(UserWarning, match="look like free text"):
+            assert _expander().fit_transform(X) is X
+        assert _expander(categorical_indices=[1]).fit_transform(X) is X
 
     def test__declared_categorical_string_column__is_not_expanded(self) -> None:
         X = _frame(_sentences())
         assert _expander(categorical_indices=[1]).fit_transform(X) is X
 
+    def test__numeric_strings__are_not_expanded(self) -> None:
+        """Numbers stored as strings are numbers, not text."""
+        X = _frame([str(i / 7) for i in range(N_DISTINCT)])
+        assert _expander().fit_transform(X) is X
+
+    def test__pyarrow_string_column__is_expanded(self) -> None:
+        """`read_csv(dtype_backend="pyarrow")` and parquet readers hand out this
+        dtype, a sibling of `string` rather than a storage of it.
+        """
+        pa = _pyarrow()
+        X = _frame(_sentences(), dtype=pd.ArrowDtype(pa.string()))
+
+        transformer = _expander()
+        out = transformer.fit_transform(X)
+
+        assert transformer.expanded_indices == [1]
+        assert out.shape[1] == 1 + N_COMPONENTS
+
+    def test__pyarrow_numeric_strings__are_not_expanded(self) -> None:
+        pa = _pyarrow()
+        X = _frame(
+            [str(i / 7) for i in range(N_DISTINCT)], dtype=pd.ArrowDtype(pa.string())
+        )
+        assert _expander().fit_transform(X) is X
+
     def test__flag_off__expands_nothing(self) -> None:
         X = _frame(_sentences())
         transformer = TextTransformer()
-        assert transformer.fit_transform(X) is X
+        with pytest.warns(UserWarning, match="look like free text"):
+            assert transformer.fit_transform(X) is X
         assert transformer.expanded_indices == []
         assert transformer.feature_names_out_ == ["num", "text"]
 
@@ -247,11 +299,35 @@ class TestExpansionAtPredictTime:
 
         np.testing.assert_allclose(out.to_numpy(), fitted.to_numpy())
 
+    def test__pyarrow_string_column_at_predict__is_read_as_strings(self) -> None:
+        pa = _pyarrow()
+        transformer = _expander()
+        fitted = transformer.fit_transform(_frame(_sentences()))
+
+        out = transformer.transform(
+            _frame(_sentences(), dtype=pd.ArrowDtype(pa.string()))
+        )
+
+        np.testing.assert_allclose(out.to_numpy(), fitted.to_numpy())
+
     def test__unseen_values__keep_the_fitted_width(self) -> None:
         transformer = _expander()
         fitted = transformer.fit_transform(_frame(_sentences()))
 
         out = transformer.transform(_frame(["never seen", None, "", "zzz"] * 10))
+
+        assert list(out.columns) == list(fitted.columns)
+        assert out.notna().all().all()
+
+    def test__all_missing_column_at_predict__is_read_as_missing_strings(self) -> None:
+        """A column with no values arrives as float, which is how pandas reads an
+        empty column, not as a column of numbers: its rows are encoded like any
+        missing value.
+        """
+        transformer = _expander()
+        fitted = transformer.fit_transform(_frame(_sentences()))
+
+        out = transformer.transform(_frame([np.nan] * 3, dtype=None))
 
         assert list(out.columns) == list(fitted.columns)
         assert out.notna().all().all()
@@ -303,11 +379,12 @@ class TestWarning:
         assert "TRANSFORM_TEXT" in message
         assert "https://github.com/PriorLabs/tabpfn-client" in message
 
+    @pytest.mark.parametrize("dtype", [object, "category"])
     @pytest.mark.parametrize("transform_text", [False, True])
-    def test__object_column__warns_whatever_the_flag(
-        self, transform_text: bool
+    def test__object_or_category_column__warns_whatever_the_flag(
+        self, dtype: object, transform_text: bool
     ) -> None:
-        X = _frame(_sentences(), dtype=object)
+        X = _frame(_sentences(), dtype=dtype)
 
         with pytest.warns(UserWarning, match="look like free text") as record:
             TextTransformer(transform_text=transform_text).fit_transform(X)
@@ -323,18 +400,20 @@ class TestWarning:
         ("column", "declared"),
         [
             (pd.Series(_sentences(), dtype="string"), [1]),
-            (pd.Series(_sentences(), dtype="category"), None),
+            (pd.Series(_sentences(), dtype="category"), [1]),
             (pd.Series(_sentences(30), dtype="string"), None),
             (pd.Series([str(i / 7) for i in range(N_DISTINCT)], dtype="string"), None),
             (pd.Series([str(i / 7) for i in range(N_DISTINCT)], dtype=object), None),
+            (pd.Series(range(N_DISTINCT), dtype="category"), None),
             (pd.Series(np.arange(N_DISTINCT, dtype=float)), None),
         ],
         ids=[
             "declared",
-            "category_dtype",
+            "declared_category_dtype",
             "at_the_cutoff",
             "numeric_strings",
             "numeric_object_strings",
+            "numeric_categories",
             "numbers",
         ],
     )
@@ -450,7 +529,7 @@ def test__fit_with_transform_text__expands_the_text_column(estimator_cls: type) 
     assert sum(name.split("input_")[-1].startswith("review_") for name in names) == (
         N_COMPONENTS
     )
-    assert schema.indices_for(FeatureModality.CATEGORICAL) == []
+    assert schema.indices_for(FeatureModality.TEXT) == []
     assert len(predictions) == len(X)
 
 
@@ -467,6 +546,24 @@ def test__fit_with_text_n_components__sets_the_expanded_width(
     ).fit(X, y)
 
     assert len(model.inferred_feature_schema_.features) == 1 + 5
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__predict_with_an_all_missing_text_column__is_not_refused(
+    estimator_cls: type,
+) -> None:
+    """A predict frame whose text column is entirely missing, as `read_csv` or a
+    `.loc` slice can produce, holds no numbers and is scored, not refused.
+    """
+    X, y = _estimator_data(estimator_cls, _review_column())
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": True}
+    ).fit(X, y)
+    X_predict = X.head(5).copy()
+    X_predict["review"] = np.nan
+    assert X_predict["review"].dtype == float
+
+    assert len(model.predict(X_predict)) == 5
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
@@ -519,30 +616,40 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_without_transform_text__warns_and_keeps_the_width(
-    estimator_cls: type,
+@pytest.mark.parametrize("text_as_numerical", [True, False])
+def test__fit_without_transform_text__warns_and_labels_the_column(
+    estimator_cls: type, text_as_numerical: bool
 ) -> None:
-    """Off by default: the column is read as before, a high-cardinality category
-    the fit warns about.
+    """Off by default: the column is untouched and `fit` warns about it. The
+    model reads it as a number either way; `TEXT_AS_NUMERICAL` picks the label.
     """
     X, y = _estimator_data(estimator_cls, _review_column())
 
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"TEXT_AS_NUMERICAL": text_as_numerical},
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
 
+    assert "'review'" in str(record[0].message)
     assert "TRANSFORM_TEXT" in str(record[0].message)
-    assert model.inferred_feature_schema_.indices_for(FeatureModality.NUMERICAL) == [
-        0,
-        1,
-    ]
+    assert model.text_transformer_.expanded_indices == []
+    schema = model.inferred_feature_schema_
+    if text_as_numerical:
+        assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+    else:
+        assert schema.indices_for(FeatureModality.TEXT) == [1]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 def test__fit_with_transform_text_and_an_object_column__does_not_expand_it(
     estimator_cls: type,
 ) -> None:
-    """Only a `string` dtype is text; an `object` column is read as before."""
+    """Only a string dtype is expanded; an `object` column is read as before,
+    with the warning.
+    """
     X, y = _estimator_data(estimator_cls, _review_column(dtype="object"))
     assert X["review"].dtype == object
 
@@ -559,6 +666,14 @@ def test__fit_with_transform_text_and_an_object_column__does_not_expand_it(
     ]
 
 
+def _sku_data(estimator_cls: type, dtype: str) -> tuple[pd.DataFrame, np.ndarray]:
+    """A 60-level `dtype` column, above the default text cutoff of 30."""
+    n = 200
+    return _estimator_data(
+        estimator_cls, pd.Series([f"sku_{i % 60}" for i in range(n)], dtype=dtype), n
+    )
+
+
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 @pytest.mark.parametrize("transform_text", [False, True])
 def test__fit_with_a_category_column_above_the_text_cutoff__reads_it_as_categorical(
@@ -568,12 +683,7 @@ def test__fit_with_a_category_column_above_the_text_cutoff__reads_it_as_categori
     flag, nor anything to warn about. Read off the frame, where the dtype still
     exists; validation flattens it away before detection runs.
     """
-    n = 200
-    X, y = _estimator_data(
-        estimator_cls,
-        pd.Series([f"sku_{i % 60}" for i in range(n)], dtype="category"),
-        n,
-    )
+    X, y = _sku_data(estimator_cls, "category")
 
     model = estimator_cls(
         n_estimators=1,
@@ -585,9 +695,36 @@ def test__fit_with_a_category_column_above_the_text_cutoff__reads_it_as_categori
         model.fit(X, y)
 
     assert model.text_transformer_.expanded_indices == []
-    schema = model.inferred_feature_schema_
-    assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
-    assert len(model.predict(X)) == n
+    assert model.categorical_features_indices_ == [1]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1
+    ]
+    assert len(model.predict(X)) == len(X)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_category_dtype_is_categorical_off__reads_the_column_by_its_values(
+    estimator_cls: type,
+) -> None:
+    """Off, the `category` dtype declares nothing: above the cutoff the column is
+    text like any other string column, and `fit` warns about it.
+    """
+    X, y = _sku_data(estimator_cls, "category")
+
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"CATEGORY_DTYPE_IS_CATEGORICAL": False},
+    )
+    with pytest.warns(UserWarning, match="look like free text") as record:
+        model.fit(X, y)
+
+    assert "'review'" in str(record[0].message)
+    assert model.categorical_features_indices_ is None
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.NUMERICAL) == [
+        0,
+        1,
+    ]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
@@ -597,10 +734,7 @@ def test__fit_with_a_declared_categorical_string_column__reads_it_as_categorical
     """A position in `categorical_features_indices` settles it the same way,
     at any cardinality, so the column is neither expanded nor warned about.
     """
-    n = 200
-    X, y = _estimator_data(
-        estimator_cls, pd.Series([f"sku_{i % 60}" for i in range(n)], dtype="string"), n
-    )
+    X, y = _sku_data(estimator_cls, "string")
 
     model = estimator_cls(
         n_estimators=1,
@@ -616,6 +750,34 @@ def test__fit_with_a_declared_categorical_string_column__reads_it_as_categorical
     assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
         1
     ]
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_declared_strings_are_categorical_off__follows_the_cutoff(
+    estimator_cls: type,
+) -> None:
+    """Off, a declared string column above the cutoff is text after all: still
+    neither expanded nor warned about, since it was declared, but not categorical.
+    """
+    X, y = _sku_data(estimator_cls, "string")
+
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[1],
+        inference_config={
+            "TRANSFORM_TEXT": True,
+            "DECLARED_STRINGS_ARE_CATEGORICAL": False,
+        },
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        model.fit(X, y)
+
+    assert model.text_transformer_.expanded_indices == []
+    schema = model.inferred_feature_schema_
+    assert schema.indices_for(FeatureModality.CATEGORICAL) == []
+    assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 1]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
@@ -642,6 +804,38 @@ def test__fit_with_differentiable_input__sets_a_text_transformer(
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_transform_text__stores_the_shifted_categorical_indices(
+    estimator_cls: type,
+) -> None:
+    """The fitted attribute addresses the validated input, where the declared
+    column has moved down past the expanded text column.
+    """
+    n = 80
+    rng = np.random.default_rng(seed=0)
+    X = pd.DataFrame(
+        {
+            "review": _review_column(n),
+            "cat": rng.choice(["a", "b", "c"], size=n),
+            "num": rng.normal(size=n),
+        }
+    )
+    y = rng.integers(0, 2, size=n) if estimator_cls is TabPFNClassifier else X["num"]
+
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[1],
+        inference_config={"TRANSFORM_TEXT": True},
+    ).fit(X, y)
+    assert model.categorical_features_indices_ == [0]
+
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": True}
+    ).fit(X, y)
+    assert model.categorical_features_indices_ is None
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 def test__fit_with_transform_text_and_tuning__tuning_estimator_gets_shifted_indices(
     estimator_cls: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -653,7 +847,7 @@ def test__fit_with_transform_text_and_tuning__tuning_estimator_gets_shifted_indi
     rng = np.random.default_rng(seed=0)
     X = pd.DataFrame(
         {
-            "review": pd.Series(_review_column(n), dtype="string"),
+            "review": _review_column(n),
             "cat": rng.choice(["a", "b", "c"], size=n),
             "num": rng.normal(size=n),
         }
@@ -670,21 +864,65 @@ def test__fit_with_transform_text_and_tuning__tuning_estimator_gets_shifted_indi
             calibrate_temperature=True, tuning_holdout_frac=0.25, tuning_n_folds=1
         ),
     )
-    getter = "_get_tuning_classifier" if is_classifier else "_get_tuning_regressor"
-    tuning_estimators: list[TabPFNClassifier | TabPFNRegressor] = []
-    original = getattr(model, getter)
-
-    def capture(**kwargs: object) -> TabPFNClassifier | TabPFNRegressor:
-        tuning_estimators.append(original(**kwargs))
-        return tuning_estimators[-1]
-
-    monkeypatch.setattr(model, getter, capture)
+    tuning_estimators = _captured_tuning_estimators(model, monkeypatch)
     model.fit(X, y)
 
     assert tuning_estimators
     assert all(
         estimator.categorical_features_indices == [0] for estimator in tuning_estimators
     )
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_dates_and_text__declared_categorical_moves_past_both(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declared categorical column behind an expanded date and an expanded text
+    column moves down once per expansion, since both append their features at
+    the end. The stored indices, the schema and the tuning estimators must all
+    find it where it ends up.
+    """
+    n = 80
+    rng = np.random.default_rng(seed=0)
+    X = pd.DataFrame(
+        {
+            "when": pd.date_range("2021-01-01", periods=n, freq="D"),
+            "review": _review_column(n),
+            "cat": rng.choice(["a", "b", "c"], size=n),
+            "num": rng.normal(size=n),
+        }
+    )
+    is_classifier = estimator_cls is TabPFNClassifier
+    y = rng.integers(0, 2, size=n) if is_classifier else rng.normal(size=n)
+    config_cls = ClassifierTuningConfig if is_classifier else RegressorTuningConfig
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[2],
+        inference_config={"TRANSFORM_DATES": True, "TRANSFORM_TEXT": True},
+        tuning_config=config_cls(
+            calibrate_temperature=True, tuning_holdout_frac=0.25, tuning_n_folds=1
+        ),
+    )
+    tuning_estimators = _captured_tuning_estimators(model, monkeypatch)
+    model.fit(X, y)
+
+    schema = model.inferred_feature_schema_
+    names = [
+        feature.name.removeprefix(INPUT_FEATURE_PREFIX) for feature in schema.features
+    ]
+    assert names[:2] == ["cat", "num"]
+    assert all(name.startswith(("when_", "review_")) for name in names[2:])
+    assert model.date_transformer_.expanded_indices == [0]
+    # `review` sat at 1 and moved down once the date column ahead of it was dropped.
+    assert model.text_transformer_.expanded_indices == [0]
+    assert model.categorical_features_indices_ == [0]
+    assert schema.indices_for(FeatureModality.CATEGORICAL) == [0]
+    assert tuning_estimators
+    assert all(
+        estimator.categorical_features_indices == [0] for estimator in tuning_estimators
+    )
+    assert len(model.predict(X)) == n
 
 
 def test__predict_proba_batched_with_transform_text__expands_the_test_frames() -> None:

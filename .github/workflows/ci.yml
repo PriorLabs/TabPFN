@@ -50,7 +50,10 @@ jobs:
           - os: windows-latest
             python-version: "3.10"
             dependency-set: lowest-direct
-          - os: macos-latest
+          # macos-latest (macOS 26) runs on a virtual GPU that cannot compile the
+          # fp16/bf16 attention kernel torch >= 2.14 uses there, so the MPS tests
+          # fail. Physical Macs are fine. TODO: retry macos-latest around 2026-11.
+          - os: macos-15
             python-version: "3.14"
             dependency-set: highest
           - os: windows-latest

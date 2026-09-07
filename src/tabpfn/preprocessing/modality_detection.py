@@ -36,6 +36,8 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
+    text_as_numerical: bool = True,
+    declared_strings_are_categorical: bool = True,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -55,8 +57,12 @@ def detect_feature_modalities(
         min_unique_for_numerical: Min unique values for a feature to be numerical.
         min_cardinality_for_text: Distinct-value count above which a string
             column is text rather than a category. Text reaching detection was
-            not expanded, so it is labelled `NUMERICAL`: the model reads the
-            alphabetical rank of each string.
+            not expanded: the model reads the alphabetical rank of each string.
+        text_as_numerical: Whether such a column is labelled `NUMERICAL`, as the
+            model reads it, rather than `TEXT`.
+        declared_strings_are_categorical: Whether a declared string column is
+            `CATEGORICAL` at any distinct-value count. Off, the text cutoff
+            applies to it as to an undeclared one.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -75,24 +81,38 @@ def detect_feature_modalities(
             min_unique_for_numerical=min_unique_for_numerical,
             min_cardinality_for_text=min_cardinality_for_text,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            text_as_numerical=text_as_numerical,
+            declared_strings_are_categorical=declared_strings_are_categorical,
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     return FeatureSchema(features=features)
 
 
-def declared_categorical_indices(X: XType, indices: Sequence[int] | None) -> list[int]:
+def declared_categorical_indices(
+    X: XType, indices: Sequence[int] | None
+) -> list[int] | None:
     """`indices` plus the positions of `X`'s `category` columns.
 
     A `category` dtype declares a column categorical as much as listing its
     index does. Only a DataFrame carries dtypes, and validation drops them,
     so this runs before it.
+
+    Returns:
+        The union, sorted, or `None` when `indices` is `None` and `X` has no
+        `category` column: nothing was declared either way.
     """
-    declared = set(indices or ())
-    if isinstance(X, pd.DataFrame):
-        for i, dtype in enumerate(X.dtypes):
-            if isinstance(dtype, pd.CategoricalDtype):
-                declared.add(i)
-    return sorted(declared)
+    category = (
+        [
+            i
+            for i, dtype in enumerate(X.dtypes)
+            if isinstance(dtype, pd.CategoricalDtype)
+        ]
+        if isinstance(X, pd.DataFrame)
+        else []
+    )
+    if not category:
+        return None if indices is None else list(indices)
+    return sorted({*category, *(indices or ())})
 
 
 def _detect_feature_modality(
@@ -103,6 +123,8 @@ def _detect_feature_modality(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
+    text_as_numerical: bool = True,
+    declared_strings_are_categorical: bool = True,
 ) -> FeatureModality:
     """Decide a single column's modality via heuristics."""
     # Early exit: once a prefix already clears every threshold below, the full
@@ -143,13 +165,15 @@ def _detect_feature_modality(
         return FeatureModality.NUMERICAL
 
     if pd.api.types.is_string_dtype(s.dtype):
-        if reported_categorical or n_unique <= min_cardinality_for_text:
+        if n_unique <= min_cardinality_for_text or (
+            reported_categorical and declared_strings_are_categorical
+        ):
             return FeatureModality.CATEGORICAL
         # Too many distinct strings for a category, and nothing here turns them
         # into text features, so the model gets each string's alphabetical rank
         # as a number. That carries no meaning; it is only the least bad option
         # left. The text transformer warns about such a column.
-        return FeatureModality.NUMERICAL
+        return FeatureModality.NUMERICAL if text_as_numerical else FeatureModality.TEXT
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )

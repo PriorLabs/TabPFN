@@ -130,6 +130,8 @@ def _for_test_detect_with_defaults(
     reported_categorical: bool = False,
     big_enough_n_to_infer_cat: bool = True,
     min_cardinality_for_text: int = 10,
+    text_as_numerical: bool = True,
+    declared_strings_are_categorical: bool = True,
 ) -> FeatureModality:
     return _detect_feature_modality(
         s,
@@ -138,6 +140,8 @@ def _for_test_detect_with_defaults(
         min_unique_for_numerical=min_unique_for_numerical,
         min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+        text_as_numerical=text_as_numerical,
+        declared_strings_are_categorical=declared_strings_are_categorical,
     )
 
 
@@ -280,6 +284,24 @@ def test__string_reported_as_categorical__is_categorical_above_text_threshold():
     assert result == FeatureModality.CATEGORICAL
 
 
+def test__string_reported_as_categorical__with_the_flag_off__follows_the_cutoff():
+    s = pd.Series([f"v{i}" for i in range(50)])
+    result = _for_test_detect_with_defaults(
+        s,
+        reported_categorical=True,
+        min_cardinality_for_text=30,
+        declared_strings_are_categorical=False,
+    )
+    assert result == FeatureModality.NUMERICAL
+    result = _for_test_detect_with_defaults(
+        s,
+        reported_categorical=True,
+        min_cardinality_for_text=50,
+        declared_strings_are_categorical=False,
+    )
+    assert result == FeatureModality.CATEGORICAL
+
+
 class TestDeclaredCategoricalIndices:
     """`declared_categorical_indices` reads a `category` dtype as a declaration."""
 
@@ -299,16 +321,29 @@ class TestDeclaredCategoricalIndices:
         X = pd.DataFrame({"cat": pd.Series(["a", "b"], dtype="category")})
         assert declared_categorical_indices(X, [0]) == [0]
 
-    def test__non_dataframe_input__adds_nothing(self) -> None:
-        X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        assert declared_categorical_indices(X, [1]) == [1]
-        assert declared_categorical_indices(X, None) == []
+    def test__nothing_to_add__returns_the_declaration_as_it_came(self) -> None:
+        """`None` stays `None`: it means nothing was declared, and still does."""
+        for X in (
+            np.array([[1.0, 2.0], [3.0, 4.0]]),
+            pd.DataFrame({"num": [1.0, 2.0], "str": ["a", "b"]}),
+        ):
+            assert declared_categorical_indices(X, [1]) == [1]
+            assert declared_categorical_indices(X, []) == []
+            assert declared_categorical_indices(X, None) is None
 
 
 def test__string_above_text_threshold__is_numerical():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.NUMERICAL
+
+
+def test__string_above_text_threshold__with_text_as_numerical_off__is_text():
+    s = pd.Series(["a", "b", "c", "a", "b", "c"])
+    result = _for_test_detect_with_defaults(
+        s, min_cardinality_for_text=2, text_as_numerical=False
+    )
+    assert result == FeatureModality.TEXT
 
 
 def test__detect_long_texts():
@@ -605,7 +640,7 @@ class TestDetectFeatureModalitiesOnStrings:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
     def _detect(
-        self, X: pd.DataFrame, declared: list[int] | None = None
+        self, X: pd.DataFrame, declared: list[int] | None = None, **flags: bool
     ) -> FeatureSchema:
         return detect_feature_modalities(
             X=X.to_numpy(dtype=object),
@@ -615,6 +650,7 @@ class TestDetectFeatureModalitiesOnStrings:
             max_unique_for_category=30,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
+            **flags,
         )
 
     def test__free_text_column__is_numerical(self) -> None:
@@ -691,6 +727,23 @@ class TestDetectFeatureModalitiesOnStrings:
 
         schema = self._detect(X, declared)
         assert schema.indices_for(FeatureModality.CATEGORICAL) == declared
+
+    def test__both_flags_off__restore_the_text_modality(self) -> None:
+        """With `text_as_numerical` and `declared_strings_are_categorical` off,
+        a string column above the cutoff is `TEXT`, declared or not.
+        """
+        X = pd.DataFrame(
+            {
+                "num": self._numeric_column(),
+                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
+                "sku": [f"sku_{i % 60}" for i in range(200)],
+            }
+        )
+        schema = self._detect(
+            X, [2], text_as_numerical=False, declared_strings_are_categorical=False
+        )
+        assert schema.indices_for(FeatureModality.TEXT) == [1, 2]
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == []
 
 
 def test__category_and_text_thresholds__move_independently() -> None:

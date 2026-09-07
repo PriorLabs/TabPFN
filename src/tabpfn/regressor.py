@@ -246,6 +246,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     text_transformer_: TextTransformer
     """The transformer that expanded every text column before validation."""
 
+    categorical_features_indices_: list[int] | None
+    """`categorical_features_indices` as positions in the validated input, where
+    an expanded date or text column has moved everything after it down."""
+
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
 
@@ -896,7 +900,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
         validate_categorical_features_indices(self.categorical_features_indices)
-        X, date_transformer, text_transformer, categorical_indices = (
+        X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
                 X,
                 categorical_features_indices=self.categorical_features_indices,
@@ -920,12 +924,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=text_transformer.feature_names_out_,
+            feature_names=feature_names,
             provided_categorical_indices=categorical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
+            text_as_numerical=self.inference_config_.TEXT_AS_NUMERICAL,
+            declared_strings_are_categorical=self.inference_config_.DECLARED_STRINGS_ARE_CATEGORICAL,
         )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
@@ -936,6 +942,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.ordinal_encoder_ = ordinal_encoder
         self.date_transformer_ = date_transformer
         self.text_transformer_ = text_transformer
+        self.categorical_features_indices_ = categorical_indices
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -1003,9 +1010,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "tuning_config": None,  # never tune inside tuning
             # Fit on the already-expanded array, where a declared column may
             # have moved down past an expanded date or text column.
-            "categorical_features_indices": self.text_transformer_.output_indices(
-                self.date_transformer_.output_indices(self.categorical_features_indices)
-            ),
+            "categorical_features_indices": self.categorical_features_indices_,
         }
 
         params.update(forced)
