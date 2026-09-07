@@ -40,9 +40,10 @@ NUMERIC_DTYPE_KINDS = "?bBiufm"
 # converts those through its own units rather than numpy's raw integers.
 FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
 OBJECT_DTYPE_KINDS = "OV"
-# numpy's fixed-width unicode strings; pandas reads them as string columns.
-UNICODE_DTYPE_KINDS = "U"
-BYTES_DTYPE_KINDS = "Sa"
+# Fixed-width unicode ("U") and numpy 2's variable-width strings ("T"); pandas
+# reads both as string columns.
+STRING_DTYPE_KINDS = "UT"
+BYTES_DTYPE_KINDS = "S"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
@@ -243,16 +244,17 @@ def fix_dtypes(  # noqa: D103
             # It's a numeric type, just wrap the array in pandas with the correct dtype
             X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
             convert_dtype = False
-        elif X.dtype.kind in OBJECT_DTYPE_KINDS + UNICODE_DTYPE_KINDS:
+        elif (
+            X.dtype.kind in OBJECT_DTYPE_KINDS + STRING_DTYPE_KINDS + BYTES_DTYPE_KINDS
+        ):
             # If numpy and object dtype, we rely on pandas to handle introspection
-            # of columns and rows to determine the dtypes. A unicode array holds
-            # strings the same way an object array of `str` does.
+            # of columns and rows to determine the dtypes. A string array holds
+            # strings the same way an object array of `str` does, and a byte string
+            # array does once decoded.
+            if X.dtype.kind in BYTES_DTYPE_KINDS:
+                X = _decode_bytes(X)
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
-        elif X.dtype.kind in BYTES_DTYPE_KINDS:
-            raise ValueError(
-                f"Byte string dtypes are not supported. Got dtype: {X.dtype}",
-            )
         else:
             raise ValueError(f"Invalid dtype for X: {X.dtype}")
     else:
@@ -313,6 +315,17 @@ def fix_dtypes(  # noqa: D103
     ):
         X = _cast_columns(X, numerical_columns, numeric_dtype)
     return X
+
+
+def _decode_bytes(X: np.ndarray) -> np.ndarray:
+    """Decode a byte string array as UTF-8, as `bytes.decode` does by default."""
+    try:
+        return np.char.decode(X, "utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            f"X holds byte strings that are not valid UTF-8 ({e}). Decode them to "
+            "`str` yourself before passing them."
+        ) from e
 
 
 def _column_kind(dtype: Any) -> str:

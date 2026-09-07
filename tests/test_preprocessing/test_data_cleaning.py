@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from unittest import mock
 
 import numpy as np
@@ -1304,43 +1305,72 @@ def test__fit_predict__a_float32_input_predicts_as_its_float64_equal() -> None:
     np.testing.assert_array_equal(proba(X32), proba(X64))
 
 
-def test__fix_dtypes__unicode_array__is_read_like_an_object_array() -> None:
-    """A fixed-width unicode array is read like an `object` array of `str`."""
-    unicode = np.array([["a", "1.5"], ["b", "2.5"], ["a", "3.5"]])
-    assert unicode.dtype.kind == "U"
+def _string_array_kinds() -> list:
+    """Every numpy string dtype: fixed-width unicode, and numpy 2's `StringDType`."""
+    kinds = [pytest.param(str, id="unicode")]
+    string_dtype = getattr(getattr(np, "dtypes", None), "StringDType", None)
+    if string_dtype is not None:
+        kinds.append(pytest.param(string_dtype(), id="StringDType"))
+    return kinds
+
+
+@pytest.mark.parametrize("dtype", _string_array_kinds())
+def test__fix_dtypes__string_array__is_read_like_an_object_array(dtype: object) -> None:
+    strings = np.array([["a", "1.5"], ["b", "2.5"], ["a", "3.5"]], dtype=dtype)
+    assert strings.dtype.kind in "UT"
 
     pd.testing.assert_frame_equal(
-        fix_dtypes(unicode, cat_indices=[0]),
-        fix_dtypes(unicode.astype(object), cat_indices=[0]),
+        fix_dtypes(strings, cat_indices=[0]),
+        fix_dtypes(strings.astype(object), cat_indices=[0]),
     )
 
 
-def test__fix_dtypes__bytes_array__is_refused() -> None:
-    with pytest.raises(ValueError, match="Byte string dtypes are not supported"):
-        fix_dtypes(np.array([[b"a"], [b"b"]]), cat_indices=None)
+def test__fix_dtypes__bytes_array__is_decoded_as_utf8() -> None:
+    strings = np.array([["a", "1.5"], ["\u00e9", "2.5"], ["a", "3.5"]])
+    encoded = np.char.encode(strings, "utf-8")
+    assert encoded.dtype.kind == "S"
+
+    pd.testing.assert_frame_equal(
+        fix_dtypes(encoded, cat_indices=[0]),
+        fix_dtypes(strings, cat_indices=[0]),
+    )
+
+
+def test__fix_dtypes__undecodable_bytes__are_refused() -> None:
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        fix_dtypes(np.array([[b"\xff"], [b"a"]]), cat_indices=None)
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_predict__unicode_array__is_accepted_like_an_object_array(
+@pytest.mark.parametrize(
+    "as_array",
+    [
+        pytest.param(lambda X: X, id="unicode"),
+        pytest.param(lambda X: np.char.encode(X, "utf-8"), id="bytes"),
+    ],
+)
+def test__fit_predict__string_array__is_accepted_like_an_object_array(
     estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+    as_array: Callable[[np.ndarray], np.ndarray],
 ) -> None:
     """A numpy string array is accepted at fit and at predict, and predicts the same
     as the same strings in an `object` array, whether the model was fitted on the
     string array or on a DataFrame of it.
     """
     n = 40
-    X = np.array([[f"c{i % 3}", f"{i % 5}"] for i in range(n)])
-    assert X.dtype.kind == "U"
+    strings = np.array([[f"c{i % 3}", f"{i % 5}"] for i in range(n)])
+    X = as_array(strings)
+    assert X.dtype.kind in "US"
     y = np.arange(n) % 2 if estimator_cls is TabPFNClassifier else np.arange(n) / n
 
     fitted_on_array = estimator_cls(n_estimators=1, device="cpu", random_state=0)
     fitted_on_array.fit(X, y)
     np.testing.assert_array_equal(
-        fitted_on_array.predict(X), fitted_on_array.predict(X.astype(object))
+        fitted_on_array.predict(X), fitted_on_array.predict(strings.astype(object))
     )
 
     fitted_on_frame = estimator_cls(n_estimators=1, device="cpu", random_state=0)
-    fitted_on_frame.fit(pd.DataFrame(X), y)
+    fitted_on_frame.fit(pd.DataFrame(strings), y)
     np.testing.assert_array_equal(
-        fitted_on_frame.predict(X), fitted_on_frame.predict(X.astype(object))
+        fitted_on_frame.predict(X), fitted_on_frame.predict(strings.astype(object))
     )
