@@ -308,9 +308,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 The indices of the columns that are suggested to be treated as
                 categorical. If `None`, the model will infer the categorical columns.
                 A column with pandas' `category` dtype counts as listed here. A
-                declared column is taken at face value: categorical whatever its
-                cardinality and whether it holds strings or numbers, never text
-                and never numerical.
+                string column declared this way is read as categorical whatever
+                its cardinality, never as text; for a numeric one, we might ignore
+                the suggestion to better fit the data seen during pre-training.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to

@@ -17,7 +17,7 @@ def infer_categorical_features(
     X: np.ndarray,
     *,
     min_samples_for_inference: int,
-    max_unique_for_category: int,  # noqa: ARG001
+    max_unique_for_category: int,
     min_unique_for_numerical: int,
     provided: Sequence[int] | None = None,
 ) -> list[int]:
@@ -36,8 +36,8 @@ def infer_categorical_features(
             for automatic inference of features which were not provided
             as categorical.
         max_unique_for_category:
-            Unused: a provided categorical is taken at face value. Kept so the
-            signature matches `detect_feature_modalities`.
+            The maximum number of unique values for a
+            feature to be considered categorical.
         min_unique_for_numerical:
             The minimum number of unique values for a
             feature to be considered numerical.
@@ -62,7 +62,10 @@ def infer_categorical_features(
                 "argument must be a string or a number"
                 "(columns must only contain strings or numbers)"
             ) from e
-        if ix in maybe_categoricals or (
+        if ix in maybe_categoricals:
+            if num_distinct <= max_unique_for_category:
+                indices.append(ix)
+        elif (
             large_enough_x_to_infer_categorical
             and num_distinct < min_unique_for_numerical
         ):
