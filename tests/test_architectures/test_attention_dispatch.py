@@ -1,5 +1,5 @@
 #  Copyright (c) Prior Labs GmbH 2026.
-"""TabPFN v3 routes its attention calls through the registry.
+"""TabPFN v3 and v3.5 route their attention calls through the registry.
 
 Checked from the outside: a registered backend sees the calls it should,
 described as they really are.
@@ -7,12 +7,14 @@ described as they really are.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator
 
 import pytest
 import torch
 
-from tabpfn.architectures import tabpfn_v3
+from tabpfn.architectures import tabpfn_v3, tabpfn_v3_5
+from tabpfn.architectures.interface import Architecture, ArchitectureModule
 from tabpfn.architectures.kv_cache import FP8_KV_DTYPE
 from tabpfn.architectures.shared import attention_backends
 from tabpfn.architectures.shared.attention_backends import AttentionSpec
@@ -59,19 +61,36 @@ def registry_sandbox() -> Iterator[None]:
         attention_backends._consult_order = saved_order
 
 
-def _model(nlayers: int = 2) -> tabpfn_v3.TabPFNV3:
-    config = tabpfn_v3.TabPFNV3Config(
-        max_num_classes=10,
-        num_buckets=5,
-        embed_dim=48,
-        nlayers=nlayers,
-        icl_num_heads=3,
-        dist_embed_num_heads=3,
-        feat_agg_num_heads=3,
+# Every architecture that dispatches through the registry.
+_ARCHITECTURES = [tabpfn_v3, tabpfn_v3_5]
+
+
+def _model(architecture: ArchitectureModule, nlayers: int = 2) -> Architecture:
+    config, _ = architecture.parse_config(
+        {
+            "max_num_classes": 10,
+            "num_buckets": 5,
+            "embed_dim": 48,
+            "nlayers": nlayers,
+            "icl_num_heads": 3,
+            "dist_embed_num_heads": 3,
+            "feat_agg_num_heads": 3,
+            # Both architectures then run their ICL attention at head_dim 64, in
+            # one call per layer over train and test rows together.
+            "feat_agg_num_cls_tokens": 4,
+            "icl_num_kv_heads_test": None,
+        }
     )
-    model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    model = architecture.get_architecture(config, cache_trainset_representation=False)
     model.to(torch.float32)
     return model
+
+
+def _forward_kwargs(model: Architecture) -> dict[str, str]:
+    """v3.5 takes the task per call; v3 is built for one task."""
+    if "task_type" in inspect.signature(model.forward).parameters:
+        return {"task_type": "multiclass"}
+    return {}
 
 
 def _inputs() -> tuple[torch.Tensor, torch.Tensor]:
@@ -82,15 +101,18 @@ def _inputs() -> tuple[torch.Tensor, torch.Tensor]:
 
 
 @pytest.mark.usefixtures("registry_sandbox")
+@pytest.mark.parametrize("architecture", _ARCHITECTURES, ids=lambda m: m.__name__)
 @torch.no_grad()
-def test_backend_receives_the_calls_it_prefers() -> None:
+def test_backend_receives_the_calls_it_prefers(
+    architecture: ArchitectureModule,
+) -> None:
     """A backend preferring the ICL shape runs once per ICL layer."""
     backend = _RecordingBackend(take=_is_icl_spec)
     attention_backends.register_attention_backend(backend)
-    model = _model(nlayers=2)
+    model = _model(architecture, nlayers=2)
     x, y = _inputs()
 
-    model(x, y)
+    model(x, y, **_forward_kwargs(model))
 
     assert backend.runs == 2  # one per ICL layer
     icl_specs = [spec for spec in backend.specs if _is_icl_spec(spec)]
@@ -103,19 +125,22 @@ def test_backend_receives_the_calls_it_prefers() -> None:
 
 
 @pytest.mark.usefixtures("registry_sandbox")
+@pytest.mark.parametrize("architecture", _ARCHITECTURES, ids=lambda m: m.__name__)
 @torch.no_grad()
-def test_cached_predict_specs_report_the_quantized_cache() -> None:
+def test_cached_predict_specs_report_the_quantized_cache(
+    architecture: ArchitectureModule,
+) -> None:
     """On the cache path the specs carry the stored KV dtype."""
     backend = _RecordingBackend()  # observe only
     attention_backends.register_attention_backend(backend)
-    model = _model()
+    model = _model(architecture)
     x, y = _inputs()
 
-    _, cache = model(x, y, return_kv_cache=True)
+    _, cache = model(x, y, return_kv_cache=True, **_forward_kwargs(model))
     cache = cache.quantize(FP8_KV_DTYPE)
     backend.specs.clear()
 
-    model(x[10:], y, kv_cache=cache, x_is_test_only=True)
+    model(x[10:], y, kv_cache=cache, x_is_test_only=True, **_forward_kwargs(model))
 
     quantized = [s for s in backend.specs if s.quantized_kv_dtype is not None]
     assert quantized, "no spec reported the quantized cache"

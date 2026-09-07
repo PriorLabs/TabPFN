@@ -455,7 +455,8 @@ def raise_if_checkpoints_disagree_on_overridable_fields(
 
 def cpu_sample_limit(model_version: ModelVersion) -> int:
     """Max sample count allowed for CPU inference by default, per model version."""
-    return 5000 if model_version == ModelVersion.V3 else 1000
+    pre_v3 = (ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6)
+    return 1000 if model_version in pre_v3 else 5000
 
 
 def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:

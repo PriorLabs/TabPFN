@@ -43,6 +43,8 @@ from tabpfn.inference_config import (
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sklearn.base import BaseEstimator
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -60,6 +62,17 @@ FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/051
 V_2_5_IDENTIFIER = "v2.5"
 V_2_6_IDENTIFIER = "v2.6"
 V_3_IDENTIFIER = "v3"
+V_3_5_IDENTIFIER = "v3.5"
+V_3_5_FAST_IDENTIFIER = "v3.5-fast"
+
+# Checkpoints name the architecture module that loads them. The names below are
+# older spellings of a module that is still loaded, mapped to its current name.
+_ARCHITECTURE_NAME_ALIASES = {
+    # v2.5 checkpoints predate the architecture-per-module layout.
+    "base": "tabpfn_v2_5",
+    # TODO: Remove once the v3.5 checkpoints are re-exported.
+    "tabpfn_v3_5_prerelease": "tabpfn_v3_5",
+}
 
 
 class ModelType(str, Enum):  # noqa: D101
@@ -198,32 +211,61 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
+    # From v3.5 on, one checkpoint carries both a classification and a regression
+    # head, so there is one source per version rather than one per estimator type.
 
-def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:  # noqa: PLR0911
-    if version == ModelVersion.V2:
-        if model_type == ModelType.CLASSIFIER:
-            return ModelSource.get_classifier_v2()
-        if model_type == ModelType.REGRESSOR:
-            return ModelSource.get_regressor_v2()
-    elif version == ModelVersion.V2_5:
-        if model_type == ModelType.CLASSIFIER:
-            return ModelSource.get_classifier_v2_5()
-        if model_type == ModelType.REGRESSOR:
-            return ModelSource.get_regressor_v2_5()
-    elif version == ModelVersion.V2_6:
-        if model_type == ModelType.CLASSIFIER:
-            return ModelSource.get_classifier_v2_6()
-        if model_type == ModelType.REGRESSOR:
-            return ModelSource.get_regressor_v2_6()
-    elif version == ModelVersion.V3:
-        if model_type == ModelType.CLASSIFIER:
-            return ModelSource.get_classifier_v3()
-        if model_type == ModelType.REGRESSOR:
-            return ModelSource.get_regressor_v3()
+    @classmethod
+    def get_v3_5(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v3.5-20260902.safetensors",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn_3_5",
+            default_filename="tabpfn-v3.5-20260902.safetensors",
+            filenames=filenames,
+        )
 
-    raise ValueError(
-        f"Unsupported version/model combination: {version.value}/{model_type.value}",
-    )
+    @classmethod
+    def get_v3_5_fast(cls) -> ModelSource:  # noqa: D102
+        # A separate, faster model, not a re-export of `get_v3_5`.
+        filenames = [
+            "tabpfn-v3.5-fast-20260903.safetensors",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn_3_5",
+            default_filename="tabpfn-v3.5-fast-20260903.safetensors",
+            filenames=filenames,
+        )
+
+
+def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
+    sources_by_type: dict[ModelType, Callable[[], ModelSource]] | None = {
+        ModelVersion.V2: {
+            ModelType.CLASSIFIER: ModelSource.get_classifier_v2,
+            ModelType.REGRESSOR: ModelSource.get_regressor_v2,
+        },
+        ModelVersion.V2_5: {
+            ModelType.CLASSIFIER: ModelSource.get_classifier_v2_5,
+            ModelType.REGRESSOR: ModelSource.get_regressor_v2_5,
+        },
+        ModelVersion.V2_6: {
+            ModelType.CLASSIFIER: ModelSource.get_classifier_v2_6,
+            ModelType.REGRESSOR: ModelSource.get_regressor_v2_6,
+        },
+        ModelVersion.V3: {
+            ModelType.CLASSIFIER: ModelSource.get_classifier_v3,
+            ModelType.REGRESSOR: ModelSource.get_regressor_v3,
+        },
+        # From v3.5 on, one multitask checkpoint backs both estimator types.
+        ModelVersion.V3_5: dict.fromkeys(ModelType, ModelSource.get_v3_5),
+        ModelVersion.V3_5_FAST: dict.fromkeys(ModelType, ModelSource.get_v3_5_fast),
+    }.get(version)
+    if sources_by_type is None or model_type not in sources_by_type:
+        raise ValueError(
+            "Unsupported version/model combination: "
+            f"{version.value}/{model_type.value}",
+        )
+    return sources_by_type[model_type]()
 
 
 def _try_huggingface_downloads(
@@ -387,6 +429,9 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V2_6, ModelSource.get_regressor_v2_6(), "regressor"),
         (ModelVersion.V3, ModelSource.get_classifier_v3(), "classifier"),
         (ModelVersion.V3, ModelSource.get_regressor_v3(), "regressor"),
+        # One multitask checkpoint per v3.5 version backs both estimator types.
+        (ModelVersion.V3_5, ModelSource.get_v3_5(), "classifier"),
+        (ModelVersion.V3_5_FAST, ModelSource.get_v3_5_fast(), "classifier"),
     ]:
         for ckpt_name in model_source.filenames:
             path = to / ckpt_name
@@ -518,6 +563,8 @@ def _download_model(
         ModelVersion.V2_5: "tabpfn_2_5",
         ModelVersion.V2_6: "tabpfn_2_6",
         ModelVersion.V3: "tabpfn_3",
+        ModelVersion.V3_5: "tabpfn_3_5",
+        ModelVersion.V3_5_FAST: "tabpfn_3_5",
     }
     if version in _HF_REPOS:
         try:
@@ -590,7 +637,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
-    version: Literal["v2", "v2.5", "v2.6", "v3"],
+    version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"],
     estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
@@ -609,7 +656,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
-    version: Literal["v2", "v2.5", "v2.6", "v3"],
+    version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"],
     estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
@@ -628,7 +675,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     estimator_type: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"],
+    version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
@@ -768,12 +815,17 @@ def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
     if model_path is None:
         return settings.tabpfn.model_version
     name = Path(model_path).name
-    if V_2_6_IDENTIFIER in name:
-        return ModelVersion.V2_6
-    if V_2_5_IDENTIFIER in name:
-        return ModelVersion.V2_5
-    if V_3_IDENTIFIER in name:
-        return ModelVersion.V3
+    # Most specific first: "v3.5-fast" contains "v3.5", which contains "v3".
+    identifiers = [
+        (V_3_5_FAST_IDENTIFIER, ModelVersion.V3_5_FAST),
+        (V_3_5_IDENTIFIER, ModelVersion.V3_5),
+        (V_2_6_IDENTIFIER, ModelVersion.V2_6),
+        (V_2_5_IDENTIFIER, ModelVersion.V2_5),
+        (V_3_IDENTIFIER, ModelVersion.V3),
+    ]
+    for identifier, version in identifiers:
+        if identifier in name:
+            return version
     return ModelVersion.V2
 
 
@@ -794,7 +846,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v3",
+    version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"] = "v3",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -813,7 +865,7 @@ def resolve_model_path(
             interpreted relative to the current working directory. If no file
             exists there, it falls back to the TabPFN cache directory.
         which: The type of model ('regressor' or 'classifier').
-        version: The model version (currently only 'v2').
+        version: The model version, used to pick the default model.
 
     Returns:
         A tuple containing lists of resolved model Path(s),
@@ -1023,12 +1075,12 @@ def _build_model(
     """Build a model from a resolved checkpoint path (no built-model cache)."""
     checkpoint = _load_checkpoint_cached(resolved, identity)
 
-    # V2 models don't have the "architecture_name" key, V2.5 models have the
-    # architecture name set to "base", so we remap. From V2.6 onwards, the architecture
-    # name corresponds to the python file name.
+    # V2 models don't have the "architecture_name" key. From V2.5 onwards, the
+    # architecture name corresponds to the python file name, up to the aliases.
     architecture_name = checkpoint.get("architecture_name", "tabpfn_v2")
-    if architecture_name == "base":
-        architecture_name = "tabpfn_v2_5"
+    architecture_name = _ARCHITECTURE_NAME_ALIASES.get(
+        architecture_name, architecture_name
+    )
     architecture = ARCHITECTURES[architecture_name]
     full_state = checkpoint["state_dict"]
     model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
@@ -1307,7 +1359,10 @@ def _resolve_architecture_name(config: ArchitectureConfig) -> str:
     from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5Config  # noqa: PLC0415
     from tabpfn.architectures.tabpfn_v2_6 import TabPFNV2p6Config  # noqa: PLC0415
     from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config  # noqa: PLC0415
+    from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5Config  # noqa: PLC0415
 
+    if isinstance(config, TabPFNV3p5Config):
+        return "tabpfn_v3_5"
     if isinstance(config, TabPFNV3Config):
         return "tabpfn_v3"
     if isinstance(config, TabPFNV2p6Config):

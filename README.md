@@ -68,6 +68,13 @@ classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
 regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_6)
 ```
 
+TabPFN-3.5 and the smaller, faster TabPFN-3.5-Fast are available as `ModelVersion.V3_5` and `ModelVersion.V3_5_FAST`. One checkpoint backs both the classifier and the regressor:
+
+```python
+classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
+regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5_FAST)
+```
+
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
 
 ## TabPFN Ecosystem

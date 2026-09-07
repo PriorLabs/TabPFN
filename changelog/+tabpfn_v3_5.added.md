@@ -1,0 +1,1 @@
+Add TabPFN-3.5 and TabPFN-3.5-Fast: `TabPFNClassifier` and `TabPFNRegressor` accept `ModelVersion.V3_5` and `ModelVersion.V3_5_FAST`, including `create_default_for_version`, and load the new `tabpfn_v3_5` architecture. Each version is one multitask checkpoint that backs both estimators.

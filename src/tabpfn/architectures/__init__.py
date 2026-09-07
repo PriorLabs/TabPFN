@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import tabpfn_v2, tabpfn_v2_5, tabpfn_v2_6, tabpfn_v3
+from . import tabpfn_v2, tabpfn_v2_5, tabpfn_v2_6, tabpfn_v3, tabpfn_v3_5
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import ArchitectureModule
@@ -23,6 +23,7 @@ ARCHITECTURES: dict[str, ArchitectureModule] = {
     "tabpfn_v2_5": tabpfn_v2_5,
     "tabpfn_v2_6": tabpfn_v2_6,
     "tabpfn_v3": tabpfn_v3,
+    "tabpfn_v3_5": tabpfn_v3_5,
 }
 """Map from architecture names to the corresponding module."""
 
