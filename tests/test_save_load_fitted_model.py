@@ -19,7 +19,11 @@ from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
-from tabpfn.model_loading import save_tabpfn_model
+from tabpfn.model_loading import (
+    load_fitted_tabpfn_model,
+    save_fitted_tabpfn_model,
+    save_tabpfn_model,
+)
 from tabpfn.utils import infer_devices
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
@@ -506,4 +510,26 @@ def test__load_from_fit_state__without_device__resolves_like_auto(
 
     assert loaded.device == "auto"
     assert loaded.devices_ == infer_devices("auto")
+    assert len(loaded.predict(X)) == len(X)
+
+
+@pytest.mark.parametrize(
+    "device",
+    ["cpu", torch.device("cpu"), ["cpu"], [torch.device("cpu")]],
+    ids=["str", "torch_device", "list_of_str", "list_of_torch_device"],
+)
+def test__load_fitted_tabpfn_model__every_device_spec_form__loads(
+    device: str | torch.device | list[str | torch.device],
+    tmp_path: Path,
+) -> None:
+    """Every form the annotation accepts must reach the estimator unaltered."""
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device="cpu", n_estimators=2)
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+    save_fitted_tabpfn_model(model, path)
+
+    loaded = load_fitted_tabpfn_model(path, device=device)
+
+    assert loaded.devices_ == (torch.device("cpu"),)
     assert len(loaded.predict(X)) == len(X)

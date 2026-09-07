@@ -1262,20 +1262,11 @@ def load_fitted_tabpfn_model(
 
     Args:
         path: The ``.tabpfn_fit`` archive to load.
-        device: The device(s) to load the estimator onto. Defaults to ``"auto"``,
-            matching the estimator constructors, which selects CUDA, then MPS,
-            then CPU by availability. The archive does not record the device the
-            model was fitted on, so pass this explicitly to pin the estimator to
-            a device.
+        device: The device(s) to load onto. The archive does not record where the
+            model was fitted, so the default resolves by availability like the
+            constructors' does; pass a device to pin it.
     """
     path = Path(path)
-    # The spec is written to JSON and passed to `to()`, so normalize a
-    # torch.device or a sequence of them to plain strings.
-    device_spec: str | list[str] = (
-        str(device)
-        if isinstance(device, (str, torch.device))
-        else [str(d) for d in device]
-    )
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
@@ -1291,7 +1282,7 @@ def load_fitted_tabpfn_model(
         ].startswith("torch."):
             dtype_name = params["inference_precision"].split(".")[1]
             params["inference_precision"] = getattr(torch, dtype_name)
-        params["device"] = device_spec
+        params["device"] = device
 
         if saved_cls_name == "TabPFNClassifier":
             cls = import_module("tabpfn.classifier").TabPFNClassifier
@@ -1313,7 +1304,7 @@ def load_fitted_tabpfn_model(
             tmp / "executor_state.joblib", est.models_
         )
 
-        est.to(device_spec)
+        est.to(device)
 
         return est
 
