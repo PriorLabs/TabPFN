@@ -602,9 +602,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
 
     @classmethod
-    def create_default_for_version(
-        cls, version: ModelVersion | str, **overrides
-    ) -> Self:
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
         """Construct a regressor that uses the given version of the model.
 
         In addition to selecting the model, this also configures certain settings to the
