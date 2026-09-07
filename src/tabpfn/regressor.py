@@ -47,6 +47,7 @@ from tabpfn.base import (
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
+    include_category_dtype_columns,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolved_n_estimators,
@@ -247,8 +248,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The transformer that expanded every text column before validation."""
 
     categorical_features_indices_: list[int] | None
-    """`categorical_features_indices` as positions in the validated input, where
-    an expanded date or text column has moved everything after it down."""
+    """`categorical_features_indices`, plus every pandas `category` column of the
+    fit input, as positions in the validated input, where an expanded date or text
+    column has moved everything after it down."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -338,8 +340,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
                 categorical. If `None`, the model will infer the categorical columns.
-                If provided, we might ignore some of the suggestion to better fit the
-                data seen during pre-training.
+                A column with pandas' `category` dtype counts as listed here. A
+                string column declared this way is read as categorical whatever
+                its cardinality, never as text; for a numeric one, we might ignore
+                the suggestion to better fit the data seen during pre-training.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -900,10 +904,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
         validate_categorical_features_indices(self.categorical_features_indices)
+        categorical_indices = include_category_dtype_columns(
+            X, self.categorical_features_indices
+        )
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
                 X,
-                categorical_features_indices=self.categorical_features_indices,
+                categorical_features_indices=categorical_indices,
                 inference_config=self.inference_config_,
             )
         )

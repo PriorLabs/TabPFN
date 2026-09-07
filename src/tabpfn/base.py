@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn.base import (
     check_is_fitted,
@@ -413,6 +414,30 @@ def create_inference_engine(  # noqa: PLR0913
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
+
+
+def include_category_dtype_columns(
+    X: XType,
+    categorical_features_indices: Sequence[int] | None,
+) -> list[int] | None:
+    """Add the positions of `X`'s pandas `category` columns to the declared ones.
+
+    A `category` dtype states the same intent as an entry in
+    `categorical_features_indices`, so the two are merged here, before any column
+    moves, and the merged list drives everything downstream: the declared
+    categoricals are taken at face value, whatever their cardinality.
+
+    Returns:
+        The sorted union of both, or `None` when neither names a column.
+    """
+    declared = set(categorical_features_indices or ())
+    if isinstance(X, pd.DataFrame):
+        declared.update(
+            i
+            for i, dtype in enumerate(X.dtypes)
+            if isinstance(dtype, pd.CategoricalDtype)
+        )
+    return sorted(declared) if declared else None
 
 
 def expand_dates_and_text(
