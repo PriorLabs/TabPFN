@@ -1302,3 +1302,45 @@ def test__fit_predict__a_float32_input_predicts_as_its_float64_equal() -> None:
         return model.fit(X, y).predict_proba(X)
 
     np.testing.assert_array_equal(proba(X32), proba(X64))
+
+
+def test__fix_dtypes__unicode_array__is_read_like_an_object_array() -> None:
+    """A fixed-width unicode array is read like an `object` array of `str`."""
+    unicode = np.array([["a", "1.5"], ["b", "2.5"], ["a", "3.5"]])
+    assert unicode.dtype.kind == "U"
+
+    pd.testing.assert_frame_equal(
+        fix_dtypes(unicode, cat_indices=[0]),
+        fix_dtypes(unicode.astype(object), cat_indices=[0]),
+    )
+
+
+def test__fix_dtypes__bytes_array__is_refused() -> None:
+    with pytest.raises(ValueError, match="Byte string dtypes are not supported"):
+        fix_dtypes(np.array([[b"a"], [b"b"]]), cat_indices=None)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_predict__unicode_array__is_accepted_like_an_object_array(
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> None:
+    """A numpy string array is accepted at fit and at predict, and predicts the same
+    as the same strings in an `object` array, whether the model was fitted on the
+    string array or on a DataFrame of it.
+    """
+    n = 40
+    X = np.array([[f"c{i % 3}", f"{i % 5}"] for i in range(n)])
+    assert X.dtype.kind == "U"
+    y = np.arange(n) % 2 if estimator_cls is TabPFNClassifier else np.arange(n) / n
+
+    fitted_on_array = estimator_cls(n_estimators=1, device="cpu", random_state=0)
+    fitted_on_array.fit(X, y)
+    np.testing.assert_array_equal(
+        fitted_on_array.predict(X), fitted_on_array.predict(X.astype(object))
+    )
+
+    fitted_on_frame = estimator_cls(n_estimators=1, device="cpu", random_state=0)
+    fitted_on_frame.fit(pd.DataFrame(X), y)
+    np.testing.assert_array_equal(
+        fitted_on_frame.predict(X), fitted_on_frame.predict(X.astype(object))
+    )

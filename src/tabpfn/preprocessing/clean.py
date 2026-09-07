@@ -40,7 +40,9 @@ NUMERIC_DTYPE_KINDS = "?bBiufm"
 # converts those through its own units rather than numpy's raw integers.
 FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
 OBJECT_DTYPE_KINDS = "OV"
-STRING_DTYPE_KINDS = "SaU"
+# numpy's fixed-width unicode strings; pandas reads them as string columns.
+UNICODE_DTYPE_KINDS = "U"
+BYTES_DTYPE_KINDS = "Sa"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
@@ -241,14 +243,15 @@ def fix_dtypes(  # noqa: D103
             # It's a numeric type, just wrap the array in pandas with the correct dtype
             X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
             convert_dtype = False
-        elif X.dtype.kind in OBJECT_DTYPE_KINDS:
+        elif X.dtype.kind in OBJECT_DTYPE_KINDS + UNICODE_DTYPE_KINDS:
             # If numpy and object dtype, we rely on pandas to handle introspection
-            # of columns and rows to determine the dtypes.
+            # of columns and rows to determine the dtypes. A unicode array holds
+            # strings the same way an object array of `str` does.
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
-        elif X.dtype.kind in STRING_DTYPE_KINDS:
+        elif X.dtype.kind in BYTES_DTYPE_KINDS:
             raise ValueError(
-                f"String dtypes are not supported. Got dtype: {X.dtype}",
+                f"Byte string dtypes are not supported. Got dtype: {X.dtype}",
             )
         else:
             raise ValueError(f"Invalid dtype for X: {X.dtype}")
