@@ -518,11 +518,15 @@ def test__load_from_fit_state__without_device__resolves_like_auto(
     ["cpu", torch.device("cpu"), ["cpu"], [torch.device("cpu")]],
     ids=["str", "torch_device", "list_of_str", "list_of_torch_device"],
 )
-def test__load_fitted_tabpfn_model__every_device_spec_form__loads(
+def test__load_fitted_tabpfn_model__every_device_spec_form__loads_and_resaves(
     device: str | torch.device | list[str | torch.device],
     tmp_path: Path,
 ) -> None:
-    """Every form the annotation accepts must reach the estimator unaltered."""
+    """Every form the annotation accepts must reach the estimator unaltered.
+
+    The spec lands on the estimator as an init param, so a later save has to
+    render it for JSON.
+    """
     X, y = _make_regression_data()
     model = TabPFNRegressor(device="cpu", n_estimators=2)
     model.fit(X, y)
@@ -533,3 +537,25 @@ def test__load_fitted_tabpfn_model__every_device_spec_form__loads(
 
     assert loaded.devices_ == (torch.device("cpu"),)
     assert len(loaded.predict(X)) == len(X)
+    save_fitted_tabpfn_model(loaded, tmp_path / "resaved.tabpfn_fit")
+
+
+@pytest.mark.parametrize(
+    "device",
+    [torch.device("cpu"), [torch.device("cpu")]],
+    ids=["torch_device", "list_of_torch_device"],
+)
+def test__save_fitted_tabpfn_model__torch_device_init_param__serializes(
+    device: torch.device | list[torch.device],
+    tmp_path: Path,
+) -> None:
+    """A `torch.device` passed to the constructor must not break saving."""
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device=device, n_estimators=2)
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+
+    save_fitted_tabpfn_model(model, path)
+
+    reloaded = load_fitted_tabpfn_model(path, device="cpu")
+    assert len(reloaded.predict(X)) == len(X)

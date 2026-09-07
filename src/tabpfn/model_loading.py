@@ -1185,6 +1185,13 @@ def save_tabpfn_model(
         torch.save(checkpoint, path)
 
 
+def _json_safe_device(device: DevicesSpecification) -> str | list[str]:
+    """Render a device spec for JSON, as `torch.device` is not serializable."""
+    if isinstance(device, (str, torch.device)):
+        return str(device)
+    return [str(d) for d in device]
+
+
 def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None:
     """Persist a fitted TabPFN estimator to ``path``.
 
@@ -1209,6 +1216,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         params = {
             k: (str(v) if isinstance(v, torch.dtype) else v) for k, v in params.items()
         }
+        params["device"] = _json_safe_device(params["device"])
         params["__class_name__"] = estimator.__class__.__name__
         with (tmp / "init_params.json").open("w") as f:
             json.dump(params, f)
