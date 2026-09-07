@@ -52,11 +52,12 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
-            A string column among them is `CATEGORICAL` at any cardinality, never
-            `TEXT`; a numeric one is still subject to `max_unique_for_category`.
+            Taken at face value: such a column is `CATEGORICAL` at any cardinality,
+            whether it holds strings or numbers.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
-        max_unique_for_category: Max unique values for a feature to be categorical.
+        max_unique_for_category: Kept for the early-exit scan bound only; a
+            declared categorical is no longer capped by it.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
         min_cardinality_for_text: Unique-value count above which an undeclared
             string column (not parsed as a number) is `TEXT` rather than
@@ -168,17 +169,15 @@ def _detect_feature_modality(
         if _detect_numeric_as_categorical(
             n_unique=n_unique,
             reported_categorical=reported_categorical,
-            max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         ):
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
 
-    is_string_like = pd.api.types.is_string_dtype(s.dtype) or isinstance(
-        s.dtype, pd.CategoricalDtype
-    )
-    if is_string_like:
+    # A pandas `category` column never arrives here as such: `X` is a numpy array
+    # by now, and its intent travels in `provided_categorical_indices` instead.
+    if pd.api.types.is_string_dtype(s.dtype):
         # A declared categorical is taken at face value: the cardinality cutoff
         # only sorts undeclared string columns into category or text.
         if reported_categorical or n_unique <= min_cardinality_for_text:
@@ -243,24 +242,19 @@ def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
 
 def _detect_numeric_as_categorical(
     n_unique: int,
-    max_unique_for_category: int,
     min_unique_for_numerical: int,
     *,
     reported_categorical: bool,
     big_enough_n_to_infer_cat: bool,
 ) -> bool:
-    """Detecting if a numerical feature is categorical depending on heuristics:
-    - Feature reported as categoricals are treated as such, as long as they
-      aren't highly cardinal.
+    """Detecting if a numerical feature is categorical:
+    - Features reported as categorical are taken at face value, at any cardinality.
     - For non-reported numerical ones, we infer them as such if they are
       sufficiently low-cardinal.
     """
     if reported_categorical:
-        if n_unique <= max_unique_for_category:
-            return True
-    elif big_enough_n_to_infer_cat and n_unique < min_unique_for_numerical:
         return True
-    return False
+    return big_enough_n_to_infer_cat and n_unique < min_unique_for_numerical
 
 
 def _get_unique_with_sklearn_compatible_error(s: pd.Series) -> int:

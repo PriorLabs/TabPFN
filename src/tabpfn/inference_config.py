@@ -76,8 +76,11 @@ class InferenceConfig:
     """
 
     MAX_UNIQUE_FOR_CATEGORICAL_FEATURES: int = 30
-    """The maximum number of unique values for a feature to be considered
-    categorical. Otherwise, it is considered numerical."""
+    """No longer has an effect. It used to demote a column listed in
+    `categorical_features_indices` to numerical above this many distinct values;
+    a declared categorical is now taken at face value at any cardinality, and
+    the inference over undeclared columns is governed by
+    `MIN_UNIQUE_FOR_NUMERICAL_FEATURES`. Kept so existing configs still load."""
     MIN_UNIQUE_FOR_NUMERICAL_FEATURES: int = 4
     """The minimum number of unique values for a feature to be considered numerical.
     Otherwise, it is considered categorical."""
@@ -86,14 +89,10 @@ class InferenceConfig:
     be categorical."""
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
-    """Number of distinct values above which a string column is read as text
-    rather than as a category. Only an undeclared column is subject to it: one
-    listed in `categorical_features_indices`, or holding pandas' `category`
-    dtype, is a category at any cardinality. A separate decision from
-    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
-    that one describes when a *number* is few enough to be a category, this one
-    describes when a *string* is varied enough to be text rather than a category,
-    and there is no reason the two should move together.
+    """Number of distinct values above which an undeclared string column is read
+    as text rather than as a category. A column listed in
+    `categorical_features_indices`, or holding pandas' `category` dtype, is a
+    category at any cardinality.
 
     Text is expanded into numeric features with `TRANSFORM_TEXT`; off, it is
     ordinal-encoded as a high-cardinality category and `fit` warns about it."""

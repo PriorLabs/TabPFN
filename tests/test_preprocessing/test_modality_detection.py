@@ -254,12 +254,12 @@ def test__numerical_reported_as_categorical():
     assert result == FeatureModality.CATEGORICAL
 
 
-def test__numerical_reported_as_categorical_but_too_many_unique_values():
+def test__numerical_reported_as_categorical__is_categorical_at_any_cardinality():
     s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
     result = _for_test_detect_with_defaults(
         s, reported_categorical=True, max_unique_for_category=9
     )
-    assert result == FeatureModality.NUMERICAL
+    assert result == FeatureModality.CATEGORICAL
 
 
 def test__detected_categorical_without_reporting():
@@ -274,12 +274,6 @@ def test__detected_categorical_without_reporting():
     result = _for_test_detect_with_defaults(
         s, reported_categorical=False, min_unique_for_numerical=5
     )
-    assert result == FeatureModality.CATEGORICAL
-
-
-def test__detect_for_categorical_with_category_dtype():
-    s = pd.Series(["a", "b", "c", "a", "b", "c"], dtype="category")
-    result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.CATEGORICAL
 
 
@@ -388,8 +382,8 @@ def test__detect_text_as_object():
             0,
             3,
             2,
-            [],
-            id="provided_column_excluded_if_exceeds_max_unique",
+            [0],
+            id="provided_column_included_at_any_cardinality",
         ),
     ],
 )
