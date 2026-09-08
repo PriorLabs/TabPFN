@@ -937,10 +937,6 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
 #
 # Sharing is what a caller who enables it takes on: two estimators served one
 # entry hold the same module, so moving or training either reaches the other.
-#
-# We don't include the `cache_trainset_representation` kwarg of
-# ``ArchitectureModule.get_architecture()`` in the key, because it is no longer
-# used since ``InferenceEngineCacheKV`` was removed.
 _DEFAULT_BUILT_MODEL_CACHE_SIZE = 0
 
 # The devices the module is moved to and the dtype it is cast to are applied in
