@@ -25,6 +25,15 @@ class FeatureSubsamplingMethod(str, Enum):
     AUTO = "auto"
 
 
+class SampleSubsamplingMethod(str, Enum):
+    """Method for subsampling rows per estimator when SUBSAMPLE_SAMPLES is set."""
+
+    AUTO = "auto"
+    BALANCED = "balanced"
+    STRATIFIED = "stratified"
+    MAJORITY_DOWNSAMPLE = "majority_downsample"
+
+
 @dataclass(frozen=True, eq=True)
 class PreprocessorConfig:
     """Configuration for data preprocessing.

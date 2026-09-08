@@ -79,6 +79,7 @@ from tabpfn.preprocessing import (
     FeatureSubsamplingMethod,
     PreprocessorConfig,
     RegressorEnsembleConfig,
+    SampleSubsamplingMethod,
     clean_data,
     generate_regression_ensemble_configs,
 )
@@ -796,6 +797,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            sample_subsampling_method=SampleSubsamplingMethod(
+                self.inference_config_.SAMPLE_SUBSAMPLING_METHOD
+            ),
             importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
             X_train=X,
             y_train=y,

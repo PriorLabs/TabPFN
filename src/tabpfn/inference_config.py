@@ -220,6 +220,39 @@ class InferenceConfig:
             indices are repeated for the remaining estimators.
     """
 
+    SAMPLE_SUBSAMPLING_METHOD: Literal[
+        "auto",
+        "balanced",
+        "stratified",
+        "majority_downsample",
+    ] = "auto"
+    """How rows are drawn for each estimator when SUBSAMPLE_SAMPLES is an int or
+    float. Ignored when SUBSAMPLE_SAMPLES is None or a list of explicit indices.
+        - "balanced": Round-robin sampling from a shared shuffled pool of all rows so
+          each row appears approximately equally often across estimators. Ignores the
+          class labels.
+        - "stratified": Preserves the class proportions of the training data in every
+          subsample while guaranteeing at least one row per class. Classification only.
+        - "majority_downsample": Groups rows by exact target value, keeps every row
+          outside the single most frequent group, and fills the remaining budget from
+          that majority group. This mode is designed for datasets with one dominant
+          target value. For binary classification this keeps the whole minority class
+          and fills up with majority rows. For regression it targets
+          zero-inflated or spiky targets: the repeated value is downsampled while all
+          other values are kept. SUBSAMPLE_SAMPLES must exceed the number of
+          non-majority rows so at least one majority row remains. If there is no unique
+          most frequent target value, a warning is emitted and the method falls back
+          to "stratified" for classification or "balanced" for regression.
+          Downsampling the majority shifts the target prior that the model sees: the
+          majority value is underrepresented in every context relative to the training
+          data. Predicted probabilities and regression means inherit that shift, so
+          the predicted level typically needs a correction, for example rescaling
+          regression predictions to the training mean. Rankings are unaffected. For
+          classification, a warning is emitted if subsampling makes the original
+          majority class smaller than another class.
+        - "auto": "stratified" for classification and "balanced" for regression.
+    """
+
     ENABLE_GPU_PREPROCESSING: bool = False
     """Move quantile transform, SVD feature generation, and feature shuffling to
     GPU / torch.  When ``True``, these operations run on the same device as
