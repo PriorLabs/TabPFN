@@ -931,22 +931,28 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
 
 
 # Bounded LRU of *built* models, keyed by (path, file identity, estimator type,
-# placement). Off unless ``TABPFN_MODEL_CACHE_SIZE`` is a positive integer; 2
-# holds a classifier and a regressor. Entries are shared by reference and left in
-# ``eval()`` mode, for repeated sequential fit/predict.
+# devices, forced dtype). Off unless ``TABPFN_MODEL_CACHE_SIZE`` is a positive
+# integer; 2 holds a classifier and a regressor. Entries are shared by reference
+# and left in ``eval()`` mode, for repeated sequential fit/predict.
 #
 # Sharing is what a caller who enables it takes on: two estimators served one
 # entry hold the same module, so moving or training either reaches the other.
 #
-# `cache_trainset_representation` is not part of the key: every architecture's
-# ``get_architecture`` deletes it, so one entry serves every fit mode.
+# We don't include the `cache_trainset_representation` kwarg of
+# ``ArchitectureModule.get_architecture()`` in the key, because it is no longer
+# used since ``InferenceEngineCacheKV`` was removed.
 _DEFAULT_BUILT_MODEL_CACHE_SIZE = 0
 
-# Where the module is moved and what dtype it is cast to — applied in place by
-# whoever is handed it, so both belong in the key.
-_Placement = tuple[tuple[str, ...] | None, str | None]
+# The devices the module is moved to and the dtype it is cast to are applied in
+# place by whoever is handed it, so both belong in the key.
+_Devices = tuple[str, ...] | None
+_ForceInferenceDType = str | None
 _BuiltModelCacheKey = tuple[
-    str, tuple[int, int], Literal["regressor", "classifier"], _Placement
+    str,
+    tuple[int, int],
+    Literal["regressor", "classifier"],
+    _Devices,
+    _ForceInferenceDType,
 ]
 _BUILT_MODEL_CACHE: OrderedDict[_BuiltModelCacheKey, tuple] = OrderedDict()
 _BUILT_MODEL_CACHE_LOCK = Lock()
@@ -967,16 +973,14 @@ def _get_built_model_cache_size() -> int:
         return _DEFAULT_BUILT_MODEL_CACHE_SIZE
 
 
-def _placement_cache_key(
-    devices: Sequence[torch.device] | None,
-    force_inference_dtype: torch.dtype | None,
-) -> _Placement:
-    """Hashable form of the placement; ``devices=None`` gets its own entry."""
-    device_key = (
-        None if devices is None else tuple(str(torch.device(d)) for d in devices)
-    )
-    dtype_key = None if force_inference_dtype is None else str(force_inference_dtype)
-    return (device_key, dtype_key)
+def _devices_cache_key(devices: Sequence[torch.device] | None) -> _Devices:
+    """Hashable form of the devices; ``None`` gets its own entry."""
+    return None if devices is None else tuple(str(torch.device(d)) for d in devices)
+
+
+def _dtype_cache_key(force_inference_dtype: torch.dtype | None) -> _ForceInferenceDType:
+    """Hashable form of the forced dtype."""
+    return None if force_inference_dtype is None else str(force_inference_dtype)
 
 
 def clear_built_model_cache() -> None:
@@ -1023,7 +1027,8 @@ def load_model(
         resolved,
         identity,
         estimator_type,
-        _placement_cache_key(devices, force_inference_dtype),
+        _devices_cache_key(devices),
+        _dtype_cache_key(force_inference_dtype),
     )
     if use_cache:
         with _BUILT_MODEL_CACHE_LOCK:
