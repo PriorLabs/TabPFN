@@ -52,11 +52,13 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
+            A string column among them is `CATEGORICAL` at any cardinality, never
+            `TEXT`; a numeric one is still subject to `max_unique_for_category`.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
-        min_cardinality_for_text: Unique-value count above which a candidate
+        min_cardinality_for_text: Unique-value count above which an undeclared
             string column (not parsed as a number) is `TEXT` rather than
             `CATEGORICAL` -- independent of the two thresholds above.
 
@@ -80,7 +82,7 @@ def detect_feature_modalities(
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema, declared_cat_indices=provided_categorical_indices)
+    _warn_on_text(feature_schema)
     return feature_schema
 
 
@@ -93,24 +95,15 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_on_text(
-    feature_schema: FeatureSchema,
-    *,
-    declared_cat_indices: Sequence[int] | None = None,
-) -> None:
+def _warn_on_text(feature_schema: FeatureSchema) -> None:
     """Warn about any free-text columns.
 
-    Args:
-        feature_schema: The schema produced by detection.
-        declared_cat_indices: Indices passed as `categorical_features_indices`;
-            never reported, since declaring a column categorical means the user
-            already intends its non-numeric values as categories.
+    A column declared categorical is never `TEXT`, so it never shows up here.
     """
-    declared = set(declared_cat_indices or ())
     text_names = [
         feature.name.removeprefix(INPUT_FEATURE_PREFIX)
-        for index, feature in enumerate(feature_schema.features)
-        if feature.modality is FeatureModality.TEXT and index not in declared
+        for feature in feature_schema.features
+        if feature.modality is FeatureModality.TEXT
     ]
     if not text_names:
         return
@@ -120,14 +113,14 @@ def _warn_on_text(
         f"high-cardinality categoricals, which usually adds noise rather than "
         f"signal: {_format_names_for_warning(text_names)}.\n"
         "If such a column holds numbers stored as strings, convert it to a numeric "
-        "dtype. If it is a category rather than text, raise "
+        "dtype. If it is a category rather than text, pass its index in "
+        "`categorical_features_indices` or give it pandas' `category` dtype, and it "
+        "is read as a categorical whatever its cardinality; or raise "
         '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
         "distinct values. If it holds genuine text, give it pandas' `string` dtype "
         'and set `inference_config={"TRANSFORM_TEXT": True}` to expand it into '
         "numeric features, or consider the tabpfn-client API, which embeds text "
-        "natively: https://github.com/PriorLabs/tabpfn-client \n"
-        "To silence this for a column that is genuinely a high-cardinality category, "
-        "pass its index in `categorical_features_indices`.",
+        "natively: https://github.com/PriorLabs/tabpfn-client",
         UserWarning,
         # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
         # `warning.filename` asserts in the tests.
@@ -145,6 +138,10 @@ def _detect_feature_modality(
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
     """Decide a single column's modality via heuristics."""
+    assert not isinstance(s.dtype, pd.CategoricalDtype), (
+        "Categorical dtype must be converted before modality detection; "
+        "preserve its intent in provided_categorical_indices."
+    )
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
     # min_cardinality_for_text is included since it can exceed the other two.
@@ -182,14 +179,14 @@ def _detect_feature_modality(
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
 
-    is_string_like = pd.api.types.is_string_dtype(s.dtype) or isinstance(
-        s.dtype, pd.CategoricalDtype
-    )
-    if is_string_like:
-        if n_unique <= min_cardinality_for_text:
+    # A pandas `category` column never arrives here as such: `X` is a numpy array
+    # by now, and its intent travels in `provided_categorical_indices` instead.
+    if pd.api.types.is_string_dtype(s.dtype):
+        # A declared categorical is taken at face value: the cardinality cutoff
+        # only sorts undeclared string columns into category or text.
+        if reported_categorical or n_unique <= min_cardinality_for_text:
             return FeatureModality.CATEGORICAL
-        else:  # noqa: RET505
-            return FeatureModality.TEXT
+        return FeatureModality.TEXT
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )

@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn.base import (
     check_is_fitted,
@@ -53,6 +54,7 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     check_input_shape_matches,
     ensure_compatible_predict_input_sklearn,
+    validate_categorical_features_indices,
 )
 
 if TYPE_CHECKING:
@@ -413,6 +415,32 @@ def create_inference_engine(  # noqa: PLR0913
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
+
+
+def resolve_categorical_features_indices(
+    X: XType,
+    categorical_features_indices: Sequence[int] | None,
+) -> list[int] | None:
+    """Validate declared indices and merge pandas `category` column positions.
+
+    A `category` dtype states the same intent as an entry in
+    `categorical_features_indices`, so the two are merged here, before any column
+    moves. The merged declarations drive date/text expansion and modality
+    detection; numeric columns remain subject to the categorical cardinality cap.
+
+    Returns:
+        The sorted union of both, or `None` when neither names a column.
+    """
+    validate_categorical_features_indices(categorical_features_indices)
+    declared = set(categorical_features_indices or ())
+    if isinstance(X, pd.DataFrame):
+        typed = {
+            i
+            for i, dtype in enumerate(X.dtypes)
+            if isinstance(dtype, pd.CategoricalDtype)
+        }
+        declared.update(typed)
+    return sorted(declared) if declared else None
 
 
 def expand_dates_and_text(

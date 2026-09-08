@@ -277,10 +277,13 @@ def test__detected_categorical_without_reporting():
     assert result == FeatureModality.CATEGORICAL
 
 
-def test__detect_for_categorical_with_category_dtype():
-    s = pd.Series(["a", "b", "c", "a", "b", "c"], dtype="category")
-    result = _for_test_detect_with_defaults(s)
-    assert result == FeatureModality.CATEGORICAL
+@pytest.mark.parametrize("values", [["a", "b", "a"], [1, 2, 1]])
+def test__detect_for_categorical_with_category_dtype__rejects_unconverted_input(
+    values: list,
+) -> None:
+    s = pd.Series(values, dtype="category")
+    with pytest.raises(AssertionError, match="Categorical dtype must be converted"):
+        _for_test_detect_with_defaults(s)
 
 
 def test__detect_textual_feature():
@@ -310,6 +313,21 @@ def test__detect_long_texts():
     assert result == FeatureModality.TEXT
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
+
+
+def test__detect_reported_categorical_string__is_categorical_at_any_cardinality():
+    """`min_cardinality_for_text` only sorts undeclared string columns."""
+    s = pd.Series([f"sku_{i}" for i in range(50)])
+    assert (
+        _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
+        == FeatureModality.TEXT
+    )
+    assert (
+        _for_test_detect_with_defaults(
+            s, reported_categorical=True, min_cardinality_for_text=2
+        )
+        == FeatureModality.CATEGORICAL
+    )
 
 
 def test__detect_text_as_object():
@@ -613,19 +631,6 @@ class TestWarnOnText:
         assert "https://github.com/PriorLabs/tabpfn-client" in message
         assert "categorical_features_indices" in message
 
-    def test__declared_cat_indices__are_not_reported(self) -> None:
-        schema = _text_schema("sku", "review")
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(schema, declared_cat_indices=[0])
-        message = str(record[0].message)
-        assert "'review'" in message
-        assert "'sku'" not in message
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_on_text(schema, declared_cat_indices=[0, 1])
-
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
         n_columns = _MAX_TEXT_COLUMNS_IN_WARNING + n_extra
@@ -737,11 +742,14 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
         assert "'ids'" in str(record[0].message)
 
-    def test__declared_categorical_columns__do_not_warn(self) -> None:
-        """Declaring a column categorical states intent, so it must stay quiet.
+    def test__declared_categorical_columns__are_categorical_and_do_not_warn(
+        self,
+    ) -> None:
+        """Declaring a column categorical is taken at face value.
 
         Covers both a plain string column and an explicit pandas `category`
-        dtype, each above the cardinality threshold.
+        dtype, each above the cardinality threshold: undeclared they are TEXT
+        and warn, declared they are CATEGORICAL and quiet.
         """
         X = pd.DataFrame(
             {
@@ -756,13 +764,15 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
         # Without the declaration the columns really are detected as TEXT and warn.
         with pytest.warns(UserWarning, match="look like free text"):
-            self._detect(X)
+            schema = self._detect(X)
+        assert schema.indices_for(FeatureModality.TEXT) == declared
 
-        # Declaring them silences the warning; the columns are still labelled TEXT.
+        # Declared, they are categoricals at any cardinality, with nothing to warn.
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             schema = self._detect(X, declared)
-        assert schema.indices_for(FeatureModality.TEXT) == declared
+        assert schema.indices_for(FeatureModality.TEXT) == []
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == declared
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
@@ -810,6 +820,57 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         warnings.simplefilter("always")
         model.fit(X, y)
     assert not [w for w in caught if "look like free text" in str(w.message)]
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_declared_high_cardinality_strings__reads_them_as_categorical(
+    estimator_cls: type,
+) -> None:
+    """A `category` dtype column is folded into `categorical_features_indices_`,
+    and every declared string column is CATEGORICAL at any cardinality, so the
+    free-text warning has nothing to say about them.
+    """
+    n = 120
+    rng = np.random.default_rng(seed=0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "sku_cat": pd.Series([f"sku_{i % 60}" for i in range(n)], dtype="category"),
+            "sku": [f"sku_{i % 60}" for i in range(n)],
+        }
+    )
+    y = (
+        rng.integers(0, 2, size=n)
+        if estimator_cls is TabPFNClassifier
+        else rng.normal(size=n)
+    )
+
+    # Only the plain string column is undeclared, so only it is text.
+    model = estimator_cls(n_estimators=1, device="cpu")
+    with pytest.warns(UserWarning, match="look like free text") as record:
+        model.fit(X, y)
+    assert "'sku'" in str(record[0].message)
+    assert "'sku_cat'" not in str(record[0].message)
+    assert model.categorical_features_indices_ == [1]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1
+    ]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == [2]
+
+    # Declaring the other one too makes both categorical; the lists merge.
+    model = estimator_cls(
+        n_estimators=1, device="cpu", categorical_features_indices=[2]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        model.fit(X, y)
+    assert model.categorical_features_indices_ == [1, 2]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1,
+        2,
+    ]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == []
+    assert len(model.predict(X)) == n
 
 
 def test__category_and_text_thresholds__move_independently() -> None:

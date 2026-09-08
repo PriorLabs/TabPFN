@@ -87,7 +87,9 @@ class InferenceConfig:
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
     """Number of distinct values above which a string column is read as text
-    rather than as a category. A separate decision from
+    rather than as a category. Only an undeclared column is subject to it: one
+    listed in `categorical_features_indices`, or holding pandas' `category`
+    dtype, is a category at any cardinality. A separate decision from
     `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
     that one describes when a *number* is few enough to be a category, this one
     describes when a *string* is varied enough to be text rather than a category,

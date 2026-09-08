@@ -41,6 +41,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
 )
@@ -101,7 +102,6 @@ from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
     extract_input_shape,
-    validate_categorical_features_indices,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -219,8 +219,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The transformer that expanded every text column before validation."""
 
     categorical_features_indices_: list[int] | None
-    """`categorical_features_indices` as positions in the validated input, where
-    an expanded date or text column has moved everything after it down."""
+    """Declared categorical column positions after date/text expansion, including
+    columns declared through pandas `category` dtype. Expanded source columns are
+    removed and their generated features appended, so these positions can differ
+    from those in the original fit input."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -316,8 +318,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
                 categorical. If `None`, the model will infer the categorical columns.
-                If provided, we might ignore some of the suggestion to better fit the
-                data seen during pre-training.
+                A column with pandas' `category` dtype counts as listed here. A
+                string column declared this way is read as categorical whatever
+                its cardinality, never as text; for a numeric one, we might ignore
+                the suggestion to better fit the data seen during pre-training.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -767,11 +771,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
-        validate_categorical_features_indices(self.categorical_features_indices)
+        categorical_indices = resolve_categorical_features_indices(
+            X, self.categorical_features_indices
+        )
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
                 X,
-                categorical_features_indices=self.categorical_features_indices,
+                categorical_features_indices=categorical_indices,
                 inference_config=self.inference_config_,
             )
         )

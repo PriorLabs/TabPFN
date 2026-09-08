@@ -484,14 +484,13 @@ def test__fit_without_transform_text__reads_the_column_as_before(
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-@pytest.mark.parametrize("dtype", ["object", "category"])
-def test__fit_with_transform_text_and_another_dtype__does_not_expand_it(
-    estimator_cls: type, dtype: str
+def test__fit_with_transform_text_and_an_object_column__does_not_expand_it(
+    estimator_cls: type,
 ) -> None:
-    """Only a `string` dtype is text: an `object` or `category` column is read
-    as before, whatever the flag.
+    """Only a `string` dtype is text: an `object` column is read as before,
+    whatever the flag.
     """
-    X, y = _estimator_data(estimator_cls, _review_column(dtype=dtype))
+    X, y = _estimator_data(estimator_cls, _review_column(dtype="object"))
     assert not isinstance(X["review"].dtype, pd.StringDtype)
 
     model = estimator_cls(
@@ -502,6 +501,29 @@ def test__fit_with_transform_text_and_another_dtype__does_not_expand_it(
 
     assert model.text_transformer_.expanded_indices == []
     assert len(model.inferred_feature_schema_.features) == 2
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_transform_text_and_a_category_column__reads_it_as_categorical(
+    estimator_cls: type,
+) -> None:
+    """A `category` column is a declared categorical: never expanded, never text,
+    whatever the flag and its cardinality.
+    """
+    X, y = _estimator_data(estimator_cls, _review_column(dtype="category"))
+
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": True}
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        model.fit(X, y)
+
+    assert model.text_transformer_.expanded_indices == []
+    assert model.categorical_features_indices_ == [1]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1
+    ]
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
