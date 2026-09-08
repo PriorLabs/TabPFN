@@ -209,9 +209,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The transformer that expanded every text column before validation."""
 
     categorical_features_indices_: list[int] | None
-    """`categorical_features_indices`, plus every pandas `category` column of the
-    fit input, as positions in the validated input, where an expanded date or text
-    column has moved everything after it down."""
+    """Declared categorical column positions after date/text expansion, including
+    columns declared through pandas `category` dtype. Expanded source columns are
+    removed and their generated features appended, so these positions can differ
+    from those in the original fit input."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
