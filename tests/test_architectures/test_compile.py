@@ -68,7 +68,7 @@ def _tiny_model() -> tabpfn_v3.TabPFNV3:
         dist_embed_num_heads=3,
         feat_agg_num_heads=3,
     )
-    model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    model = tabpfn_v3.get_architecture(config)
     model.to(torch.float32)
     return model
 

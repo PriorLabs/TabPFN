@@ -26,7 +26,6 @@ def _build_small_arch(
             features_per_group=2,
             seed=seed,
         ),
-        cache_trainset_representation=False,
     )
     for param in model.parameters():
         if param.abs().sum() < 1e-6:

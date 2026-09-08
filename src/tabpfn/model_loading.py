@@ -589,7 +589,6 @@ def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[False],
-    cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
@@ -608,7 +607,6 @@ def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[True],
-    cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
@@ -626,7 +624,6 @@ def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
-    cache_trainset_representation: bool,
     estimator_type: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
@@ -651,8 +648,6 @@ def load_model_criterion_config(
             Whether to check if the criterion
             is a FullSupportBarDistribution, which is the expected criterion
             for models trained for regression.
-        cache_trainset_representation:
-            Whether the model should know to cache the trainset representation.
         estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
@@ -715,7 +710,6 @@ def load_model_criterion_config(
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             estimator_type=estimator_type,
-            cache_trainset_representation=cache_trainset_representation,
         )
         if check_bar_distribution_criterion and not isinstance(
             criterion,
@@ -923,16 +917,13 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
 
 
 # Bounded, opt-in cache of *built* models (architecture + loaded weights),
-# keyed by (resolved path, file identity). Enabled by setting the env var
-# ``TABPFN_MODEL_CACHE_SIZE`` to a positive integer (an LRU of that size;
-# default 0 disables it, preserving prior behaviour). Only the non-mutating
-# build is cached: with ``cache_trainset_representation`` the model accumulates
-# the train-set representation during fit, so a shared instance can't be reused
-# across fits. The cached model is shared by reference and left in ``eval()``
-# mode — intended for repeated sequential fit/predict (cross-validation,
-# per-group models, or servers that manage their own concurrency). RES-2422
-# tracks the follow-up that externalises per-fit state so a single backbone can
-# be shared across threads too.
+# keyed by (resolved path, file identity, estimator type). Enabled by setting
+# the env var ``TABPFN_MODEL_CACHE_SIZE`` to a positive integer (an LRU of that
+# size; default 0 disables it, preserving prior behaviour). The cached model is
+# shared by reference and left in ``eval()`` mode — intended for repeated
+# sequential fit/predict (cross-validation, per-group models, or servers that
+# manage their own concurrency). RES-2422 tracks the follow-up that externalises
+# per-fit state so a single backbone can be shared across threads too.
 _BUILT_MODEL_CACHE: OrderedDict[tuple[str, tuple[int, int]], tuple] = OrderedDict()
 _BUILT_MODEL_CACHE_LOCK = Lock()
 
@@ -954,7 +945,6 @@ def load_model(
     *,
     path: Path,
     estimator_type: Literal["regressor", "classifier"],
-    cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -967,20 +957,17 @@ def load_model(
     skip disk I/O. When ``TABPFN_MODEL_CACHE_SIZE`` is a positive integer the
     *built* model (architecture + loaded weights) is also cached, as an LRU of
     that size, so repeated calls skip reconstruction and ``load_state_dict``
-    entirely. Only the non-mutating build (``cache_trainset_representation=False``)
-    is cached. Both caches invalidate when the file changes (mtime + size).
+    entirely. Both caches invalidate when the file changes (mtime + size).
 
     Args:
         path: Path to the checkpoint
         estimator_type: The task the estimator is being built for. A checkpoint
             with both heads backs either task, so this selects the criterion.
-        cache_trainset_representation: If True, the model will cache the
-            trainset representation. Forwarded to get_architecture.
     """
     resolved = str(path.resolve())
     identity = Checkpoint(resolved).identity()
 
-    use_cache = _get_built_model_cache_size() > 0 and not cache_trainset_representation
+    use_cache = _get_built_model_cache_size() > 0
     # `estimator_type` belongs in the key: the criterion differs per task, so a
     # checkpoint built for one task must not be served for the other.
     key = (resolved, identity, estimator_type)
@@ -995,7 +982,6 @@ def load_model(
         resolved,
         identity,
         estimator_type=estimator_type,
-        cache_trainset_representation=cache_trainset_representation,
     )
 
     if use_cache:
@@ -1013,7 +999,6 @@ def _build_model(
     identity: tuple[int, int],
     *,
     estimator_type: Literal["regressor", "classifier"],
-    cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -1036,10 +1021,7 @@ def _build_model(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
-    model = architecture.get_architecture(
-        model_config,
-        cache_trainset_representation=cache_trainset_representation,
-    )
+    model = architecture.get_architecture(model_config)
 
     # A checkpoint may carry criterion state for a task it is not being loaded for
     # (save_tabpfn_model writes it for regressors), so it is always kept out of the

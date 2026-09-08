@@ -34,7 +34,7 @@ def _get_model() -> tabpfn_v3.TabPFNV3:
         dist_embed_num_heads=3,
         feat_agg_num_heads=3,
     )
-    model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    model = tabpfn_v3.get_architecture(config)
     model.to(torch.float32)
     return model
 
@@ -264,7 +264,7 @@ def _get_regression_model() -> tabpfn_v3.TabPFNV3:
         feat_agg_num_cls_tokens=2,
         dist_embed_num_inducing_points=8,
     )
-    model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    model = tabpfn_v3.get_architecture(config)
     model.to(torch.float32)
     return model
 
@@ -373,7 +373,7 @@ def test__kv_cache__gqa_matches_standard() -> None:
         feat_agg_num_cls_tokens=2,
         dist_embed_num_inducing_points=8,
     )
-    arch = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    arch = tabpfn_v3.get_architecture(config)
     arch.to(torch.float32)
 
     torch.manual_seed(42)
