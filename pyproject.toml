@@ -94,9 +94,7 @@ ci = [
 
 [tool.uv]
 exclude-newer = "7 days"
-# skrub is temporarily exempt: 0.10.1 fixes the `joblib.externals.cloudpickle` import
-# removed in joblib 1.6, and only becomes visible once the 7 day window passes 2026-09-08T09:33Z.
-exclude-newer-package = {torch = false, skrub = false}
+exclude-newer-package = {torch = false}
 
 [tool.setuptools.package-data]
 "tabpfn.architectures.shared" = ["tabpfn_col_embedding.pt"]
