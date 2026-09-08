@@ -135,8 +135,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """TabPFN classifier with a scikit-learn-compatible interface.
 
     Usage guidance:
-        - TabPFN-3 supports up to 1,000,000 rows, subject to feature count,
-          checkpoint limits, and memory.
+        - TabPFN-3 and later versions support up to 1,000,000 rows, subject to
+          feature count, checkpoint limits, and memory.
         - For large datasets or limited memory, use per-estimator subsampling,
           e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 50_000}``.
         - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
