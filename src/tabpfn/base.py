@@ -54,6 +54,7 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     check_input_shape_matches,
     ensure_compatible_predict_input_sklearn,
+    validate_categorical_features_indices,
 )
 
 if TYPE_CHECKING:
@@ -416,20 +417,21 @@ def create_inference_engine(  # noqa: PLR0913
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
-def include_category_dtype_columns(
+def resolve_categorical_features_indices(
     X: XType,
     categorical_features_indices: Sequence[int] | None,
 ) -> list[int] | None:
-    """Add the positions of `X`'s pandas `category` columns to the declared ones.
+    """Validate declared indices and merge pandas `category` column positions.
 
     A `category` dtype states the same intent as an entry in
     `categorical_features_indices`, so the two are merged here, before any column
-    moves, and the merged list drives everything downstream: the declared
-    categoricals are taken at face value, whatever their cardinality.
+    moves. The merged declarations drive date/text expansion and modality
+    detection; numeric columns remain subject to the categorical cardinality cap.
 
     Returns:
         The sorted union of both, or `None` when neither names a column.
     """
+    validate_categorical_features_indices(categorical_features_indices)
     declared = set(categorical_features_indices or ())
     if isinstance(X, pd.DataFrame):
         typed = {

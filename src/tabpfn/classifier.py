@@ -39,9 +39,9 @@ from tabpfn.base import (
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
-    include_category_dtype_columns,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
 )
@@ -102,7 +102,6 @@ from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
     extract_input_shape,
-    validate_categorical_features_indices,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -761,8 +760,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
-        validate_categorical_features_indices(self.categorical_features_indices)
-        categorical_indices = include_category_dtype_columns(
+        categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
         )
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
