@@ -83,7 +83,7 @@ def _tiny_model(architecture: ArchitectureModule) -> Architecture:
             "icl_num_kv_heads_test": None,
         }
     )
-    model = architecture.get_architecture(config, cache_trainset_representation=False)
+    model = architecture.get_architecture(config)
     model.to(torch.float32)
     return model
 

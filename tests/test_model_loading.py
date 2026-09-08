@@ -48,7 +48,7 @@ def test__load_model__no_architecture_name_in_checkpoint__loads_v2_architecture(
     tmp_path: Path,
 ) -> None:
     config = _get_minimal_v2_config()
-    model = tabpfn_v2.get_architecture(config, cache_trainset_representation=True)
+    model = tabpfn_v2.get_architecture(config)
     checkpoint = {"state_dict": model.state_dict(), "config": asdict(config)}
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
@@ -71,8 +71,6 @@ class FakeArchitectureModule(ArchitectureModule):
     def get_architecture(
         self,
         config: ArchitectureConfig,
-        *,
-        cache_trainset_representation: bool,
     ) -> Architecture:
         return DummyArchitecture()
 
@@ -193,9 +191,7 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
     tmp_path: Path,
 ) -> None:
     architecture_config = _get_minimal_v2_config()
-    model = tabpfn_v2.get_architecture(
-        architecture_config, cache_trainset_representation=True
-    )
+    model = tabpfn_v2.get_architecture(architecture_config)
     # v2 checkpoints have no "architecture_name" key
     checkpoint = {
         "state_dict": model.state_dict(),
@@ -207,7 +203,6 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
     _, _, _, inference_config = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v2",
         download_if_not_exists=False,
@@ -270,7 +265,6 @@ def test__load_v2_5_classification_ckpt__returns_v2_5_preprocessing(
     _, _, _, inference_config = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v2.5",
         download_if_not_exists=False,
@@ -314,7 +308,6 @@ def test__load_v2_5_regression_ckpt__returns_v2_5_preprocessing(
     _, _, _, inference_config = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="regressor",
         version="v2.5",
         download_if_not_exists=False,
@@ -346,7 +339,7 @@ def _build_small_v3_checkpoint(
         dist_embed_num_heads=3,
         feat_agg_num_heads=3,
     )
-    model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    model = tabpfn_v3.get_architecture(config)
     return {
         "state_dict": model.state_dict(),
         "config": asdict(config),
@@ -369,7 +362,7 @@ def _build_small_v3_5_checkpoint(
         dist_embed_num_heads=3,
         feat_agg_num_heads=3,
     )
-    model = tabpfn_v3_5.get_architecture(config, cache_trainset_representation=False)
+    model = tabpfn_v3_5.get_architecture(config)
     return {
         "state_dict": model.state_dict(),
         "config": asdict(config),
@@ -397,7 +390,6 @@ def test__load_v3_5_multitask_ckpt__backs_both_estimator_types(
         model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=estimator_type == "regressor",
-            cache_trainset_representation=False,
             estimator_type=estimator_type,
             version=version,
             download_if_not_exists=False,
@@ -451,7 +443,6 @@ def test__load_v3_classification_ckpt__returns_inference_config_from_checkpoint(
     _, _, _, loaded_inference_config = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v3",
         download_if_not_exists=False,
@@ -479,7 +470,6 @@ def test__load_v3_regression_ckpt__returns_bar_distribution_from_model_borders(
         model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=True,
-            cache_trainset_representation=False,
             estimator_type="regressor",
             version="v3",
             download_if_not_exists=False,
@@ -513,7 +503,6 @@ def test__load_multitask_ckpt__criterion_follows_the_requested_task(
         _, criterion, _, _ = model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=estimator_type == "regressor",
-            cache_trainset_representation=False,
             estimator_type=estimator_type,
             version="v3",
             download_if_not_exists=False,
@@ -544,7 +533,6 @@ def test__load_classification_only_ckpt__as_regressor__raises(
         model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=True,
-            cache_trainset_representation=False,
             estimator_type="regressor",
             version="v2.5",
             download_if_not_exists=False,
@@ -588,7 +576,6 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
     loaded_models, _, _, loaded_config = model_loading.load_model_criterion_config(
         model_path=[checkpoint_1_path, checkpoint_2_path],
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v2",
         download_if_not_exists=False,
@@ -645,7 +632,6 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
         model_loading.load_model_criterion_config(
             model_path=[checkpoint_1_path, checkpoint_2_path],
             check_bar_distribution_criterion=False,
-            cache_trainset_representation=False,
             estimator_type="classifier",
             version="v2",
             download_if_not_exists=False,
@@ -707,7 +693,6 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
         _, _, _, _ = model_loading.load_model_criterion_config(
             model_path=shared_checkpoint_path,
             check_bar_distribution_criterion=False,
-            cache_trainset_representation=False,
             estimator_type="classifier",
             version="v2",
             download_if_not_exists=True,
@@ -764,7 +749,6 @@ def test__load_ckpts_with_differing_softmax_temperatures__raises(
         model_loading.load_model_criterion_config(
             model_path=paths,
             check_bar_distribution_criterion=False,
-            cache_trainset_representation=False,
             estimator_type="classifier",
             version="v3",
             download_if_not_exists=False,
@@ -779,7 +763,6 @@ def test__load_ckpts_with_differing_softmax_temperatures__override__loads(
     loaded_models, _, _, loaded_config = model_loading.load_model_criterion_config(
         model_path=paths,
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v3",
         download_if_not_exists=False,
@@ -798,7 +781,6 @@ def test__load_ckpts_with_equal_softmax_temperatures__loads(tmp_path: Path) -> N
     _, _, _, loaded_config = model_loading.load_model_criterion_config(
         model_path=paths,
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v3",
         download_if_not_exists=False,
@@ -829,7 +811,6 @@ def test__load_ckpts_differing_beyond_softmax_temperature__raises(
         model_loading.load_model_criterion_config(
             model_path=paths,
             check_bar_distribution_criterion=False,
-            cache_trainset_representation=False,
             estimator_type="classifier",
             version="v3",
             download_if_not_exists=False,
@@ -851,7 +832,6 @@ def test__load_ckpt_without_softmax_temperature__uses_legacy_default(
     _, _, _, inference_config = model_loading.load_model_criterion_config(
         model_path=checkpoint_path,
         check_bar_distribution_criterion=False,
-        cache_trainset_representation=False,
         estimator_type="classifier",
         version="v3",
         download_if_not_exists=False,
@@ -868,19 +848,16 @@ def test__load_model__skips_the_random_init_and_matches_the_checkpoint(
     inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
     if architecture_name == "tabpfn_v2":
         config = _get_minimal_v2_config()
-        source = tabpfn_v2.get_architecture(config, cache_trainset_representation=False)
+        source = tabpfn_v2.get_architecture(config)
         checkpoint = {"state_dict": source.state_dict(), "config": asdict(config)}
     elif architecture_name == "tabpfn_v3":
         checkpoint = _build_small_v3_checkpoint(inference_config, max_num_classes=10)
-        source = tabpfn_v3.get_architecture(
-            TabPFNV3Config(**checkpoint["config"]), cache_trainset_representation=False
-        )
+        source = tabpfn_v3.get_architecture(TabPFNV3Config(**checkpoint["config"]))
         source.load_state_dict(checkpoint["state_dict"])
     else:
         checkpoint = _build_small_v3_5_checkpoint(inference_config, max_num_classes=10)
         source = tabpfn_v3_5.get_architecture(
             TabPFNV3p5Config(**checkpoint["config"]),
-            cache_trainset_representation=False,
         )
         source.load_state_dict(checkpoint["state_dict"])
     checkpoint_path = tmp_path / "checkpoint.ckpt"
@@ -889,7 +866,6 @@ def test__load_model__skips_the_random_init_and_matches_the_checkpoint(
     loaded, *_ = model_loading.load_model(
         path=checkpoint_path,
         estimator_type="classifier",
-        cache_trainset_representation=False,
     )
     source_params = dict(source.named_parameters())
     loaded_params = dict(loaded.named_parameters())
@@ -944,9 +920,7 @@ def test__tabpfn_v3_5__regression_borders_follow_the_head_buffer() -> None:
     """The borders alias tracks the head's buffer through `to`, not a stale tensor."""
     inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
     checkpoint = _build_small_v3_5_checkpoint(inference_config, max_num_classes=10)
-    model = tabpfn_v3_5.get_architecture(
-        TabPFNV3p5Config(**checkpoint["config"]), cache_trainset_representation=False
-    )
+    model = tabpfn_v3_5.get_architecture(TabPFNV3p5Config(**checkpoint["config"]))
     model.to(torch.float64)
     assert model.regression_borders is model.heads.regression_borders
     assert model.regression_borders.dtype == torch.float64

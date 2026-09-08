@@ -1023,7 +1023,6 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
         initialize_tabpfn_model(
             model_path="auto",
             which="classifier",
-            fit_mode="low_memory",
         )
     )
     assert models is not None, "model should be initialized for classifier"
@@ -1397,7 +1396,6 @@ def _create_dummy_classifier_model_specs(
     )
     model = tabpfn_v2_5.get_architecture(
         config=minimal_config,
-        cache_trainset_representation=False,
     )
     inference_config = InferenceConfig.get_default(
         task_type="multiclass",

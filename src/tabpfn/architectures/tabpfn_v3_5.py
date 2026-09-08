@@ -3019,17 +3019,9 @@ def parse_config(
     return parsed_config, parsed_config.get_unused_config(config)
 
 
-def get_architecture(
-    config: ArchitectureConfig,
-    *,
-    cache_trainset_representation: bool = False,
-) -> TabPFNV3p5:
+def get_architecture(config: ArchitectureConfig) -> TabPFNV3p5:
     """Construct TabPFN v3.5 from the given config."""
-    del cache_trainset_representation
     assert isinstance(config, TabPFNV3p5Config)
-    # cache_trainset_representation is accepted for interface compatibility but
-    # is a no-op: v3.5 uses explicit KV cache passing via forward() parameters
-    # (kv_cache / return_kv_cache) instead of model-internal caching.
     return TabPFNV3p5(config=config)
 
 
