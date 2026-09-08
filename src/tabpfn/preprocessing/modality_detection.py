@@ -138,6 +138,10 @@ def _detect_feature_modality(
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
     """Decide a single column's modality via heuristics."""
+    assert not isinstance(s.dtype, pd.CategoricalDtype), (
+        "Categorical dtype must be converted before modality detection; "
+        "preserve its intent in provided_categorical_indices."
+    )
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
     # min_cardinality_for_text is included since it can exceed the other two.

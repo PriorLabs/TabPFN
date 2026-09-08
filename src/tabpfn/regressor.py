@@ -47,9 +47,9 @@ from tabpfn.base import (
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
-    include_category_dtype_columns,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
 )
@@ -107,7 +107,6 @@ from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
     extract_input_shape,
-    validate_categorical_features_indices,
     validate_dataset_size,
 )
 
@@ -248,9 +247,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The transformer that expanded every text column before validation."""
 
     categorical_features_indices_: list[int] | None
-    """`categorical_features_indices`, plus every pandas `category` column of the
-    fit input, as positions in the validated input, where an expanded date or text
-    column has moved everything after it down."""
+    """Declared categorical column positions after date/text expansion, including
+    columns declared through pandas `category` dtype. Expanded source columns are
+    removed and their generated features appended, so these positions can differ
+    from those in the original fit input."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -903,8 +903,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
 
-        validate_categorical_features_indices(self.categorical_features_indices)
-        categorical_indices = include_category_dtype_columns(
+        categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
         )
         X, date_transformer, text_transformer, feature_names, categorical_indices = (

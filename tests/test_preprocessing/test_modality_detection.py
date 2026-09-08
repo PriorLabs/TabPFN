@@ -277,6 +277,15 @@ def test__detected_categorical_without_reporting():
     assert result == FeatureModality.CATEGORICAL
 
 
+@pytest.mark.parametrize("values", [["a", "b", "a"], [1, 2, 1]])
+def test__detect_for_categorical_with_category_dtype__rejects_unconverted_input(
+    values: list,
+) -> None:
+    s = pd.Series(values, dtype="category")
+    with pytest.raises(AssertionError, match="Categorical dtype must be converted"):
+        _for_test_detect_with_defaults(s)
+
+
 def test__detect_textual_feature():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
