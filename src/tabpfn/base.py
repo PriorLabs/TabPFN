@@ -109,6 +109,7 @@ def initialize_tabpfn_model(
     | list[RegressorModelSpecs]
     | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
+    *,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
 ) -> tuple[
