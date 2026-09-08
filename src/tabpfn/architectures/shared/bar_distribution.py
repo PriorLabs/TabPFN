@@ -54,8 +54,7 @@ class BarDistribution(nn.Module):
     def has_equal_borders(self, other: BarDistribution) -> bool:
         """Check if two BarDistributions have equal borders.
 
-        The two may sit on different devices — a cached model carries the device
-        of the fit that placed it — so compare values, not placement.
+        The two may sit on different devices.
         """
         return torch.equal(self.borders.cpu(), other.borders.cpu())  # pyright: ignore[reportArgumentType]
 
