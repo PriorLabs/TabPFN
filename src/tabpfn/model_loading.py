@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import ModelPath
+    from tabpfn.utils import DevicesSpecification
 
 logger = logging.getLogger(__name__)
 
@@ -1184,6 +1185,13 @@ def save_tabpfn_model(
         torch.save(checkpoint, path)
 
 
+def _json_safe_device(device: DevicesSpecification) -> str | list[str]:
+    """Render a device spec for JSON, as `torch.device` is not serializable."""
+    if isinstance(device, (str, torch.device)):
+        return str(device)
+    return [str(d) for d in device]
+
+
 def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None:
     """Persist a fitted TabPFN estimator to ``path``.
 
@@ -1208,6 +1216,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         params = {
             k: (str(v) if isinstance(v, torch.dtype) else v) for k, v in params.items()
         }
+        params["device"] = _json_safe_device(params["device"])
         params["__class_name__"] = estimator.__class__.__name__
         with (tmp / "init_params.json").open("w") as f:
             json.dump(params, f)
@@ -1255,9 +1264,16 @@ def _extract_archive(path: Path, tmp: Path) -> None:
 
 
 def load_fitted_tabpfn_model(
-    path: Path | str, *, device: str | torch.device = "cpu"
+    path: Path | str, *, device: DevicesSpecification = "auto"
 ) -> BaseEstimator:
-    """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
+    """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``.
+
+    Args:
+        path: The ``.tabpfn_fit`` archive to load.
+        device: The device(s) to load onto. The archive does not record where the
+            model was fitted, so the default resolves by availability like the
+            constructors' does; pass a device to pin it.
+    """
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -1274,7 +1290,7 @@ def load_fitted_tabpfn_model(
         ].startswith("torch."):
             dtype_name = params["inference_precision"].split(".")[1]
             params["inference_precision"] = getattr(torch, dtype_name)
-        params["device"] = str(device)
+        params["device"] = device
 
         if saved_cls_name == "TabPFNClassifier":
             cls = import_module("tabpfn.classifier").TabPFNClassifier
@@ -1296,7 +1312,7 @@ def load_fitted_tabpfn_model(
             tmp / "executor_state.joblib", est.models_
         )
 
-        est.to(str(device))
+        est.to(device)
 
         return est
 

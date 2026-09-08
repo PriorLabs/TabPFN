@@ -19,7 +19,12 @@ from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
-from tabpfn.model_loading import save_tabpfn_model
+from tabpfn.model_loading import (
+    load_fitted_tabpfn_model,
+    save_fitted_tabpfn_model,
+    save_tabpfn_model,
+)
+from tabpfn.utils import infer_devices
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
@@ -329,7 +334,7 @@ def test_saving_and_loading_with_tuning_config(
     path = tmp_path / "model.tabpfn_fit"
     estimator.fit(X, y)
     estimator.save_fit_state(path)
-    loaded_estimator = TabPFNClassifier.load_from_fit_state(path)
+    loaded_estimator = TabPFNClassifier.load_from_fit_state(path, device="cpu")
     assert loaded_estimator.tuned_classification_thresholds_ is not None
     assert loaded_estimator.softmax_temperature_ is not None
     assert loaded_estimator.eval_metric_ is ClassifierEvalMetrics.F1
@@ -361,7 +366,7 @@ def test_saving_and_loading_regressor_with_tuning_config(
     path = tmp_path / "model.tabpfn_fit"
     estimator.fit(X, y)
     estimator.save_fit_state(path)
-    loaded_estimator = TabPFNRegressor.load_from_fit_state(path)
+    loaded_estimator = TabPFNRegressor.load_from_fit_state(path, device="cpu")
 
     assert loaded_estimator.eval_metric_ is RegressorEvalMetrics.NLL
     assert (
@@ -477,3 +482,80 @@ def test__save_and_load_fit_with_cache_twice__predictions_equal(
     loaded_2 = estimator_class.load_from_fit_state(path_2, device=loading_device)
 
     _assert_roundtrip_predictions(original, loaded_2, X, cross_device=cross_device)
+
+
+@pytest.mark.parametrize("estimator_class", [TabPFNClassifier, TabPFNRegressor])
+def test__load_from_fit_state__without_device__resolves_like_auto(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+    tmp_path: Path,
+) -> None:
+    """Loading without a device must land where the constructor's "auto" points.
+
+    This defaulted to "cpu", so a GPU-fitted model silently reloaded onto CPU
+    and predicted orders of magnitude slower with nothing to signal it. The
+    intuitive repair, assigning to `.device`, cannot help: predict reads
+    `devices_`.
+    """
+    X, y = (
+        _make_regression_data()
+        if estimator_class is TabPFNRegressor
+        else _make_classification_data_with_categoricals()
+    )
+    model = estimator_class(device="cpu", n_estimators=2)
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+    model.save_fit_state(path)
+
+    loaded = estimator_class.load_from_fit_state(path)
+
+    assert loaded.device == "auto"
+    assert loaded.devices_ == infer_devices("auto")
+    assert len(loaded.predict(X)) == len(X)
+
+
+@pytest.mark.parametrize(
+    "device",
+    ["cpu", torch.device("cpu"), ["cpu"], [torch.device("cpu")]],
+    ids=["str", "torch_device", "list_of_str", "list_of_torch_device"],
+)
+def test__load_fitted_tabpfn_model__every_device_spec_form__loads_and_resaves(
+    device: str | torch.device | list[str | torch.device],
+    tmp_path: Path,
+) -> None:
+    """Every form the annotation accepts must reach the estimator unaltered.
+
+    The spec lands on the estimator as an init param, so a later save has to
+    render it for JSON.
+    """
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device="cpu", n_estimators=2)
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+    save_fitted_tabpfn_model(model, path)
+
+    loaded = load_fitted_tabpfn_model(path, device=device)
+
+    assert loaded.devices_ == (torch.device("cpu"),)
+    assert len(loaded.predict(X)) == len(X)
+    save_fitted_tabpfn_model(loaded, tmp_path / "resaved.tabpfn_fit")
+
+
+@pytest.mark.parametrize(
+    "device",
+    [torch.device("cpu"), [torch.device("cpu")]],
+    ids=["torch_device", "list_of_torch_device"],
+)
+def test__save_fitted_tabpfn_model__torch_device_init_param__serializes(
+    device: torch.device | list[torch.device],
+    tmp_path: Path,
+) -> None:
+    """A `torch.device` passed to the constructor must not break saving."""
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device=device, n_estimators=2)
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+
+    save_fitted_tabpfn_model(model, path)
+
+    reloaded = load_fitted_tabpfn_model(path, device="cpu")
+    assert len(reloaded.predict(X)) == len(X)

@@ -326,8 +326,9 @@ reg = TabPFNRegressor(device="cuda")
 reg.fit(X_train, y_train)
 save_fitted_tabpfn_model(reg, "my_reg.tabpfn_fit")
 
-# Later or on a CPU-only machine
-reg_cpu = load_fitted_tabpfn_model("my_reg.tabpfn_fit", device="cpu")
+# Later, or in another process. Defaults to device="auto", as the
+# constructors do; pass device= to pin it (e.g. device="cpu").
+reg_loaded = load_fitted_tabpfn_model("my_reg.tabpfn_fit")
 ```
 
 To store just the foundation model weights (without a fitted estimator) use

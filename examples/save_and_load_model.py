@@ -14,17 +14,17 @@ from tabpfn.model_loading import (
     save_fitted_tabpfn_model,
 )
 
-# Train a regressor on GPU
+# Train a regressor on the best available device
 X, y = load_diabetes(return_X_y=True)
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.33, random_state=42
 )
-reg = TabPFNRegressor(device="cuda")
+reg = TabPFNRegressor(device="auto")
 reg.fit(X_train, y_train)
 
 # Save the fitted estimator
 save_fitted_tabpfn_model(reg, Path("trained_reg.tabpfn_fit"))
 
-# Load on CPU for inference
-reg_cpu = load_fitted_tabpfn_model(Path("trained_reg.tabpfn_fit"), device="cpu")
-print(reg_cpu.predict(X_test)[:5])
+# Load for inference. Defaults to device="auto"; pass device= to pin it.
+reg_loaded = load_fitted_tabpfn_model(Path("trained_reg.tabpfn_fit"))
+print(reg_loaded.predict(X_test)[:5])
