@@ -432,11 +432,12 @@ def include_category_dtype_columns(
     """
     declared = set(categorical_features_indices or ())
     if isinstance(X, pd.DataFrame):
-        declared.update(
+        typed = {
             i
             for i, dtype in enumerate(X.dtypes)
             if isinstance(dtype, pd.CategoricalDtype)
-        )
+        }
+        declared.update(typed)
     return sorted(declared) if declared else None
 
 
