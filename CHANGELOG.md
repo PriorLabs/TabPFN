@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Add `InferenceConfig.SAMPLE_SUBSAMPLING_METHOD` to choose how rows are drawn per estimator when `SUBSAMPLE_SAMPLES` is set: `"balanced"`, `"stratified"`, or the new `"majority_downsample"`, which groups rows by exact target value, keeps every row outside the single most frequent group, and fills the remaining budget from that majority group. This keeps the whole minority class for imbalanced classification and downsamples the repeated value for zero-inflated regression targets. Targets without a unique majority warn and fall back to the task's default sampling method. The default `"auto"` keeps the previous behavior (stratified for classification, balanced for regression).
-
 ## [8.5.0] - 2026-08-27
 
 ### Breaking Changes
