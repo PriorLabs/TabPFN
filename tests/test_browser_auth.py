@@ -15,13 +15,18 @@ from unittest.mock import patch
 import pytest
 
 from tabpfn.browser_auth import (
+    _get_license_name,
     _has_display,
     delete_cached_token,
     get_cached_token,
     save_token,
     verify_token,
 )
-from tabpfn.errors import TabPFNLicenseError
+from tabpfn.errors import (
+    TabPFNError,
+    TabPFNHuggingFaceGatedRepoError,
+    TabPFNLicenseError,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -639,3 +644,30 @@ class TestTryBrowserLoginRouting:
 
         assert result == "browser-jwt"
         mock_browser.assert_called_once()
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://huggingface.co", code, "", {}, None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("code", [401, 404])
+def test__get_license_name__unreleased_repo_not_visible__says_not_available_yet(
+    code: int,
+) -> None:
+    with (
+        patch(
+            "tabpfn.browser_auth.urllib.request.urlopen", side_effect=_http_error(code)
+        ),
+        pytest.raises(TabPFNError, match="not publicly available yet"),
+    ):
+        _get_license_name("tabpfn_3_5")
+
+
+def test__get_license_name__released_repo_not_visible__raises_gated_error() -> None:
+    with (
+        patch(
+            "tabpfn.browser_auth.urllib.request.urlopen", side_effect=_http_error(401)
+        ),
+        pytest.raises(TabPFNHuggingFaceGatedRepoError),
+    ):
+        _get_license_name("tabpfn_3")
