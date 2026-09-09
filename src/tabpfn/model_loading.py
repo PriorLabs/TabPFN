@@ -218,11 +218,12 @@ class ModelSource:  # noqa: D101
     @classmethod
     def get_v3_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v3.5-20260902.safetensors",
+            "tabpfn-v3.5-20260909.safetensors",
+            "tabpfn-v3.5-20260909_multiclass.safetensors",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3_5",
-            default_filename="tabpfn-v3.5-20260902.safetensors",
+            default_filename="tabpfn-v3.5-20260909.safetensors",
             filenames=filenames,
         )
 
@@ -230,11 +231,11 @@ class ModelSource:  # noqa: D101
     def get_v3_5_fast(cls) -> ModelSource:  # noqa: D102
         # A separate, faster model, not a re-export of `get_v3_5`.
         filenames = [
-            "tabpfn-v3.5-fast-20260903.safetensors",
+            "tabpfn-v3.5-fast-20260909.safetensors",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3_5",
-            default_filename="tabpfn-v3.5-fast-20260903.safetensors",
+            default_filename="tabpfn-v3.5-fast-20260909.safetensors",
             filenames=filenames,
         )
 

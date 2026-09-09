@@ -443,8 +443,8 @@ def test__load_model__prerelease_architecture_name__loads_v3_5_architecture(
 @pytest.mark.parametrize(
     ("file_name", "expected"),
     [
-        ("tabpfn-v3.5-fast-20260903.safetensors", ModelVersion.V3_5_FAST),
-        ("tabpfn-v3.5-20260902.safetensors", ModelVersion.V3_5),
+        ("tabpfn-v3.5-fast-20260909.safetensors", ModelVersion.V3_5_FAST),
+        ("tabpfn-v3.5-20260909.safetensors", ModelVersion.V3_5),
         ("tabpfn_v3.5_prerelease_wzc91eda_20260825.safetensors", ModelVersion.V3_5),
         ("tabpfn-v3-classifier-v3_default.ckpt", ModelVersion.V3),
         ("tabpfn-v2.6-regressor-v2.6_default.ckpt", ModelVersion.V2_6),
