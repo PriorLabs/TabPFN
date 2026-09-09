@@ -869,8 +869,12 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         assert torch.equal(actual.value.float(), expected.value.float())
         # The scales are an absmax over a fresh forward pass, and BLAS on some
         # platforms (macOS arm64) is not bitwise reproducible across runs.
-        torch.testing.assert_close(actual.key_scale, expected.key_scale)
-        torch.testing.assert_close(actual.value_scale, expected.value_scale)
+        torch.testing.assert_close(
+            actual.key_scale, expected.key_scale, rtol=1e-6, atol=0
+        )
+        torch.testing.assert_close(
+            actual.value_scale, expected.value_scale, rtol=1e-6, atol=0
+        )
 
 
 @torch.no_grad()

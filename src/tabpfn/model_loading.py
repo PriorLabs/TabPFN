@@ -71,8 +71,6 @@ V_3_5_FAST_IDENTIFIER = "v3.5-fast"
 _ARCHITECTURE_NAME_ALIASES = {
     # v2.5 checkpoints predate the architecture-per-module layout.
     "base": "tabpfn_v2_5",
-    # TODO: Remove once the v3.5 checkpoints are re-exported.
-    "tabpfn_v3_5_prerelease": "tabpfn_v3_5",
 }
 
 

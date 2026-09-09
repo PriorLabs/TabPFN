@@ -359,7 +359,6 @@ def _build_small_v3_5_checkpoint(
     inference_config: InferenceConfig,
     *,
     max_num_classes: int,
-    architecture_name: str = "tabpfn_v3_5",
 ) -> dict:
     config = TabPFNV3p5Config(
         max_num_classes=max_num_classes,
@@ -374,7 +373,7 @@ def _build_small_v3_5_checkpoint(
     return {
         "state_dict": model.state_dict(),
         "config": asdict(config),
-        "architecture_name": architecture_name,
+        "architecture_name": "tabpfn_v3_5",
         "inference_config": asdict(inference_config),
     }
 
@@ -414,38 +413,11 @@ def test__load_v3_5_multitask_ckpt__backs_both_estimator_types(
     assert loaded_inference_config == inference_config
 
 
-def test__load_model__prerelease_architecture_name__loads_v3_5_architecture(
-    tmp_path: Path,
-) -> None:
-    """The pre-release v3.5 checkpoints name the architecture by its old name.
-
-    They load through the alias until they are re-exported under `tabpfn_v3_5`.
-    """
-    inference_config = InferenceConfig(
-        PREPROCESS_TRANSFORMS=[PreprocessorConfig("quantile_uni_coarse")]
-    )
-    checkpoint = _build_small_v3_5_checkpoint(
-        inference_config,
-        max_num_classes=10,
-        architecture_name="tabpfn_v3_5_prerelease",
-    )
-    checkpoint_path = tmp_path / "tabpfn-v3.5-prerelease.safetensors"
-    save_as_safetensors(checkpoint, checkpoint_path)
-
-    loaded_model, _, loaded_config, _ = model_loading.load_model(
-        path=checkpoint_path, estimator_type="classifier"
-    )
-
-    assert isinstance(loaded_model, tabpfn_v3_5.TabPFNV3p5)
-    assert isinstance(loaded_config, TabPFNV3p5Config)
-
-
 @pytest.mark.parametrize(
     ("file_name", "expected"),
     [
         ("tabpfn-v3.5-fast-20260909.safetensors", ModelVersion.V3_5_FAST),
         ("tabpfn-v3.5-20260909.safetensors", ModelVersion.V3_5),
-        ("tabpfn_v3.5_prerelease_wzc91eda_20260825.safetensors", ModelVersion.V3_5),
         ("tabpfn-v3-classifier-v3_default.ckpt", ModelVersion.V3),
         ("tabpfn-v2.6-regressor-v2.6_default.ckpt", ModelVersion.V2_6),
         ("tabpfn-v2.5-classifier-v2.5_default.ckpt", ModelVersion.V2_5),
