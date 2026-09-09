@@ -396,12 +396,17 @@ def test__fit_with_real_datetime_column__raises_naming_it(estimator_cls: type) -
     """
     X, y = _estimator_data(estimator_cls, pd.date_range("2020-01-01", periods=120))
 
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": False}
+    )
     with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
         model.fit(X, y)
 
     model = estimator_cls(
-        n_estimators=1, device="cpu", categorical_features_indices=[1]
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[1],
+        inference_config={"TRANSFORM_DATES": False},
     )
     with pytest.raises(TabPFNValidationError, match=r"1 \('date'\)"):
         model.fit(X, y)

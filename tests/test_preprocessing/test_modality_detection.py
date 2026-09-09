@@ -798,7 +798,9 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         else rng.normal(size=n)
     )
 
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'review'" in str(record[0].message)
@@ -846,7 +848,9 @@ def test__fit_with_declared_high_cardinality_strings__reads_them_as_categorical(
     )
 
     # Only the plain string column is undeclared, so only it is text.
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'sku'" in str(record[0].message)

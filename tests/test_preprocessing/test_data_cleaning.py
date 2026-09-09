@@ -651,7 +651,12 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
         }
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"TRANSFORM_TEXT": False},
+    )
     clf.fit(X_fit, y)
 
     with pytest.warns(UserWarning, match="differs.*from fit time"):
@@ -686,7 +691,12 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
         ]
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"TRANSFORM_TEXT": False},
+    )
     clf.fit(X_fit, y)
 
     with pytest.warns(UserWarning, match="differs.*from fit time"):
