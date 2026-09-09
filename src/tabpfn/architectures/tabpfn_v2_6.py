@@ -1070,11 +1070,7 @@ def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p6Config, dict[str, An
     return parsed_config, parsed_config.get_unused_config(config)
 
 
-def get_architecture(
-    config: ArchitectureConfig,
-    *,
-    cache_trainset_representation: bool = False,
-) -> TabPFNV2p6:
+def get_architecture(config: ArchitectureConfig) -> TabPFNV2p6:
     """Construct TabPFNV2.6 based on the given config.
 
     This factory method implements the interface defined in
@@ -1084,17 +1080,10 @@ def get_architecture(
         config: The config returned by parse_config(). This method should use a
             runtime isinstance() check to downcast the config to this architecture's
             specific config class.
-        cache_trainset_representation: Accepted for interface compatibility but
-            ignored. This architecture uses an explicit KV cache passed through
-            forward() (``kv_cache`` / ``return_kv_cache``) rather than model-internal
-            caching, so no special construction is required.
 
     Returns: the constructed architecture
     """
     assert isinstance(config, TabPFNV2p6Config)
-    # The explicit KV cache is selected at call time via forward()'s kv_cache /
-    # return_kv_cache arguments, so the model does not need configuring here.
-    del cache_trainset_representation
     task_type = "multiclass" if config.max_num_classes > 0 else "regression"
     n_out = config.max_num_classes if task_type == "multiclass" else config.num_buckets
     return TabPFNV2p6(config=config, n_out=n_out, task_type=task_type)

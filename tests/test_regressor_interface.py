@@ -883,7 +883,6 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
         initialize_tabpfn_model(
             model_path="auto",
             which="regressor",
-            fit_mode="low_memory",
         )
     )
     assert model is not None, "model should be initialized for regressor"
@@ -1703,7 +1702,6 @@ def _create_dummy_regressor_model_specs() -> RegressorModelSpecs:
     return RegressorModelSpecs(
         model=tabpfn_v2_5.get_architecture(
             config=minimal_config,
-            cache_trainset_representation=False,
         ),
         architecture_config=minimal_config,
         inference_config=InferenceConfig.get_default(

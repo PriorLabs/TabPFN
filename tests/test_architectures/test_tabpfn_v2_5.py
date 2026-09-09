@@ -45,9 +45,7 @@ def _create_small_v2_5(task_type: str = "multiclass") -> tabpfn_v2_5.TabPFNV2p5:
     )
 
     # Get the architectures
-    arch_v2_5 = tabpfn_v2_5.get_architecture(
-        configv2, cache_trainset_representation=False
-    )
+    arch_v2_5 = tabpfn_v2_5.get_architecture(configv2)
     for param in arch_v2_5.parameters():
         if param.abs().sum() < 1e-6:
             param.data += torch.randn_like(param) * 1e-1
