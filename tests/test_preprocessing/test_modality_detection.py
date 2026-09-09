@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import decimal
 import warnings
 from typing import Any
 
@@ -975,3 +976,31 @@ def test__count_distinct_per_column__matches_nunique() -> None:
     assert _count_distinct_per_column(ints).tolist() == [1, 2]
     bools = np.array([[True], [False], [True]])
     assert _count_distinct_per_column(bools).tolist() == [2]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1.5, np.nan, 2.5], True),
+        ([1, 2, None], True),
+        ([True, False, None], True),
+        ([1, 2.5, 3], True),
+        ([decimal.Decimal("1.5"), None], True),
+        ([None, None], True),
+        ([np.nan, pd.NA], True),
+        (["1.5", "2", None], True),  # spelled-out numbers still count
+        (["1.5", "x"], False),
+        (["a", "b"], False),
+        ([1, "x"], False),
+        ([1 + 2j, 3 + 0j], False),
+        ([b"1", b"2"], True),
+        ([pd.Timestamp("2020-01-01"), None], False),
+    ],
+)
+def test__is_numeric_pandas_series__object_column(values: list, expected: bool) -> None:
+    """The C-level shortcut and the value walk agree on object columns."""
+    s = pd.Series(values, dtype=object)
+    assert _is_numeric_pandas_series(s) is expected
+    if PANDAS_BELOW_3:
+        walk = all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
+        assert walk is expected

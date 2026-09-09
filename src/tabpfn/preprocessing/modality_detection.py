@@ -291,8 +291,20 @@ def _count_distinct_per_column(X: np.ndarray) -> np.ndarray:
     return (values[1:] != values[:-1]).sum(axis=0) + 1
 
 
+#: `pd.api.types.infer_dtype` kinds whose every non-missing value is a number. A
+#: `string` or `mixed` column is not settled by them: a spelled-out number counts too.
+_INFERRED_NUMERIC_KINDS = frozenset(
+    {"integer", "floating", "mixed-integer-float", "boolean", "decimal", "empty"}
+)
+
+
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if pd.api.types.is_numeric_dtype(s.dtype):
+        return True
+    # A numeric column stored as object is the common case: a frame with one
+    # non-numeric column arrives as a single object array. `infer_dtype` settles it in
+    # C rather than a Python-level walk over every value.
+    if pd.api.types.infer_dtype(s, skipna=True) in _INFERRED_NUMERIC_KINDS:
         return True
     if PANDAS_BELOW_3:
         return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
