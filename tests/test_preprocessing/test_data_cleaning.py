@@ -618,7 +618,7 @@ def test__classifier_fit__string_dtype_plus_numpy_bool() -> None:
     assert np.isfinite(proba).all()
 
 
-def test__classifier_predict__numeric_against_string_fit_categories() -> None:
+def test__predict__transform_text_off__numeric_vs_string_fit_categories() -> None:
     """A column that is string at fit but numeric at predict must not crash.
 
     Regression for a predict-time crash (seen on the `anes_voting` dataset). TabPFN
@@ -651,7 +651,12 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
         }
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"TRANSFORM_TEXT": False},
+    )
     clf.fit(X_fit, y)
 
     with pytest.warns(UserWarning, match="differs.*from fit time"):
@@ -660,7 +665,7 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     assert np.isfinite(proba).all()
 
 
-def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:
+def test__predict__transform_text_off__numpy_array_vs_string_fit_categories() -> None:
     """Predicting with a numpy array (no column names) after a named-DataFrame fit.
 
     ``validate_data`` converts both fit and predict inputs to numpy before
@@ -686,7 +691,12 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
         ]
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"TRANSFORM_TEXT": False},
+    )
     clf.fit(X_fit, y)
 
     with pytest.warns(UserWarning, match="differs.*from fit time"):
@@ -699,7 +709,8 @@ def test__process_text_na_dataframe__numeric_against_string_fit_categories() -> 
     """The predict-time fix isolated to ``clean.process_text_na_dataframe`` (no model).
 
     Same root cause as
-    ``test__classifier_predict__numeric_against_string_fit_categories``, narrowed to the
+    ``test__predict__transform_text_off__numeric_vs_string_fit_categories``,
+    narrowed to the
     component that owns predict-time cleaning: fit the ordinal encoder on string
     categories, then transform a frame whose ``code`` column arrives numeric. The
     mismatched column must be coerced to string (with a warning) and its unseen values
