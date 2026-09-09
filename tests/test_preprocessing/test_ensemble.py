@@ -1096,6 +1096,49 @@ def test__get_subsample_indices_for_estimators__detaches_torch_targets():
     assert y.requires_grad
 
 
+def test__get_subsample_indices_for_estimators__bfloat16_targets():
+    """bfloat16 has no numpy dtype; the labels must be widened, not crash."""
+    y = torch.tensor([0.0] * 9 + [1.0], dtype=torch.bfloat16)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=4,
+        num_estimators=2,
+        n_samples=len(y),
+        rng=np.random.default_rng(0),
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 4
+        assert 9 in indices
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.float32, torch.bfloat16])
+def test__fit_with_differentiable_input__row_subsampling(dtype: torch.dtype):
+    """The differentiable path now stratifies under "auto", like fit() does."""
+    rng = np.random.default_rng(0)
+    n_majority, n_minority = 180, 20
+    X = torch.tensor(rng.normal(size=(n_majority + n_minority, 3)), dtype=torch.float32)
+    y_np = np.array([0] * n_majority + [1] * n_minority)
+    y = torch.tensor(y_np, dtype=dtype)
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        differentiable_input=True,
+        inference_config={"SUBSAMPLE_SAMPLES": 60},
+        random_state=0,
+    )
+    clf.fit_with_differentiable_input(X, y)
+    row_indices = clf.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    for indices in row_indices:
+        assert len(indices) == 60
+        # Stratified: the minority keeps roughly its 10% share (one slot is
+        # reserved per class, the rest allocated by largest remainder) instead
+        # of being left to chance as under the previous label-blind sampling.
+        assert (y_np[indices] == 1).sum() in (6, 7)
+
+
 @pytest.mark.parametrize("subsample_samples", [None, [np.array([0, 1])]])
 def test__sample_subsampling_method__ignored_without_numeric_subsampling(
     subsample_samples: list[np.ndarray] | None,

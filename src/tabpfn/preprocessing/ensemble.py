@@ -13,6 +13,7 @@ from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 import numpy as np
+import torch
 
 from tabpfn.constants import (
     AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES,
@@ -40,7 +41,6 @@ from tabpfn.preprocessing.transform import fit_preprocessing
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
-    import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
@@ -215,11 +215,7 @@ class TabPFNEnsemblePreprocessor:
             cat_indices = (
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
-            y_for_importance = (
-                y_train
-                if isinstance(y_train, np.ndarray)
-                else y_train.detach().cpu().numpy()
-            )
+            y_for_importance = _targets_to_numpy(y_train)
             importance_feature_order = _compute_feature_importance_order(
                 X=X_train,
                 y=y_for_importance,
@@ -693,6 +689,26 @@ def _resolve_sample_subsampling_method(
     return method
 
 
+def _targets_to_numpy(y: np.ndarray | torch.Tensor) -> np.ndarray:
+    """Return the targets as a numpy array for label-only bookkeeping.
+
+    Row indices and feature importance are non-differentiable metadata, so a
+    tensor is detached here; the original tensor and its autograd graph stay
+    intact for the preprocessing and inference paths. Reduced-precision floats
+    such as bfloat16 have no numpy counterpart and are widened to float32 first.
+    """
+    if isinstance(y, np.ndarray):
+        return y
+    y = y.detach().cpu()
+    if y.is_floating_point() and y.dtype not in (
+        torch.float16,
+        torch.float32,
+        torch.float64,
+    ):
+        y = y.float()
+    return y.numpy()
+
+
 def _subsample_rows_by_method(
     *,
     method: SampleSubsamplingMethod,
@@ -721,11 +737,7 @@ def _subsample_rows_by_method(
         raise ValueError(
             f"Row subsampling method {method.value!r} requires the targets (y)."
         )
-    if not isinstance(y, np.ndarray):
-        # Row indices are non-differentiable metadata. Detaching only this view
-        # keeps the original target tensor and its autograd graph intact for the
-        # preprocessing and inference paths.
-        y = y.detach().cpu().numpy()
+    y = _targets_to_numpy(y)
     if method == SampleSubsamplingMethod.STRATIFIED:
         return _subsample_rows_stratified(
             subsample_size=subsample_size,
