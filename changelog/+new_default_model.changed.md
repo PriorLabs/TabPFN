@@ -1,0 +1,1 @@
+TabPFN-3.5 is the default model: `TabPFNClassifier()` and `TabPFNRegressor()` now load `ModelVersion.V3_5` unless a `model_path` or another version is given. The previous default, TabPFN-3, stays available through `create_default_for_version(ModelVersion.V3)`.
