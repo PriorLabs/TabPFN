@@ -21,6 +21,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
     clean_data_transform,
+    coerce_nullable_dtypes_to_numpy,
     fix_dtypes,
     process_text_na_dataframe,
 )
@@ -1344,3 +1345,30 @@ def test__fit_predict__unicode_array__is_accepted_like_an_object_array(
     np.testing.assert_array_equal(
         fitted_on_frame.predict(X), fitted_on_frame.predict(X.astype(object))
     )
+
+
+def test__coerce_nullable_dtypes_to_numpy__selects_by_dtype() -> None:
+    """Bool and nullable numeric columns become float64, all others keep their dtype."""
+    X = pd.DataFrame(
+        {
+            "bool": [True, False, True],
+            "boolean": pd.array([True, None, False], dtype="boolean"),
+            "int64_na": pd.array([1, None, 3], dtype="Int64"),
+            "float64_na": pd.array([1.5, None, 3.5], dtype="Float64"),
+            "uint8_na": pd.array([1, 2, None], dtype="UInt8"),
+            "int": [1, 2, 3],
+            "float": [1.5, 2.5, 3.5],
+            "cat": pd.Categorical(["a", "b", "a"]),
+            "string": pd.array(["a", None, "b"], dtype="string"),
+            "obj": ["a", 1, None],
+            "bool_again": [False, False, True],
+        }
+    )
+    out = coerce_nullable_dtypes_to_numpy(X)
+    cast = ["bool", "boolean", "int64_na", "float64_na", "uint8_na", "bool_again"]
+    assert all(out[c].dtype == np.float64 for c in cast)
+    for c in X.columns:
+        if c not in cast:
+            assert out[c].dtype == X[c].dtype, c
+    assert list(out.columns) == list(X.columns)
+    assert out["boolean"].isna().tolist() == [False, True, False]
