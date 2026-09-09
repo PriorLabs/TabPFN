@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sys
+import time
 import warnings
 from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import torch
 from sklearn.preprocessing import PowerTransformer
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -19,19 +21,23 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.configs import (
     FeatureSubsamplingMethod,
     PreprocessorConfig,
+    SampleSubsamplingMethod,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     DEFAULT_N_ESTIMATORS,
     TabPFNEnsemblePreprocessor,
     _compute_feature_importance_order,
+    _compute_majority_downsample_group_counts,
     _draw_balanced_from_pool,
     _fit_importance_ordering,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
     _resolve_feature_subsampling_method,
     _resolve_importance_top_k,
+    _resolve_sample_subsampling_method,
     _subsample_features_importance_based,
+    _subsample_rows_majority_downsample,
     _subsample_rows_stratified,
     scale_n_estimators_for_feature_coverage,
 )
@@ -677,7 +683,8 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         num_estimators=num_estimators,
         n_samples=n_samples,
         rng=rng,
-        y_for_stratification=y,
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
     )
 
     assert result is not None
@@ -695,7 +702,8 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         num_estimators=num_estimators,
         n_samples=n_samples,
         rng=np.random.default_rng(4),
-        y_for_stratification=y,
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
     )
     assert result_float is not None
     expected_size = int(0.4 * n_samples) + 1  # 41
@@ -707,6 +715,512 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
 
 
 # --- Feature importance subsampling tests ---
+
+
+def test__compute_majority_downsample_group_counts__binary_keeps_minority_whole():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([900, 100]), subsample_size=300
+    )
+    np.testing.assert_array_equal(counts, [200, 100])
+    assert counts.sum() == 300
+
+
+def test__compute_majority_downsample_group_counts__keeps_all_non_majority_groups():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([500, 10, 300, 40]), subsample_size=400
+    )
+    np.testing.assert_array_equal(counts, [50, 10, 300, 40])
+    assert counts.sum() == 400
+
+
+def test__compute_majority_downsample_group_counts__minority_exceeds_budget():
+    with pytest.raises(ValueError, match="greater than the number of non-majority"):
+        _compute_majority_downsample_group_counts(
+            group_sizes=np.array([600, 400]), subsample_size=100
+        )
+
+
+def test__compute_majority_downsample_group_counts__minority_nearly_fills_budget():
+    """The minority is kept whole as long as one row is left for the majority."""
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([900, 99]), subsample_size=100
+    )
+    np.testing.assert_array_equal(counts, [1, 99])
+
+
+@pytest.mark.parametrize(
+    "group_sizes",
+    [
+        np.array([10, 10]),
+        np.array([10, 2, 10]),
+        np.ones(1000, dtype=int),
+    ],
+)
+def test__compute_majority_downsample_group_counts__rejects_tied_majority(
+    group_sizes: np.ndarray,
+):
+    with pytest.raises(ValueError, match="one unique majority target value"):
+        _compute_majority_downsample_group_counts(
+            group_sizes=group_sizes,
+            subsample_size=min(10, int(group_sizes.sum()) - 1),
+        )
+
+
+def test__compute_majority_downsample_group_counts__single_group():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([100]), subsample_size=30
+    )
+    np.testing.assert_array_equal(counts, [30])
+
+
+def test__compute_majority_downsample_group_counts__full_budget_needs_no_majority():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([10, 10]), subsample_size=20
+    )
+    np.testing.assert_array_equal(counts, [10, 10])
+
+
+def test__compute_majority_downsample_group_counts__never_exceeds_group_size():
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        minority_sizes = rng.integers(1, 50, size=rng.integers(1, 20))
+        majority_size = int(minority_sizes.max() + rng.integers(1, 50))
+        sizes = np.append(minority_sizes, majority_size)
+        rng.shuffle(sizes)
+        non_majority_size = int(sizes.sum() - majority_size)
+        budget = int(rng.integers(non_majority_size + 1, sizes.sum() + 1))
+        counts = _compute_majority_downsample_group_counts(sizes, budget)
+        assert counts.sum() == budget
+        assert (counts <= sizes).all()
+        assert (counts >= 0).all()
+        majority_group = int(np.argmax(sizes))
+        np.testing.assert_array_equal(
+            np.delete(counts, majority_group), np.delete(sizes, majority_group)
+        )
+
+
+def test__subsample_rows_majority_downsample__zero_inflated_regression():
+    """Zeros are downsampled while every distinct nonzero target is kept."""
+    rng = np.random.default_rng(0)
+    n_zeros, n_nonzero = 900, 100
+    y = np.concatenate([np.zeros(n_zeros), rng.exponential(size=n_nonzero) + 0.1])
+    rng.shuffle(y)
+    nonzero_rows = set(np.flatnonzero(y != 0))
+    subsample_size = 250
+
+    result = _subsample_rows_majority_downsample(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=4,
+        rng=rng,
+        task_type="regressor",
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == subsample_size
+        assert len(np.unique(indices)) == subsample_size
+        assert set(indices[y[indices] != 0]) == nonzero_rows
+        assert (y[indices] == 0).sum() == subsample_size - n_nonzero
+
+
+def test__subsample_rows_majority_downsample__many_distinct_values_is_fast():
+    """Bookkeeping must not loop over every distinct target value per estimator."""
+    rng = np.random.default_rng(0)
+    y = np.concatenate([np.zeros(200_000), rng.normal(size=200_000)])
+    start = time.perf_counter()
+    result = _subsample_rows_majority_downsample(
+        subsample_size=250_000,
+        y=y,
+        num_estimators=8,
+        rng=rng,
+        task_type="regressor",
+    )
+    elapsed = time.perf_counter() - start
+    assert result is not None
+    assert all(len(idx) == 250_000 for idx in result)
+    assert elapsed < 10, f"took {elapsed:.1f}s"
+
+
+def test__subsample_rows_majority_downsample__keeps_all_minority_rows():
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 950 + [1] * 50)
+    rng.shuffle(y)
+    minority_rows = set(np.where(y == 1)[0])
+    subsample_size = 200
+    num_estimators = 8
+
+    result = _subsample_rows_majority_downsample(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+        task_type="classifier",
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    for indices in result:
+        assert len(indices) == subsample_size
+        assert len(np.unique(indices)) == subsample_size, "no duplicate rows"
+        assert set(indices[y[indices] == 1]) == minority_rows
+        assert (y[indices] == 0).sum() == subsample_size - len(minority_rows)
+
+
+def test__subsample_rows_majority_downsample__majority_balanced_coverage():
+    """Majority rows are drawn round-robin so coverage is even across estimators."""
+    rng = np.random.default_rng(1)
+    y = np.array([0] * 100 + [1] * 10)
+    # 4 estimators x 40 majority slots = 160 draws over 100 majority rows:
+    # every row is drawn once in the first pass, 60 of them twice.
+    result = _subsample_rows_majority_downsample(
+        subsample_size=50,
+        y=y,
+        num_estimators=4,
+        rng=rng,
+        task_type="classifier",
+    )
+    assert result is not None
+    majority_counts = np.bincount(
+        np.concatenate([idx[y[idx] == 0] for idx in result]), minlength=110
+    )[:100]
+    assert set(majority_counts.tolist()) == {1, 2}
+    assert majority_counts.sum() == 160
+
+
+def test__subsample_rows_majority_downsample__returns_none_when_no_subsampling_needed():
+    y = np.array([0, 0, 1])
+    assert (
+        _subsample_rows_majority_downsample(
+            subsample_size=3,
+            y=y,
+            num_estimators=2,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+        is None
+    )
+
+
+def test__subsample_rows_majority_downsample__string_labels():
+    rng = np.random.default_rng(3)
+    y = np.array(["cat"] * 90 + ["dog"] * 10)
+    result = _subsample_rows_majority_downsample(
+        subsample_size=30,
+        y=y,
+        num_estimators=3,
+        rng=rng,
+        task_type="classifier",
+    )
+    assert result is not None
+    for indices in result:
+        assert (y[indices] == "dog").sum() == 10
+        assert (y[indices] == "cat").sum() == 20
+
+
+def test__subsample_rows_majority_downsample__balanced_fallback_for_regression():
+    y = np.arange(20)
+    with pytest.warns(UserWarning, match="falling back to 'balanced'"):
+        result = _subsample_rows_majority_downsample(
+            subsample_size=5,
+            y=y,
+            num_estimators=4,
+            rng=np.random.default_rng(0),
+            task_type="regressor",
+        )
+
+    assert result is not None
+    occurrence_counts = np.bincount(np.concatenate(result), minlength=len(y))
+    np.testing.assert_array_equal(occurrence_counts, np.ones(len(y), dtype=int))
+
+
+def test__subsample_rows_majority_downsample__stratified_fallback_for_classifier():
+    y = np.array([0] * 10 + [1] * 10)
+    with pytest.warns(UserWarning, match="falling back to 'stratified'"):
+        result = _subsample_rows_majority_downsample(
+            subsample_size=10,
+            y=y,
+            num_estimators=3,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+
+    assert result is not None
+    for indices in result:
+        assert (y[indices] == 0).sum() == 5
+        assert (y[indices] == 1).sum() == 5
+
+
+@pytest.mark.parametrize("subsample_size", [9, 10])
+def test__subsample_rows_majority_downsample__rejects_insufficient_budget(
+    subsample_size: int,
+):
+    y = np.array([0] * 10 + [1] * 6 + [2] * 4)
+    with pytest.raises(ValueError, match="greater than the number of non-majority"):
+        _subsample_rows_majority_downsample(
+            subsample_size=subsample_size,
+            y=y,
+            num_estimators=3,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+
+
+def test__subsample_rows_majority_downsample__warns_when_class_prior_inverts():
+    y = np.array([0] * 500 + [1] * 300 + [2] * 200)
+    with pytest.warns(UserWarning, match="changes the class prior"):
+        result = _subsample_rows_majority_downsample(
+            subsample_size=600,
+            y=y,
+            num_estimators=2,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+
+    assert result is not None
+    for indices in result:
+        np.testing.assert_array_equal(np.bincount(y[indices]), [100, 300, 200])
+
+
+def test__resolve_sample_subsampling_method__auto():
+    assert (
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.AUTO, task_type="classifier"
+        )
+        == SampleSubsamplingMethod.STRATIFIED
+    )
+    assert (
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.AUTO, task_type="regressor"
+        )
+        == SampleSubsamplingMethod.BALANCED
+    )
+
+
+def test__resolve_sample_subsampling_method__stratified_rejected_for_regressor():
+    with pytest.raises(ValueError, match="only supported for classification"):
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.STRATIFIED, task_type="regressor"
+        )
+
+
+def test__resolve_sample_subsampling_method__majority_downsample_allowed_for_regressor():  # noqa: E501
+    assert (
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE, task_type="regressor"
+        )
+        == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+    )
+
+
+def test__resolve_sample_subsampling_method__accepts_strings():
+    resolved = _resolve_sample_subsampling_method(
+        "majority_downsample",  # type: ignore[arg-type]
+        task_type="classifier",
+    )
+    assert resolved == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+
+
+def test__get_subsample_indices_for_estimators__majority_downsample_dispatch():
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 900 + [1] * 100)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=300,
+        num_estimators=4,
+        n_samples=len(y),
+        rng=rng,
+        method=SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE,
+        y=y,
+    )
+    assert result is not None
+    for indices in result:
+        assert (y[indices] == 1).sum() == 100
+        assert (y[indices] == 0).sum() == 200
+
+
+def test__get_subsample_indices_for_estimators__class_aware_requires_y():
+    with pytest.raises(ValueError, match="requires the targets"):
+        _get_subsample_indices_for_estimators(
+            subsample_samples=10,
+            num_estimators=2,
+            n_samples=100,
+            rng=np.random.default_rng(0),
+            method=SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE,
+        )
+
+
+def test__get_subsample_indices_for_estimators__auto_must_be_resolved():
+    with pytest.raises(ValueError, match="must be resolved"):
+        _get_subsample_indices_for_estimators(
+            subsample_samples=10,
+            num_estimators=2,
+            n_samples=100,
+            rng=np.random.default_rng(0),
+            method=SampleSubsamplingMethod.AUTO,
+        )
+
+
+def test__get_subsample_indices_for_estimators__balanced_ignores_y():
+    """Explicit 'balanced' ignores the labels even when they are provided."""
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 999 + [1])
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=100,
+        num_estimators=3,
+        n_samples=len(y),
+        rng=rng,
+        method=SampleSubsamplingMethod.BALANCED,
+        y=y,
+    )
+    assert result is not None
+    # Round-robin over a shuffled pool: 3 x 100 = 300 slots over 1000 rows, so
+    # the single minority row cannot appear in every estimator.
+    assert sum(1 in set(y[idx]) for idx in result) <= 1
+
+
+def test__get_subsample_indices_for_estimators__detaches_torch_targets():
+    y = torch.tensor([0.0] * 9 + [1.0], requires_grad=True)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=4,
+        num_estimators=2,
+        n_samples=len(y),
+        rng=np.random.default_rng(0),
+        method=SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE,
+        y=y,
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 4
+        assert 9 in indices
+    assert y.requires_grad
+
+
+def test__get_subsample_indices_for_estimators__bfloat16_targets():
+    """bfloat16 has no numpy dtype; the labels must be widened, not crash."""
+    y = torch.tensor([0.0] * 9 + [1.0], dtype=torch.bfloat16)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=4,
+        num_estimators=2,
+        n_samples=len(y),
+        rng=np.random.default_rng(0),
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 4
+        assert 9 in indices
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.float32, torch.bfloat16])
+def test__fit_with_differentiable_input__row_subsampling(dtype: torch.dtype):
+    """The differentiable path now stratifies under "auto", like fit() does."""
+    rng = np.random.default_rng(0)
+    n_majority, n_minority = 180, 20
+    X = torch.tensor(rng.normal(size=(n_majority + n_minority, 3)), dtype=torch.float32)
+    y_np = np.array([0] * n_majority + [1] * n_minority)
+    y = torch.tensor(y_np, dtype=dtype)
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        differentiable_input=True,
+        inference_config={"SUBSAMPLE_SAMPLES": 60},
+        random_state=0,
+    )
+    clf.fit_with_differentiable_input(X, y)
+    row_indices = clf.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    for indices in row_indices:
+        assert len(indices) == 60
+        # Stratified: the minority keeps roughly its 10% share (one slot is
+        # reserved per class, the rest allocated by largest remainder) instead
+        # of being left to chance as under the previous label-blind sampling.
+        assert (y_np[indices] == 1).sum() in (6, 7)
+
+
+@pytest.mark.parametrize("subsample_samples", [None, [np.array([0, 1])]])
+def test__sample_subsampling_method__ignored_without_numeric_subsampling(
+    subsample_samples: list[np.ndarray] | None,
+):
+    configs = generate_regression_ensemble_configs(
+        num_estimators=1,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[PreprocessorConfig("none", categorical_name="numeric")],
+        target_transforms=[None],
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=2,
+        feature_schema=_get_schema(1),
+        random_state=0,
+        n_preprocessing_jobs=1,
+        subsample_samples=subsample_samples,
+        sample_subsampling_method=SampleSubsamplingMethod.STRATIFIED,
+        task_type="regressor",
+    )
+
+    if subsample_samples is None:
+        assert preprocessor.subsample_row_indices is None
+    else:
+        assert preprocessor.subsample_row_indices is not None
+        np.testing.assert_array_equal(
+            preprocessor.subsample_row_indices[0], subsample_samples[0]
+        )
+
+
+def test__end_to_end__majority_downsample_row_subsampling():
+    """The classifier wires SAMPLE_SUBSAMPLING_METHOD through to the preprocessor."""
+    rng = np.random.default_rng(0)
+    n_majority, n_minority = 180, 20
+    X = rng.normal(size=(n_majority + n_minority, 3))
+    y = np.array([0] * n_majority + [1] * n_minority)
+    clf = TabPFNClassifier(
+        n_estimators=3,
+        inference_config={
+            "SUBSAMPLE_SAMPLES": 60,
+            "SAMPLE_SUBSAMPLING_METHOD": "majority_downsample",
+        },
+        random_state=0,
+    )
+    clf.fit(X, y)
+    row_indices = clf.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    assert len(row_indices) == 3
+    for indices in row_indices:
+        assert len(indices) == 60
+        assert (y[indices] == 1).sum() == n_minority
+        assert (y[indices] == 0).sum() == 60 - n_minority
+
+
+def test__end_to_end__majority_downsample_row_subsampling_regressor():
+    """A zero-inflated regressor keeps every nonzero target row per estimator."""
+    rng = np.random.default_rng(0)
+    n_zeros, n_nonzero = 170, 30
+    X = rng.normal(size=(n_zeros + n_nonzero, 3))
+    y = np.concatenate([np.zeros(n_zeros), rng.exponential(size=n_nonzero) + 0.1])
+    reg = TabPFNRegressor(
+        n_estimators=3,
+        inference_config={
+            "SUBSAMPLE_SAMPLES": 80,
+            "SAMPLE_SUBSAMPLING_METHOD": "majority_downsample",
+        },
+        random_state=0,
+    )
+    reg.fit(X, y)
+    row_indices = reg.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    assert len(row_indices) == 3
+    for indices in row_indices:
+        assert len(indices) == 80
+        assert (y[indices] != 0).sum() == n_nonzero
+        assert (y[indices] == 0).sum() == 80 - n_nonzero
 
 
 def test__subsample_features_importance_based__top_k_always_present():

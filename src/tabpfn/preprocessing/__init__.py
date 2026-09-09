@@ -9,6 +9,7 @@ from .configs import (
     FeatureSubsamplingMethod,
     PreprocessorConfig,
     RegressorEnsembleConfig,
+    SampleSubsamplingMethod,
 )
 from .ensemble import (
     generate_classification_ensemble_configs,
@@ -30,6 +31,7 @@ __all__ = [
     "PreprocessingPipeline",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
+    "SampleSubsamplingMethod",
     "clean_data",
     "fit_preprocessing",
     "generate_classification_ensemble_configs",

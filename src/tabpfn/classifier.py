@@ -78,6 +78,7 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     FeatureSubsamplingMethod,
     PreprocessorConfig,
+    SampleSubsamplingMethod,
     clean_data,
     generate_classification_ensemble_configs,
 )
@@ -933,6 +934,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            sample_subsampling_method=SampleSubsamplingMethod(
+                self.inference_config_.SAMPLE_SUBSAMPLING_METHOD
+            ),
             importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
             X_train=X,
             y_train=y,
@@ -1298,6 +1302,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            sample_subsampling_method=SampleSubsamplingMethod(
+                self.inference_config_.SAMPLE_SUBSAMPLING_METHOD
+            ),
+            y_train=y,
+            task_type=self.estimator_type,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(
