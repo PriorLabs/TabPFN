@@ -821,6 +821,24 @@ def test__kv_cache__quantize_passthrough_on_already_quantized() -> None:
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("task_type", ["multiclass", "regression"])
+def test__forward__kv_cache__missing_cells_in_train_and_test__matches_uncached(
+    task_type: TaskType,
+) -> None:
+    """Filled test cells must tie with the filled train cells they rank against."""
+    arch = _get_model()
+    x, y = _inputs(task_type)
+    gen = torch.Generator().manual_seed(1)
+    x = x.masked_fill(torch.rand(x.shape, generator=gen) < 0.4, float("nan"))
+    full = arch(x, y, task_type=task_type)
+    _, cache = arch(x, y, task_type=task_type, return_kv_cache=True)
+    from_cache = arch(
+        x[NUM_TRAIN:], y, task_type=task_type, kv_cache=cache, x_is_test_only=True
+    )
+    torch.testing.assert_close(full, from_cache, rtol=0, atol=1e-5)
+
+
+@torch.no_grad()
 @pytest.mark.parametrize("cache_dtype", [QUANTIZED_KV_DTYPE, FP8_KV_DTYPE])
 def test__kv_cache__layerwise_quantization_matches_post_forward(
     cache_dtype: torch.dtype,
@@ -849,8 +867,10 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         # Comparing after an exact float32 widening works for int8 and float8.
         assert torch.equal(actual.key.float(), expected.key.float())
         assert torch.equal(actual.value.float(), expected.value.float())
-        assert torch.equal(actual.key_scale, expected.key_scale)
-        assert torch.equal(actual.value_scale, expected.value_scale)
+        # The scales are an absmax over a fresh forward pass, and BLAS on some
+        # platforms (macOS arm64) is not bitwise reproducible across runs.
+        torch.testing.assert_close(actual.key_scale, expected.key_scale)
+        torch.testing.assert_close(actual.value_scale, expected.value_scale)
 
 
 @torch.no_grad()

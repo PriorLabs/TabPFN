@@ -2459,11 +2459,21 @@ class TabPFNV3p5(Architecture):
         # Note: Indicators need to be computed before imputation.
         nan_ind_BRiC = _generate_nan_and_inf_indicator(x_RiBC).transpose(0, 1)
 
-        x_RiBC, _ = _impute_nan_and_inf_with_mean(x_RiBC, num_train, scaler_cache)
+        x_RiBC, is_finite_RiBC = _impute_nan_and_inf_with_mean(
+            x_RiBC, num_train, scaler_cache
+        )
         fit_stats = scaler_cache is None
         if fit_stats:
             fit_data = x_RiBC[:num_train] if num_train > 0 else x_RiBC
             scaler_cache = self.standard_scaler.fit(fit_data)
+            # Align the fill value between train and cached test rows: the cached
+            # path fills from `mean`, which differs from the nanmean by rounding,
+            # enough to move a filled test cell out of the ECDF tie block.
+            x_RiBC = torch.where(
+                is_finite_RiBC,
+                x_RiBC,
+                scaler_cache["mean"].unsqueeze(0).expand_as(x_RiBC),
+            )
 
         # Rank the imputed values, not the output of `standard_scaler.transform`
         # below: its +/-100 clip would collapse extreme outliers into ties.
