@@ -992,13 +992,17 @@ def test__count_distinct_per_column__matches_nunique() -> None:
         (["1.5", "x"], False),
         (["a", "b"], False),
         ([1, "x"], False),
-        ([1 + 2j, 3 + 0j], False),
         ([b"1", b"2"], True),
         ([pd.Timestamp("2020-01-01"), None], False),
     ],
 )
 def test__is_numeric_pandas_series__object_column(values: list, expected: bool) -> None:
-    """The C-level shortcut and the value walk agree on object columns."""
+    """The C-level shortcut and the value walk agree on object columns.
+
+    Complex values are left out: the shortcut does not settle them, and the two
+    existing paths disagree on them (`float()` rejects a complex number, `pd.to_numeric`
+    accepts it), so their answer depends on the pandas version.
+    """
     s = pd.Series(values, dtype=object)
     assert _is_numeric_pandas_series(s) is expected
     if PANDAS_BELOW_3:
