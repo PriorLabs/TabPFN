@@ -7,8 +7,8 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
@@ -20,9 +20,6 @@ from tabpfn.preprocessing.datamodel import (
     FeatureSchema,
     build_input_feature_names,
 )
-
-if TYPE_CHECKING:
-    import numpy as np
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
 
@@ -68,18 +65,35 @@ def detect_feature_modalities(
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
+    provided = set(provided_categorical_indices or ())
+    decided_at = _decided_at(
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
+    )
+    # A numeric array needs no per-column parsing: every column is numeric, so only
+    # the distinct-value count decides, and that is counted for all columns at once.
+    n_unique_per_column = _numeric_n_unique_per_column(X, decided_at=decided_at)
     for i, index in enumerate(range(X.shape[1])):
         feature_name = unique_feature_names[i]
-        X_slice: np.ndarray = X[:, index]
-        reported_categorical = index in (provided_categorical_indices or ())
-        feat_modality = _detect_feature_modality(
-            s=pd.Series(X_slice, name=feature_name),
-            reported_categorical=reported_categorical,
-            max_unique_for_category=max_unique_for_category,
-            min_unique_for_numerical=min_unique_for_numerical,
-            min_cardinality_for_text=min_cardinality_for_text,
-            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        )
+        reported_categorical = index in provided
+        if n_unique_per_column is not None:
+            feat_modality = _numeric_modality(
+                n_unique=int(n_unique_per_column[index]),
+                reported_categorical=reported_categorical,
+                max_unique_for_category=max_unique_for_category,
+                min_unique_for_numerical=min_unique_for_numerical,
+                big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            )
+        else:
+            feat_modality = _detect_feature_modality(
+                s=pd.Series(X[:, index], name=feature_name),
+                reported_categorical=reported_categorical,
+                max_unique_for_category=max_unique_for_category,
+                min_unique_for_numerical=min_unique_for_numerical,
+                min_cardinality_for_text=min_cardinality_for_text,
+                big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
     _warn_on_text(feature_schema)
@@ -142,17 +156,10 @@ def _detect_feature_modality(
         "Categorical dtype must be converted before modality detection; "
         "preserve its intent in provided_categorical_indices."
     )
-    # Early exit: once a prefix already clears every threshold below, the full
-    # count would land in the same bucket, so skip scanning the rest.
-    # min_cardinality_for_text is included since it can exceed the other two.
-    decided_at = (
-        max(
-            max_unique_for_category,
-            min_unique_for_numerical,
-            min_cardinality_for_text,
-            1,
-        )
-        + 1
+    decided_at = _decided_at(
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
     )
     n_unique = 0
     if len(s) > _EARLY_EXIT_PREFIX_ROWS:
@@ -169,15 +176,13 @@ def _detect_feature_modality(
         return FeatureModality.CONSTANT
 
     if _is_numeric_pandas_series(s):
-        if _detect_numeric_as_categorical(
+        return _numeric_modality(
             n_unique=n_unique,
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        ):
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.NUMERICAL
+        )
 
     # A pandas `category` column never arrives here as such: `X` is a numpy array
     # by now, and its intent travels in `provided_categorical_indices` instead.
@@ -190,6 +195,100 @@ def _detect_feature_modality(
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
+
+
+def _decided_at(
+    *,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
+) -> int:
+    """The distinct-value count at which every threshold below is cleared.
+
+    Once a prefix of a column already holds this many distinct values, the full count
+    would land in the same bucket, so the rest of the column need not be scanned.
+    `min_cardinality_for_text` is included since it can exceed the other two.
+    """
+    return (
+        max(
+            max_unique_for_category,
+            min_unique_for_numerical,
+            min_cardinality_for_text,
+            1,
+        )
+        + 1
+    )
+
+
+def _numeric_modality(
+    *,
+    n_unique: int,
+    reported_categorical: bool,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    big_enough_n_to_infer_cat: bool,
+) -> FeatureModality:
+    """The modality of a numeric column with `n_unique` distinct values (NaN counted).
+
+    A constant (or all-missing) column is `CONSTANT` unless declared categorical, so
+    that it still routes through the ordinal encoder instead of crashing as a
+    constant numeric column when predict sees an unseen value.
+    """
+    if n_unique <= 1 and not reported_categorical:
+        return FeatureModality.CONSTANT
+    if _detect_numeric_as_categorical(
+        n_unique=n_unique,
+        reported_categorical=reported_categorical,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+    ):
+        return FeatureModality.CATEGORICAL
+    return FeatureModality.NUMERICAL
+
+
+def _numeric_n_unique_per_column(
+    X: np.ndarray, *, decided_at: int
+) -> np.ndarray | None:
+    """Distinct values per column of a numeric or bool array, NaN counted as a value.
+
+    `None` for anything else (an object array is parsed column by column). Mirrors
+    the per-column early exit: a column whose first `_EARLY_EXIT_PREFIX_ROWS` rows
+    already hold `decided_at` distinct values keeps that prefix count, which lands
+    in the same bucket as the full count; only the other columns are counted in
+    full.
+    """
+    if not isinstance(X, np.ndarray) or X.ndim != 2 or X.dtype.kind not in "biuf":
+        return None
+    n_rows, n_columns = X.shape
+    if n_rows == 0:
+        return np.zeros(n_columns, dtype=np.int64)
+    if n_rows <= _EARLY_EXIT_PREFIX_ROWS:
+        return _count_distinct_per_column(X)
+    n_unique = _count_distinct_per_column(X[:_EARLY_EXIT_PREFIX_ROWS])
+    undecided = np.flatnonzero(n_unique < decided_at)
+    if len(undecided):
+        n_unique[undecided] = _count_distinct_per_column(X[:, undecided])
+    return n_unique
+
+
+def _count_distinct_per_column(X: np.ndarray) -> np.ndarray:
+    """`pd.Series(column).nunique(dropna=False)` for every column of a numeric array.
+
+    Sorting puts equal values next to each other and NaN last, so the count is one
+    plus the number of adjacent unequal pairs, with NaN counted once when present.
+    `-0.0` equals `0.0` and `inf` equals `inf` here as under `nunique`.
+    """
+    values = np.sort(X, axis=0)
+    if values.dtype.kind == "f":
+        missing = np.isnan(values)
+        differs = (values[1:] != values[:-1]) & ~missing[1:]
+        return (
+            differs.sum(axis=0)
+            + (~missing).any(axis=0).astype(np.int64)
+            + missing.any(axis=0).astype(np.int64)
+        )
+    return (values[1:] != values[:-1]).sum(axis=0) + 1
 
 
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
