@@ -29,7 +29,7 @@ from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
 from tabpfn.architectures.interface import PerformanceOptions
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3
+from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.finetuning.data_util import (
@@ -540,7 +540,7 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV3,
+        TabPFNV3p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -615,7 +615,7 @@ def test__finetuned_tabpfn_classifier__fit_without_validation(
     caplog.set_level(logging.INFO, logger="tabpfn.finetuning.finetuned_base")
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=mock_forward,
@@ -791,7 +791,7 @@ def test__finetuned_tabpfn_classifier__validation_frequency_schedules_evaluation
 
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=create_mock_architecture_forward(n_classes=n_classes),
@@ -851,7 +851,7 @@ def test__finetuned_tabpfn_classifier__validation_frequency_without_remaining_ev
     caplog.set_level(logging.INFO, logger="tabpfn.finetuning.finetuned_base")
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=create_mock_architecture_forward(n_classes=n_classes),
@@ -900,7 +900,7 @@ def test__finetuned_tabpfn_classifier__validation_frequency_counts_patience_chec
 
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=create_mock_architecture_forward(n_classes=n_classes),
@@ -984,7 +984,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1069,7 +1071,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1107,7 +1111,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     )
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1218,7 +1224,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV3,
+        TabPFNV3p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -1287,7 +1293,9 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1621,7 +1629,10 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     # Patch the standard classifier's *internal model's* forward method
     # The internal model typically receives the combined train+test sequence
     with patch.object(
-        clf_standard.models_[0], "forward", wraps=clf_standard.models_[0].forward
+        clf_standard.models_[0],
+        "forward",
+        wraps=clf_standard.models_[0].forward,
+        autospec=True,
     ) as mock_forward_p1:
         _ = clf_standard.predict_proba(X_test_raw)
         assert mock_forward_p1.called, "Standard models_[0].forward was not called."
@@ -1691,7 +1702,10 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     tensor_p2_full = None
     # Patch the *batched* classifier's internal model's forward method
     with patch.object(
-        clf_batched.models_[0], "forward", wraps=clf_batched.models_[0].forward
+        clf_batched.models_[0],
+        "forward",
+        wraps=clf_batched.models_[0].forward,
+        autospec=True,
     ) as mock_forward_p2:
         _ = clf_batched.forward(batch.X_query)
         assert mock_forward_p2.called, "Batched models_[0].forward was not called."
@@ -1791,7 +1805,7 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     )
 
     with mock.patch.object(
-        TabPFNV3,
+        TabPFNV3p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,

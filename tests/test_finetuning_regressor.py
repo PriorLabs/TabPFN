@@ -85,7 +85,7 @@ def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]
         first_param = next(self.parameters())
         param_contribution = 0.0 * first_param.sum()
 
-        n_out = int(getattr(self, "n_out", 1))
+        n_out = self.heads.output_projection.out_features
         return (
             torch.randn(
                 num_test_rows,
@@ -213,7 +213,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+        "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -271,7 +271,7 @@ def test__regressor_checkpoint_contains_mse_metric(
     mock_forward = create_mock_architecture_forward_regression()
     with (
         mock.patch(
-            "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+            "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
             autospec=True,
             side_effect=mock_forward,
         ),
