@@ -618,7 +618,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
 
     @classmethod
-    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+    def create_default_for_version(
+        cls, version: ModelVersion | str, **overrides
+    ) -> Self:
         """Construct a regressor that uses the given version of the model.
 
         In addition to selecting the model, this also configures certain settings to the
@@ -651,6 +653,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             options = {
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v3().default_filename
+                ),
+                "n_estimators": "auto",
+            }
+        elif version == ModelVersion.V3_5:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_v3_5().default_filename
+                ),
+                "n_estimators": "auto",
+            }
+        elif version == ModelVersion.V3_5_FAST:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_v3_5_fast().default_filename
                 ),
                 "n_estimators": "auto",
             }
