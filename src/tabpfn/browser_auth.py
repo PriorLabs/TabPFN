@@ -163,12 +163,6 @@ def _get_license_name(hf_repo_id: str) -> str:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        if hf_repo_id == "tabpfn_3_5" and exc.code in (401, 404):
-            raise TabPFNError(
-                "TabPFN-3.5 is not publicly available yet. Stay tuned!"
-            ) from exc
-        raise TabPFNHuggingFaceGatedRepoError(f"Prior-Labs/{hf_repo_id}") from exc
     except Exception as exc:
         raise TabPFNHuggingFaceGatedRepoError(f"Prior-Labs/{hf_repo_id}") from exc
     license_name = data.get("cardData", {}).get("license_name")
