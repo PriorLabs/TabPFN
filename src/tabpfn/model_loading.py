@@ -66,13 +66,6 @@ V_3_IDENTIFIER = "v3"
 V_3_5_IDENTIFIER = "v3.5"
 V_3_5_FAST_IDENTIFIER = "v3.5-fast"
 
-# Checkpoints name the architecture module that loads them. The names below are
-# older spellings of a module that is still loaded, mapped to its current name.
-_ARCHITECTURE_NAME_ALIASES = {
-    # v2.5 checkpoints predate the architecture-per-module layout.
-    "base": "tabpfn_v2_5",
-}
-
 
 class ModelType(str, Enum):  # noqa: D101
     # TODO: Merge with TaskType in tabpfn.constants.
@@ -1075,12 +1068,12 @@ def _build_model(
     """Build a model from a resolved checkpoint path (no built-model cache)."""
     checkpoint = _load_checkpoint_cached(resolved, identity)
 
-    # V2 models don't have the "architecture_name" key. From V2.5 onwards, the
-    # architecture name corresponds to the python file name, up to the aliases.
+    # V2 models don't have the "architecture_name" key, V2.5 models have the
+    # architecture name set to "base", so we remap. From V2.6 onwards, the architecture
+    # name corresponds to the python file name.
     architecture_name = checkpoint.get("architecture_name", "tabpfn_v2")
-    architecture_name = _ARCHITECTURE_NAME_ALIASES.get(
-        architecture_name, architecture_name
-    )
+    if architecture_name == "base":
+        architecture_name = "tabpfn_v2_5"
     architecture = ARCHITECTURES[architecture_name]
     full_state = checkpoint["state_dict"]
     model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
