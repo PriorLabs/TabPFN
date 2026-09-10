@@ -576,6 +576,8 @@ class ManyClassDecoder(nn.Module):
         train_keys_BNHD: torch.Tensor,
         test_embeddings_BME: torch.Tensor,
         targets_BN: torch.Tensor,
+        *,
+        num_present_classes: int,
     ) -> torch.Tensor:
         """Perform a forward pass, on keys already built by `project_keys`."""
         B, M, _ = test_embeddings_BME.shape
@@ -600,7 +602,6 @@ class ManyClassDecoder(nn.Module):
         # the class axis shrinks the int64 one-hot and, since
         # `_chunked_class_attention` runs `ceil(T / head_dim)` folded attention
         # passes, can cut the attention cost by that factor.
-        num_present_classes = int(targets_long.max()) + 1
         one_hot_targets_BNT = torch.where(
             is_finite_BN[..., None],
             F.one_hot(targets_long, num_classes=num_present_classes),
@@ -1945,6 +1946,7 @@ class MultiTaskHeads(nn.Module):
         y_train_BN: torch.Tensor,  # (B, N), only consumed by the multiclass head
         *,
         task_type: str,
+        num_present_classes: int | None,
     ) -> torch.Tensor:
         """Apply the head selected by `task_type`.
 
@@ -1956,11 +1958,17 @@ class MultiTaskHeads(nn.Module):
             test_emb = self.mlp_regression(test_emb)
             return self.output_projection(test_emb.transpose(0, 1))
         if task_type == "multiclass":
+            assert num_present_classes is not None
             assert train_keys_BNHD is not None, (
                 "the multiclass head needs the decoder keys"
             )
             test_emb = self.mlp_classification(test_emb)
-            return self.many_class_decoder(train_keys_BNHD, test_emb, y_train_BN)
+            return self.many_class_decoder(
+                train_keys_BNHD,
+                test_emb,
+                y_train_BN,
+                num_present_classes=num_present_classes,
+            )
         raise ValueError(f"Unsupported task type: {task_type}")
 
 
@@ -2182,16 +2190,21 @@ class TabPFNV3p5(Architecture):
                 "the non-cache forward needs the full train+test tensor."
             )
 
-        if (
-            not self.training
-            and task_type == "multiclass"
-            and ((y > self.max_num_classes - 1) | (y < 0)).any()
-        ):
-            raise ValueError(
-                "Target is out of range. Make sure to use an ordinal encoded target. "
-                f"Expected target values between 0 and {self.max_num_classes - 1}, "
-                f"but got values outside this range."
+        num_present_classes = None
+        if task_type == "multiclass":
+            num_present_classes = (
+                torch.nan_to_num(y, nan=0.0).max().item() + 1 if y.numel() else 1
             )
+            if not self.training and (
+                num_present_classes > self.max_num_classes or (y < 0).any()
+            ):
+                raise ValueError(
+                    "Target is out of range. "
+                    "Make sure to use an ordinal encoded target. "
+                    f"Expected target values between 0 and {self.max_num_classes - 1}, "
+                    f"but got values outside this range."
+                )
+            num_present_classes = int(num_present_classes)
         x_RiBC = x
         B = x_RiBC.shape[1]
         num_train = y.shape[0]
@@ -2359,6 +2372,7 @@ class TabPFNV3p5(Architecture):
             test_emb,
             y_train_BN,
             task_type=task_type,
+            num_present_classes=num_present_classes,
         )
         if self._nan_safe_output:
             test_out = torch.nan_to_num(test_out, nan=0.0)

@@ -285,12 +285,40 @@ def test__forward__no_test_set_works_batch_size_one(task_type: TaskType) -> None
 
 
 @torch.no_grad()
-def test__forward__multiclass_target_out_of_range__raises() -> None:
+@pytest.mark.parametrize(
+    "invalid_target",
+    [-1.0, -0.5, MAX_NUM_CLASSES - 0.5, MAX_NUM_CLASSES, -np.inf, np.inf],
+)
+def test__forward__multiclass_target_out_of_range__raises(
+    invalid_target: float,
+) -> None:
     arch = _get_model()
     x, y = _inputs("multiclass")
-    y[0] = MAX_NUM_CLASSES
+    y[0, 0] = invalid_target
     with pytest.raises(ValueError, match="Target is out of range"):
         arch(x, y, task_type="multiclass")
+
+
+@torch.no_grad()
+def test__forward__nan_and_highest_class_in_second_batch__cached_matches_uncached() -> (
+    None
+):
+    arch = _get_model()
+    x, y = _inputs("multiclass", n_train_classes=2)
+    y[0, 0] = np.nan
+    y[0, 1] = MAX_NUM_CLASSES - 1
+    expected = arch(x, y, task_type="multiclass")
+
+    _, cache = arch(x[:NUM_TRAIN], y, task_type="multiclass", return_kv_cache=True)
+    actual = arch(
+        x[NUM_TRAIN:],
+        y,
+        task_type="multiclass",
+        kv_cache=cache,
+        x_is_test_only=True,
+    )
+
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
 
 
 @torch.no_grad()
@@ -411,7 +439,9 @@ def test__many_class_decoder__unused_classes__matches_full_width_one_hot() -> No
     targets = (torch.arange(num_train) % 3).repeat(batch, 1).to(torch.float64)
 
     train_keys = decoder.project_keys(train_emb)
-    actual = decoder(train_keys, test_emb, targets)
+    actual = torch.compile(decoder, backend="eager", fullgraph=True)(
+        train_keys, test_emb, targets, num_present_classes=3
+    )
 
     q_BMHD = decoder.q_projection(test_emb).view(batch, num_test, num_heads, head_dim)
     one_hot_BNHT = (
