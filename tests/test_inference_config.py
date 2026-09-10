@@ -199,8 +199,13 @@ def test__regressor_get_inference_config__with_override__applies_override() -> N
     assert specs.inference_config.POLYNOMIAL_FEATURES == "no"
 
 
-def test__cpu_sample_limit__v3__returns_5000() -> None:
-    assert cpu_sample_limit(ModelVersion.V3) == 5000
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V3, ModelVersion.V3_5, ModelVersion.V3_5_FAST]
+)
+def test__cpu_sample_limit__v3_onwards__returns_5000(
+    model_version: ModelVersion,
+) -> None:
+    assert cpu_sample_limit(model_version) == 5000
 
 
 def test__cpu_sample_limit__pre_v3_versions__return_1000() -> None:

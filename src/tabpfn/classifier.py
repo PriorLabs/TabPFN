@@ -628,6 +628,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ),
                 "n_estimators": "auto",
             }
+        elif version == ModelVersion.V3_5:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_v3_5().default_filename
+                ),
+                "n_estimators": "auto",
+            }
+        elif version == ModelVersion.V3_5_FAST:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_v3_5_fast().default_filename
+                ),
+                "n_estimators": "auto",
+            }
         else:
             raise ValueError(f"Unknown version: {version}")
 

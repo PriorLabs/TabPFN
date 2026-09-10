@@ -18,7 +18,7 @@ from pydantic.dataclasses import dataclass
 from torch import Tensor, nn
 
 from tabpfn import model_loading
-from tabpfn.architectures import ARCHITECTURES, tabpfn_v2, tabpfn_v3
+from tabpfn.architectures import ARCHITECTURES, tabpfn_v2, tabpfn_v3, tabpfn_v3_5
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
@@ -26,6 +26,8 @@ from tabpfn.architectures.interface import (
 )
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
+from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5Config
+from tabpfn.checkpoint import save_as_safetensors
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import DEFAULT_SOFTMAX_TEMPERATURE, InferenceConfig
 from tabpfn.preprocessing import PreprocessorConfig
@@ -164,6 +166,26 @@ def test__save_tabpfn_model__stores_v3_architecture_and_inference_config(
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     assert checkpoint["architecture_name"] == "tabpfn_v3"
     assert checkpoint["config"]["name"] == "TabPFN-v3"
+    assert checkpoint["inference_config"] == asdict(inference_config)
+
+
+def test__save_tabpfn_model__stores_v3_5_architecture_and_inference_config(
+    tmp_path: Path,
+) -> None:
+    config = TabPFNV3p5Config(max_num_classes=10, num_buckets=100)
+    inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+    estimator = SimpleNamespace(
+        models_=[torch.nn.Linear(1, 1)],
+        configs_=[config],
+        inference_config_=inference_config,
+    )
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+
+    model_loading.save_tabpfn_model(estimator, checkpoint_path)
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["architecture_name"] == "tabpfn_v3_5"
+    assert checkpoint["config"]["name"] == "TabPFN-v3.5"
     assert checkpoint["inference_config"] == asdict(inference_config)
 
 
@@ -331,6 +353,81 @@ def _build_small_v3_checkpoint(
         "architecture_name": "tabpfn_v3",
         "inference_config": asdict(inference_config),
     }
+
+
+def _build_small_v3_5_checkpoint(
+    inference_config: InferenceConfig,
+    *,
+    max_num_classes: int,
+) -> dict:
+    config = TabPFNV3p5Config(
+        max_num_classes=max_num_classes,
+        num_buckets=5,
+        embed_dim=48,
+        nlayers=1,
+        icl_num_heads=3,
+        dist_embed_num_heads=3,
+        feat_agg_num_heads=3,
+    )
+    model = tabpfn_v3_5.get_architecture(config, cache_trainset_representation=False)
+    return {
+        "state_dict": model.state_dict(),
+        "config": asdict(config),
+        "architecture_name": "tabpfn_v3_5",
+        "inference_config": asdict(inference_config),
+    }
+
+
+@pytest.mark.parametrize("estimator_type", ["classifier", "regressor"])
+@pytest.mark.parametrize("version", ["v3.5", "v3.5-fast"])
+def test__load_v3_5_multitask_ckpt__backs_both_estimator_types(
+    tmp_path: Path,
+    estimator_type: Literal["classifier", "regressor"],
+    version: Literal["v3.5", "v3.5-fast"],
+) -> None:
+    """A v3.5 checkpoint carries both heads and its own inference config."""
+    inference_config = InferenceConfig(
+        PREPROCESS_TRANSFORMS=[PreprocessorConfig("quantile_uni_coarse")]
+    )
+    checkpoint = _build_small_v3_5_checkpoint(inference_config, max_num_classes=10)
+    checkpoint_path = tmp_path / f"tabpfn-{version}-test.safetensors"
+    save_as_safetensors(checkpoint, checkpoint_path)
+
+    models, criterion, configs, loaded_inference_config = (
+        model_loading.load_model_criterion_config(
+            model_path=[checkpoint_path],
+            check_bar_distribution_criterion=estimator_type == "regressor",
+            cache_trainset_representation=False,
+            estimator_type=estimator_type,
+            version=version,
+            download_if_not_exists=False,
+        )
+    )
+
+    assert isinstance(models[0], tabpfn_v3_5.TabPFNV3p5)
+    assert isinstance(configs[0], TabPFNV3p5Config)
+    if estimator_type == "regressor":
+        assert isinstance(criterion, FullSupportBarDistribution)
+    else:
+        assert isinstance(criterion, nn.CrossEntropyLoss)
+    assert loaded_inference_config == inference_config
+
+
+@pytest.mark.parametrize(
+    ("file_name", "expected"),
+    [
+        ("tabpfn-v3.5-fast-20260909.safetensors", ModelVersion.V3_5_FAST),
+        ("tabpfn-v3.5-20260909.safetensors", ModelVersion.V3_5),
+        ("tabpfn-v3-classifier-v3_default.ckpt", ModelVersion.V3),
+        ("tabpfn-v2.6-regressor-v2.6_default.ckpt", ModelVersion.V2_6),
+        ("tabpfn-v2.5-classifier-v2.5_default.ckpt", ModelVersion.V2_5),
+        ("tabpfn-v2-classifier.ckpt", ModelVersion.V2),
+    ],
+)
+def test__resolve_model_version__reads_the_version_off_the_file_name(
+    tmp_path: Path, file_name: str, expected: ModelVersion
+) -> None:
+    assert model_loading.resolve_model_version(tmp_path / file_name) == expected
 
 
 def test__load_v3_classification_ckpt__returns_inference_config_from_checkpoint(

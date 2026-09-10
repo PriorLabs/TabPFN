@@ -67,6 +67,8 @@ model_sources = [
     ModelSource.get_classifier_v2(),
     ModelSource.get_classifier_v2_5(),
     ModelSource.get_classifier_v3(),
+    ModelSource.get_v3_5(),
+    ModelSource.get_v3_5_fast(),
 ]
 fit_modes = ["low_memory", "fit_preprocessors"]
 
@@ -530,7 +532,14 @@ def test_balance_probabilities_alters_proba_output() -> None:
 
 @pytest.mark.parametrize(
     "model_version",
-    [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6, ModelVersion.V3],
+    [
+        ModelVersion.V2,
+        ModelVersion.V2_5,
+        ModelVersion.V2_6,
+        ModelVersion.V3,
+        ModelVersion.V3_5,
+        ModelVersion.V3_5_FAST,
+    ],
 )
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
@@ -565,12 +574,15 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
 
 
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V3, ModelVersion.V3_5, ModelVersion.V3_5_FAST]
+)
 @pytest.mark.parametrize("device", get_pytest_devices())
-def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
-    X_y: tuple[np.ndarray, np.ndarray], device: str
+def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3_family(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
     kwargs = {
-        "version": ModelVersion.V3,
+        "version": model_version,
         "n_estimators": 2,
         "inference_precision": torch.float32,
         "random_state": 0,
@@ -1440,6 +1452,34 @@ def test__create_default_for_version__v3__uses_correct_defaults() -> None:
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v3-" in estimator.model_path
+
+
+def test__create_default_for_version__v3_5__uses_correct_defaults() -> None:
+    estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5)
+
+    assert isinstance(estimator, TabPFNClassifier)
+    assert estimator.n_estimators == "auto"
+    assert estimator.softmax_temperature == "auto"
+    assert isinstance(estimator.model_path, str)
+    # One multitask checkpoint backs both estimators, so the estimator type is not
+    # part of the file name.
+    assert "-v3.5-" in estimator.model_path
+    assert "fast" not in estimator.model_path
+
+
+def test__create_default_for_version__v3_5_fast__uses_correct_defaults() -> None:
+    estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3_5_FAST)
+
+    assert isinstance(estimator, TabPFNClassifier)
+    assert estimator.n_estimators == "auto"
+    assert estimator.softmax_temperature == "auto"
+    assert isinstance(estimator.model_path, str)
+    assert "-v3.5-fast-" in estimator.model_path
+
+
+def test__create_default_for_version__unknown_version__raises() -> None:
+    with pytest.raises(ValueError, match="Unknown version"):
+        TabPFNClassifier.create_default_for_version("v99")  # type: ignore[arg-type]
 
 
 def test__create_default_for_version__passes_through_overrides() -> None:

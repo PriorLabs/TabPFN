@@ -1,0 +1,3259 @@
+# ruff: noqa: PLR0912, C901
+"""TabPFN v3.5 architecture, inference only.
+
+`task_type` is a per-`forward()` argument, so one model instance handles both
+multiclass and regression.
+
+Shape suffix convention:
+
+B: batch size
+R: total rows (train + test)
+Ri: input rows, could be either train + test or test.
+Rj: Chunked rows (<= R)
+N: train rows
+M: test rows
+C: total columns
+Cj: Chunked columns (<= C)
+E: embedding dimension
+T: Target dim (e.g. number of classes).
+Cl: number of CLS tokens
+
+D: head dimension
+H: num heads
+S: sequence length
+
+Copyright (c) Prior Labs GmbH 2026.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import logging as _logging
+import math
+from collections.abc import Callable
+from functools import partial
+from typing import TYPE_CHECKING, Any, Literal, cast
+from typing_extensions import override
+
+import numpy as np
+import pydantic
+import torch
+import torch.nn.functional as F  # noqa: N812
+import torch.utils.checkpoint
+from torch import nn
+
+from tabpfn.architectures.interface import (
+    Architecture,
+    ArchitectureConfig,
+    PerformanceOptions,
+)
+from tabpfn.architectures.kv_cache import (
+    QUANTIZED_KV_DTYPE,
+    KVCache,
+    KVCacheEntry,
+    QuantizedKVCacheEntry,
+)
+from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
+from tabpfn.architectures.shared.scaled_dot_product_attention import (
+    scaled_dot_product_attention,
+)
+from tabpfn.errors import is_oom_error
+from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
+
+if TYPE_CHECKING:
+    from torch.nn.attention import SDPBackend
+
+    from tabpfn.constants import TaskType
+
+
+_logger = _logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+@pydantic.dataclasses.dataclass
+class TabPFNV3p5Config(ArchitectureConfig):
+    """Configuration for the single-file TabPFN v3.5 architecture.
+
+    The defaults are the v3.5 pre-release checkpoint's config, so the only keys a
+    caller has to supply are the head sizes `max_num_classes` and `num_buckets`,
+    which the checkpoint carries.
+    """
+
+    name: str = "TabPFN-v3.5"
+
+    # ---- Distribution embedder (per-column induced self-attention) ----
+    embed_dim: int = 128
+    """Base embedding dimension used throughout the model."""
+
+    dist_embed_num_blocks: int = 3
+    """Number of induced-self-attention blocks in the distribution embedder."""
+
+    dist_embed_num_heads: int = 8
+    """Number of attention heads in the distribution embedder."""
+
+    dist_embed_num_inducing_points: int = 128
+    """Number of inducing points in the distribution embedder."""
+
+    feature_group_size: int = 3
+    """Number of features per circular-shift group in the distribution embedder."""
+
+    # ---- Feature aggregation (cross-feature interaction via CLS tokens) ----
+    feat_agg_num_blocks: int = 3
+    """Number of transformer blocks in the feature aggregation stage."""
+
+    feat_agg_num_heads: int = 8
+    """Number of attention heads in the feature aggregation stage."""
+
+    feat_agg_num_cls_tokens: int = 8
+    """Number of CLS tokens used to aggregate per-row feature information."""
+
+    feat_agg_rope_base: float = 100_000
+    """RoPE base in the feature aggregation transformer."""
+
+    # ---- ICL transformer ----
+    nlayers: int = 24
+    """Number of transformer blocks in the ICL stage."""
+
+    icl_num_heads: int = 16
+    """Number of attention heads in the ICL stage."""
+
+    icl_num_kv_heads: int | None = None
+    """GQA: number of KV heads in the ICL stage. None = standard MHA.
+    Must divide icl_num_heads."""
+
+    icl_num_kv_heads_test: int | None = 1
+    """Number of KV heads used by test rows in the ICL stage.
+    None = same as train rows (i.e. icl_num_kv_heads / standard MHA).
+    Any value that divides icl_num_heads is valid (1 = MQA, other = GQA)."""
+
+    # ---- Output decoder (many-class for multiclass, MLP for regression) ----
+    decoder_head_dim: int = 64
+    """Head dimension for the many-class decoder attention."""
+
+    decoder_num_heads: int = 6
+    """Number of attention heads for the many-class decoder."""
+
+    decoder_use_softmax_scaling: bool = True
+    """If True, apply softmax scaling in the many-class decoder."""
+
+    # ---- Shared ----
+    ff_factor: int = 2
+    """Feed-forward expansion factor used throughout the model."""
+
+    softmax_scaling_mlp_hidden_dim: int = 64
+    """Number of hidden units in the MLPs for the SoftmaxScalingMLP layer."""
+
+    # ---- Fourier cell embedding ----
+    fourier_encoding_num_frequencies: int = 32
+    """Number of learnable Fourier frequencies per grouped cell value. Each value
+    channel is expanded into twice this many sin/cos features."""
+
+    cell_ecdf_num_frequencies: int = 4
+    """Number of Fourier frequencies for the per-cell ECDF channel; each cell
+    contributes twice this many metadata features."""
+
+    cell_ecdf_num_buckets: int = 8192
+    """Number of bucket edges the per-cell ECDF ranks against, per column.
+
+    Caps the ECDF context at `num_buckets` values per column instead of one per
+    train row, which is what keeps the inference cache from growing with the
+    table. A column with at most this many distinct values is ranked exactly;
+    above it, ranks between two edges are interpolated. Set it to at least the
+    train-row count to rank every table exactly."""
+
+    cell_embed_row_chunk_size: int | None = 2048
+    """Row-chunk size for the Fourier cell embedder. When set, the embedder splits
+    the row axis into chunks of this size, bounding the peak memory of the Fourier
+    expansion's `(..., G, 2F)` features to one chunk. Matters most on tall tables,
+    where the per-column inducing-hidden pass embeds all train rows at once. None
+    disables chunking. Ignored under torch.compile, which plans its own
+    recomputation."""
+
+    # ---- Memory-efficient inference ----
+    inference_row_chunk_size: int = 2048
+    """Max rows per Stage 0-2 chunk during inference."""
+
+    inference_col_chunk_size: int = 4
+    """Max output groups per chunk for inducing hidden state computation."""
+
+    def __post_init__(self) -> None:
+        """Validate config constraints."""
+        for name in (
+            "fourier_encoding_num_frequencies",
+            "cell_ecdf_num_frequencies",
+        ):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
+        # A single bucket leaves no interval to interpolate over.
+        if self.cell_ecdf_num_buckets < 2:
+            raise ValueError(
+                f"cell_ecdf_num_buckets must be >= 2, got {self.cell_ecdf_num_buckets}"
+            )
+        if (
+            self.cell_embed_row_chunk_size is not None
+            and self.cell_embed_row_chunk_size <= 0
+        ):
+            raise ValueError(
+                "cell_embed_row_chunk_size must be > 0 or None, got "
+                f"{self.cell_embed_row_chunk_size}"
+            )
+        if self.icl_num_kv_heads is not None and (
+            self.icl_num_heads % self.icl_num_kv_heads != 0
+        ):
+            raise ValueError(
+                f"icl_num_heads ({self.icl_num_heads}) must be divisible by "
+                f"icl_num_kv_heads ({self.icl_num_kv_heads})"
+            )
+        if self.icl_num_kv_heads_test is not None:
+            if self.icl_num_heads % self.icl_num_kv_heads_test != 0:
+                raise ValueError(
+                    f"icl_num_heads ({self.icl_num_heads}) must be divisible by "
+                    f"icl_num_kv_heads_test ({self.icl_num_kv_heads_test})"
+                )
+            effective_kv = (
+                self.icl_num_kv_heads
+                if self.icl_num_kv_heads is not None
+                else self.icl_num_heads
+            )
+            if self.icl_num_kv_heads_test > effective_kv:
+                raise ValueError(
+                    f"icl_num_kv_heads_test ({self.icl_num_kv_heads_test}) must be "
+                    f"<= the number of train KV heads ({effective_kv})"
+                )
+
+
+# ---------------------------------------------------------------------------
+# TabPFN v3.5 KV cache
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class TabPFNV3p5Cache(KVCache):
+    """Top-level cache container for the TabPFN v3.5 explicit KV cache.
+
+    Stores everything needed to skip stages 0-2 for train rows and reuse
+    cached K/V in the ICL transformer.
+
+    Attributes:
+        kv: Per-layer KV cache for the ICL transformer blocks.
+        decoder_keys: Projected many-class decoder keys of shape
+            `(B, N_train, H_dec, D_dec)`, i.e. the decoder's `k_projection`
+            already applied to the post-ICL, post-norm train embeddings. `None`
+            for a regression cache, which has no many-class decoder. Caching the
+            keys rather than the embeddings they come from is smaller
+            (`H_dec * D_dec` is below the ICL width) and keeps the projection off
+            the predict path.
+        train_shape: `(batch_size, num_train)` for validation.
+        scaler_cache: Fitted standard-scaler statistics (`mean`, `std`). Allows
+            standardising test-only data without train rows present.
+        ecdf_context: ECDF bucket edges and their rank bounds per column, `(3,
+            B, C, K)` at `ECDF_CONTEXT_DTYPE`, against which test cells are
+            ranked. `K` is `min(cell_ecdf_num_buckets, n_train)`, so on a tall
+            table this stops growing with the row count.
+        inducing_hidden: Per-block inducing hidden states from the
+            distribution embedder, each of shape `(B*C_out, n_ind, E)`.
+            Allows running `cross_attn_block2` on test rows without
+            recomputing `cross_attn_block1` from train rows.
+    """
+
+    decoder_keys: torch.Tensor | None = None
+    train_shape: tuple[int, int] = (0, 0)
+    scaler_cache: dict[str, torch.Tensor] | None = None
+    ecdf_context: torch.Tensor | None = None
+    inducing_hidden: list[torch.Tensor] | None = None
+
+    @override
+    def to(self, device: torch.device | str) -> TabPFNV3p5Cache:
+        """Move all cached tensors to the given device."""
+        return TabPFNV3p5Cache(
+            kv=self._kv_to(device),
+            decoder_keys=(
+                self.decoder_keys.to(device) if self.decoder_keys is not None else None
+            ),
+            train_shape=self.train_shape,
+            scaler_cache=self._dict_of_tensors_to(self.scaler_cache, device),
+            ecdf_context=(
+                self.ecdf_context.to(device) if self.ecdf_context is not None else None
+            ),
+            inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
+        )
+
+    def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3p5Cache:
+        """Return a new cache with quantized ICL KV entries.
+
+        Only the ICL KV cache is quantized; `decoder_keys`, `scaler_cache`,
+        `ecdf_context` and `inducing_hidden` stay at the precision they were built
+        at. `InferenceEngineExplicitKVCache`
+        calls this whenever the resolved `kv_cache_precision` is not `"auto"`, which
+        is why `get_supported_kv_cache_precisions` has to advertise the dtypes this
+        handles.
+
+        Args:
+            dtype: Target quantization dtype (default `QUANTIZED_KV_DTYPE`, int8;
+                `FP8_KV_DTYPE` is the other one the engine can ask for).
+        """
+        quantized_kv = {
+            idx: (entry.quantize(dtype) if isinstance(entry, KVCacheEntry) else entry)
+            for idx, entry in self.kv.items()
+        }
+        return TabPFNV3p5Cache(
+            kv=quantized_kv,
+            decoder_keys=self.decoder_keys,
+            train_shape=self.train_shape,
+            scaler_cache=self.scaler_cache,
+            ecdf_context=self.ecdf_context,
+            inducing_hidden=self.inducing_hidden,
+        )
+
+
+def get_cache_size(
+    *,
+    n_train: int,
+    n_features: int,
+    model_config: TabPFNV3p5Config,
+    task_type: TaskType,
+    base_dtype: torch.dtype | Literal["autocast"],
+    kv_cache_precision: Literal["auto", "int8", "fp8"] = "int8",
+) -> int:
+    """Cached memory in bytes for a single TabPFN v3.5 estimator at batch size 1.
+
+    Works from shapes alone, so it can be called before fitting to size an
+    inference run. It is the exact resident size of one estimator's
+    `TabPFNV3p5Cache`, summing every tensor the cache holds:
+
+    1. The ICL transformer KV cache (int8 plus per-tensor scales when quantized).
+    2. The many-class decoder keys, `(n_train, H_dec * D_dec)`. Multiclass only —
+       regression has no many-class decoder and caches nothing here, which is why
+       this needs the `task_type` the forward pass will be called with.
+    3. The distribution-embedder `inducing_hidden` states.
+    4. The fitted scaler stats, `mean` and `std`.
+    5. The ECDF ranking context `ecdf_context`, always at `ECDF_CONTEXT_DTYPE`,
+       whatever the compute precision.
+
+    The cache is not uniformly one dtype, so each term is sized at its own
+    precision, selected by `base_dtype`:
+
+    * **Forced precision** (a `torch.dtype`, mirroring `inference_precision` set
+      to a dtype): the model and inputs are cast to it, so every non-KV term
+      lands at that dtype.
+    * **Autocast** (`"autocast"`, the GPU default for `inference_precision="auto"`):
+      weights stay fp32 and ops are cast at runtime to fp16. The matmul-lineage
+      tensors (KV, and `decoder_keys` via its explicit cast to the KV dtype)
+      take fp16, while the reduction/norm-lineage tensors (`inducing_hidden`,
+      `scaler_cache`) stay fp32.
+
+    Args:
+        n_train: Number of training rows. The KV cache and the decoder keys
+            scale with this; test rows are not cached.
+        n_features: Number of feature columns the model sees. Exact for the
+            columns the model sees; for real end-to-end runs preprocessing may
+            change it (SVD features, categorical expansion, per-member
+            subsampling), making those terms approximate.
+        model_config: The v3.5 architecture config.
+        task_type: The task the cache will be built for. Selects whether the
+            many-class decoder keys are counted.
+        base_dtype: A `torch.dtype` for the forced-precision path, or
+            `"autocast"` for the GPU autocast path.
+        kv_cache_precision: If `"int8"` (default) or `"fp8"`, the KV cache is
+            sized at one byte per element plus per-tensor scales at the KV
+            compute dtype, mirroring the engine's `maybe_quantize_kv_cache`; if
+            `"auto"`, the K/V are sized at the compute dtype with no scales.
+
+    Returns:
+        Per-estimator cache size in bytes. Multiply by the ensemble size for the
+        total (each estimator holds its own cache).
+    """
+    if kv_cache_precision not in ("auto", "int8", "fp8"):
+        raise ValueError(
+            f"Invalid kv_cache_precision: {kv_cache_precision}. "
+            "Must be one of 'auto', 'int8' or 'fp8'."
+        )
+    quantize_kv_cache = kv_cache_precision in ("int8", "fp8")
+
+    if base_dtype == "autocast":
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else torch.float16
+        kv_scale_dtype = torch.float16  # per-tensor scales, at the KV fp16 dtype
+        decoder_key_dtype = torch.float16
+        inducing_dtype = torch.float32
+        scaler_dtype = torch.float32
+    else:
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else base_dtype
+        kv_scale_dtype = base_dtype
+        decoder_key_dtype = base_dtype
+        inducing_dtype = base_dtype
+        scaler_dtype = base_dtype
+
+    icl_emsize = model_config.embed_dim * model_config.feat_agg_num_cls_tokens
+    head_dim = icl_emsize // model_config.icl_num_heads
+    if model_config.icl_num_kv_heads_test is not None:
+        num_kv_heads = model_config.icl_num_kv_heads_test
+    elif model_config.icl_num_kv_heads is not None:
+        num_kv_heads = model_config.icl_num_kv_heads
+    else:
+        num_kv_heads = model_config.icl_num_heads
+
+    # 1. ICL KV cache: key + value (the factor of 2), per layer, over all layers.
+    kv_elements = model_config.nlayers * 2 * n_train * num_kv_heads * head_dim
+    total_bytes = kv_elements * kv_dtype.itemsize
+    if quantize_kv_cache:
+        # One scalar scale per key and per value tensor.
+        total_bytes += model_config.nlayers * 2 * kv_scale_dtype.itemsize
+
+    # 2. Many-class decoder keys, (n_train, H_dec * D_dec). Multiclass only.
+    if task_type == "multiclass":
+        decoder_key_width = (
+            model_config.decoder_num_heads * model_config.decoder_head_dim
+        )
+        total_bytes += n_train * decoder_key_width * decoder_key_dtype.itemsize
+
+    # 3. Distribution-embedder inducing states: one
+    # (n_features, dist_embed_num_inducing_points, embed_dim) tensor per block.
+    total_bytes += (
+        model_config.dist_embed_num_blocks
+        * n_features
+        * model_config.dist_embed_num_inducing_points
+        * model_config.embed_dim
+    ) * inducing_dtype.itemsize
+
+    # 4. Fitted scaler stats: mean + std, each (n_features,).
+    total_bytes += 2 * n_features * scaler_dtype.itemsize
+
+    # 5. The ECDF ranking context: an edge value and its two rank bounds (the
+    # factor of 3) per bucket, per column.
+    num_buckets = min(model_config.cell_ecdf_num_buckets, n_train)
+    total_bytes += 3 * n_features * num_buckets * ECDF_CONTEXT_DTYPE.itemsize
+
+    return total_bytes
+
+
+# ---------------------------------------------------------------------------
+# Rotary Positional Embeddings (RoPE) — compile-friendly, no einops
+# ---------------------------------------------------------------------------
+# We don't cache cos/sin, since this blocks torch.compile.
+
+
+def apply_rope(
+    t: torch.Tensor,
+    inv_freq: torch.Tensor,
+    *,
+    interleaved: bool = False,
+) -> torch.Tensor:
+    """Apply rotary positional embeddings to `t` along seq_dim=-2.
+
+    All intermediate math is done in `inv_freq.dtype` (fp32 by
+    construction) and the result is cast back to `t.dtype`.
+
+    Args:
+        t: Tensor of shape `(..., S, D)` where the head dim `D` is
+            even. The sequence dim is the second-to-last axis.
+        inv_freq: `(D // 2,)` inverse frequencies (typically
+            `1 / theta ** (2i / D)`).
+        interleaved: When `True`, rotates dimension pairs
+            `(0, 1), (2, 3), …` (LLaMA/HF interleaved layout). When
+            `False` (default), splits the last dim into two contiguous
+            halves and rotates them against each other.
+    """
+    dtype = t.dtype
+    seq_len = t.shape[-2]
+    positions = torch.arange(seq_len, device=t.device, dtype=inv_freq.dtype)
+    freqs = positions[:, None] * inv_freq[None, :]  # (S, D/2)
+    cos = freqs.cos()
+    sin = freqs.sin()
+    if interleaved:
+        cos = cos.repeat_interleave(2, dim=-1)  # (S, D)
+        sin = sin.repeat_interleave(2, dim=-1)
+        t_even = t[..., 0::2]
+        t_odd = t[..., 1::2]
+        # stack → (..., D/2, 2) rows (-t_odd, t_even); flatten → (-t1, t0, -t3, t2, …)
+        t_rotated = torch.stack((-t_odd, t_even), dim=-1).flatten(-2)
+    else:
+        cos = torch.cat((cos, cos), dim=-1)  # (S, D)
+        sin = torch.cat((sin, sin), dim=-1)
+        half = t.shape[-1] // 2
+        t_rotated = torch.cat((-t[..., half:], t[..., :half]), dim=-1)
+    return (t * cos + t_rotated * sin).to(dtype)
+
+
+class RotaryEmbedding(nn.Module):
+    """Compile-friendly rotary positional embedding.
+
+    Args:
+        dim: Per-head rotation dimension. Must be even.
+        theta: Base for the rotary frequencies (10_000 in the original
+            paper, 100_000 in our configs).
+        interleaved: See `apply_rope`.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        *,
+        theta: float = 10_000.0,
+        interleaved: bool = False,
+    ) -> None:
+        super().__init__()
+        assert dim % 2 == 0, f"RoPE head dim must be even, got {dim}"
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        # Store as a non-learnable nn.Parameter (not a buffer) to match the
+        # upstream RotaryEmbedding which has `self.freqs = nn.Parameter(...,
+        # requires_grad=False)`. This preserves the parameter count seen by
+        # the optimizer, avoiding subtle numerical drift in training due to
+        # Adam state ordering changes.
+        self.freqs = nn.Parameter(inv_freq, requires_grad=False)
+        self.interleaved = interleaved
+
+    def rotate_queries_or_keys(self, t_BHSD: torch.Tensor) -> torch.Tensor:
+        """Apply RoPE to t_BSHD."""
+        return apply_rope(t_BHSD, self.freqs, interleaved=self.interleaved)
+
+
+class _DtypeMatchingRMSNorm(nn.RMSNorm):
+    """RMSNorm that casts weight to match the input dtype.
+
+    Fused CUDA kernels require matching dtypes; casting the tiny weight/bias per-call
+    avoids unfused fallbacks under autocast.
+    """
+
+    @override
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if self.weight.dtype != input.dtype:
+            return F.rms_norm(
+                input,
+                self.normalized_shape,
+                self.weight.to(input.dtype),
+                self.eps,
+            )
+        return super().forward(input)
+
+
+class ManyClassDecoder(nn.Module):
+    """Attention-based retrieval decoder for many-class classification.
+
+    Computes weighted (by attention score) average over one-hot encoded
+    train targets, then takes the log to obtain logits.  Supports arbitrary
+    class counts by chunking the value (one-hot) dimension into head_dim-sized
+    pieces and folding them into the batch dimension for a single flash-attention
+    call.
+    """
+
+    def __init__(
+        self,
+        max_num_classes: int,
+        input_size: int,
+        head_dim: int = 64,
+        num_heads: int = 6,
+        softmax_scaling_layer: nn.Module | None = None,
+    ):
+        """Init."""
+        super().__init__()
+        self.max_num_classes = max_num_classes
+        self.input_size = input_size
+        self.attention_size = head_dim * num_heads
+        self.head_dim = head_dim
+        self.num_heads = num_heads
+        self.q_projection = nn.Linear(self.input_size, self.attention_size)
+        self.k_projection = nn.Linear(self.input_size, self.attention_size)
+        self.softmax_scaling_layer = softmax_scaling_layer
+
+    def project_keys(self, train_embeddings_BNE: torch.Tensor) -> torch.Tensor:
+        """Project train embeddings to per-head keys: `(B,N,E)` -> `(B,N,H,D)`.
+
+        Split out from `forward` so the inference cache can hold the keys instead
+        of the embeddings they come from. That is smaller — `H*D` is below
+        `input_size` — and keeps the projection off the predict path.
+        """
+        k_BNE = self.k_projection(train_embeddings_BNE)
+        return k_BNE.view(*k_BNE.shape[:2], self.num_heads, self.head_dim).contiguous()
+
+    @override
+    def forward(
+        self,
+        train_keys_BNHD: torch.Tensor,
+        test_embeddings_BME: torch.Tensor,
+        targets_BN: torch.Tensor,
+        *,
+        num_present_classes: int,
+    ) -> torch.Tensor:
+        """Perform a forward pass, on keys already built by `project_keys`."""
+        B, M, _ = test_embeddings_BME.shape
+        q_BME = self.q_projection(test_embeddings_BME)
+        # Mirrors the dtype guard in ICLAttention's cached path: keys built under
+        # autocast, or read back from the cache, may not match the query dtype.
+        if train_keys_BNHD.dtype != q_BME.dtype:
+            train_keys_BNHD = train_keys_BNHD.to(q_BME.dtype)
+
+        if M == 0:
+            # Flash attention rejects a query sequence of length 0, so return
+            # early. The zero-weighted sums keep both inputs in the graph.
+            empty = test_embeddings_BME.new_empty((0, B, self.max_num_classes))
+            return empty + (q_BME.sum() + train_keys_BNHD.sum()) * 0.0
+
+        # Mask out non-finite target rows. Those shouldn't contribute to the output
+        # and the .long conversion results in different values on different platforms.
+        is_finite_BN = torch.isfinite(targets_BN)
+        targets_long = torch.where(is_finite_BN, targets_BN.long(), 0)
+        # Only the classes present in the batch need a one-hot column; the rest
+        # are zero everywhere and are restored by the padding below. Narrowing
+        # the class axis shrinks the int64 one-hot and, since
+        # `_chunked_class_attention` runs `ceil(T / head_dim)` folded attention
+        # passes, can cut the attention cost by that factor.
+        one_hot_targets_BNT = torch.where(
+            is_finite_BN[..., None],
+            F.one_hot(targets_long, num_classes=num_present_classes),
+            0,
+        ).to(dtype=q_BME.dtype)
+
+        q_BMHD = q_BME.view(B, M, self.num_heads, self.head_dim).contiguous()
+        k_BNHD = train_keys_BNHD
+        one_hot_targets_BNHT = (
+            one_hot_targets_BNT.unsqueeze(2)
+            .expand(-1, -1, self.num_heads, -1)
+            .contiguous()
+        )
+        test_output_BMHT = _chunked_class_attention(
+            q_BMHD,
+            k_BNHD,
+            one_hot_targets_BNHT,
+            softmax_scaling_layer=self.softmax_scaling_layer,
+        )
+        test_output_BMT = test_output_BMHT.mean(2)  # average over heads
+
+        # Widen back to the architectural class count. A class absent from the
+        # train targets holds an all-zero value column, so attention returns
+        # exactly the zero written here.
+        missing_classes = self.max_num_classes - num_present_classes
+        if missing_classes:
+            test_output_BMT = F.pad(test_output_BMT, (0, missing_classes))
+
+        test_output_MBT = test_output_BMT.transpose(0, 1)
+        # convert to logits:
+        return torch.log(torch.clamp(test_output_MBT, min=1e-5) + 3e-5)
+
+
+def _chunked_class_attention(
+    q_BSHD: torch.Tensor,
+    k_BJHD: torch.Tensor,
+    v_BJHT: torch.Tensor,
+    softmax_scaling_layer: nn.Module | None = None,
+) -> torch.Tensor:
+    """Run retrieval attention where the value dimension C may exceed head_dim D.
+
+    Splits V into head_dim-sized chunks along the class axis, folds the chunk
+    index into the batch dimension, and dispatches a single flash-attention call.
+    This avoids the O(N*M) memory cost of the math backend for any class count.
+
+    Args:
+        q_BSHD: Query tensor of shape (B, S, H, D) for test points.
+        k_BJHD: Key tensor of shape (B, J, H, D) for train points.
+        v_BJHT: Value tensor of shape (B, J, H, T) holding one-hot class
+            encodings; T may be larger than D.
+        softmax_scaling_layer: Optional scaling module to scale queries before SDPA.
+
+    Returns:
+        Output tensor of shape (B, S, H, T).
+    """
+    B, S, H, D = q_BSHD.shape
+    T = v_BJHT.shape[-1]
+    num_chunks = math.ceil(T / D)
+
+    # Pad V to a multiple of D along the class axis
+    pad = num_chunks * D - T
+    if pad > 0:
+        v_BJHT = F.pad(v_BJHT, (0, pad))
+
+    # Fold chunk index into batch dimension
+    J = v_BJHT.shape[1]
+    v_folded = (
+        v_BJHT.reshape(B, J, H, num_chunks, D)
+        .permute(0, 3, 1, 2, 4)
+        .reshape(B * num_chunks, J, H, D)
+        .contiguous()
+    )
+    q_folded = (
+        q_BSHD.unsqueeze(1)
+        .expand(-1, num_chunks, -1, -1, -1)
+        .reshape(B * num_chunks, S, H, D)
+        .contiguous()
+    )
+    k_folded = (
+        k_BJHD.unsqueeze(1)
+        .expand(-1, num_chunks, -1, -1, -1)
+        .reshape(B * num_chunks, J, H, D)
+        .contiguous()
+    )
+
+    # Single flash-attention call across all chunks
+    out_folded = _batched_scaled_dot_product_attention(
+        q_folded, k_folded, v_folded, softmax_scaling_layer=softmax_scaling_layer
+    )
+
+    # Unfold and trim padding: (B*K, S, H, D) -> (B, S, H, T)
+    return (
+        out_folded.reshape(B, num_chunks, S, H, D)
+        .permute(0, 2, 3, 1, 4)
+        .reshape(B, S, H, num_chunks * D)[..., :T]
+    )
+
+
+class TrainableOrthogonalEmbedding(nn.Module):
+    """Trainable class embeddings initialized with orthogonal initialization."""
+
+    def __init__(self, num_classes: int, embed_dim: int) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(num_classes, embed_dim)
+        self._init()
+
+    @override
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Map integer labels (B, T) -> embeddings (B, T, embed_dim)."""
+        return self.embedding(x.long())
+
+    def _init(self) -> None:
+        """Initialize embedding weight rows orthogonally in-place.
+
+        The first `min(num_classes, embed_dim)` rows are set to orthonormal
+        vectors via QR decomposition; remaining rows (when `num_classes >
+        embed_dim`) are unit-normalized random vectors.
+        """
+        weight = self.embedding.weight
+        num_classes, embed_dim = weight.shape
+        k = min(num_classes, embed_dim)
+        q, _ = torch.linalg.qr(torch.randn(embed_dim, k))
+        ortho_rows = q.T  # (k, embed_dim)
+        with torch.no_grad():
+            weight[:k].copy_(ortho_rows)
+            if num_classes > embed_dim:
+                extra = torch.randn(num_classes - k, embed_dim)
+                extra = extra / extra.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                weight[k:].copy_(extra)
+
+
+class MLP(nn.Sequential):
+    """Two-layer GELU feed-forward network with zero-initialized output."""
+
+    def __init__(
+        self,
+        emsize: int,
+        dim_feedforward: int,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        kw = {"device": device, "dtype": dtype}
+        linear2 = nn.Linear(dim_feedforward, emsize, bias=False, **kw)
+        nn.init.zeros_(linear2.weight)
+        super().__init__(
+            nn.Linear(emsize, dim_feedforward, bias=False, **kw),
+            nn.GELU(),
+            linear2,
+        )
+
+
+class FourierFeatureGroupEmbedder(nn.Module):
+    """Fourier-feature embedding of a grouped feature block (TabFM-style).
+
+    Maps `(..., G) -> (..., E)`: expands each grouped scalar into `[sin, cos]`
+    against one learnable frequency bank shared by every cell, sums the features
+    over the group, and projects with a shared linear. Summing before the linear
+    (`Σ_g W·f_g = W·Σ_g f_g`) avoids materializing the per-group `(..., G, E)`
+    projection. The frequency multiply and sin/cos run in fp32; the projection
+    follows autocast.
+    """
+
+    def __init__(
+        self,
+        group_size: int,
+        embed_dim: int,
+        num_freq: int,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        kw = {"device": device, "dtype": dtype}
+        # Bias-free: the summed embedding is LayerNorm'd (with a learnable bias)
+        # in FourierPlusMetadataFeatureGroupEmbedder, so a per-linear bias is
+        # redundant.
+        self.frequencies = nn.Parameter(torch.randn(group_size, num_freq, **kw) * 2.0)
+        self.in_linear = nn.Linear(num_freq * 2, embed_dim, bias=False, **kw)
+
+    @override
+    def forward(self, x_G: torch.Tensor) -> torch.Tensor:
+        """Embed grouped cell values `(..., G)` into `(..., E)`."""
+        dt = x_G.dtype
+        proj = x_G.unsqueeze(-1).float() * self.frequencies.float()  # (..., G, F)
+        feats_G = torch.cat([proj.sin(), proj.cos()], dim=-1).to(dt)  # (..., G, 2F)
+        return self.in_linear(feats_G.sum(dim=-2))  # (..., E)
+
+
+class FourierPlusMetadataFeatureGroupEmbedder(nn.Module):
+    """Fourier-embed the grouped cell values; linearly embed the metadata; sum.
+
+    Maps a grouped cell tensor `(..., G) -> (..., E)`, a drop-in replacement for
+    the linear cell embedder. The leading `group_size` channels are the
+    standard-scaled values, which both paths read; the input continues with the
+    NaN indicators (when enabled) and the trailing `group_size` raw ECDF ranks.
+
+    Two E-dim embeddings are summed:
+    - the values through a `FourierFeatureGroupEmbedder` (frequencies in fp32,
+      projection in bf16 under autocast);
+    - the whole metadata block through one bias-free linear run in fp32, because
+      bf16's 8-bit mantissa cannot keep high-cardinality ordinal categorical
+      values distinct.
+
+    A final `LayerNorm` normalizes the summed embedding to unit scale — matching
+    the LayerNorm applied to the target-aware y-encoder output it is later summed
+    with, and keeping the scale stable across `group_size` and `num_freq`.
+    """
+
+    def __init__(
+        self,
+        group_size: int,
+        embed_dim: int,
+        num_freq: int,
+        *,
+        ecdf_num_frequencies: int,
+        row_chunk_size: int | None = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        kw = {"device": device, "dtype": dtype}
+        self.group_size = group_size
+        self.ecdf_num_frequencies = ecdf_num_frequencies
+        self.row_chunk_size = row_chunk_size
+        self.fourier = FourierFeatureGroupEmbedder(
+            group_size, embed_dim, num_freq, **kw
+        )
+        # Each grouped value arrives with its NaN/Inf indicator.
+        value_width = group_size * 2
+        # One raw ECDF rank per group position on the way in; each is lifted to
+        # 2K sin/cos features inside `_embed`, so the linear is wider than the
+        # tensor the caller passes.
+        self.input_width = value_width + group_size
+        self.metadata_width = value_width + group_size * 2 * ecdf_num_frequencies
+        self.metadata_linear = nn.Linear(
+            self.metadata_width, embed_dim, bias=False, **kw
+        )
+        self.layernorm = nn.LayerNorm(embed_dim, elementwise_affine=True, **kw)
+
+    @override
+    def forward(self, x_grouped_G: torch.Tensor) -> torch.Tensor:
+        """Embed a grouped cell tensor `(B, R, C, G)` into `(B, R, C, E)`."""
+        # The Fourier expansions transiently materialize (..., G, 2F) and
+        # (..., G, 2K) features per cell across the whole row axis (dim=1) at
+        # once. Chunking the rows bounds that peak to `row_chunk_size` rows;
+        # rows are independent here, so chunk-and-concat is exact. This matters
+        # at scale: the per-column inducing-hidden pass embeds all train rows at
+        # once (only columns are chunked there), so a tall table would otherwise
+        # blow up the transient along the row axis.
+        # Skipped under torch.compile: inductor plans its own recomputation, and
+        # a Python row loop over a dynamic row count would force graph breaks.
+        if (
+            self.row_chunk_size is None
+            or torch.compiler.is_compiling()
+            or x_grouped_G.shape[1] <= self.row_chunk_size
+        ):
+            return self._embed(x_grouped_G)
+        parts = [
+            self._embed(x_grouped_G[:, start : start + self.row_chunk_size])
+            for start in range(0, x_grouped_G.shape[1], self.row_chunk_size)
+        ]
+        return torch.cat(parts, dim=1)
+
+    def _embed(self, x_grouped_G: torch.Tensor) -> torch.Tensor:
+        dt = x_grouped_G.dtype
+        fourier_out = self.fourier(x_grouped_G[..., : self.group_size])  # (..., E)
+        # Slice the trailing raw ECDF ranks out of the metadata block and put them
+        # back as 2K sin/cos features each, which is why the linear is wider than
+        # the tensor that arrives. Lifting here rather than before grouping bounds
+        # the (..., G, 2K) expansion by the row chunk and keeps grouping to one
+        # channel per group position instead of 2K.
+        ranks_G = x_grouped_G[..., -self.group_size :]
+        metadata_G = torch.cat(
+            [
+                x_grouped_G[..., : -self.group_size],
+                _ecdf_fourier_features(ranks_G, self.ecdf_num_frequencies).flatten(-2),
+            ],
+            dim=-1,
+        )
+        # fp32 metadata projection even under bf16 autocast. Cast the weight too
+        # so this holds under bf16 parameters, not just bf16 inputs.
+        with torch.autocast(device_type=x_grouped_G.device.type, enabled=False):
+            metadata_out = F.linear(
+                metadata_G.float(), self.metadata_linear.weight.float()
+            )  # (..., E)
+        return self.layernorm((fourier_out.float() + metadata_out).to(dt))
+
+
+class SoftmaxScalingMLP(nn.Module):
+    """Query-aware attention scaling using MLPs to compute scaling factors.
+
+    Applies scaling to queries:
+
+    q_scaled = q * base_mlp(logn) * (1 + tanh(query_mlp(q))),
+
+    where the base MLP learns length-dependent scaling and the query MLP
+    learns query-dependent modulation.
+    """
+
+    def __init__(
+        self,
+        num_heads: int,
+        head_dim: int,
+        n_hidden: int = 64,
+    ):
+        """Initializes the SoftmaxScalingMLP module.
+
+        Args:
+            num_heads: Number of attention heads.
+            head_dim: Dimension of each attention head.
+            n_hidden: Number of hidden units in the MLPs.
+        """
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+
+        base_out_dim = num_heads * head_dim
+        query_out_dim = head_dim
+
+        self.base_mlp = nn.Sequential(
+            nn.Linear(1, n_hidden), nn.GELU(), nn.Linear(n_hidden, base_out_dim)
+        )
+        self.query_mlp = nn.Sequential(
+            nn.Linear(head_dim, n_hidden), nn.GELU(), nn.Linear(n_hidden, query_out_dim)
+        )
+        # ensures initial modulation is zero
+        nn.init.zeros_(self.query_mlp[-1].weight)  # type: ignore
+        nn.init.zeros_(self.query_mlp[-1].bias)  # type: ignore
+
+    @override
+    def forward(self, q_BSHD: torch.Tensor, n: int) -> torch.Tensor:
+        """Applies scalable attention scaling to queries.
+
+        Args:
+            q_BSHD: Query tensor after projection, shape `[B, S, H, D]`.
+                B: Batch size.
+                S: Sequence length.
+                H: Number of heads.
+                D: Head dimension.
+            n: Number of elements for log-n scaling.
+
+        Returns:
+            Scaled query tensor, same shape as `q_BSHD`.
+        """
+        logn_11 = _safe_log_seqlen(n, q_BSHD.device, q_BSHD.dtype).reshape(1, 1)
+        base_scales = self.base_mlp(logn_11).view(1, 1, self.num_heads, self.head_dim)
+        modulation = 1 + torch.tanh(self.query_mlp(q_BSHD))
+        scales = base_scales * modulation
+        return q_BSHD * scales
+
+
+def _batched_scaled_dot_product_attention(
+    q_BSHD: torch.Tensor,
+    k_BSJD: torch.Tensor | None,
+    v_BSJD: torch.Tensor | None,
+    softmax_scaling_layer: nn.Module | None = None,
+    _backends_override: list[SDPBackend] | None = None,
+    quantized_kv: QuantizedKVCacheEntry | None = None,
+) -> torch.Tensor:
+    """SDPA with optional query scaling.
+
+    Args:
+        q_BSHD (torch.Tensor): Queries of shape (batch, seq len, num heads, head dim).
+        k_BSJD (torch.Tensor | None): Keys of shape (batch, seq len, num heads or
+            num kv heads, head dim). None when `quantized_kv` carries them.
+        v_BSJD (torch.Tensor | None): Values of shape (batch, seq len, num heads
+            or num kv heads, head dim). None when `quantized_kv` carries them.
+        softmax_scaling_layer (nn.Module | None): Optional module to apply
+            SSMax scaling to queries before attention. `n` for the scaling is the
+            KV sequence length, read from `k_BSJD` or the quantized cache entry.
+        _backends_override (list[SDPBackend] | None): Optional list of SDP backends.
+        quantized_kv (QuantizedKVCacheEntry | None): Keys and values as a
+            quantized cache entry, in place of `k_BSJD`/`v_BSJD`. The dispatcher
+            dequantizes it unless the backend it picks consumes it as stored.
+
+    Returns:
+        torch.Tensor: Attention output, shape (B, S, H, D).
+    """
+    if softmax_scaling_layer is not None:
+        k = quantized_kv.key if quantized_kv is not None else k_BSJD
+        assert k is not None
+        src_len = k.shape[1]
+        q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
+    return scaled_dot_product_attention(
+        q_BSHD,
+        k_BSJD,
+        v_BSJD,
+        _backends_override,
+        quantized_kv=quantized_kv,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attention modules
+# ---------------------------------------------------------------------------
+
+
+class Attention(nn.Module):
+    """Multi-head self-attention with RoPE."""
+
+    def __init__(
+        self,
+        embedding_size: int,
+        num_heads: int,
+        head_dim: int,
+        *,
+        norm_factory: Callable[[int], nn.Module],
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        kw = {"device": device, "dtype": dtype, "bias": False}
+
+        self.q_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.k_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.v_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.out_projection = nn.Linear(head_dim * num_heads, embedding_size, **kw)
+
+        torch.nn.init.xavier_uniform_(self.q_projection.weight)
+        torch.nn.init.xavier_uniform_(self.k_projection.weight)
+        torch.nn.init.xavier_uniform_(self.v_projection.weight)
+        torch.nn.init.zeros_(self.out_projection.weight)
+
+        self.q_norm = norm_factory(head_dim)
+        self.k_norm = norm_factory(head_dim)
+
+    @override
+    def forward(self, x_BSE: torch.Tensor, rope: RotaryEmbedding) -> torch.Tensor:
+        B, S, _ = x_BSE.shape
+        q = self.q_projection(x_BSE).view(B, S, -1, self.head_dim)
+        k = self.k_projection(x_BSE).view(B, S, -1, self.head_dim)
+        v = self.v_projection(x_BSE).view(B, S, -1, self.head_dim)
+
+        q = rope.rotate_queries_or_keys(q.transpose(1, 2)).transpose(1, 2)
+        k = rope.rotate_queries_or_keys(k.transpose(1, 2)).transpose(1, 2)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        out = _batched_scaled_dot_product_attention(q, k, v).reshape(
+            B, S, self.head_dim * self.num_heads
+        )
+        return self.out_projection(out)
+
+
+class CrossAttention(nn.Module):
+    """Multi-head cross-attention (query attends to key/value sequence)."""
+
+    def __init__(
+        self,
+        embedding_size: int,
+        num_heads: int,
+        head_dim: int,
+        softmax_scaling_layer: nn.Module | None = None,
+        *,
+        norm_factory: Callable[[int], nn.Module],
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.softmax_scaling_layer = softmax_scaling_layer
+        kw = {"device": device, "dtype": dtype, "bias": False}
+
+        self.q_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.k_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.v_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.out_projection = nn.Linear(head_dim * num_heads, embedding_size, **kw)
+
+        torch.nn.init.xavier_uniform_(self.q_projection.weight)
+        torch.nn.init.xavier_uniform_(self.k_projection.weight)
+        torch.nn.init.xavier_uniform_(self.v_projection.weight)
+        torch.nn.init.zeros_(self.out_projection.weight)
+
+        self.q_norm = norm_factory(head_dim)
+        self.k_norm = norm_factory(head_dim)
+
+    @override
+    def forward(
+        self,
+        x_for_query_BQE: torch.Tensor,
+        x_for_key_and_value_BVE: torch.Tensor,
+    ) -> torch.Tensor:
+        B, Q, _ = x_for_query_BQE.shape
+        _, V, _ = x_for_key_and_value_BVE.shape
+        q = self.q_projection(x_for_query_BQE).view(B, Q, -1, self.head_dim)
+        k = self.k_projection(x_for_key_and_value_BVE).view(B, V, -1, self.head_dim)
+        v = self.v_projection(x_for_key_and_value_BVE).view(B, V, -1, self.head_dim)
+
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        out = _batched_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            softmax_scaling_layer=self.softmax_scaling_layer,
+        )
+
+        return self.out_projection(out.reshape(B, Q, self.head_dim * self.num_heads))
+
+
+class ICLAttention(nn.Module):
+    """ICL attention: all rows attend to train-only keys/values.
+
+    In v2, the ICL transformer restricts keys/values to training rows so that
+    test rows cannot attend to each other or to future labels.
+
+    When `num_kv_heads_test` is set, test rows use fewer KV heads than train
+    rows (GQA / MQA for the test partition only), reducing the KV-cache at
+    inference time.
+    """
+
+    def __init__(
+        self,
+        embedding_size: int,
+        num_heads: int,
+        head_dim: int,
+        softmax_scaling_layer: nn.Module | None = None,
+        num_kv_heads: int | None = None,
+        num_kv_heads_test: int | None = None,
+        *,
+        norm_factory: Callable[[int], nn.Module],
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.softmax_scaling_layer = softmax_scaling_layer
+        self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
+        self.num_kv_heads_test = num_kv_heads_test
+        kw = {"device": device, "dtype": dtype, "bias": False}
+
+        self.q_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        self.out_projection = nn.Linear(head_dim * num_heads, embedding_size, **kw)
+
+        torch.nn.init.xavier_uniform_(self.q_projection.weight)
+        torch.nn.init.zeros_(self.out_projection.weight)
+
+        if num_kv_heads is not None:
+            # GQA: smaller K/V projections
+            kv_dim = num_kv_heads * head_dim
+            self.k_projection = nn.Linear(embedding_size, kv_dim, **kw)
+            self.v_projection = nn.Linear(embedding_size, kv_dim, **kw)
+        else:
+            self.k_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+            self.v_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
+        nn.init.xavier_uniform_(self.k_projection.weight)
+        nn.init.xavier_uniform_(self.v_projection.weight)
+
+        # q/k RMSNorm is applied per head (over head_dim), so it commutes with the
+        # test-head slicing below; the KV cache stores the already-normed keys.
+        self.q_norm = norm_factory(head_dim)
+        self.k_norm = norm_factory(head_dim)
+
+    @override
+    def forward(
+        self,
+        x_BRE: torch.Tensor,
+        single_eval_pos: int,
+        *,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
+        return_kv: bool = False,
+    ) -> tuple[torch.Tensor, KVCacheEntry | None]:
+        """Self-attention where k/v are restricted to train rows.
+
+        Args:
+            x_BRE: (B, R, E) all rows (train + test), or test-only when
+                `cached_kv` is provided.
+            single_eval_pos: Number of training rows; positions after this index
+                are test rows. Should be 0 when using `cached_kv`.
+            cached_kv: Pre-computed K/V from a previous forward pass. When
+                provided, K/V projection is skipped and these values are used
+                directly.
+            return_kv: If True, also return the computed K/V as a
+                `KVCacheEntry`.
+
+        Returns:
+            `(output, kv_entry)` where `kv_entry` is `None` unless
+            `return_kv` is True.
+        """
+        B, R, _ = x_BRE.shape
+
+        q = self.q_norm(
+            self.q_projection(x_BRE).view(B, R, self.num_heads, self.head_dim)
+        )
+
+        if cached_kv is not None:
+            # Use pre-computed K/V from cache (test-only path)
+            k = cached_kv.key
+            v = cached_kv.value
+            assert k is not None, "cached key is None"
+            assert v is not None, "cached value is None"
+            # The cache already stores only the test KV heads (sliced at
+            # cache-build time), so no slicing is needed here.
+            if self.num_kv_heads_test is not None:
+                nh_test_heads = self.num_kv_heads_test
+                assert k.shape[2] == nh_test_heads, "cached key has wrong num heads"
+                assert v.shape[2] == nh_test_heads, "cached value has wrong num heads"
+            if isinstance(cached_kv, QuantizedKVCacheEntry):
+                # The SDPA wrapper dequantizes unless a backend takes it as is.
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    None,
+                    None,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                    quantized_kv=cached_kv,
+                )
+            else:
+                # Match dtype in case of autocast (e.g. fp32 cache under fp16)
+                if k.dtype != q.dtype:
+                    k = k.to(q.dtype)
+                    v = v.to(q.dtype)
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                )
+        else:
+            N = R if single_eval_pos is None else single_eval_pos
+            x_train = x_BRE[:, :N]
+            k = self.k_projection(x_train).view(B, N, self.num_kv_heads, self.head_dim)
+            v = self.v_projection(x_train).view(B, N, self.num_kv_heads, self.head_dim)
+            # Norm once here so the value cached below is already normed.
+            k = self.k_norm(k)
+
+            if (
+                self.num_kv_heads_test is not None
+                and single_eval_pos is not None
+                and N < R
+            ):
+                # Train rows: full KV heads
+                out_train = _batched_scaled_dot_product_attention(
+                    q[:, :N],
+                    k,
+                    v,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                )
+                # Test rows: fewer KV heads (GQA / MQA)
+                nh_test_heads = self.num_kv_heads_test
+                out_test = _batched_scaled_dot_product_attention(
+                    q[:, N:],
+                    k[:, :, :nh_test_heads],
+                    v[:, :, :nh_test_heads],
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                )
+                out = torch.cat([out_train, out_test], dim=1)
+            else:
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                )
+
+        result = self.out_projection(out.reshape(B, R, self.head_dim * self.num_heads))
+
+        kv_entry: KVCacheEntry | None = None
+        if return_kv:
+            # Only cache the KV heads used for test<-train attention to save
+            # memory. When num_kv_heads_test is set, test rows use fewer heads.
+            # Under autocast `k_norm` (an RMSNorm) returns fp32 while `v` is the
+            # autocast dtype; SDPA casts both to that dtype anyway, so store the
+            # keys at it too rather than at twice the size. `kv_compute_dtype` in
+            # `forward` is read off the cached key, so this also sets the dtype of
+            # the decoder keys and of the quantization scales.
+            k_cache, v_cache = k.to(v.dtype), v
+            if self.num_kv_heads_test is not None:
+                nh_test_heads = self.num_kv_heads_test
+                # .contiguous() so the kept slice owns its storage and the
+                # full-projection backing tensor can be freed; otherwise the
+                # cache silently retains all KV heads via the slice view.
+                k_cache = k_cache[:, :, :nh_test_heads].contiguous()
+                v_cache = v_cache[:, :, :nh_test_heads].contiguous()
+            kv_entry = KVCacheEntry(key=k_cache.detach(), value=v_cache.detach())
+        return result, kv_entry
+
+
+# ---------------------------------------------------------------------------
+# Transformer blocks
+# ---------------------------------------------------------------------------
+
+
+class CrossAttentionBlock(nn.Module):
+    """Cross-attention block with pre-norm and MLP."""
+
+    def __init__(
+        self,
+        *,
+        emsize: int,
+        nhead: int,
+        dim_feedforward: int,
+        norm_factory: Callable[[int], nn.Module],
+        softmax_scaling_layer: nn.Module | None = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        assert emsize % nhead == 0
+        kw = {"device": device, "dtype": dtype}
+
+        self.attn = CrossAttention(
+            embedding_size=emsize,
+            num_heads=nhead,
+            head_dim=emsize // nhead,
+            softmax_scaling_layer=softmax_scaling_layer,
+            norm_factory=norm_factory,
+            **kw,
+        )
+        self.mlp = MLP(emsize, dim_feedforward, **kw)
+        self.layernorm_q = norm_factory(emsize)
+        self.layernorm_kv = norm_factory(emsize)
+        self.layernorm2 = norm_factory(emsize)
+
+    @override
+    def forward(
+        self,
+        x_BQE: torch.Tensor,
+        context_BVE: torch.Tensor,
+    ) -> torch.Tensor:
+        attn_out = self.attn(
+            self.layernorm_q(x_BQE),
+            self.layernorm_kv(context_BVE),
+        )
+        x_BQE = x_BQE + attn_out
+        mlp_out = self.mlp(self.layernorm2(x_BQE))
+        return x_BQE + mlp_out
+
+
+class TransformerBlock(nn.Module):
+    """Standard pre-norm transformer block used in ColumnAggregator."""
+
+    def __init__(
+        self,
+        *,
+        emsize: int,
+        nhead: int,
+        dim_feedforward: int,
+        norm_factory: Callable[[int], nn.Module],
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        kw = {"device": device, "dtype": dtype}
+        assert emsize % nhead == 0
+        self.attention = Attention(
+            embedding_size=emsize,
+            num_heads=nhead,
+            head_dim=emsize // nhead,
+            norm_factory=norm_factory,
+            **kw,
+        )
+        self.layernorm = norm_factory(emsize)
+        self.layernorm_mlp = norm_factory(emsize)
+        self.mlp = MLP(emsize, dim_feedforward, **kw)
+
+    @override
+    def forward(
+        self,
+        x_BRCE: torch.Tensor,
+        rope: RotaryEmbedding,
+        save_peak_memory_factor: int | None = None,
+    ) -> torch.Tensor:
+        x_BRCE = chunked_evaluate_maybe_inplace(
+            lambda x, rope: self.attention(self.layernorm(x), rope=rope),
+            x_BRCE,
+            save_peak_memory_factor=save_peak_memory_factor,
+            residual=True,
+            batch_dims=2,
+            rope=rope,
+        )
+        return chunked_evaluate_maybe_inplace(
+            lambda x: self.mlp(self.layernorm_mlp(x)),
+            x_BRCE,
+            save_peak_memory_factor=save_peak_memory_factor,
+            residual=True,
+            batch_dims=3,
+        )
+
+    def forward_cross(
+        self,
+        query_BRQE: torch.Tensor,
+        context_BRCE: torch.Tensor,
+        rope: RotaryEmbedding,
+    ) -> torch.Tensor:
+        """Cross-attention variant: query attends to context.
+
+        Used in ColumnAggregator for the last CLS-readout block.
+        """
+        B, R, Q, _ = query_BRQE.shape
+        _, _, V, E = context_BRCE.shape
+
+        # Fold rows into batch for attention (per-row cross-attn over features)
+        norm_q = self.layernorm(query_BRQE)
+        q_flat = norm_q.view(B * R, Q, E)
+        c_flat = self.layernorm(context_BRCE).view(B * R, V, E)
+        q_proj = self.attention.q_projection(q_flat).view(
+            B * R, Q, -1, self.attention.head_dim
+        )
+        k_flat = self.attention.k_projection(c_flat).view(
+            B * R, V, -1, self.attention.head_dim
+        )
+        v_flat = self.attention.v_projection(c_flat).view(
+            B * R, V, -1, self.attention.head_dim
+        )
+
+        q_proj = rope.rotate_queries_or_keys(q_proj.transpose(1, 2)).transpose(1, 2)
+        k_flat = rope.rotate_queries_or_keys(k_flat.transpose(1, 2)).transpose(1, 2)
+        q_proj = self.attention.q_norm(q_proj)
+        k_flat = self.attention.k_norm(k_flat)
+
+        attn_out = _batched_scaled_dot_product_attention(q_proj, k_flat, v_flat)
+        attn_out = attn_out.reshape(
+            B * R, Q, self.attention.head_dim * self.attention.num_heads
+        )
+        attn_out = self.attention.out_projection(attn_out).view(B, R, Q, E)
+
+        x_out = query_BRQE + attn_out
+        mlp_out = self.mlp(self.layernorm_mlp(x_out))
+        return x_out + mlp_out
+
+
+class ICLTransformerBlock(nn.Module):
+    """ICL transformer block with train-only keys and optional softmax scaling."""
+
+    def __init__(
+        self,
+        *,
+        emsize: int,
+        nhead: int,
+        dim_feedforward: int,
+        norm_factory: Callable[[int], nn.Module],
+        softmax_scaling_layer: nn.Module | None = None,
+        num_kv_heads: int | None = None,
+        num_kv_heads_test: int | None = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        kw = {"device": device, "dtype": dtype}
+        assert emsize % nhead == 0
+        self.icl_attention = ICLAttention(
+            embedding_size=emsize,
+            num_heads=nhead,
+            head_dim=emsize // nhead,
+            softmax_scaling_layer=softmax_scaling_layer,
+            num_kv_heads=num_kv_heads,
+            num_kv_heads_test=num_kv_heads_test,
+            norm_factory=norm_factory,
+            **kw,
+        )
+        self.layernorm = norm_factory(emsize)
+        self.layernorm_mlp = norm_factory(emsize)
+        self.mlp = MLP(emsize, dim_feedforward, **kw)
+
+    @override
+    def forward(
+        self,
+        x_BRE: torch.Tensor,
+        single_eval_pos: int,
+        save_peak_memory_factor: int | None = None,
+        *,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
+        return_kv: bool = False,
+    ) -> tuple[torch.Tensor, KVCacheEntry | None]:
+        """Forward pass with optional KV cache support.
+
+        Args:
+            x_BRE: (B, R, E) all rows, or test-only when `cached_kv` is set.
+            single_eval_pos: Number of training rows.
+            save_peak_memory_factor: Chunking factor for memory saving.
+            cached_kv: Pre-computed K/V for this layer.
+            return_kv: If True, also return the K/V cache entry.
+
+        Returns:
+            `(output, kv_entry)` where `kv_entry` is `None` unless
+            `return_kv` is True.
+        """
+        kv_entry: KVCacheEntry | None = None
+
+        if return_kv:
+            # Run attention without chunking so we can capture the KV entry
+            attn_out, kv_entry = self.icl_attention(
+                self.layernorm(x_BRE),
+                single_eval_pos=single_eval_pos,
+                return_kv=True,
+            )
+            x_BRE = x_BRE + attn_out
+        elif cached_kv is not None:
+            # Use cached KV -- chunking over test batch is fine
+            # TODO: Performance test this as it might not be needed.
+            def _attn_fn_cached(
+                x: torch.Tensor,
+                single_eval_pos: int | None = None,
+            ) -> torch.Tensor:
+                out, _ = self.icl_attention(
+                    self.layernorm(x),
+                    single_eval_pos=single_eval_pos,
+                    cached_kv=cached_kv,
+                )
+                return out
+
+            x_BRE = chunked_evaluate_maybe_inplace(
+                _attn_fn_cached,
+                x_BRE,
+                save_peak_memory_factor=save_peak_memory_factor,
+                residual=True,
+                batch_dims=1,
+                single_eval_pos=single_eval_pos,
+            )
+        else:
+            # Default path -- no cache
+            def _attn_fn(
+                x: torch.Tensor,
+                single_eval_pos: int | None = None,
+            ) -> torch.Tensor:
+                out, _ = self.icl_attention(
+                    self.layernorm(x),
+                    single_eval_pos=single_eval_pos,
+                )
+                return out
+
+            x_BRE = chunked_evaluate_maybe_inplace(
+                _attn_fn,
+                x_BRE,
+                save_peak_memory_factor=save_peak_memory_factor,
+                residual=True,
+                batch_dims=1,
+                single_eval_pos=single_eval_pos,
+            )
+
+        # MLP (always the same regardless of cache mode)
+        x_BRE = chunked_evaluate_maybe_inplace(
+            lambda x: self.mlp(self.layernorm_mlp(x)),
+            x_BRE,
+            save_peak_memory_factor=save_peak_memory_factor,
+            residual=True,
+            batch_dims=2,
+        )
+
+        return x_BRE, kv_entry
+
+
+# ---------------------------------------------------------------------------
+# Induced self-attention block (v2 style, no affine output)
+# ---------------------------------------------------------------------------
+
+
+class InducedSelfAttentionBlock(nn.Module):
+    """Induced self-attention (SetTransformer-style) for efficient O(n) attention.
+
+    Two-stage mechanism:
+    1. Inducing points attend to train rows uses softmax scaling when provided.
+    2. All rows attend to the inducing-point hidden states.
+    """
+
+    def __init__(
+        self,
+        *,
+        emsize: int,
+        nhead: int,
+        num_inducing_points: int,
+        dim_feedforward: int,
+        norm_factory: Callable[[int], nn.Module],
+        softmax_scaling_layer: nn.Module | None = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        kw = {"device": device, "dtype": dtype}
+        block_kw = {
+            "emsize": emsize,
+            "nhead": nhead,
+            "dim_feedforward": dim_feedforward,
+            "norm_factory": norm_factory,
+            **kw,
+        }
+
+        self.cross_attn_block1 = CrossAttentionBlock(
+            **block_kw,
+            softmax_scaling_layer=softmax_scaling_layer,
+        )
+        self.cross_attn_block2 = CrossAttentionBlock(**block_kw)
+
+        self.num_inducing_points = num_inducing_points
+        self.inducing_vectors = nn.Parameter(torch.empty(num_inducing_points, emsize))
+        nn.init.trunc_normal_(self.inducing_vectors, std=0.02)
+
+    def _induced_attention(
+        self,
+        x_BcRE: torch.Tensor,
+        single_eval_pos: int | None = None,
+        cached_hidden: torch.Tensor | None = None,
+        *,
+        return_hidden: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Induced self-attention with optional hidden-state return.
+
+        When `return_hidden` is True, returns `(output, hidden_detached)`
+        so the caller can cache the inducing hidden states. Here, we opt for
+        different output types depending on return_hidden, so that this function
+        can be used in `chunked_evaluate_maybe_inplace` without any additional logic.
+        """
+        if cached_hidden is not None:
+            hidden = cached_hidden.to(x_BcRE.dtype)
+        else:
+            Bc, R, _ = x_BcRE.shape
+            N = R if single_eval_pos is None else single_eval_pos
+            ind = self.inducing_vectors.unsqueeze(0).expand(Bc, -1, -1)
+            hidden = self.cross_attn_block1(ind, x_BcRE[:, :N])
+        out = self.cross_attn_block2(x_BcRE, hidden)
+        if return_hidden:
+            return out, hidden.detach()
+        return out
+
+    @override
+    def forward(
+        self,
+        x_BRCE: torch.Tensor,
+        single_eval_pos: int | None = None,
+        save_peak_memory_factor: int | None = None,
+        *,
+        cached_hidden: torch.Tensor | None = None,
+        return_hidden: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward with optional inducing hidden-state caching.
+
+        Returns:
+            `(output, hidden)` where `hidden` is `None` unless
+            `return_hidden` is True.
+        """
+        B, R, C, E = x_BRCE.shape
+        x_BCRE = x_BRCE.transpose(1, 2).contiguous()
+        x_BcRE = x_BCRE.reshape(B * C, R, E)
+
+        if return_hidden:
+            out_BcRE, hidden = self._induced_attention(
+                x_BcRE,
+                single_eval_pos=single_eval_pos,
+                return_hidden=True,
+            )
+        else:
+            out_BcRE = chunked_evaluate_maybe_inplace(
+                self._induced_attention,
+                x_BcRE,
+                save_peak_memory_factor,
+                residual=False,
+                batch_dims=1,
+                single_eval_pos=single_eval_pos,
+                cached_hidden=cached_hidden,
+            )
+            hidden = None
+
+        out_BCRE = out_BcRE.reshape(B, C, R, E)
+        return out_BCRE.transpose(1, 2).contiguous(), hidden
+
+
+# ---------------------------------------------------------------------------
+# Feature distribution embedder
+# ---------------------------------------------------------------------------
+
+
+class FeatureDistributionEmbedder(nn.Module):
+    """Stack of InducedSelfAttentionBlock layers applied per column."""
+
+    def __init__(
+        self,
+        *,
+        emsize: int,
+        nhead: int,
+        num_inducing_points: int,
+        dim_feedforward: int,
+        num_layers: int,
+        norm_factory: Callable[[int], nn.Module],
+        softmax_scaling_layer_factory: Callable[[], nn.Module] | None = None,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ):
+        super().__init__()
+        self.layers = nn.ModuleList(
+            InducedSelfAttentionBlock(
+                emsize=emsize,
+                nhead=nhead,
+                num_inducing_points=num_inducing_points,
+                dim_feedforward=dim_feedforward,
+                norm_factory=norm_factory,
+                softmax_scaling_layer=(
+                    softmax_scaling_layer_factory()
+                    if softmax_scaling_layer_factory is not None
+                    else None
+                ),
+                device=device,
+                dtype=dtype,
+            )
+            for _ in range(num_layers)
+        )
+
+    @override
+    def forward(
+        self,
+        x_BRiCE: torch.Tensor,
+        num_train_rows: int | None = None,
+        save_peak_memory_factor: int | None = None,
+        *,
+        force_recompute_layer: bool = False,
+        cached_hidden: list[torch.Tensor] | None = None,
+        return_hidden: bool = False,
+    ) -> tuple[torch.Tensor, list[torch.Tensor] | None]:
+        """Forward pass through all induced self-attention blocks.
+
+        Returns:
+            `(output, hidden_states)` where `hidden_states` is `None`
+            unless `return_hidden` is True.
+        """
+        hidden_states: list[torch.Tensor] | None = [] if return_hidden else None
+        assert not (return_hidden and force_recompute_layer), (
+            "return_hidden is incompatible with force_recompute_layer"
+        )
+        for i, layer in enumerate(self.layers):
+            if force_recompute_layer:
+                x_BRiCE, _ = torch.utils.checkpoint.checkpoint(  # type: ignore
+                    layer,
+                    x_BRiCE,
+                    num_train_rows,
+                    use_reentrant=False,
+                    save_peak_memory_factor=save_peak_memory_factor,
+                )
+            else:
+                layer_cached = cached_hidden[i] if cached_hidden is not None else None
+                x_BRiCE, h = layer(
+                    x_BRiCE,
+                    single_eval_pos=num_train_rows,
+                    save_peak_memory_factor=save_peak_memory_factor,
+                    cached_hidden=layer_cached,
+                    return_hidden=return_hidden,
+                )
+                if hidden_states is not None:
+                    hidden_states.append(h)
+        return x_BRiCE, hidden_states
+
+
+# ---------------------------------------------------------------------------
+# Cross-feature interaction (Row interaction / v2 RowInteraction)
+# ---------------------------------------------------------------------------
+
+
+class ColumnAggregator(nn.Module):
+    """Context-aware cross-feature interaction that aggregates column information.
+
+    CLS tokens are prepended, the sequence passes through transformer blocks,
+    and the last block performs CLS-only readout (q=CLS, k/v=all).
+    An output normalization is applied before the CLS tokens are returned.
+    """
+
+    def __init__(
+        self,
+        emsize: int,
+        nhead: int,
+        num_layers: int,
+        dim_feedforward: int,
+        num_cls_tokens: int,
+        *,
+        norm_factory: Callable[[int], nn.Module],
+        rope_base: float = 100_000,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        self.embed_dim = emsize
+        self.num_cls_tokens = num_cls_tokens
+        kw = {"device": device, "dtype": dtype}
+
+        self.blocks = nn.ModuleList(
+            TransformerBlock(
+                emsize=emsize,
+                nhead=nhead,
+                dim_feedforward=dim_feedforward,
+                norm_factory=norm_factory,
+                **kw,
+            )
+            for _ in range(num_layers)
+        )
+        self.rope = RotaryEmbedding(
+            dim=emsize // nhead, theta=int(rope_base), interleaved=False
+        )
+        self.cls_tokens = nn.Parameter(torch.empty(num_cls_tokens, emsize))
+        nn.init.trunc_normal_(self.cls_tokens, std=0.02)
+
+        # Output norm applied to CLS tokens after the last block (v2 out_ln)
+        self.out_ln = norm_factory(emsize)
+
+    @override
+    def forward(
+        self,
+        x_BRiCE: torch.Tensor,
+        save_peak_memory_factor: int | None = None,
+        force_recompute_layer: bool = False,
+    ) -> torch.Tensor:
+        """Transform feature embeddings into per-row CLS representations.
+
+        Args:
+            x_BRiCE: (B, Ri, C, E)
+            save_peak_memory_factor: If set, chunk the evaluation to save memory.
+            force_recompute_layer: If True, force gradient checkpointing.
+
+        Returns:
+            (B, Ri, num_cls_tokens, E)
+        """
+        B, Ri, _, E = x_BRiCE.shape
+        cls = self.cls_tokens.expand(B, Ri, self.num_cls_tokens, E).to(x_BRiCE.device)
+        # Prepend CLS tokens: (B, Ri, num_cls + C, E)
+        x = torch.cat((cls, x_BRiCE), dim=2)
+
+        # Run all blocks except the last
+        for block in self.blocks[:-1]:
+            if force_recompute_layer:
+                x = torch.utils.checkpoint.checkpoint(  # type: ignore
+                    block,
+                    x,
+                    self.rope,
+                    save_peak_memory_factor,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(
+                    x, rope=self.rope, save_peak_memory_factor=save_peak_memory_factor
+                )
+
+        # Last block: CLS tokens as query, full sequence as key/value (v2 readout)
+        last_block = cast("TransformerBlock", self.blocks[-1])
+        x_full: torch.Tensor = x  # type: ignore[assignment]
+        cls_part = x_full[..., : self.num_cls_tokens, :]
+        if force_recompute_layer:
+            cls_out = torch.utils.checkpoint.checkpoint(  # type: ignore
+                last_block.forward_cross,
+                cls_part,
+                x_full,
+                self.rope,
+                use_reentrant=False,
+            )
+        else:
+            cls_out = last_block.forward_cross(cls_part, x_full, self.rope)
+
+        del x
+        return self.out_ln(cls_out)
+
+
+class _PreHeadMLP(nn.Module):
+    """Residual pre-norm MLP applied to embeddings before an output head.
+
+    At init the inner MLP's final projection is zero, so this block acts as
+    the identity and existing trained heads see unchanged embeddings.
+    """
+
+    def __init__(
+        self,
+        emsize: int,
+        dim_feedforward: int,
+        norm_factory: Callable[[int], nn.Module],
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ) -> None:
+        super().__init__()
+        self.norm = norm_factory(emsize)
+        self.mlp = MLP(emsize, dim_feedforward, device=device, dtype=dtype)
+
+    @override
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.mlp(self.norm(x))
+
+
+class MultiTaskHeads(nn.Module):
+    """Bundled output heads for multitask inference.
+
+    Two heads share an input embedding of size `input_size`:
+    - multiclass: attention-based `ManyClassDecoder` over the train targets,
+      producing `(M, B, max_num_classes)` logits.
+    - regression: linear layer producing `(M, B, num_buckets)` bar logits.
+
+    A residual pre-norm MLP block is applied to the embeddings before each final
+    projection — one for multiclass, a separate one for regression.
+    """
+
+    def __init__(
+        self,
+        *,
+        input_size: int,
+        max_num_classes: int,
+        num_buckets: int,
+        decoder_head_dim: int,
+        decoder_num_heads: int,
+        decoder_softmax_scaling_layer: nn.Module | None = None,
+        mlp_dim_feedforward: int,
+        norm_factory: Callable[[int], nn.Module],
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ):
+        super().__init__()
+        kw = {"device": device, "dtype": dtype}
+        self.many_class_decoder = ManyClassDecoder(
+            max_num_classes=max_num_classes,
+            input_size=input_size,
+            head_dim=decoder_head_dim,
+            num_heads=decoder_num_heads,
+            softmax_scaling_layer=decoder_softmax_scaling_layer,
+        )
+        self.output_projection = nn.Linear(input_size, num_buckets, **kw)
+        self.mlp_classification = _PreHeadMLP(
+            emsize=input_size,
+            dim_feedforward=mlp_dim_feedforward,
+            norm_factory=norm_factory,
+            **kw,
+        )
+        self.mlp_regression = _PreHeadMLP(
+            emsize=input_size,
+            dim_feedforward=mlp_dim_feedforward,
+            norm_factory=norm_factory,
+            **kw,
+        )
+        self.register_buffer(
+            "regression_borders",
+            _spline_based_regression_borders(num_buckets),
+        )
+
+    def project_decoder_keys(self, train_emb: torch.Tensor) -> torch.Tensor:
+        """Many-class decoder keys for the train rows, ready to cache.
+
+        Runs the classification pre-head MLP first, so the keys come from the same
+        embeddings `forward` would have projected.
+        """
+        return self.many_class_decoder.project_keys(self.mlp_classification(train_emb))
+
+    @override
+    def forward(
+        self,
+        train_keys_BNHD: torch.Tensor | None,  # from project_decoder_keys
+        test_emb: torch.Tensor,  # (B, M, D)
+        y_train_BN: torch.Tensor,  # (B, N), only consumed by the multiclass head
+        *,
+        task_type: str,
+        num_present_classes: int | None,
+    ) -> torch.Tensor:
+        """Apply the head selected by `task_type`.
+
+        Returns `(M, B, max_num_classes)` for multiclass and `(M, B,
+        num_buckets)` for regression. `train_keys_BNHD` is unused for regression,
+        which has no many-class decoder, and may be None there.
+        """
+        if task_type == "regression":
+            test_emb = self.mlp_regression(test_emb)
+            return self.output_projection(test_emb.transpose(0, 1))
+        if task_type == "multiclass":
+            assert num_present_classes is not None
+            assert train_keys_BNHD is not None, (
+                "the multiclass head needs the decoder keys"
+            )
+            test_emb = self.mlp_classification(test_emb)
+            return self.many_class_decoder(
+                train_keys_BNHD,
+                test_emb,
+                y_train_BN,
+                num_present_classes=num_present_classes,
+            )
+        raise ValueError(f"Unsupported task type: {task_type}")
+
+
+# ---------------------------------------------------------------------------
+# Main model
+# ---------------------------------------------------------------------------
+
+
+class TabPFNV3p5(Architecture):
+    """Single-file TabPFN v3.5 architecture.
+
+    Pipeline:
+    1. Preprocessing: standard scaling + NaN encoding
+    2. Feature grouping: circular shifts applied before embedding
+    3. Cell embedding: feature_group_size scalar values → embed_dim
+    4. Target-aware column embedding: add y_encoder(y_train) to train rows
+    5. Feature distribution embedder: InducedSelfAttentionBlock x dist_embed_num_blocks
+    6. Feature aggregator with feature interaction: transformer with aggregation tokens
+    7. ICL transformer: y_encoder + standard attention (train-keys only) + decoder
+    """
+
+    def __init__(
+        self,
+        *,
+        config: TabPFNV3p5Config,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | str | None = None,
+    ):
+        super().__init__()
+        self.ff_factor = config.ff_factor
+        self.icl_emsize = config.embed_dim * config.feat_agg_num_cls_tokens
+        self.max_num_classes = config.max_num_classes
+        self.feature_group_size = config.feature_group_size
+        self.ecdf_num_buckets = config.cell_ecdf_num_buckets
+        kw = {"device": device, "dtype": dtype}
+
+        norm_factory = partial(_DtypeMatchingRMSNorm, device=device, dtype=dtype)
+
+        # ---- Cell embedding (ordinal: grouped raw values → E) ----
+        self.x_embed = FourierPlusMetadataFeatureGroupEmbedder(
+            config.feature_group_size,
+            config.embed_dim,
+            config.fourier_encoding_num_frequencies,
+            ecdf_num_frequencies=config.cell_ecdf_num_frequencies,
+            row_chunk_size=config.cell_embed_row_chunk_size,
+            **kw,
+        )
+
+        # ---- Target-aware col embedding (one per task type) ----
+        self.col_y_encoder = nn.ModuleDict(
+            {
+                "multiclass": TrainableOrthogonalEmbedding(
+                    config.max_num_classes,
+                    config.embed_dim,
+                ),
+                "regression": nn.Linear(1, config.embed_dim, bias=True, **kw),
+            }
+        )
+        # Shared across task types so that the encoded train-label signal has
+        # comparable magnitude regardless of which task-specific y-encoder
+        # produced it.
+        self.col_y_layernorm = nn.LayerNorm(config.embed_dim, **kw)
+
+        # ---- Distribution embedder (SetTransformer per feature column) ----
+        self.feature_distribution_embedder = FeatureDistributionEmbedder(
+            emsize=config.embed_dim,
+            nhead=config.dist_embed_num_heads,
+            num_layers=config.dist_embed_num_blocks,
+            num_inducing_points=config.dist_embed_num_inducing_points,
+            dim_feedforward=config.embed_dim * config.ff_factor,
+            norm_factory=norm_factory,
+            softmax_scaling_layer_factory=lambda: SoftmaxScalingMLP(
+                num_heads=config.dist_embed_num_heads,
+                head_dim=config.embed_dim // config.dist_embed_num_heads,
+                n_hidden=config.softmax_scaling_mlp_hidden_dim,
+            ),
+            **kw,
+        )
+
+        # ---- Cross-feature interaction (RowInteraction) ----
+        self.column_aggregator = ColumnAggregator(
+            emsize=config.embed_dim,
+            nhead=config.feat_agg_num_heads,
+            num_layers=config.feat_agg_num_blocks,
+            num_cls_tokens=config.feat_agg_num_cls_tokens,
+            dim_feedforward=config.embed_dim * config.ff_factor,
+            norm_factory=norm_factory,
+            rope_base=config.feat_agg_rope_base,
+            **kw,
+        )
+
+        # ---- ICL target encoder (one per task type) ----
+        self.icl_y_encoder = nn.ModuleDict(
+            {
+                "multiclass": TrainableOrthogonalEmbedding(
+                    config.max_num_classes,
+                    self.icl_emsize,
+                ),
+                "regression": nn.Linear(1, self.icl_emsize, bias=True, **kw),
+            }
+        )
+        self.icl_y_layernorm = nn.LayerNorm(self.icl_emsize, **kw)
+
+        # ---- ICL transformer ----
+        self.icl_blocks = nn.ModuleList(
+            ICLTransformerBlock(
+                emsize=self.icl_emsize,
+                nhead=config.icl_num_heads,
+                dim_feedforward=self.icl_emsize * config.ff_factor,
+                norm_factory=norm_factory,
+                num_kv_heads=config.icl_num_kv_heads,
+                num_kv_heads_test=config.icl_num_kv_heads_test,
+                softmax_scaling_layer=SoftmaxScalingMLP(
+                    num_heads=config.icl_num_heads,
+                    head_dim=self.icl_emsize // config.icl_num_heads,
+                    n_hidden=config.softmax_scaling_mlp_hidden_dim,
+                ),
+                **kw,
+            )
+            for _ in range(config.nlayers)
+        )
+
+        # ---- Output norm + multi-task heads ----
+        self.output_norm = norm_factory(self.icl_emsize)
+        decoder_softmax_scaling = (
+            SoftmaxScalingMLP(
+                num_heads=config.decoder_num_heads,
+                head_dim=config.decoder_head_dim,
+                n_hidden=config.softmax_scaling_mlp_hidden_dim,
+            )
+            if config.decoder_use_softmax_scaling
+            else None
+        )
+        self.heads = MultiTaskHeads(
+            input_size=self.icl_emsize,
+            max_num_classes=config.max_num_classes,
+            num_buckets=config.num_buckets,
+            decoder_head_dim=config.decoder_head_dim,
+            decoder_num_heads=config.decoder_num_heads,
+            decoder_softmax_scaling_layer=decoder_softmax_scaling,
+            mlp_dim_feedforward=self.icl_emsize * config.ff_factor,
+            norm_factory=norm_factory,
+            device=device,
+            dtype=dtype,
+        )
+        # Expose for API compatibility.
+        self.regression_borders = self.heads.regression_borders
+        self.standard_scaler = TorchStandardScaler()
+        self._nan_safe_output = True
+        self._icl_bf16 = False
+        self.emsize = config.embed_dim
+        self.inference_row_chunk_size = config.inference_row_chunk_size
+        self.inference_col_chunk_size = config.inference_col_chunk_size
+
+    def enable_icl_bf16(self) -> None:
+        """Switch the ICL blocks and output norm to bfloat16 inference."""
+        self.icl_blocks.to(torch.bfloat16)
+        self.output_norm.to(torch.bfloat16)
+        self._icl_bf16 = True
+
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return self.icl_emsize
+
+    @override
+    def forward(
+        self,
+        x: torch.Tensor | dict[str, torch.Tensor],
+        y: torch.Tensor | dict[str, torch.Tensor] | None,
+        task_type: TaskType,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        performance_options: PerformanceOptions | None = None,
+        kv_cache: TabPFNV3p5Cache | None = None,
+        return_kv_cache: bool = False,
+        x_is_test_only: bool = False,
+    ) -> (
+        torch.Tensor
+        | dict[str, torch.Tensor]
+        | tuple[torch.Tensor | dict[str, torch.Tensor], TabPFNV3p5Cache | None]
+    ):
+        """Main forward pass for TabPFN v3.5.
+
+        `task_type` selects the per-task target encoder and output head; the
+        same model instance handles both tasks.
+
+        When a KV cache is provided, `x_is_test_only=True` lets the
+        caller pass only the test rows (shape `(num_test, 1, D)`) instead
+        of padding with train-row placeholders. `y` still carries the
+        train labels — the decoder reads `y[:num_train]` for the
+        many-class head. Outside the cache path, `x` is always the full
+        dataset and this flag is ignored.
+        """
+        del categorical_inds
+        if isinstance(x, dict):
+            x = x["main"]
+        if isinstance(y, dict):
+            y = y["main"]
+        if y is None:
+            y = torch.zeros(0, device=x.device, dtype=x.dtype)
+        if y.dim() == 3 and y.shape[-1] == 1:
+            y = y.squeeze(-1)
+
+        if performance_options is None:
+            performance_options = self.get_default_performance_options()
+
+        if performance_options.enable_torch_compile:
+            # We increase the limit, since we compile a couple of subgraphs for
+            # chunking and different batched_sdpa configs.
+            torch._dynamo.config.cache_size_limit = max(
+                32, torch._dynamo.config.cache_size_limit
+            )
+
+        if x_is_test_only and (kv_cache is None or kv_cache.is_empty()):
+            raise ValueError(
+                "x_is_test_only=True requires kv_cache to be provided; "
+                "the non-cache forward needs the full train+test tensor."
+            )
+
+        num_present_classes = None
+        if task_type == "multiclass":
+            num_present_classes = (
+                torch.nan_to_num(y, nan=0.0).max().item() + 1 if y.numel() else 1
+            )
+            if not self.training and (
+                num_present_classes > self.max_num_classes or (y < 0).any()
+            ):
+                raise ValueError(
+                    "Target is out of range. "
+                    "Make sure to use an ordinal encoded target. "
+                    f"Expected target values between 0 and {self.max_num_classes - 1}, "
+                    f"but got values outside this range."
+                )
+            num_present_classes = int(num_present_classes)
+        x_RiBC = x
+        B = x_RiBC.shape[1]
+        num_train = y.shape[0]
+        if performance_options.enable_torch_compile:
+            torch._dynamo.mark_dynamic(x_RiBC, index=0)
+            torch._dynamo.mark_dynamic(x_RiBC, index=1)
+            torch._dynamo.mark_dynamic(x_RiBC, index=2)
+
+        x_BRiClE, inducing_hidden, scaler_stats = self._stages_0_to_2(
+            x_RiBC,
+            y,
+            task_type,
+            performance_options=performance_options,
+            return_inducing_hidden=return_kv_cache,
+            kv_cache=kv_cache,
+            x_is_test_only=x_is_test_only,
+        )
+
+        # ---- Stage 3: ICL ----
+        x_BRiD = x_BRiClE.flatten(-2)
+        del x_BRiClE
+        if self._icl_bf16:
+            x_BRiD = x_BRiD.to(torch.bfloat16)
+
+        # Per-layer KV entries collected when return_kv_cache is True.
+        kv_out: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
+        # The compute dtype of the K/V, captured before any quantization below.
+        # The decoder keys are stored at this dtype, not at the quantized one.
+        kv_compute_dtype: torch.dtype | None = None
+        # tabpfn releases up to 8.3.0 have no `kv_cache_dtype`; their engine
+        # quantizes the finished cache through `TabPFNV3p5Cache.quantize`. Newer
+        # ones set this instead and expect the quantization per layer, here,
+        # which frees each full-precision entry as the loop moves on.
+        kv_cache_dtype = getattr(performance_options, "kv_cache_dtype", None)
+
+        # An ambient autocast context (e.g. the TabPFN inference engine wraps
+        # forward in one) would recast matmuls to the autocast dtype and upcast
+        # layer_norm to fp32; bf16 ICL needs true bf16 compute throughout.
+        icl_autocast_ctx = (
+            torch.autocast(x_BRiD.device.type, enabled=False)
+            if self._icl_bf16
+            else contextlib.nullcontext()
+        )
+        with icl_autocast_ctx:
+            if kv_cache is not None and not kv_cache.is_empty():
+                # Cache path: no y_icl embedding; use cached K/V pairs
+                for layer_idx, block in enumerate(self.icl_blocks):
+                    x_BRiD, _ = block(
+                        x_BRiD,
+                        0,
+                        performance_options.save_peak_memory_factor,
+                        cached_kv=kv_cache.kv[layer_idx],
+                    )
+            else:
+                if num_train > 0:
+                    y_icl = self._prepare_y(y, num_train, B, task_type=task_type)
+                    y_icl_emb = self._embed_icl_y(y_icl, task_type=task_type)
+                    x_BRiD[:, :num_train] = x_BRiD[:, :num_train] + y_icl_emb
+
+                if return_kv_cache:
+                    for layer_idx, block in enumerate(self.icl_blocks):
+                        x_BRiD, kv_entry = block(
+                            x_BRiD,
+                            num_train,
+                            performance_options.save_peak_memory_factor,
+                            return_kv=True,
+                        )
+                        kv_compute_dtype = kv_entry.key.dtype
+                        if kv_cache_dtype is not None:
+                            kv_entry = kv_entry.quantize(kv_cache_dtype)
+                        kv_out[layer_idx] = kv_entry
+                else:
+                    for block in self.icl_blocks:
+                        if performance_options.force_recompute_layer:
+                            x_BRiD, _ = torch.utils.checkpoint.checkpoint(
+                                block,
+                                x_BRiD,
+                                num_train,
+                                use_reentrant=False,
+                                save_peak_memory_factor=performance_options.save_peak_memory_factor,
+                            )
+                        else:
+                            x_BRiD, _ = block(
+                                x_BRiD,
+                                num_train,
+                                performance_options.save_peak_memory_factor,
+                            )
+
+            x_BRiD = self.output_norm(x_BRiD)
+        if self._icl_bf16:
+            assert x_BRiD.dtype == torch.bfloat16, (
+                "bf16 ICL inference must preserve a bf16 residual through the "
+                "ICL blocks and output norm"
+            )
+            # Preserve the fp32 boundary expected by task heads that were not
+            # moved to bf16.
+            x_BRiD = x_BRiD.float()
+
+        # ---- Split embeddings --------------------------------------------------
+        running_from_cache = kv_cache is not None and not kv_cache.is_empty()
+        if running_from_cache:
+            test_emb = x_BRiD
+            # The cache holds the decoder keys projected from the train
+            # embeddings, not the embeddings, so they are gone on this path.
+            train_emb = None
+        else:
+            test_emb = x_BRiD[:, num_train:]
+            train_emb = x_BRiD[:, :num_train]
+
+        # ---- Many-class decoder keys -------------------------------------------
+        # Regression has no many-class decoder, so it neither builds nor caches
+        # these; a regression cache is that much smaller.
+        train_keys: torch.Tensor | None = None
+        if task_type == "multiclass":
+            if running_from_cache:
+                assert kv_cache is not None
+                assert kv_cache.decoder_keys is not None, (
+                    "a multiclass KV cache must carry the decoder keys"
+                )
+                train_keys = kv_cache.decoder_keys
+            else:
+                assert train_emb is not None
+                train_keys = self.heads.project_decoder_keys(train_emb)
+
+        # ---- Build KV cache output ---------------------------------------------
+        built_cache: TabPFNV3p5Cache | None = None
+        if return_kv_cache:
+            if running_from_cache:
+                built_cache = kv_cache  # pass through unchanged
+            else:
+                # Reuse the statistics fitted during preprocessing (on the imputed
+                # train rows). Re-fitting on raw `x_RiBC` here would let the
+                # passed-through +/-inf poison the mean/std and turn every
+                # standardised test cell into NaN at predict time.
+                assert kv_out
+                # Store the decoder keys at the unquantized ICL compute dtype:
+                # the KV entries above may already be int8 by now.
+                assert kv_compute_dtype is not None
+                built_cache = TabPFNV3p5Cache(
+                    kv=kv_out,
+                    decoder_keys=(
+                        train_keys.detach().to(kv_compute_dtype)
+                        if train_keys is not None
+                        else None
+                    ),
+                    train_shape=(B, num_train),
+                    scaler_cache={
+                        k: v.detach()
+                        for k, v in scaler_stats.items()
+                        if k != _ECDF_CONTEXT_KEY
+                    },
+                    ecdf_context=scaler_stats[_ECDF_CONTEXT_KEY].detach(),
+                    inducing_hidden=(
+                        [h.detach() for h in inducing_hidden]
+                        if inducing_hidden is not None
+                        else None
+                    ),
+                )
+
+        # ---- Decoder -----------------------------------------------------------
+        y_BN = y.transpose(0, 1) if y.dim() == 2 else y.unsqueeze(0)
+        y_train_BN = y_BN[:, :num_train]
+        test_out: torch.Tensor = self.heads(
+            train_keys,
+            test_emb,
+            y_train_BN,
+            task_type=task_type,
+            num_present_classes=num_present_classes,
+        )
+        if self._nan_safe_output:
+            test_out = torch.nan_to_num(test_out, nan=0.0)
+
+        if only_return_standard_out:
+            output = test_out
+        else:
+            output = {
+                "standard": test_out,
+                "test_embeddings": test_emb.transpose(0, 1),
+            }
+            if train_emb is not None:
+                output["train_embeddings"] = train_emb.transpose(0, 1)
+
+        if return_kv_cache:
+            return output, built_cache
+        return output
+
+    @override
+    def get_default_performance_options(self) -> PerformanceOptions:
+        options = super().get_default_performance_options()
+        return dataclasses.replace(
+            options,
+            use_chunkwise_inference=True,
+        )
+
+    @override
+    def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
+        # `TabPFNV3p5Cache.quantize` handles both dtypes. Without this override the
+        # base returns ("auto",) and the engine never quantizes.
+        return ("auto", "int8", "fp8")
+
+    def _prepare_y(
+        self,
+        y: torch.Tensor,
+        num_train: int,
+        batch_size: int,
+        *,
+        task_type: TaskType,
+    ) -> torch.Tensor:
+        """Prepare y_train for either target-embedding stage.
+
+        Returns:
+            Clean y_train of shape (B, train_size), or None if no train rows.
+        """
+        if num_train == 0:
+            raise ValueError("No training rows available for target embedding.")
+
+        y_NB1 = _prepare_targets(y, num_train, batch_size)[:num_train]
+        y_NB1 = _impute_target_nan_and_inf(
+            y_NB1=y_NB1,
+            task_type=task_type,
+            num_train_rows=num_train,
+        )
+        return y_NB1.squeeze(-1).transpose(0, 1)  # (B, train_size)
+
+    def _embed_col_y(self, y_BN: torch.Tensor, *, task_type: TaskType) -> torch.Tensor:
+        """Embed y_train for the col stage → (B, T, E)."""
+        if task_type == "multiclass":
+            y_emb = self.col_y_encoder["multiclass"](y_BN)
+        elif task_type == "regression":
+            y_emb = self.col_y_encoder["regression"](y_BN.unsqueeze(-1))
+        else:
+            raise ValueError(f"Unsupported task type: {task_type}")
+        return self.col_y_layernorm(y_emb)
+
+    def _embed_icl_y(self, y_BN: torch.Tensor, *, task_type: TaskType) -> torch.Tensor:
+        """Embed y_train for the ICL stage → (B, T, D)."""
+        if task_type == "multiclass":
+            y_emb = self.icl_y_encoder["multiclass"](y_BN)
+        elif task_type == "regression":
+            y_emb = self.icl_y_encoder["regression"](y_BN.unsqueeze(-1))
+        else:
+            raise ValueError(f"Unsupported task type: {task_type}")
+        return self.icl_y_layernorm(y_emb)
+
+    def _preprocess_raw(
+        self,
+        x_RiBC: torch.Tensor,
+        num_train: int,
+        scaler_cache: dict[str, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """NaN indicator capture → imputation → standardisation → transpose.
+
+        When *scaler_cache* is provided the scaler is applied without refitting
+        (inference mode); otherwise it is fitted on the first *num_train* rows
+        *after* imputation, so the statistics stay finite even when the raw input
+        carried +/-inf.
+
+        `ecdf_BRiC` holds the per-cell midrank ECDF against the train rows, one
+        raw rank per cell — the cell embedder lifts it to sin/cos features.
+
+        Returns `(x_BRiC, nan_ind_BRiC, ecdf_BRiC, scaler_stats)`. Returning the
+        fitted statistics lets the caller store exactly these in the inference
+        cache, so test rows are standardised (and ECDF-ranked) against the same
+        train context.
+        """
+        # Note: Indicators need to be computed before imputation.
+        nan_ind_BRiC = _generate_nan_and_inf_indicator(x_RiBC).transpose(0, 1)
+
+        x_RiBC, is_finite_RiBC = _impute_nan_and_inf_with_mean(
+            x_RiBC, num_train, scaler_cache
+        )
+        fit_stats = scaler_cache is None
+        if fit_stats:
+            fit_data = x_RiBC[:num_train] if num_train > 0 else x_RiBC
+            scaler_cache = self.standard_scaler.fit(fit_data)
+            # Align the fill value between train and cached test rows: the cached
+            # path fills from `mean`, which differs from the nanmean by rounding,
+            # enough to move a filled test cell out of the ECDF tie block.
+            x_RiBC = torch.where(
+                is_finite_RiBC,
+                x_RiBC,
+                scaler_cache["mean"].unsqueeze(0).expand_as(x_RiBC),
+            )
+
+        # Rank the imputed values, not the output of `standard_scaler.transform`
+        # below: its +/-100 clip would collapse extreme outliers into ties.
+        x_imputed_BRiC = x_RiBC.transpose(0, 1)
+        if fit_stats:
+            scaler_cache[_ECDF_CONTEXT_KEY] = _build_ecdf_context(
+                x_imputed_BRiC, num_train, self.ecdf_num_buckets
+            )
+        ecdf_BRiC = _in_context_ecdf(x_imputed_BRiC, scaler_cache[_ECDF_CONTEXT_KEY])
+
+        x_RiBC = self.standard_scaler.transform(x_RiBC, fitted_cache=scaler_cache)
+        x_BRiC = x_RiBC.transpose(0, 1)
+
+        return x_BRiC, nan_ind_BRiC, ecdf_BRiC, scaler_cache
+
+    def _group_features(
+        self,
+        x_BRiC: torch.Tensor,
+        nan_ind_BRiC: torch.Tensor,
+        ecdf_BRiC: torch.Tensor,
+    ) -> torch.Tensor:
+        """Build the full grouped + indicator-concatenated tensor.
+
+        Layout: standard-scaled values, then the NaN indicators, then the raw ECDF
+        ranks. The cell embedder slices the values off the front and the ranks off
+        the back, so those two blocks must stay at their ends.
+        """
+        shifts = [-(2**i) for i in range(self.feature_group_size)]
+        return torch.cat(
+            [
+                torch.stack([torch.roll(t, shifts=s, dims=2) for s in shifts], dim=-1)
+                for t in (x_BRiC, nan_ind_BRiC, ecdf_BRiC)
+            ],
+            dim=-1,
+        )
+
+    def _group_feature_cols(
+        self,
+        x_BRiC: torch.Tensor,
+        nan_ind_BRiC: torch.Tensor,
+        ecdf_BRiC: torch.Tensor,
+        col_start: int,
+        col_end: int,
+    ) -> torch.Tensor:
+        """Grouped features for columns `[col_start, col_end)` only.
+
+        Equivalent to `_group_features(x, ind, ecdf)[:, :, col_start:col_end]` —
+        `torch.roll(x, -s, dims=2)[:, :, c] == x[:, :, (c + s) % C]` — without
+        materializing the full `(B, Ri, C, G)` tensor.
+        """
+        C = x_BRiC.shape[2]
+        cols = torch.arange(col_start, col_end, device=x_BRiC.device)
+        size = self.feature_group_size
+        idx = [(cols + 2**i) % C for i in range(size)]
+        return torch.cat(
+            [
+                torch.stack([t[:, :, i] for i in idx], dim=-1)
+                for t in (x_BRiC, nan_ind_BRiC, ecdf_BRiC)
+            ],
+            dim=-1,
+        )
+
+    def _compute_all_inducing_hidden(
+        self,
+        dist_embedder_layers: nn.ModuleList,
+        x_train_BNC: torch.Tensor,
+        nan_ind_train_BNC: torch.Tensor,
+        ecdf_train_BNC: torch.Tensor,
+        y_col_emb_BNE: torch.Tensor | None,
+        col_chunk_size: int,
+        *,
+        enable_torch_compile: bool,
+    ) -> list[torch.Tensor]:
+        """Pre-compute inducing hidden states for every dist-embedder block.
+
+        Processes columns in chunks of *col_chunk_size* to avoid
+        materialising `(B*C_out, N_train, embedding_size)` all at once.
+        Takes the ungrouped train rows and groups each column chunk on the
+        fly, so the full grouped tensor is never resident.
+
+        Returns one `(B*C, num_inducing, embedding_size)` tensor per block.
+        """
+        num_columns = x_train_BNC.shape[2]
+        num_train = x_train_BNC.shape[1]
+        num_blocks = len(dist_embedder_layers)
+        # I: num inducing vectors.
+        # Collect (B, Cj, I, E) per column-chunk, per block
+        hidden_per_block: list[list[torch.Tensor]] = [[] for _ in range(num_blocks)]
+
+        process_col_fn = (
+            self._compiled(self._process_col_chunk)
+            if enable_torch_compile
+            else self._process_col_chunk
+        )
+
+        for c0 in range(0, num_columns, col_chunk_size):
+            c1 = min(c0 + col_chunk_size, num_columns)
+            x_grouped_chunk_BNCjG = self._group_feature_cols(
+                x_train_BNC, nan_ind_train_BNC, ecdf_train_BNC, c0, c1
+            )
+            if enable_torch_compile:
+                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=0)
+                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=1)
+                # Will compile two versions: one with cols dynamic and one with
+                # cols static for the fixed chunk size.
+                if (c1 - c0) != col_chunk_size:
+                    torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=2)
+
+            chunk_outputs_BCjIE = process_col_fn(
+                x_grouped_chunk_BNCjG=x_grouped_chunk_BNCjG,
+                y_col_emb_BNE=y_col_emb_BNE,
+                num_train=num_train,
+            )
+            for blk_idx, h in enumerate(chunk_outputs_BCjIE):
+                hidden_per_block[blk_idx].append(h)
+
+        # Concatenate and flatten column chunks (B * C_out, I, E) per block.
+        return [torch.cat(chunks, dim=1).flatten(0, 1) for chunks in hidden_per_block]
+
+    def _compiled(self, method: Callable) -> Callable:
+        """Lazily `torch.compile` a bound method of this instance.
+
+        The compiled callable is cached per underlying function, so dynamo /
+        inductor are only imported when `torch.compile` is actually
+        requested (keeping `import tabpfn` and eager inference free of them),
+        and each method is compiled at most once.
+        """
+        cache = self.__dict__.setdefault("_torch_compile_cache", {})
+        key = method.__func__
+        if key not in cache:
+            cache[key] = torch.compile(method, dynamic=True)
+        return cache[key]
+
+    def __getstate__(self) -> dict[str, Any]:
+        # `torch.compile`-d callables are not picklable, so exclude the lazily
+        # populated compile cache from (un)pickling / torch.save. It is
+        # rebuilt on demand by `_compiled()`. Delegate to nn.Module first so
+        # its own state handling (e.g. `_compiled_call_impl`) is preserved.
+        state = super().__getstate__()
+        state.pop("_torch_compile_cache", None)
+        return state
+
+    def _preprocess_and_group(
+        self,
+        rows_RiBC: torch.Tensor,
+        y: torch.Tensor,
+        num_train: int,
+        scaler_cache: dict[str, torch.Tensor] | None,
+        task_type: TaskType,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
+        """Preprocess rows, embed y for the col stage, and group features.
+
+        Combines the three pre-chunk-loop steps into one compiled pass.
+        Returns the grouped x of shape `(B, Ri, C, G)` tensor, optionally the
+        `(B, N_train, E)` y embedding, and the scaler statistics fitted during
+        preprocessing (for reuse in the inference cache).
+        """
+        x_BRiC, nan_ind_BRiC, ecdf_BRiC, y_col_emb_BNE, scaler_stats = (
+            self._preprocess_no_group(rows_RiBC, y, num_train, scaler_cache, task_type)
+        )
+        x_grouped_BRiCG = self._group_features(x_BRiC, nan_ind_BRiC, ecdf_BRiC)
+        return x_grouped_BRiCG, y_col_emb_BNE, scaler_stats
+
+    def _preprocess_no_group(
+        self,
+        rows_RiBC: torch.Tensor,
+        y: torch.Tensor,
+        num_train: int,
+        scaler_cache: dict[str, torch.Tensor] | None,
+        task_type: TaskType,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        dict[str, torch.Tensor],
+    ]:
+        """Preprocess rows and embed y, deferring feature grouping.
+
+        Used on the chunked path so the `(B, Ri, C, G)` grouped tensor is never
+        materialized for all rows at once — chunks are grouped on the fly,
+        keeping only the `(B, Ri, C)` scaled features, NaN indicators and ECDF
+        ranks resident.
+        """
+        B = rows_RiBC.shape[1]
+        x_BRiC, nan_ind_BRiC, ecdf_BRiC, scaler_stats = self._preprocess_raw(
+            rows_RiBC, num_train, scaler_cache
+        )
+        y_col_emb_BNE: torch.Tensor | None = None
+        if scaler_cache is None and num_train > 0:
+            y_col_BN = self._prepare_y(y, num_train, B, task_type=task_type)
+            y_col_emb_BNE = self._embed_col_y(y_col_BN, task_type=task_type)
+        return x_BRiC, nan_ind_BRiC, ecdf_BRiC, y_col_emb_BNE, scaler_stats
+
+    def _stages_0_to_2(
+        self,
+        x_RiBC: torch.Tensor,
+        y: torch.Tensor,
+        task_type: TaskType,
+        *,
+        performance_options: PerformanceOptions,
+        return_inducing_hidden: bool,
+        kv_cache: TabPFNV3p5Cache | None,
+        x_is_test_only: bool,
+    ) -> tuple[torch.Tensor, list[torch.Tensor] | None, dict[str, torch.Tensor]]:
+        """Stages 0-2: feature embedding, distribution embedding, column aggregation.
+
+        Handles all three computation paths (cache / chunked / full) and returns
+        `(x_BRiClE, inducing_hidden, scaler_stats)`.  `inducing_hidden` is
+        `None` unless
+        `return_inducing_hidden` is True (full path) or row-chunking is active
+        (chunked path, where it is always computed as an intermediate).
+        """
+        num_train = y.shape[0]
+        if performance_options.use_chunkwise_inference and not self.training:
+            row_chunk_size = self.inference_row_chunk_size
+            col_chunk_size = self.inference_col_chunk_size
+        else:
+            row_chunk_size = None
+            col_chunk_size = None
+
+        force_recompute_layer = performance_options.force_recompute_layer
+        save_peak_memory_factor = performance_options.save_peak_memory_factor
+
+        if kv_cache is not None and not kv_cache.is_empty():
+            rows_RiBC = x_RiBC if x_is_test_only else x_RiBC[num_train:]
+            assert kv_cache.scaler_cache is not None
+            assert kv_cache.ecdf_context is not None
+            scaler_cache = {
+                **kv_cache.scaler_cache,
+                _ECDF_CONTEXT_KEY: kv_cache.ecdf_context,
+            }
+            precomputed_hidden: list[torch.Tensor] | None = kv_cache.inducing_hidden
+            effective_num_train = 0
+        else:
+            rows_RiBC = x_RiBC
+            scaler_cache = None
+            precomputed_hidden = None
+            effective_num_train = num_train
+
+        num_rows, C = rows_RiBC.shape[0], rows_RiBC.shape[2]
+        use_chunks = row_chunk_size is not None and row_chunk_size < num_rows
+
+        # --- Preprocess + y col-embed (+ feature grouping on the full path). ---
+        # The chunked path defers grouping to the per-chunk loops so the full
+        # (B, Ri, C, G) tensor is never resident.
+        x_grouped_BRiCG: torch.Tensor | None = None
+        x_BRiC: torch.Tensor | None = None
+        nan_ind_BRiC: torch.Tensor | None = None
+        ecdf_BRiC: torch.Tensor | None = None
+        if use_chunks:
+            x_BRiC, nan_ind_BRiC, ecdf_BRiC, y_col_emb_BNE, scaler_stats = (
+                self._preprocess_no_group(
+                    rows_RiBC, y, num_train, scaler_cache, task_type
+                )
+            )
+        else:
+            preprocess_fn = (
+                self._compiled(self._preprocess_and_group)
+                if performance_options.enable_torch_compile
+                else self._preprocess_and_group
+            )
+            x_grouped_BRiCG, y_col_emb_BNE, scaler_stats = preprocess_fn(
+                rows_RiBC, y, num_train, scaler_cache, task_type
+            )
+
+        # --- Phase 1: compute inducing hidden when chunking w/o a pre-built cache. ---
+        if use_chunks and precomputed_hidden is None:
+            eff_col_chunk = col_chunk_size if col_chunk_size is not None else C
+            while True:
+                try:
+                    precomputed_hidden = self._compute_all_inducing_hidden(
+                        self.feature_distribution_embedder.layers,
+                        x_BRiC[:, :num_train],
+                        nan_ind_BRiC[:, :num_train],
+                        ecdf_BRiC[:, :num_train],
+                        y_col_emb_BNE,
+                        eff_col_chunk,
+                        enable_torch_compile=performance_options.enable_torch_compile,
+                    )
+                    break
+                except RuntimeError as e:
+                    if not is_oom_error(e) or eff_col_chunk <= 1:
+                        raise
+                    torch.cuda.empty_cache()
+                    # `torch.mps.empty_cache()` raises where there is no MPS
+                    # backend, which would turn a recoverable OOM into a crash.
+                    if torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                    eff_col_chunk //= 2
+                    _logger.warning("OOM: halving col_chunk_size to %d", eff_col_chunk)
+                    self.inference_col_chunk_size = eff_col_chunk
+
+        # --- Shared per-chunk loop: embed → dist-embedder → column-aggregator ---
+        # When not chunking, the single iteration covers all rows. force_recompute_layer
+        # and return_hidden only apply on the full path (see below).
+        is_full_path = not use_chunks and precomputed_hidden is None
+        effective_chunk_size = row_chunk_size if use_chunks else num_rows
+
+        enable_torch_compile = performance_options.enable_torch_compile
+        process_row_chunk = (
+            self._compiled(self._process_row_chunk)
+            if enable_torch_compile
+            else self._process_row_chunk
+        )
+        while True:
+            parts: list[torch.Tensor] = []
+            inducing_hidden: list[torch.Tensor] | None = None
+            try:
+                for row_chunk_start in range(0, num_rows, effective_chunk_size):
+                    row_chunk_end = min(
+                        row_chunk_start + effective_chunk_size, num_rows
+                    )
+                    if x_grouped_BRiCG is not None:
+                        x_grouped_chunk = x_grouped_BRiCG[
+                            :, row_chunk_start:row_chunk_end
+                        ]
+                    else:
+                        x_grouped_chunk = self._group_features(
+                            x_BRiC[:, row_chunk_start:row_chunk_end],
+                            nan_ind_BRiC[:, row_chunk_start:row_chunk_end],
+                            ecdf_BRiC[:, row_chunk_start:row_chunk_end],
+                        )
+                    if enable_torch_compile:
+                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=0)
+                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=2)
+                        # Will compile two versions: One with dynamic rows and
+                        # one with static rows for the fixed chunk size.
+                        if (row_chunk_end - row_chunk_start) != row_chunk_size:
+                            torch._dynamo.mark_dynamic(x_grouped_chunk, index=1)
+
+                    row_embedding_chunk, chunk_hidden = process_row_chunk(
+                        x_grouped_chunk_BRjCG=x_grouped_chunk,
+                        y_col_emb=y_col_emb_BNE,
+                        chunk_start=row_chunk_start,
+                        chunk_end=row_chunk_end,
+                        effective_num_train=effective_num_train,
+                        precomputed_hidden=precomputed_hidden,
+                        save_peak_memory_factor=save_peak_memory_factor,
+                        force_recompute_layer=force_recompute_layer,
+                        return_inducing_hidden=return_inducing_hidden,
+                        is_full_path=is_full_path,
+                    )
+                    if chunk_hidden is not None:
+                        inducing_hidden = chunk_hidden
+                    parts.append(row_embedding_chunk)
+                break
+            except RuntimeError as e:
+                if not is_oom_error(e) or not use_chunks or effective_chunk_size <= 1:
+                    raise
+                parts.clear()
+                torch.cuda.empty_cache()
+                effective_chunk_size //= 2
+                _logger.warning(
+                    "OOM: halving row_chunk_size to %d", effective_chunk_size
+                )
+                self.inference_row_chunk_size = effective_chunk_size
+
+        if use_chunks:
+            inducing_hidden = precomputed_hidden
+        x_BRiClE = parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
+        return x_BRiClE, inducing_hidden, scaler_stats
+
+    def _process_col_chunk(
+        self,
+        *,
+        x_grouped_chunk_BNCjG: torch.Tensor,
+        y_col_emb_BNE: torch.Tensor | None,
+        num_train: int,
+    ) -> list[torch.Tensor]:
+        """Compute inducing hidden for one column chunk across all dist-embedder blocks.
+
+        `x_grouped_chunk_BNCjG` has shape `(B, train rows, Cj, G)` — a slice of the
+        pre-grouped tensor with Cj << C, so the chunked op never sees the full `C`
+        dim. Returns one `(B, Cj, n_ind, embedding_size)` tensor per block.
+        """
+        B, _, Cj, _ = x_grouped_chunk_BNCjG.shape
+
+        # Embed this column chunk → (B, Rt, Cj, E)
+        x_emb_BNCjE = self.x_embed(x_grouped_chunk_BNCjG)
+        E = x_emb_BNCjE.shape[-1]
+
+        # Target-aware y (broadcasts over the Cj columns)
+        if y_col_emb_BNE is not None and num_train > 0:
+            x_emb_BNCjE = x_emb_BNCjE + y_col_emb_BNE.unsqueeze(2)
+
+        # (B, Rt, Cj, E) → (B*Cj, Rt, E)
+        x_flat = x_emb_BNCjE.transpose(1, 2).contiguous().reshape(B * Cj, num_train, E)
+
+        layers = self.feature_distribution_embedder.layers
+        num_blocks = len(layers)
+        chunk_outputs: list[torch.Tensor] = []
+        for blk_idx, blk in enumerate(layers):
+            ind = blk.inducing_vectors.unsqueeze(0).expand(B * Cj, -1, -1)
+            hidden = blk.cross_attn_block1(ind, x_flat)  # (B*cc, n_ind, E)
+            # Reshape for correct batch-column ordering when concatenated
+            chunk_outputs.append(hidden.reshape(B, Cj, -1, E))
+            # Update train embeddings for next block's Step 1
+            if blk_idx < num_blocks - 1:
+                x_flat = blk.cross_attn_block2(x_flat, hidden)
+
+        return chunk_outputs
+
+    def _process_row_chunk(
+        self,
+        x_grouped_chunk_BRjCG: torch.Tensor,
+        y_col_emb: torch.Tensor | None,
+        chunk_start: int,
+        chunk_end: int,
+        effective_num_train: int,
+        precomputed_hidden: list[torch.Tensor] | None,
+        save_peak_memory_factor: int | None,
+        *,
+        force_recompute_layer: bool,
+        return_inducing_hidden: bool,
+        is_full_path: bool,
+    ) -> tuple[torch.Tensor, list[torch.Tensor] | None]:
+        """Run one row chunk through dist-embedder and column-aggregator.
+
+        `x_grouped_chunk` has shape `(B, row_chunk_range, C, G)` — a slice
+        of the pre-grouped tensor.
+        Returns `(row_embedding_chunk, chunk_hidden)`. `chunk_hidden` is
+        only non-None when `return_inducing_hidden` is True on the full path.
+        """
+        row_chunk_range = chunk_end - chunk_start
+        # Number of train rows in this chunk, not overall dataset.
+        num_train_rows = max(0, min(effective_num_train - chunk_start, row_chunk_range))
+
+        x_emb = self.x_embed(x_grouped_chunk_BRjCG)
+
+        if y_col_emb is not None and num_train_rows > 0:
+            y_emb = y_col_emb[:, chunk_start : chunk_start + num_train_rows]
+            x_emb[:, :num_train_rows] = x_emb[:, :num_train_rows] + y_emb.unsqueeze(2)
+
+        x_emb, chunk_hidden = self.feature_distribution_embedder(
+            x_BRiCE=x_emb,
+            num_train_rows=num_train_rows,
+            cached_hidden=precomputed_hidden,
+            save_peak_memory_factor=(save_peak_memory_factor if is_full_path else None),
+            force_recompute_layer=force_recompute_layer and is_full_path,
+            return_hidden=return_inducing_hidden and is_full_path,
+        )
+        row_embedding_chunk = self.column_aggregator(
+            x_BRiCE=x_emb,
+            save_peak_memory_factor=save_peak_memory_factor,
+            force_recompute_layer=force_recompute_layer and is_full_path,
+        )
+        return row_embedding_chunk, chunk_hidden
+
+
+# ---------------------------------------------------------------------------
+# Module interface
+# ---------------------------------------------------------------------------
+
+
+def parse_config(
+    config: dict[str, Any],
+) -> tuple[TabPFNV3p5Config, dict[str, Any]]:
+    """Parse the config dict into a TabPFNV3p5Config, return unused keys."""
+    parsed_config = TabPFNV3p5Config(**config)
+    return parsed_config, parsed_config.get_unused_config(config)
+
+
+def get_architecture(
+    config: ArchitectureConfig,
+    *,
+    cache_trainset_representation: bool = False,
+) -> TabPFNV3p5:
+    """Construct TabPFN v3.5 from the given config."""
+    del cache_trainset_representation
+    assert isinstance(config, TabPFNV3p5Config)
+    # cache_trainset_representation is accepted for interface compatibility but
+    # is a no-op: v3.5 uses explicit KV cache passing via forward() parameters
+    # (kv_cache / return_kv_cache) instead of model-internal caching.
+    return TabPFNV3p5(config=config)
+
+
+# ---------------------------------------------------------------------------
+# Private data utilities
+# ---------------------------------------------------------------------------
+
+
+def _prepare_targets(
+    y: torch.Tensor,
+    num_train_and_test_rows: int,
+    batch_size: int,
+) -> torch.Tensor:
+    """Pad y to match num_train_and_test_rows and ensure shape (Ri, B, 1)."""
+    num_train_labels = y.shape[0]
+    if num_train_labels > num_train_and_test_rows:
+        raise ValueError("No test rows provided.")
+    target_RBT = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
+    return F.pad(
+        target_RBT,
+        (0, 0, 0, 0, 0, num_train_and_test_rows - num_train_labels),
+        value=float("nan"),
+    )
+
+
+def _impute_nan_and_inf_with_mean(
+    x: torch.Tensor,
+    num_train_rows: int,
+    scaler_cache: dict[str, torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Impute the nan and inf with the mean of the feature.
+
+    Returns:
+        A tuple of (imputed tensor, is_finite mask).
+    """
+    is_finite = torch.isfinite(x)
+    if num_train_rows == 0 and scaler_cache is None:
+        _logging.warning("No training rows or scaler cache provided, imputing with 0.")
+    if scaler_cache is not None:
+        feature_means = scaler_cache["mean"]
+    else:
+        x_train = torch.where(is_finite[:num_train_rows], x[:num_train_rows], torch.nan)
+        feature_means = torch.nan_to_num(torch.nanmean(x_train, dim=0), 0)
+    return torch.where(is_finite, x, feature_means.unsqueeze(0).expand_as(x)), is_finite
+
+
+_ECDF_CONTEXT_KEY = "ecdf_buckets"
+"""Key the ECDF ranking context travels under inside the working scaler dict.
+
+Preprocessing hands one dict back to the caller, so the context rides along with
+`mean` and `std`; `TabPFNV3p5Cache` splits it back out into its own field.
+"""
+
+ECDF_CONTEXT_DTYPE: torch.dtype = torch.float32
+"""Storage dtype of the ECDF ranking context."""
+
+
+_ECDF_CELL_BUDGET = 1 << 23
+"""Cells the ECDF context build and query work on per pass.
+
+Both carry several intermediates the size of the cells they are given, so a
+million-row table done in one pass would cost a multiple of the table itself.
+Neither result depends on how the cells are split — the context is built per
+column, the ranks per cell — so this only bounds the transients.
+"""
+
+
+def _build_ecdf_context(
+    x_BRiC: torch.Tensor, num_train: int, num_buckets: int
+) -> torch.Tensor:
+    """Summarise the train rows per (batch, column) into ECDF bucket edges.
+
+    Returns `(3, B, C, K)` at `ECDF_CONTEXT_DTYPE`, holding for each of `K =
+    min(num_buckets, num_train)` edges: the edge value, and the counts of train
+    values strictly below it and at most equal to it. The counts are exact, so
+    `_in_context_ecdf` reproduces the true midrank on any value that is an edge.
+
+    A column with at most `K` distinct values gets one edge per distinct value,
+    which is what makes it exact: consecutive edges then leave no unseen value
+    between them for interpolation to guess at. Above `K` the edges are spaced
+    over row positions instead, so every edge carries the same share of the
+    column and no dense value is skipped.
+    """
+    rows_BNC = x_BRiC[:, :num_train] if num_train > 0 else x_BRiC
+    columns = rows_BNC.shape[2]
+    columns_per_pass = max(1, _ECDF_CELL_BUDGET // rows_BNC.shape[1])
+    if columns_per_pass < columns:
+        return torch.cat(
+            [
+                _build_ecdf_context(
+                    x_BRiC[:, :, start : start + columns_per_pass],
+                    num_train,
+                    num_buckets,
+                )
+                for start in range(0, columns, columns_per_pass)
+            ],
+            dim=2,
+        )
+
+    sorted_BCN = (
+        rows_BNC.transpose(1, 2).to(ECDF_CONTEXT_DTYPE).contiguous().sort(dim=-1).values
+    )
+    n = sorted_BCN.shape[-1]
+    k = min(num_buckets, n)
+
+    # Index of each sorted position within the column's distinct values, so a
+    # searchsorted over it maps a distinct index back to a row position.
+    is_new = torch.ones_like(sorted_BCN, dtype=torch.int32)
+    is_new[..., 1:] = (sorted_BCN[..., 1:] != sorted_BCN[..., :-1]).to(torch.int32)
+    # In place: on a tall table this is as large as the sorted values themselves.
+    distinct_idx_BCN = is_new.cumsum_(-1).sub_(1)
+    num_distinct_BC1 = distinct_idx_BCN[..., -1:] + 1
+
+    steps = torch.arange(k, device=x_BRiC.device, dtype=ECDF_CONTEXT_DTYPE)
+    if k > 1:
+        # Two rulers, because they answer different questions. Evenly spaced
+        # distinct indices hit every value a column has, but only while it has at
+        # most `k` of them. Above that the rank error is paid in mass, not in
+        # distinct values: a column whose rows pile onto a few values inside a
+        # wide distinct range would starve exactly those values of edges, and
+        # interpolating across them spans most of the column. Row positions are
+        # mass-uniform by construction, so they take over there.
+        distinct_BCK = steps * ((num_distinct_BC1 - 1).to(ECDF_CONTEXT_DTYPE) / (k - 1))
+        rows_K = (steps * ((n - 1) / (k - 1))).round().to(torch.int64)
+        targets_BCK = torch.where(
+            num_distinct_BC1 <= k,
+            distinct_BCK.round().to(torch.int32),
+            distinct_idx_BCN.gather(-1, rows_K.expand(*sorted_BCN.shape[:2], k)),
+        ).contiguous()
+    else:
+        targets_BCK = (
+            steps.round().to(torch.int32).expand(*sorted_BCN.shape[:2], k).contiguous()
+        )
+
+    below = torch.searchsorted(distinct_idx_BCN, targets_BCK, side="left")
+    at_most = torch.searchsorted(distinct_idx_BCN, targets_BCK, side="right")
+    edges_BCK = sorted_BCN.gather(-1, below)
+    return torch.stack(
+        [edges_BCK, below.to(ECDF_CONTEXT_DTYPE), at_most.to(ECDF_CONTEXT_DTYPE)]
+    )
+
+
+def _ecdf_midrank_counts(
+    values_BCRi: torch.Tensor, ecdf_context: torch.Tensor
+) -> torch.Tensor:
+    """Midrank of each value against the buckets, as a train-row count."""
+    edges_BCK, below_BCK, at_most_BCK = ecdf_context
+    k = edges_BCK.shape[-1]
+    # int32 indices halve these two transients; K is a bucket count.
+    left = torch.searchsorted(edges_BCK, values_BCRi, side="left", out_int32=True)
+    right = torch.searchsorted(edges_BCK, values_BCRi, side="right", out_int32=True)
+
+    lo_idx = (left - 1).clamp(min=0).to(torch.int64)
+    hi_idx = left.clamp(max=k - 1).to(torch.int64)
+    edge_lo = edges_BCK.gather(-1, lo_idx)
+    edge_hi = edges_BCK.gather(-1, hi_idx)
+    at_most_lo = at_most_BCK.gather(-1, lo_idx)
+    below_hi = below_BCK.gather(-1, hi_idx)
+
+    # The two ends coincide only outside the edge range, where the clamp already
+    # leaves the right count: n above the last edge, and 0 below the first once
+    # the override below applies.
+    width = edge_hi - edge_lo
+    inside = width > 0
+    # Divide by 1 outside a bucket instead of masking the quotient: `where`
+    # backpropagates through the branch it discards, and 0 * inf is NaN. Prompt
+    # tuning optimises the cells, so that NaN would reach them.
+    weight = torch.where(
+        inside, (values_BCRi - edge_lo) / torch.where(inside, width, 1.0), 0.0
+    )
+    counts = at_most_lo + weight * (below_hi - at_most_lo)
+    is_edge = right > left
+    exact = 0.5 * (below_hi + at_most_BCK.gather(-1, hi_idx))
+    counts = torch.where(is_edge, exact, counts)
+    return torch.where((left == 0) & ~is_edge, counts.new_zeros(()), counts)
+
+
+def _in_context_ecdf(x_BRiC: torch.Tensor, ecdf_context: torch.Tensor) -> torch.Tensor:
+    """Midrank ECDF of each cell value against the train rows, via the buckets.
+
+    A value that is itself a bucket edge gets that edge's exact midrank, which
+    handles ties. A value inside a bucket is interpolated linearly between the
+    two counts the bucket's ends bracket — an interval that is empty when the
+    buckets hold every distinct train value, so the estimate is then exact too.
+    Inputs must be finite: torch sorts NaN last, so a NaN query would come out at
+    rank 1.0.
+    """
+    num_rows, columns = x_BRiC.shape[1], x_BRiC.shape[2]
+    at_most_BCK = ecdf_context[2]
+    # The last edge is the column maximum, so its at-most count is the row count.
+    n = at_most_BCK[..., -1:]
+
+    def rank(rows_BRjC: torch.Tensor) -> torch.Tensor:
+        values_BCRj = rows_BRjC.transpose(1, 2).to(ECDF_CONTEXT_DTYPE).contiguous()
+        counts_BCRj = _ecdf_midrank_counts(values_BCRj, ecdf_context)
+        return (counts_BCRj / n).transpose(1, 2).to(x_BRiC.dtype)
+
+    if torch.compiler.is_compiling():
+        # A Python loop over the row count would make Dynamo specialise on it,
+        # which the dynamic-shape marking in `forward` forbids. The compiled path
+        # ranks all rows in one pass; the inference row chunking bounds them.
+        return rank(x_BRiC)
+
+    rows_per_pass = max(1, _ECDF_CELL_BUDGET // columns)
+    ecdf_BRiC = torch.empty(x_BRiC.shape, dtype=x_BRiC.dtype, device=x_BRiC.device)
+    for start in range(0, num_rows, rows_per_pass):
+        rows = slice(start, start + rows_per_pass)
+        ecdf_BRiC[:, rows] = rank(x_BRiC[:, rows])
+    return ecdf_BRiC
+
+
+def _ecdf_fourier_features(u: torch.Tensor, num_frequencies: int) -> torch.Tensor:
+    """Low-frequency sin/cos features of ECDF values in [0, 1]: `(...) -> (..., 2K)`.
+
+    Uses half-period phases (pi * k * u, k = 1..num_frequencies) so u=0 and u=1
+    stay distinguishable at every frequency parity (no wrap-around at k=1).
+    """
+    k = torch.arange(1, num_frequencies + 1, device=u.device, dtype=u.dtype)
+    phase = u.unsqueeze(-1) * (math.pi * k)
+    return torch.cat([phase.sin(), phase.cos()], dim=-1)
+
+
+def _impute_target_nan_and_inf(
+    y_NB1: torch.Tensor,
+    task_type: TaskType,
+    num_train_rows: int,
+) -> torch.Tensor:
+    # The class imputation for is performed for backwards compatibility.
+    # We impute the mean and then do a ceil() operation.
+    # Only apply ceil() to imputed positions to preserve differentiability for
+    # original values (e.g. during prompt tuning).
+    y_NB1, is_finite = _impute_nan_and_inf_with_mean(y_NB1, num_train_rows)
+    if task_type == "regression":
+        return y_NB1
+    return torch.where(is_finite, y_NB1, y_NB1.ceil())
+
+
+_NAN_INDICATOR = -2.0
+_INFINITY_INDICATOR = 2.0
+_NEG_INFINITY_INDICATOR = 4.0
+
+
+def _generate_nan_and_inf_indicator(x: torch.Tensor) -> torch.Tensor:
+    """Generate NaN/Inf indicator features (matches TabPFN v2.5)."""
+    return (
+        torch.isnan(x) * _NAN_INDICATOR
+        + torch.isposinf(x) * _INFINITY_INDICATOR
+        + torch.isneginf(x) * _NEG_INFINITY_INDICATOR
+    ).to(x.dtype)
+
+
+def _safe_log_seqlen(
+    n: int | torch.Tensor, device: torch.device, dtype: torch.dtype
+) -> torch.Tensor:
+    """Compute log(n) safely, avoiding fp16 overflow for large `n`."""
+    if isinstance(n, torch.Tensor):
+        return n.to(torch.float32).clamp(min=1).log().to(dtype)
+    # Materialise `n` via arithmetic on a 0-d tensor rather than
+    # `torch.as_tensor(n, ...)`. The latter bakes `n` into the graph as a constant and
+    # emits a `n == <value>` guard, triggering a recompile on every new value
+    # `one * n` keeps the value symbolic when `n` is a SymInt.
+    one = torch.ones((), dtype=torch.float32, device=device)
+    return (one * n).clamp(min=1).log().to(dtype)
+
+
+def _spline_based_regression_borders(num_buckets: int) -> torch.Tensor:
+    """Generate hardcoded regression bin borders based on the v2.5 checkpoint.
+
+    Note: Borders are num_buckets + 1!
+
+
+    Returns:
+        An array of shape (num_buckets + 1,) containing the bucket borders.
+    """
+    border_reference_points = [
+        (0, -128),
+        (5, -16.9),
+        (20, -13),
+        (100, -9.9),
+        (200, -8.47),
+        (500, -6.48),
+        (1000, -4.40),
+    ]
+    # The original model had 5000 buckets.
+    border_reference_points = (
+        border_reference_points
+        + [(2500, 0)]
+        + [(5000 - x, -y) for x, y in border_reference_points[::-1]]
+    )
+    x_scale = num_buckets / 5000
+    xp = np.array([x for x, _ in border_reference_points]) * x_scale
+    yp = np.array([y for _, y in border_reference_points])
+    return torch.tensor(
+        np.interp(x=np.arange(num_buckets + 1), xp=xp, fp=yp), dtype=torch.float32
+    )
