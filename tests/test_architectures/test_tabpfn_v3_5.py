@@ -439,9 +439,7 @@ def test__many_class_decoder__unused_classes__matches_full_width_one_hot() -> No
     targets = (torch.arange(num_train) % 3).repeat(batch, 1).to(torch.float64)
 
     train_keys = decoder.project_keys(train_emb)
-    actual = torch.compile(decoder, backend="eager", fullgraph=True)(
-        train_keys, test_emb, targets, num_present_classes=3
-    )
+    actual = decoder(train_keys, test_emb, targets, num_present_classes=3)
 
     q_BMHD = decoder.q_projection(test_emb).view(batch, num_test, num_heads, head_dim)
     one_hot_BNHT = (
