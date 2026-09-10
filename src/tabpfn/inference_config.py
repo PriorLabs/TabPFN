@@ -20,6 +20,7 @@ from tabpfn.preprocessing import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
+from tabpfn.preprocessing.images import DEFAULT_IMAGE_ENCODER_MODEL
 
 DEFAULT_SOFTMAX_TEMPERATURE = 0.9
 """The softmax temperature of every checkpoint released before the temperature became
@@ -163,6 +164,35 @@ class InferenceConfig:
     """Features a text column is expanded into with `TRANSFORM_TEXT`: the leading
     components of a truncated SVD over its tf-idf matrix. Fewer when the column
     has fewer character n-grams than that."""
+
+    TRANSFORM_IMAGE: bool = True
+    """Whether a column named in `image_features_indices` is expanded into
+    `IMAGE_N_COMPONENTS` numeric features: the CLS embedding of `IMAGE_ENCODER_MODEL`
+    (a DINOv3 ViT-S/16 by default, 384 dimensions), standardised and reduced by a
+    PCA fit on the training rows. Nothing is detected: only declared columns are
+    read, and with none declared this is a no-op that imports none of the optional
+    dependencies (`pip install "tabpfn[image]"`). Off, a declared column is refused
+    with an error naming this flag.
+
+    A declared column has to hold one image per cell, as a base64 string (a
+    `data:image/...;base64,` prefix is tolerated) or as the image file's bytes, at
+    fit and at predict, in a DataFrame, and may not be listed in
+    `categorical_features_indices`; each of these is refused with an error saying
+    so. Not run by the fine-tuning estimators."""
+
+    IMAGE_N_COMPONENTS: int = 30
+    """Features an image column is expanded into with `TRANSFORM_IMAGE`: the leading
+    principal components of its standardised embeddings. Fewer when the column has
+    fewer rows than that, or the encoder fewer dimensions."""
+
+    IMAGE_ENCODER_MODEL: str = DEFAULT_IMAGE_ENCODER_MODEL
+    """Hugging Face id of the vision encoder whose CLS token, the first token of
+    `last_hidden_state`, embeds each image. Any model `AutoModel` loads that has an
+    `AutoImageProcessor` and a leading CLS token works, e.g. the larger
+    `facebook/dinov3-vitl16-pretrain-lvd1689m` (1024 dimensions) or the ungated
+    `facebook/dinov2-small`. The default is gated: accept its license on the Hub
+    once and log in (`hf auth login` or `HF_TOKEN`). A fitted estimator keeps the
+    encoder it was fit with, so this only matters at fit."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.

@@ -45,10 +45,13 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     estimator_to_device,
-    expand_dates_and_text,
+    expand_dates,
+    expand_images,
+    expand_text,
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    reject_images_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
@@ -91,6 +94,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.images import ImageTransformer
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -252,6 +256,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
+    image_transformer_: ImageTransformer
+    """The transformer that expanded every declared image column before validation."""
+
     date_transformer_: DateTransformer
     """The transformer that converted every temporal column before validation."""
 
@@ -259,10 +266,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The transformer that expanded every text column before validation."""
 
     categorical_features_indices_: list[int] | None
-    """Declared categorical column positions after date/text expansion, including
-    columns declared through pandas `category` dtype. Expanded source columns are
-    removed and their generated features appended, so these positions can differ
-    from those in the original fit input."""
+    """Declared categorical column positions after image, date and text
+    expansion, including columns declared through pandas `category` dtype.
+    Expanded source columns are removed and their generated features appended,
+    so these positions can differ from those in the original fit input."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -282,6 +289,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
+        image_features_indices: Sequence[int] | None = None,
         softmax_temperature: float | Literal["auto"] = "auto",
         average_before_softmax: bool = False,
         model_path: str
@@ -363,6 +371,23 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     model and the `.fit()`, consider setting the
                     `.categorical_features_indices` attribute after the model was
                     initialized and before `.fit()`.
+
+            image_features_indices:
+                The positions of the columns whose cells hold images, each as a
+                base64-encoded string (a `data:image/...;base64,` prefix is fine) or
+                as the image file's bytes. Each such column is replaced by
+                `IMAGE_N_COMPONENTS` numeric features: the CLS embedding of
+                `IMAGE_ENCODER_MODEL` (a DINOv3 ViT-S/16 by default), standardised
+                and reduced by a PCA fit on the training rows. Nothing is detected:
+                an undeclared column is never read as images, and with none declared
+                nothing changes. Needs `pip install "tabpfn[image]"` and, for the
+                default encoder, its license accepted on the Hugging Face Hub.
+                Gated by `InferenceConfig.TRANSFORM_IMAGE`. A column listed here may
+                not be listed in `categorical_features_indices`.
+
+                !!! note
+                    The indices are 0-based and should represent the data passed to
+                    `.fit()`. The declared columns have to hold images at predict too.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -583,6 +608,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.n_estimators = n_estimators
         self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
+        self.image_features_indices = image_features_indices
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
         self.model_path = model_path
@@ -868,6 +894,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Minimal preprocessing for prompt tuning: no categorical features,
         # all-numerical schema, identity preprocessor that preserves grads.
         reject_categoricals_for_differentiable_input(self.categorical_features_indices)
+        reject_images_for_differentiable_input(self.image_features_indices)
         n_features = X.shape[1]
         # One Feature instance per column — list multiplication would share
         # the same dataclass and any later in-place update would leak across
@@ -877,8 +904,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             for _ in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
-        # A tensor holds no dates or strings, so these fit nothing; set anyway, so
-        # every predict path converts through them without first checking.
+        # A tensor holds no images, dates or strings, so these fit nothing; set
+        # anyway, so every predict path converts through them without checking.
+        self.image_transformer_ = ImageTransformer().fit(X)
         self.date_transformer_ = DateTransformer().fit(X)
         self.text_transformer_ = TextTransformer().fit(X)
         self.n_features_in_ = n_features
@@ -935,13 +963,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
         )
-        X, date_transformer, text_transformer, feature_names, categorical_indices = (
-            expand_dates_and_text(
-                X,
-                categorical_features_indices=categorical_indices,
-                inference_config=self.inference_config_,
-            )
+        X, image_transformer, categorical_indices = expand_images(
+            X,
+            image_features_indices=self.image_features_indices,
+            categorical_features_indices=categorical_indices,
+            inference_config=self.inference_config_,
+            device=self.devices_[0],
         )
+        X, date_transformer, categorical_indices = expand_dates(
+            X,
+            categorical_features_indices=categorical_indices,
+            inference_config=self.inference_config_,
+        )
+        X, text_transformer, categorical_indices = expand_text(
+            X,
+            categorical_features_indices=categorical_indices,
+            inference_config=self.inference_config_,
+        )
+        feature_names = text_transformer.feature_names_out_
 
         X, y, _ = ensure_compatible_fit_inputs(
             X,
@@ -973,6 +1012,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
+        self.image_transformer_ = image_transformer
         self.date_transformer_ = date_transformer
         self.text_transformer_ = text_transformer
         self.categorical_features_indices_ = categorical_indices
@@ -1041,8 +1081,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_mode": "fit_preprocessors",
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
-            # Fit on the already-expanded array, where a declared column may
-            # have moved down past an expanded date or text column.
+            # Fit on the already-expanded array, where the images are features
+            # and a declared column may have moved down past an expanded one.
+            "image_features_indices": None,
             "categorical_features_indices": self.categorical_features_indices_,
         }
 
@@ -1098,9 +1139,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
-        # Preprocessed tensors hold no dates or strings either, so these fit
-        # nothing: the date transformer still refuses a date and converts a
+        # Preprocessed tensors hold no images, dates or strings either, so these
+        # fit nothing: the date transformer still refuses a date and converts a
         # duration, like any fitted one.
+        self.image_transformer_ = ImageTransformer().fit(X_preprocessed[0])
         self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
         self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
 
@@ -1382,6 +1424,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # TODO: Move these at some point to InferenceEngine
         check_input_shape_matches(X, estimator=self)
+        X = self.image_transformer_.transform(X)
         X = self.date_transformer_.transform(X)
         X = self.text_transformer_.transform(X)
         X = ensure_compatible_predict_input_sklearn(X, self)
@@ -1549,6 +1592,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
             check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
+            X_holdout_NhF = tuning_regressor.image_transformer_.transform(  # noqa: PLW2901
+                X_holdout_NhF
+            )
             X_holdout_NhF = tuning_regressor.date_transformer_.transform(  # noqa: PLW2901
                 X_holdout_NhF
             )
@@ -1823,6 +1869,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             check_input_shape_matches(X_test, estimator=worker)
+            X_test = worker.image_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = worker.text_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901

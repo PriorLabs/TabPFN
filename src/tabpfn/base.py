@@ -45,6 +45,7 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.images import ImageTransformer
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
@@ -55,6 +56,7 @@ from tabpfn.validation import (
     check_input_shape_matches,
     ensure_compatible_predict_input_sklearn,
     validate_categorical_features_indices,
+    validate_image_features_indices,
 )
 
 if TYPE_CHECKING:
@@ -443,22 +445,52 @@ def resolve_categorical_features_indices(
     return sorted(declared) if declared else None
 
 
-def expand_dates_and_text(
+def expand_images(
+    X: XType,
+    *,
+    image_features_indices: Sequence[int] | None,
+    categorical_features_indices: Sequence[int] | None,
+    inference_config: InferenceConfig,
+    device: torch.device,
+) -> tuple[XType, ImageTransformer, list[int] | None]:
+    """Expand the declared image columns of a fit input, before validation.
+
+    Runs first: image columns are declared by position in the caller's frame, so
+    nothing may move before they are read. An expanded column is dropped and its
+    features appended, so every column after it moves down.
+
+    Returns:
+        The expanded input, the fitted transformer, and the declared categorical
+        positions in the expanded input (`None` when none were declared).
+    """
+    validate_image_features_indices(image_features_indices)
+    image_transformer = ImageTransformer(
+        image_indices=image_features_indices,
+        categorical_indices=categorical_features_indices,
+        transform_image=inference_config.TRANSFORM_IMAGE,
+        n_components=inference_config.IMAGE_N_COMPONENTS,
+        model_name=inference_config.IMAGE_ENCODER_MODEL,
+        device=device,
+    )
+    X = image_transformer.fit_transform(X)
+    categorical_indices = image_transformer.output_indices(categorical_features_indices)
+    return X, image_transformer, categorical_indices
+
+
+def expand_dates(
     X: XType,
     *,
     categorical_features_indices: Sequence[int] | None,
     inference_config: InferenceConfig,
-) -> tuple[XType, DateTransformer, TextTransformer, list[str] | None, list[int] | None]:
-    """Expand the datetime and text columns of a fit input, before validation.
+) -> tuple[XType, DateTransformer, list[int] | None]:
+    """Expand the datetime columns of a fit input, before validation.
 
     An expanded column is dropped and its features appended, so every column
-    after it moves down. The returned labels and categorical positions describe
-    the returned input, so no caller needs to know which transformer ran last.
+    after it moves down.
 
     Returns:
-        The expanded input, the two fitted transformers, the expanded input's
-        column labels (`None` when `X` is not a `DataFrame`), and the declared
-        categorical positions in it (`None` when none were declared).
+        The expanded input, the fitted transformer, and the declared categorical
+        positions in the expanded input (`None` when none were declared).
     """
     date_transformer = DateTransformer(
         categorical_indices=categorical_features_indices,
@@ -466,20 +498,33 @@ def expand_dates_and_text(
     )
     X = date_transformer.fit_transform(X)
     categorical_indices = date_transformer.output_indices(categorical_features_indices)
+    return X, date_transformer, categorical_indices
+
+
+def expand_text(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+    inference_config: InferenceConfig,
+) -> tuple[XType, TextTransformer, list[int] | None]:
+    """Expand the text columns of a fit input, before validation.
+
+    An expanded column is dropped and its features appended, so every column
+    after it moves down.
+
+    Returns:
+        The expanded input, the fitted transformer, and the declared categorical
+        positions in the expanded input (`None` when none were declared).
+    """
     text_transformer = TextTransformer(
-        categorical_indices=categorical_indices,
+        categorical_indices=categorical_features_indices,
         transform_text=inference_config.TRANSFORM_TEXT,
         min_cardinality_for_text=inference_config.MIN_CARDINALITY_FOR_TEXT,
         n_components=inference_config.TEXT_N_COMPONENTS,
     )
     X = text_transformer.fit_transform(X)
-    return (
-        X,
-        date_transformer,
-        text_transformer,
-        text_transformer.feature_names_out_,
-        text_transformer.output_indices(categorical_indices),
-    )
+    categorical_indices = text_transformer.output_indices(categorical_features_indices)
+    return X, text_transformer, categorical_indices
 
 
 def reject_categoricals_for_differentiable_input(
@@ -498,6 +543,18 @@ def reject_categoricals_for_differentiable_input(
         raise ValueError(
             "Categorical features are not supported for differentiable input."
         )
+
+
+def reject_images_for_differentiable_input(
+    image_features_indices: Sequence[int] | None,
+) -> None:
+    """Reject image features in the differentiable-input fit path.
+
+    A tensor cannot carry images, and the differentiable path runs no column
+    expansion, so a declaration here could only be a mistake.
+    """
+    if image_features_indices is not None and len(image_features_indices) > 0:
+        raise ValueError("Image features are not supported for differentiable input.")
 
 
 def initialize_model_variables_helper(
@@ -641,6 +698,11 @@ def estimator_to_device(
 
     estimator.device = device
     estimator.devices_ = parsed_devices
+    # The image encoder runs where the model does; a fitted transformer loaded
+    # from disk still points at the device it was fit on.
+    image_transformer = getattr(estimator, "image_transformer_", None)
+    if image_transformer is not None:
+        image_transformer.device = parsed_devices[0]
     estimator.use_autocast_, estimator.forced_inference_dtype_, byte_size = (
         determine_precision(estimator.inference_precision, estimator.devices_)
     )
@@ -716,6 +778,7 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     check_input_shape_matches(X, estimator=model)
+    X = model.image_transformer_.transform(X)
     X = model.date_transformer_.transform(X)
     X = model.text_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
