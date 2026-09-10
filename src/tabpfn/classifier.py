@@ -62,6 +62,7 @@ from tabpfn.inference import (
 from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
+    TuningConfig,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
     get_tuning_splits,
@@ -72,6 +73,16 @@ from tabpfn.model_loading import (
     load_fitted_tabpfn_model,
     prepend_cache_path,
     save_fitted_tabpfn_model,
+)
+from tabpfn.prediction_scaling import (
+    PredictionScaling,
+    PredictionScalingMode,
+    apply_class_weights,
+    balanced_class_weights,
+    context_class_prior,
+    fit_holdout_class_weights,
+    resolve_prediction_scaling,
+    sampler_class_weights,
 )
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
@@ -241,6 +252,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The ensemble configurations used during fit.
     Stored for reuse in prompt tuning."""
 
+    prediction_scaling_: PredictionScalingMode
+    """The prediction scaling mode in effect after resolving `"auto"`."""
+
+    prediction_scaling_weights_: np.ndarray | None
+    """Per-class weights applied to the averaged probabilities, or `None` when no
+    rescaling is applied."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -248,6 +266,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float | Literal["auto"] = "auto",
+        prediction_scaling: PredictionScaling = "auto",
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
         model_path: str
@@ -346,13 +365,39 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
                 the other way of naming one.
 
+            prediction_scaling:
+                Post-processing that rescales the predicted class probabilities
+                toward a reference class prior, as opposed to `softmax_temperature`,
+                which changes their confidence. Each mode multiplies the averaged
+                probabilities by a per-class weight vector and renormalizes; the
+                modes differ in where the weights come from.
+
+                - `"none"`: no rescaling.
+                - `"balanced"`: divide by the class prior so the predicted prior
+                  moves toward uniform. Helps metrics that are insensitive to class
+                  imbalance (balanced accuracy, macro ROC AUC). Without row
+                  subsampling this is the training prior; under
+                  `SAMPLE_SUBSAMPLING_METHOD="majority_downsample"` it is the
+                  context prior the model actually saw.
+                - `"sampler"`: undo the label shift introduced by row subsampling by
+                  multiplying with training prior over context prior. Exact under the
+                  label-shift assumption and free. A no-op when the sampler did not
+                  change the prior.
+                - `"holdout"`: fit the weights on held-out rows so the mean predicted
+                  probability per class matches the observed class frequency. Costs
+                  one extra fit per tuning fold; shares the holdout with
+                  `tuning_config` when that is set. Not available with
+                  `differentiable_input=True`.
+                - `"auto"` (default): `"sampler"` when row subsampling shifted the
+                  prior, otherwise `"none"`. Existing behavior is unchanged for every
+                  configuration that does not use `"majority_downsample"`.
+
+                Rescaling by a per-class factor is monotone within each class, so for
+                binary tasks it never changes the ranking of the positive class.
+
             balance_probabilities:
-                Whether to balance the probabilities based on the class distribution
-                in the training data. This can help to improve predictive performance
-                when the classes are highly imbalanced and the metric of interest is
-                insensitive to class imbalance (e.g., balanced accuracy, balanced log
-                loss, roc-auc macro ovo, etc.). This is only applied when predicting
-                during a post-processing step.
+                Deprecated alias for `prediction_scaling="balanced"`. Will be removed
+                in a future release.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of
@@ -562,6 +607,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
+        self.prediction_scaling = prediction_scaling
         self.balance_probabilities = balance_probabilities
         self.average_before_softmax = average_before_softmax
         self.model_path = model_path
@@ -890,12 +936,80 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Fit on the already-expanded array, where a declared column may
             # have moved down past an expanded date or text column.
             "categorical_features_indices": self.categorical_features_indices_,
+            # Holdout rows must be scored without any rescaling: the holdout mode
+            # learns the whole correction from them, and the free modes are
+            # applied by this estimator, not the clone.
+            "prediction_scaling": "none",
+            "balance_probabilities": False,
         }
 
         params.update(forced)
         params.update(overwrite_kwargs)
 
         return TabPFNClassifier(**params)
+
+    def _resolve_prediction_scaling(self, *, y_encoded: np.ndarray) -> None:
+        """Resolve `prediction_scaling` and compute the free weight vectors.
+
+        Requires `class_counts_` and `ensemble_preprocessor_`. The holdout mode
+        leaves the weights unset here; they are fitted from held-out rows in
+        `_maybe_calibrate_temperature_and_tune_decision_thresholds`.
+        """
+        requested = self.prediction_scaling
+        if self.balance_probabilities:
+            if PredictionScalingMode(requested) not in (
+                PredictionScalingMode.AUTO,
+                PredictionScalingMode.BALANCED,
+            ):
+                raise ValueError(
+                    "balance_probabilities=True conflicts with "
+                    f"prediction_scaling={requested!r}. Drop balance_probabilities; "
+                    "it is a deprecated alias for prediction_scaling='balanced'."
+                )
+            warnings.warn(
+                "balance_probabilities is deprecated and will be removed in a future "
+                "release; pass prediction_scaling='balanced' instead.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            requested = "balanced"
+
+        preprocessor = self.ensemble_preprocessor_
+        shifted = preprocessor.sampler_shifted_prior
+        self.prediction_scaling_ = resolve_prediction_scaling(
+            requested,
+            task_type="classifier",
+            sampler_shifted_prior=shifted,
+        )
+
+        context_prior = (
+            context_class_prior(
+                y_encoded, preprocessor.subsample_row_indices, self.n_classes_
+            )
+            if shifted
+            else None
+        )
+        # The differentiable-input path does not go through the label encoder
+        # and therefore has no `class_counts_`; the encoded labels carry them.
+        train_counts = getattr(self, "class_counts_", None)
+        if train_counts is None:
+            train_counts = np.bincount(
+                np.asarray(y_encoded).astype(np.int64), minlength=self.n_classes_
+            )
+        mode = self.prediction_scaling_
+        if mode == PredictionScalingMode.BALANCED:
+            self.prediction_scaling_weights_ = balanced_class_weights(
+                train_counts, context_prior
+            )
+        elif mode == PredictionScalingMode.SAMPLER:
+            self.prediction_scaling_weights_ = (
+                sampler_class_weights(train_counts, context_prior)
+                if context_prior is not None
+                else None
+            )
+        else:
+            # NONE, or HOLDOUT until the holdout fit fills the weights in.
+            self.prediction_scaling_weights_ = None
 
     @config_context(transform_output="default")  # type: ignore
     def fit(self, X: XType, y: YType) -> Self:
@@ -931,8 +1045,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.ensemble_configs_ = ensemble_configs
 
-        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
-
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             n_samples=X.shape[0],
@@ -956,6 +1068,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_train=y,
             task_type=self.estimator_type,
         )
+
+        # The free scaling modes need the context prior, which the row sampler
+        # fixed above; the holdout mode is fitted inside the tuning step below,
+        # which also applies whatever weights are already known.
+        self._resolve_prediction_scaling(y_encoded=y)
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
 
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
@@ -1053,6 +1171,25 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
+    def _prediction_scaling_may_apply(self) -> bool:
+        """Whether `prediction_scaling` can produce non-trivial weights.
+
+        `"auto"` and `"sampler"` only act when the row sampler shifts the prior,
+        so they stay usable in batched prediction unless that sampler is
+        configured.
+        """
+        mode = PredictionScalingMode(self.prediction_scaling)
+        if mode == PredictionScalingMode.NONE:
+            return False
+        if mode in (PredictionScalingMode.BALANCED, PredictionScalingMode.HOLDOUT):
+            return True
+        config = self.get_inference_config()
+        return (
+            config.SUBSAMPLE_SAMPLES is not None
+            and SampleSubsamplingMethod(config.SAMPLE_SUBSAMPLING_METHOD)
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+        )
+
     def predict_proba_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
@@ -1087,8 +1224,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ValueError: If the input lists have unequal or zero length, the
                 datasets do not all share the same set of classes, or the training
                 (or test) arrays do not all share one shape.
-            NotImplementedError: If ``balance_probabilities`` or ``tuning_config``
-                is configured on the estimator — their state is per-dataset and
+            NotImplementedError: If an active ``prediction_scaling`` (or the
+                deprecated ``balance_probabilities``) or ``tuning_config`` is
+                configured on the estimator — their state is per-dataset and
                 cannot be applied correctly across a shared batch. Score those
                 datasets individually with ``predict_proba``. Also raised for
                 ``inference_precision=torch.float64``, which the fused forward
@@ -1118,10 +1256,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # estimator but their fitted state (thresholds, class counts, calibrated
         # temperature) is per-dataset; applying the last dataset's state across the
         # whole batch would be wrong, so they are not supported here.
-        if self.balance_probabilities:
+        if self.balance_probabilities or self._prediction_scaling_may_apply():
             raise NotImplementedError(
-                "predict_proba_batched does not support balance_probabilities=True; "
-                "score datasets individually with predict_proba."
+                "predict_proba_batched does not support prediction_scaling "
+                f"({self.prediction_scaling!r}) or balance_probabilities=True; the "
+                "class weights are fitted per dataset. Score datasets individually "
+                "with predict_proba, or pass prediction_scaling='none'."
             )
         if self.tuning_config is not None:
             raise NotImplementedError(
@@ -1322,6 +1462,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_train=y,
             task_type=self.estimator_type,
         )
+        requested_scaling = PredictionScalingMode(self.prediction_scaling)
+        if requested_scaling == PredictionScalingMode.HOLDOUT:
+            raise ValueError(
+                "prediction_scaling='holdout' is not supported with "
+                "differentiable_input=True; use 'auto', 'none', 'balanced', or "
+                "'sampler'."
+            )
+        self._resolve_prediction_scaling(y_encoded=y.detach().cpu().float().numpy())
 
         self.executor_ = InferenceEngineCachePreprocessing(
             X_train=X,
@@ -1355,10 +1503,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # `softmax_temperature_` is already resolved by `_initialize_model_variables`.
         self.tuned_classification_thresholds_ = None
 
-        tuning_config_resolved = resolve_tuning_config(
-            tuning_config=self.tuning_config,
-            num_samples=X.shape[0],
-            config_cls=ClassifierTuningConfig,
+        needs_holdout_scaling = self._needs_holdout_prediction_scaling()
+        tuning_config_resolved = self._resolve_tuning_config_for_fit(
+            num_samples=X.shape[0], force_holdout=needs_holdout_scaling
         )
         if tuning_config_resolved is None:
             if self.eval_metric_ is ClassifierEvalMetrics.F1:
@@ -1429,6 +1576,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # whatever the checkpoint declared.
             self.softmax_temperature_ = calibrated_softmax_temperature
 
+        if needs_holdout_scaling:
+            self._fit_holdout_prediction_scaling(holdout_raw_logits, holdout_y_true)
+
         if tuning_config_resolved.tune_decision_thresholds:
             holdout_probas = (
                 self.logits_to_probabilities(holdout_raw_logits)
@@ -1444,6 +1594,50 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 n_classes=self.n_classes_,
             )
             self.tuned_classification_thresholds_ = tuned_classification_thresholds
+
+    def _resolve_tuning_config_for_fit(
+        self, *, num_samples: int, force_holdout: bool
+    ) -> TuningConfig | None:
+        """Resolve `tuning_config`, creating a default one when a holdout is
+        needed for `prediction_scaling="holdout"` but no tuning was requested.
+        """
+        resolved = resolve_tuning_config(
+            tuning_config=self.tuning_config,
+            num_samples=num_samples,
+            config_cls=ClassifierTuningConfig,
+        )
+        if resolved is None and force_holdout:
+            resolved = ClassifierTuningConfig().resolve(num_samples=num_samples)
+        return resolved
+
+    def _needs_holdout_prediction_scaling(self) -> bool:
+        return (
+            getattr(self, "prediction_scaling_", None) == PredictionScalingMode.HOLDOUT
+        )
+
+    def _fit_holdout_prediction_scaling(
+        self,
+        holdout_raw_logits: np.ndarray,
+        holdout_y_true: np.ndarray,
+    ) -> None:
+        """Fit `prediction_scaling_weights_` so the mean predicted probability per
+        class on the holdout rows matches the holdout class frequency.
+
+        Runs after temperature calibration, so the weights are fitted on the
+        probabilities that will actually be produced at predict time.
+        """
+        holdout_probas = (
+            self.logits_to_probabilities(holdout_raw_logits)
+            .float()
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        self.prediction_scaling_weights_ = fit_holdout_class_weights(
+            holdout_probas=holdout_probas,
+            holdout_y_true=holdout_y_true,
+            n_classes=self.n_classes_,
+        )
 
     def _compute_holdout_validation_data(
         self,
@@ -1654,7 +1848,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     raw_logits=raw_logits,
                     softmax_temperature=softmax_temperature,
                     average_before_softmax=self.average_before_softmax,
-                    balance_probabilities=self.balance_probabilities,
                 )
                 .float()
                 .detach()
@@ -1706,11 +1899,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return torch.nn.functional.softmax(logits, dim=-1)
 
     def _apply_balancing(self, probas: torch.Tensor) -> torch.Tensor:
-        """Applies class balancing to a probability tensor."""
+        """Applies class balancing by training class counts to a probability tensor."""
         counts = getattr(self, "class_counts_", None)
         if counts is None:
             return probas
         return balance_probas_by_class_counts(probas, counts)
+
+    def _apply_prediction_scaling(self, probas: torch.Tensor) -> torch.Tensor:
+        """Applies the fitted `prediction_scaling_weights_` to a probability tensor."""
+        weights = getattr(self, "prediction_scaling_weights_", None)
+        if weights is None:
+            return probas
+        return apply_class_weights(probas, weights)
 
     def logits_to_probabilities(
         self,
@@ -1729,6 +1929,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             softmax_temperature: Optional override for temperature scaling.
             average_before_softmax: Optional override for averaging order.
             balance_probabilities: Optional override for probability balancing.
+                When `None`, the fitted `prediction_scaling_weights_` are applied,
+                which already cover a `"balanced"` prediction scaling. Passing
+                `True` forces plain balancing by training class counts and
+                skips the fitted weights; `False` skips both.
 
         Returns:
             Probabilities with shape (n_samples, n_classes).
@@ -1748,11 +1952,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             if average_before_softmax is None
             else average_before_softmax
         )
-        use_balance = (
-            self.balance_probabilities
-            if balance_probabilities is None
-            else balance_probabilities
-        )
+        use_fitted_weights = balance_probabilities is None
+        use_balance = bool(balance_probabilities)
 
         steps: list[Callable[[torch.Tensor], torch.Tensor]] = []
 
@@ -1777,7 +1978,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Expected logits with 2 or more dims, got {raw_logits.ndim}"
             )
 
-        if use_balance:
+        if use_fitted_weights:
+            steps.append(self._apply_prediction_scaling)
+        elif use_balance:
             steps.append(self._apply_balancing)
 
         output = raw_logits

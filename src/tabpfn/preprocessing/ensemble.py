@@ -245,6 +245,7 @@ class TabPFNEnsemblePreprocessor:
                 task_type=task_type,
             )
 
+        self.sample_subsampling_method_ = resolved_sample_subsampling_method
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
             num_estimators=len(self.configs),
@@ -253,6 +254,19 @@ class TabPFNEnsemblePreprocessor:
             method=resolved_sample_subsampling_method,
             y=y_train,
             task_type=task_type,
+        )
+
+    @property
+    def sampler_shifted_prior(self) -> bool:
+        """True when row subsampling changed the target prior of every context.
+
+        Only ``majority_downsample`` does this by design; ``balanced`` and
+        ``stratified`` preserve the training proportions in expectation.
+        """
+        return (
+            self.subsample_row_indices is not None
+            and self.sample_subsampling_method_
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
         )
 
     def any_estimator_uses_gpu_svd(self) -> bool:

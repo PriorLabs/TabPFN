@@ -75,6 +75,14 @@ from tabpfn.model_loading import (
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
+from tabpfn.prediction_scaling import (
+    PredictionScaling,
+    PredictionScalingMode,
+    fit_holdout_level_scaling,
+    majority_value_shares,
+    resolve_prediction_scaling,
+    sampler_bucket_log_weights,
+)
 from tabpfn.preprocessing import (
     EnsembleConfig,
     FeatureSubsamplingMethod,
@@ -284,6 +292,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float | Literal["auto"] = "auto",
         average_before_softmax: bool = False,
+        prediction_scaling: PredictionScaling = "auto",
         model_path: str
         | Path
         | list[str]
@@ -389,6 +398,32 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   softmax.
                 - If `False`, the softmax function is applied to each set of logits.
                   Then, we average the resulting probabilities of each forward pass.
+
+            prediction_scaling:
+                Post-processing that rescales the predicted target distribution
+                toward the training data, as opposed to `softmax_temperature`, which
+                changes its spread.
+
+                - `"none"`: no rescaling.
+                - `"sampler"`: undo the label shift introduced by
+                  `SAMPLE_SUBSAMPLING_METHOD="majority_downsample"`, which
+                  over-represents the rare target values in every context. The
+                  probability mass of the bucket holding the most frequent target
+                  value is reweighted by its training share over its context share,
+                  every other bucket by the ratio of the complements. Exact under the
+                  label-shift assumption and free; a no-op when the sampler did not
+                  change the prior.
+                - `"holdout"`: fit an affine map of the predicted distribution on
+                  held-out rows so the mean prediction matches the held-out target
+                  mean. Multiplicative when both means are positive, additive
+                  otherwise. Costs one extra fit per tuning fold; shares the holdout
+                  with `tuning_config` when that is set. Not available with
+                  `differentiable_input=True`.
+                - `"auto"` (default): `"sampler"` when row subsampling shifted the
+                  prior, otherwise `"none"`. Existing behavior is unchanged for every
+                  configuration that does not use `"majority_downsample"`.
+
+                `"balanced"` is a classification-only mode and is rejected here.
 
             model_path:
                 The path to the TabPFN model file, i.e., the pre-trained weights.
@@ -585,6 +620,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
+        self.prediction_scaling = prediction_scaling
         self.model_path = model_path
         self.device = device
         self.ignore_pretraining_limits = ignore_pretraining_limits
@@ -698,6 +734,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         return self.models_[0]
 
+    prediction_scaling_: PredictionScalingMode
+    """The prediction scaling mode in effect after resolving `"auto"`."""
+
+    prediction_scaling_log_weights_: torch.Tensor | None
+    """Per-bucket log weights added to the aggregated log-probabilities for the
+    `"sampler"` mode, or `None`."""
+
+    prediction_scaling_affine_: tuple[float, float]
+    """`(scale, shift)` applied to the raw-space borders for the `"holdout"` mode;
+    `(1.0, 0.0)` otherwise."""
+
     @property
     def norm_bardist_(self) -> FullSupportBarDistribution:
         """WARNING: DEPRECATED. Please use `raw_space_bardist_` instead.
@@ -787,9 +834,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ``y_train_std_`` must already be set as Python floats.
         """
         borders = self.znorm_space_bardist_.borders.detach()
-        self.raw_space_bardist_ = FullSupportBarDistribution(
-            borders * self.y_train_std_ + self.y_train_mean_,
-        ).float()
+        raw_borders = borders * self.y_train_std_ + self.y_train_mean_
+        # The holdout prediction scaling is an affine map of the target axis.
+        scale, shift = getattr(self, "prediction_scaling_affine_", (1.0, 0.0))
+        if (scale, shift) != (1.0, 0.0):
+            raw_borders = raw_borders * scale + shift
+        self.raw_space_bardist_ = FullSupportBarDistribution(raw_borders).float()
 
     def _build_ensemble_preprocessor_and_executor(
         self,
@@ -1044,12 +1094,67 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Fit on the already-expanded array, where a declared column may
             # have moved down past an expanded date or text column.
             "categorical_features_indices": self.categorical_features_indices_,
+            # Holdout rows are scored without rescaling: the holdout mode learns
+            # the whole correction from them.
+            "prediction_scaling": "none",
         }
 
         params.update(forced)
         params.update(overwrite_kwargs)
 
         return TabPFNRegressor(**params)
+
+    def _reset_prediction_scaling(self) -> None:
+        """Set the prediction scaling attributes to their no-op values."""
+        self.prediction_scaling_ = PredictionScalingMode.NONE
+        self.prediction_scaling_log_weights_ = None
+        self.prediction_scaling_affine_ = (1.0, 0.0)
+
+    def _resolve_prediction_scaling(self, *, y_raw: np.ndarray) -> None:
+        """Resolve `prediction_scaling` and compute the sampler bucket weights.
+
+        Requires `ensemble_preprocessor_` and `raw_space_bardist_`. The holdout
+        mode's affine map is fitted earlier, in
+        `_maybe_calibrate_ensemble_temperature`, because it has to be in place
+        before the raw-space borders are built.
+        """
+        shifted = self.ensemble_preprocessor_.sampler_shifted_prior
+        self.prediction_scaling_ = resolve_prediction_scaling(
+            self.prediction_scaling,
+            task_type="regressor",
+            sampler_shifted_prior=shifted,
+        )
+        if self.prediction_scaling_ == PredictionScalingMode.SAMPLER and shifted:
+            value, train_share, context_share = majority_value_shares(
+                y_raw, self.ensemble_preprocessor_.subsample_row_indices
+            )
+            self.prediction_scaling_log_weights_ = sampler_bucket_log_weights(
+                self.raw_space_bardist_,
+                majority_value=value,
+                train_share=train_share,
+                context_share=context_share,
+            )
+        else:
+            self.prediction_scaling_log_weights_ = None
+
+    def _prediction_scaling_may_apply(self) -> bool:
+        """Whether `prediction_scaling` can change predictions for this config.
+
+        `"auto"` and `"sampler"` only act when the row sampler shifts the prior,
+        so they stay usable in batched prediction unless that sampler is
+        configured.
+        """
+        mode = PredictionScalingMode(self.prediction_scaling)
+        if mode == PredictionScalingMode.NONE:
+            return False
+        if mode in (PredictionScalingMode.BALANCED, PredictionScalingMode.HOLDOUT):
+            return True
+        config = self.get_inference_config()
+        return (
+            config.SUBSAMPLE_SAMPLES is not None
+            and SampleSubsamplingMethod(config.SAMPLE_SUBSAMPLING_METHOD)
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+        )
 
     def fit_from_preprocessed(
         self,
@@ -1200,6 +1305,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.y_train_mean_ = y_mean.detach().item()
         self.y_train_std_ = y_std.detach().item()
         y = (y_float - y_mean) / y_std
+        if (
+            PredictionScalingMode(self.prediction_scaling)
+            == PredictionScalingMode.HOLDOUT
+        ):
+            raise ValueError(
+                "prediction_scaling='holdout' is not supported with "
+                "differentiable_input=True; use 'auto', 'none', or 'sampler'."
+            )
+        self._reset_prediction_scaling()
         self._rebuild_raw_space_bardist()
 
         # Force sequential preprocessing: with differentiable input X carries
@@ -1214,6 +1328,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_preprocessing_jobs=1,
             inference_mode=False,
         )
+        self._resolve_prediction_scaling(y_raw=y.detach().cpu().float().numpy())
 
         return self
 
@@ -1234,6 +1349,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # that the constant-target fit, which returns before calibration, still
         # exposes the attribute.
         self.ensemble_softmax_temperature_ = 1.0
+        self._reset_prediction_scaling()
 
         if self.differentiable_input:
             raise ValueError(
@@ -1284,6 +1400,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # tuning regressor derives its own mean/std from its own training split.
         self._maybe_calibrate_ensemble_temperature(X=X, y=y)
 
+        y_raw = np.asarray(y, dtype=np.float64)
         mean, std = np.mean(y), np.std(y)
         # TODO: y_train_std_ and y_train_mean_ don't seem to be used anywhere else.
         self.y_train_std_ = std.item() + 1e-20
@@ -1301,6 +1418,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # TODO: Standard fit usually uses inference_mode=True, before it was enabled
             inference_mode=True,
         )
+        self._resolve_prediction_scaling(y_raw=y_raw)
 
         return self
 
@@ -1471,10 +1589,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_samples=X.shape[0],
             config_cls=RegressorTuningConfig,
         )
+        needs_holdout_scaling = (
+            PredictionScalingMode(self.prediction_scaling)
+            == PredictionScalingMode.HOLDOUT
+        )
+        if tuning_config_resolved is None and needs_holdout_scaling:
+            # The holdout scaling mode needs held-out predictions even when no
+            # tuning was requested; use the tuning defaults for the split.
+            tuning_config_resolved = RegressorTuningConfig().resolve(
+                num_samples=X.shape[0]
+            )
         if tuning_config_resolved is None:
             return
 
-        if not tuning_config_resolved.calibrate_temperature:
+        calibrate = tuning_config_resolved.calibrate_temperature
+        if not calibrate and not needs_holdout_scaling:
             return
 
         holdout_folds = self._compute_holdout_validation_data(
@@ -1484,12 +1613,47 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_folds=int(tuning_config_resolved.tuning_n_folds),
         )
 
-        # Falls back to the current no-op temperature if every fold was
-        # dropped, e.g. because each training split had a constant target.
-        self.ensemble_softmax_temperature_ = find_regression_optimal_temperature(
-            holdout_folds=holdout_folds,
-            metric_name=self.eval_metric_,
-            current_default_temperature=self.ensemble_softmax_temperature_,
+        if calibrate:
+            # Falls back to the current no-op temperature if every fold was
+            # dropped, e.g. because each training split had a constant target.
+            self.ensemble_softmax_temperature_ = find_regression_optimal_temperature(
+                holdout_folds=holdout_folds,
+                metric_name=self.eval_metric_,
+                current_default_temperature=self.ensemble_softmax_temperature_,
+            )
+
+        if needs_holdout_scaling:
+            self._fit_holdout_prediction_scaling(holdout_folds)
+
+    def _fit_holdout_prediction_scaling(
+        self,
+        holdout_folds: list[
+            tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]
+        ],
+    ) -> None:
+        """Fit `prediction_scaling_affine_` so the mean prediction on the holdout
+        rows matches the holdout target mean.
+
+        Uses the calibrated ensemble temperature, so the level is fitted on the
+        distribution that will actually be produced at predict time. Leaves the
+        no-op map in place when no fold was usable.
+        """
+        temperature = self.ensemble_softmax_temperature_
+        pred_means: list[np.ndarray] = []
+        y_true: list[np.ndarray] = []
+        with torch.no_grad():
+            for logits, raw_space_bardist, y_holdout in holdout_folds:
+                if logits.shape[0] == 0:
+                    continue
+                pred_means.append(
+                    raw_space_bardist.mean(logits / temperature).float().cpu().numpy()
+                )
+                y_true.append(y_holdout.float().cpu().numpy())
+        if not pred_means:
+            return
+        self.prediction_scaling_affine_ = fit_holdout_level_scaling(
+            holdout_pred_mean=np.concatenate(pred_means),
+            holdout_y_true=np.concatenate(y_true),
         )
 
     def _compute_holdout_validation_data(
@@ -1681,7 +1845,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         temperature = getattr(self, "ensemble_softmax_temperature_", 1.0)
         if temperature != 1.0:
             logits = logits / temperature
-
+        # The sampler prediction scaling reweights buckets; the bar distribution's
+        # log_softmax renormalizes afterwards.
+        log_weights = getattr(self, "prediction_scaling_log_weights_", None)
+        if log_weights is not None:
+            logits = logits + log_weights.to(device=logits.device, dtype=logits.dtype)
         return logits
 
     def predict_batched(  # noqa: C901, PLR0912
@@ -1753,6 +1921,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # dataset's own holdout, so there is no single temperature to apply to a
         # shared batch. Mirrors the same guard in
         # `TabPFNClassifier.predict_proba_batched`.
+        if self._prediction_scaling_may_apply():
+            raise NotImplementedError(
+                "predict_batched does not support prediction_scaling "
+                f"({self.prediction_scaling!r}); the correction is fitted per "
+                "dataset. Score datasets individually with predict, or pass "
+                "prediction_scaling='none'."
+            )
         if self.tuning_config is not None:
             raise NotImplementedError(
                 "predict_batched does not support tuning_config (ensemble "
