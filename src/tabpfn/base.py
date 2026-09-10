@@ -445,33 +445,23 @@ def resolve_categorical_features_indices(
     return sorted(declared) if declared else None
 
 
-def expand_images_dates_and_text(
+def expand_images(
     X: XType,
     *,
     image_features_indices: Sequence[int] | None,
     categorical_features_indices: Sequence[int] | None,
     inference_config: InferenceConfig,
     device: torch.device,
-) -> tuple[
-    XType,
-    ImageTransformer,
-    DateTransformer,
-    TextTransformer,
-    list[str] | None,
-    list[int] | None,
-]:
-    """Expand the image, datetime and text columns of a fit input, before validation.
+) -> tuple[XType, ImageTransformer, list[int] | None]:
+    """Expand the declared image columns of a fit input, before validation.
 
-    Images go first: their columns are declared by position in the caller's frame,
-    so nothing may move before they are read. An expanded column is dropped and its
-    features appended, so every column after it moves down. The returned labels and
-    categorical positions describe the returned input, so no caller needs to know
-    which transformer ran last.
+    Runs first: image columns are declared by position in the caller's frame, so
+    nothing may move before they are read. An expanded column is dropped and its
+    features appended, so every column after it moves down.
 
     Returns:
-        The expanded input, the three fitted transformers, the expanded input's
-        column labels (`None` when `X` is not a `DataFrame`), and the declared
-        categorical positions in it (`None` when none were declared).
+        The expanded input, the fitted transformer, and the declared categorical
+        positions in the expanded input (`None` when none were declared).
     """
     validate_image_features_indices(image_features_indices)
     image_transformer = ImageTransformer(
@@ -484,27 +474,57 @@ def expand_images_dates_and_text(
     )
     X = image_transformer.fit_transform(X)
     categorical_indices = image_transformer.output_indices(categorical_features_indices)
+    return X, image_transformer, categorical_indices
+
+
+def expand_dates(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+    inference_config: InferenceConfig,
+) -> tuple[XType, DateTransformer, list[int] | None]:
+    """Expand the datetime columns of a fit input, before validation.
+
+    An expanded column is dropped and its features appended, so every column
+    after it moves down.
+
+    Returns:
+        The expanded input, the fitted transformer, and the declared categorical
+        positions in the expanded input (`None` when none were declared).
+    """
     date_transformer = DateTransformer(
-        categorical_indices=categorical_indices,
+        categorical_indices=categorical_features_indices,
         transform_dates=inference_config.TRANSFORM_DATES,
     )
     X = date_transformer.fit_transform(X)
-    categorical_indices = date_transformer.output_indices(categorical_indices)
+    categorical_indices = date_transformer.output_indices(categorical_features_indices)
+    return X, date_transformer, categorical_indices
+
+
+def expand_text(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+    inference_config: InferenceConfig,
+) -> tuple[XType, TextTransformer, list[int] | None]:
+    """Expand the text columns of a fit input, before validation.
+
+    An expanded column is dropped and its features appended, so every column
+    after it moves down.
+
+    Returns:
+        The expanded input, the fitted transformer, and the declared categorical
+        positions in the expanded input (`None` when none were declared).
+    """
     text_transformer = TextTransformer(
-        categorical_indices=categorical_indices,
+        categorical_indices=categorical_features_indices,
         transform_text=inference_config.TRANSFORM_TEXT,
         min_cardinality_for_text=inference_config.MIN_CARDINALITY_FOR_TEXT,
         n_components=inference_config.TEXT_N_COMPONENTS,
     )
     X = text_transformer.fit_transform(X)
-    return (
-        X,
-        image_transformer,
-        date_transformer,
-        text_transformer,
-        text_transformer.feature_names_out_,
-        text_transformer.output_indices(categorical_indices),
-    )
+    categorical_indices = text_transformer.output_indices(categorical_features_indices)
+    return X, text_transformer, categorical_indices
 
 
 def reject_categoricals_for_differentiable_input(

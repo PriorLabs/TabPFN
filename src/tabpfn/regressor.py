@@ -45,7 +45,9 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     estimator_to_device,
-    expand_images_dates_and_text,
+    expand_dates,
+    expand_images,
+    expand_text,
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
@@ -961,20 +963,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
         )
-        (
-            X,
-            image_transformer,
-            date_transformer,
-            text_transformer,
-            feature_names,
-            categorical_indices,
-        ) = expand_images_dates_and_text(
+        X, image_transformer, categorical_indices = expand_images(
             X,
             image_features_indices=self.image_features_indices,
             categorical_features_indices=categorical_indices,
             inference_config=self.inference_config_,
             device=self.devices_[0],
         )
+        X, date_transformer, categorical_indices = expand_dates(
+            X,
+            categorical_features_indices=categorical_indices,
+            inference_config=self.inference_config_,
+        )
+        X, text_transformer, categorical_indices = expand_text(
+            X,
+            categorical_features_indices=categorical_indices,
+            inference_config=self.inference_config_,
+        )
+        feature_names = text_transformer.feature_names_out_
 
         X, y, _ = ensure_compatible_fit_inputs(
             X,
