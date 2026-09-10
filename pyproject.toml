@@ -52,6 +52,8 @@ license = { file = "LICENSE" }
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
+# Image columns: the DINOv3 encoder ships with a torchvision-backed image processor only.
+image = ["transformers>=4.57", "torchvision", "pillow"]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
@@ -343,6 +345,9 @@ module = [
   "kditransform.*",
   "lightgbm.*",
   "skrub.*",
+  "transformers.*",
+  "torchvision.*",
+  "PIL.*",
 ]
 ignore_missing_imports = true
 
