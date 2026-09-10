@@ -117,6 +117,28 @@ def validate_categorical_features_indices(indices: Sequence[int] | None) -> None
             )
 
 
+def validate_image_features_indices(indices: Sequence[int] | None) -> None:
+    """Check that `image_features_indices` holds non-negative integer positions.
+
+    Every consumer works positionally, so a column label in the list would be
+    ignored at best and crash the index arithmetic at worst.
+
+    Raises:
+        TabPFNValidationError: On an entry that is not a non-negative integer.
+    """
+    for entry in indices or ():
+        if (
+            not isinstance(entry, numbers.Integral)
+            or isinstance(entry, bool)
+            or entry < 0
+        ):
+            raise TabPFNValidationError(
+                "`image_features_indices` must hold non-negative integer column "
+                f"positions, got {entry!r} ({type(entry).__name__}). Pass the "
+                "position of each image column, not its label."
+            )
+
+
 def ensure_compatible_fit_inputs(
     X: XType,
     y: YType,
