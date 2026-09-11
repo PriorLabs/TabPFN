@@ -355,8 +355,8 @@ def _align_columns_to_fitted_dtypes(
     as that fit-time dtype at predict. Two mismatches are handled:
 
     * string at fit, numeric at predict -> the column is cast to ``string``. Otherwise
-      sklearn's ``_check_unknown`` takes its numeric branch and compares float values
-      against the string ``categories_``, raising a ``TypeError``.
+      the float values are looked up against the string ``categories_`` and none of
+      them matches.
     * numeric at fit, string at predict -> the column is cast to numeric via
       ``pd.to_numeric(..., errors="coerce")``. Numeric-looking strings match their fit
       category; non-numeric strings become ``NaN`` (treated as missing).
