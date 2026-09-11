@@ -162,7 +162,9 @@ def _detect_feature_modality(
         min_cardinality_for_text=min_cardinality_for_text,
     )
     n_unique = 0
-    if len(s) > _EARLY_EXIT_PREFIX_ROWS:
+    # The prefix pass only pays off when it can save most of a long column; a column
+    # not much longer than the prefix is counted once, in full.
+    if len(s) > 2 * _EARLY_EXIT_PREFIX_ROWS:
         n_unique = _get_unique_with_sklearn_compatible_error(
             s.iloc[:_EARLY_EXIT_PREFIX_ROWS]
         )
@@ -307,7 +309,8 @@ def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if pd.api.types.infer_dtype(s, skipna=True) in _INFERRED_NUMERIC_KINDS:
         return True
     if PANDAS_BELOW_3:
-        return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
+        # Over a list rather than the Series: iterating a Series is the slow part.
+        return all(map(_is_numeric_or_missing_for_old_pandas, s.tolist()))
     # The generator above stops at the first non-numeric value; `pd.to_numeric`
     # coerces the whole column first, so reject on a prefix instead: one
     # non-numeric value anywhere settles the answer, so a prefix that already
