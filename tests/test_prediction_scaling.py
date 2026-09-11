@@ -418,6 +418,24 @@ def test__regressor__holdout_mode_fits_affine_map_and_rescales_borders():
     assert abs(reg.predict(X).mean() - y.mean()) < abs(raw.predict(X).mean() - y.mean())
 
 
+def test__regressor__differentiable_input_applies_sampler_scaling_in_raw_units():
+    """The differentiable path z-normalizes `y` before fitting; the sampler weights
+    must still locate the spike on the raw-space borders and match `fit()`.
+    """
+    X, y = _zero_inflated_regression()
+    reference = _downsampling_regressor().fit(X, y)
+    reg = _downsampling_regressor(differentiable_input=True)
+    reg.fit_with_differentiable_input(
+        torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+    )
+    assert reg.prediction_scaling_ == PredictionScalingMode.SAMPLER
+    assert reg.prediction_scaling_log_weights_ is not None
+    spike = int(reg.raw_space_bardist_.map_to_bucket_idx(torch.tensor([0.0])).item())
+    log_w = reg.prediction_scaling_log_weights_
+    assert log_w.argmax().item() == spike
+    torch.testing.assert_close(log_w, reference.prediction_scaling_log_weights_)
+
+
 def test__regressor__holdout_rejected_with_differentiable_input():
     X, y = _zero_inflated_regression()
     reg = TabPFNRegressor(

@@ -1328,7 +1328,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_preprocessing_jobs=1,
             inference_mode=False,
         )
-        self._resolve_prediction_scaling(y_raw=y.detach().cpu().float().numpy())
+        # `y` is z-normalized by now; the sampler weights locate the majority
+        # value on the raw-space borders, so they need the original target.
+        self._resolve_prediction_scaling(y_raw=y_float.detach().cpu().float().numpy())
 
         return self
 
