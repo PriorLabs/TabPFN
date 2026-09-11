@@ -219,12 +219,20 @@ def test__classifier__auto_is_none_without_prior_shift():
     assert clf.prediction_scaling_weights_ is None
 
 
-def test__classifier__predictions_are_batch_independent():
+def test__classifier__scaling_is_a_fixed_per_row_function():
+    """The weights are fitted once and applied row by row, so the scaled output
+    equals the unscaled output with the fitted weights applied. This is what makes
+    the correction independent of the batch being predicted; the forward pass
+    itself is not bit-identical across batch sizes on every platform, so the two
+    are compared within one batch.
+    """
     X, y = _imbalanced_classification()
-    clf = _downsampling_classifier().fit(X, y)
-    full = clf.predict_proba(X[:20])
-    single = clf.predict_proba(X[:1])
-    np.testing.assert_allclose(single, full[:1], atol=1e-6)
+    scaled = _downsampling_classifier().fit(X, y)
+    raw = _downsampling_classifier(prediction_scaling="none").fit(X, y)
+    expected = apply_class_weights(
+        torch.tensor(raw.predict_proba(X[:20])), scaled.prediction_scaling_weights_
+    ).numpy()
+    np.testing.assert_allclose(scaled.predict_proba(X[:20]), expected, atol=1e-6)
 
 
 def test__classifier__balance_probabilities_is_deprecated_alias():
@@ -386,10 +394,24 @@ def test__regressor__auto_is_none_without_prior_shift():
     assert reg.prediction_scaling_log_weights_ is None
 
 
-def test__regressor__predictions_are_batch_independent():
+def test__regressor__scaling_is_a_fixed_per_row_function():
+    """The bucket log weights are fitted once and added row by row: within one
+    batch the scaled aggregated logits are the unscaled ones plus the weights.
+    See the classifier counterpart for why this is compared within a batch.
+    """
     X, y = _zero_inflated_regression()
-    reg = _downsampling_regressor().fit(X, y)
-    np.testing.assert_allclose(reg.predict(X[:1]), reg.predict(X[:20])[:1], atol=1e-5)
+    scaled = _downsampling_regressor().fit(X, y)
+    raw = _downsampling_regressor(prediction_scaling="none").fit(X, y)
+    scaled_logits = scaled.predict(X[:20], output_type="full")["logits"]
+    raw_logits = raw.predict(X[:20], output_type="full")["logits"]
+    # Buckets with no mass carry -inf in both tensors; compare the finite ones.
+    finite = torch.isfinite(raw_logits) & torch.isfinite(scaled_logits)
+    assert finite.float().mean() > 0.9
+    delta = (scaled_logits - raw_logits).cpu()
+    expected = scaled.prediction_scaling_log_weights_.to(delta.dtype).expand_as(delta)
+    torch.testing.assert_close(
+        delta[finite.cpu()], expected[finite.cpu()], atol=1e-5, rtol=1e-5
+    )
 
 
 def test__regressor__balanced_rejected():
