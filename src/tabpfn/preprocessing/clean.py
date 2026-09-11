@@ -248,21 +248,7 @@ def fix_dtypes(  # noqa: D103
         # This will help us get better dtype inference later
         convert_dtype = True
     elif isinstance(X, np.ndarray):
-        if X.dtype.kind in NUMERIC_DTYPE_KINDS:
-            # It's a numeric type, just wrap the array in pandas with the correct dtype
-            X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
-            convert_dtype = False
-        elif X.dtype.kind in OBJECT_OR_STRING_DTYPE_KINDS:
-            # For an object or string array we rely on pandas to introspect the
-            # cells and determine each column's dtype.
-            X = pd.DataFrame(X, copy=True)
-            convert_dtype = True
-        elif X.dtype.kind in BYTES_DTYPE_KINDS:
-            raise ValueError(
-                f"Byte string dtypes are not supported. Got dtype: {X.dtype}",
-            )
-        else:
-            raise ValueError(f"Invalid dtype for X: {X.dtype}")
+        X, convert_dtype, cat_indices = _frame_from_array(X, cat_indices, numeric_dtype)
     else:
         raise ValueError(f"Invalid type for X: {type(X)}")
 
@@ -321,6 +307,46 @@ def fix_dtypes(  # noqa: D103
     ):
         X = _cast_columns(X, numerical_columns, numeric_dtype)
     return X
+
+
+def _frame_from_array(
+    X: np.ndarray,
+    cat_indices: Sequence[int | str] | None,
+    numeric_dtype: Literal["float32", "float64"],
+) -> tuple[pd.DataFrame, bool, Sequence[int | str] | None]:
+    """`X` as a frame, whether its dtypes still need inferring, and the categorical
+    columns still to be cast (None once the frame already holds them as category).
+    """
+    if X.dtype.kind in NUMERIC_DTYPE_KINDS:
+        # It's a numeric type, just wrap the array in pandas with the correct dtype
+        return pd.DataFrame(X, copy=False, dtype=numeric_dtype), False, cat_indices
+    if X.dtype.kind in OBJECT_OR_STRING_DTYPE_KINDS:
+        # For an object or string array we rely on pandas to introspect the cells and
+        # determine each column's dtype.
+        if cat_indices is not None and all(
+            isinstance(i, (int, np.integer)) for i in cat_indices
+        ):
+            return _frame_with_categoricals(X, cat_indices), True, None
+        return pd.DataFrame(X, copy=True), True, cat_indices
+    if X.dtype.kind in BYTES_DTYPE_KINDS:
+        raise ValueError(f"Byte string dtypes are not supported. Got dtype: {X.dtype}")
+    raise ValueError(f"Invalid dtype for X: {X.dtype}")
+
+
+def _frame_with_categoricals(
+    X: np.ndarray, cat_indices: Sequence[int | np.integer]
+) -> pd.DataFrame:
+    """`pd.DataFrame(X, copy=True)` with the columns at `cat_indices` cast to category.
+
+    Each column is built once, which is cheaper than casting them inside the frame
+    afterwards, where every column goes through the block manager on its own.
+    """
+    categorical = {int(i) for i in cat_indices}
+    columns = {
+        i: pd.Categorical(X[:, i]) if i in categorical else X[:, i].copy()
+        for i in range(X.shape[1])
+    }
+    return pd.DataFrame(columns, columns=pd.RangeIndex(X.shape[1]), copy=False)
 
 
 def _column_kind(dtype: Any) -> str:
