@@ -303,6 +303,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         memory_saving_mode: MemorySavingMode = "auto",
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+        kv_cache_at_predict: bool = False,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -504,7 +505,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 memory but gives lower latency. If False, the cache is stored on CPU.
 
             kv_cache_precision:
-                Only relevant when `fit_mode="fit_with_cache"`. Resolved against
+                Only relevant when `fit_mode="fit_with_cache"` or
+                `kv_cache_at_predict=True`. Resolved against
                 what the model architecture supports. `None` (default) picks the
                 architecture default (`"int8"` when it can quantize, e.g. TabPFN-3,
                 else `"auto"`); `"int8"` quantizes the key-value cache to save
@@ -513,6 +515,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 `"auto"` keeps the computed dtype. Requesting a
                 quantized precision on an architecture that cannot quantize
                 warns and falls back to `"auto"`.
+
+            kv_cache_at_predict:
+                Only relevant when `fit_mode="low_memory"` or
+                `fit_mode="fit_preprocessors"`. If True, every `.predict()` builds
+                each ensemble member's transformer key-value cache from the
+                training data, runs the test rows through it in chunks of
+                `TABPFN_MAX_BATCHED_TEST_ROWS` rows and drops the cache again.
+                Peak device memory is then that of the training data plus one
+                chunk of test rows, instead of the training data plus all test
+                rows at once; total predict time is unchanged. Unlike
+                `fit_mode="fit_with_cache"`, nothing is kept between calls, so
+                the fitted model stays as small as in the chosen `fit_mode`.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
@@ -601,6 +615,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.keep_cache_on_device = keep_cache_on_device
         self.kv_cache_precision = kv_cache_precision
+        self.kv_cache_at_predict = kv_cache_at_predict
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -848,6 +863,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             task_type="regression",
             keep_cache_on_device=self.keep_cache_on_device,
             kv_cache_precision=self.kv_cache_precision,
+            kv_cache_at_predict=self.kv_cache_at_predict,
             inference_mode=inference_mode,
         )
 
