@@ -65,9 +65,10 @@ class TabPFNSettings(BaseSettings):
         default=32768,
         ge=0,
         description="Maximum number of test rows fed through the model in a single "
-        "forward pass during cached ('fit_with_cache') inference. Larger test sets "
-        "are chunked. Performance is close to optimal at the default of 32768. "
-        "Set to 0 to disable chunking.",
+        "forward pass during key-value-cached inference (fit_mode='fit_with_cache' "
+        "or kv_cache_at_predict=True). Larger test sets are chunked. Performance "
+        "is close to optimal at the default of 32768. Set to 0 to disable "
+        "chunking.",
     )
 
     def model_post_init(self, _: Any) -> None:
