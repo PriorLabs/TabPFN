@@ -624,10 +624,40 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             model.to(device)
 
 
-#: Ensemble members stacked into one forward pass: at most this many members ...
-_MAX_BATCHED_MEMBERS = 32
-#: ... and at most this many input elements (rows x features) per member.
-_MAX_BATCHED_ELEMENTS = 4_000_000
+#: Ensemble members are stacked into one forward pass only for tables of at most
+#: this many rows (training plus test); longer tables are compute-bound already and
+#: batching them costs time and memory.
+_MAX_BATCHED_ROWS = 8_000
+#: At most this many members per batched forward ...
+_MAX_BATCHED_MEMBERS = 8
+#: ... at most this many input elements (rows x features) per batch ...
+_MAX_BATCHED_ELEMENTS = 8_000_000
+#: ... and no more than fit into this peak device memory, by the estimate below.
+_BATCHED_PEAK_MEMORY_BYTES = 20 * 2**30
+#: Peak activation bytes per input element of one member, an upper bound measured on
+#: the largest current architecture for tables up to 2,500 rows; longer tables need
+#: less per element, scaled by the square root of the row ratio.
+_ACTIVATION_BYTES_PER_ELEMENT = 4_300
+_ACTIVATION_SATURATION_ROWS = 2_500
+
+
+def _estimated_member_activation_bytes(X_full: torch.Tensor) -> int:
+    """Rough peak activation memory of one member's forward on `X_full`."""
+    rows = X_full.shape[0]
+    per_element = _ACTIVATION_BYTES_PER_ELEMENT * min(
+        1.0, (_ACTIVATION_SATURATION_ROWS / rows) ** 0.5
+    )
+    return max(1, int(per_element * X_full.numel()))
+
+
+def _batched_member_count(X_full: torch.Tensor, device: torch.device) -> int:
+    """Members per batched forward within the element and memory limits."""
+    budget = _BATCHED_PEAK_MEMORY_BYTES
+    if device.type == "cuda":
+        budget -= torch.cuda.memory_allocated(device)
+    by_memory = budget // _estimated_member_activation_bytes(X_full)
+    by_elements = _MAX_BATCHED_ELEMENTS // X_full.numel()
+    return int(max(1, min(_MAX_BATCHED_MEMBERS, by_elements, by_memory)))
 
 
 class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
@@ -743,6 +773,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             and len(devices) == 1
             and only_return_standard_out
             and self.inference_mode
+            and self._rows_with_test(X) <= _MAX_BATCHED_ROWS
         ):
             yield from self._iter_outputs_batched(
                 _transform_X_test,
@@ -788,6 +819,12 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             timed_outputs.elapsed_seconds
         )
 
+    def _rows_with_test(self, X: np.ndarray | torch.Tensor) -> int:
+        """Rows of the longest member context: its training rows plus the test rows."""
+        return X.shape[0] + max(
+            member.X_train.shape[0] for member in self.ensemble_members
+        )
+
     def _iter_outputs_batched(
         self,
         transform_X_test: Callable[[TabPFNEnsembleMember], np.ndarray | torch.Tensor],
@@ -801,9 +838,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         Members are grouped by model and by the shape and dtype of their prepared
         inputs; each group is split into batches of at most `_MAX_BATCHED_MEMBERS`
-        members or `_MAX_BATCHED_ELEMENTS` input elements, and every batch runs as one
-        forward with the members along the batch dimension. The outputs are handed back
-        in member order, one per member, as the per-member loop yields them.
+        members, fewer when the batch would exceed `_MAX_BATCHED_ELEMENTS` input
+        elements or its estimated activation memory `_BATCHED_PEAK_MEMORY_BYTES`, and
+        every batch runs as one forward with the members along the batch dimension. The
+        outputs are handed back in member order, one per member, as the per-member loop
+        yields them.
         """
         prepared = []
         for member in self.ensemble_members:
@@ -832,9 +871,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         start = time.perf_counter()
         for positions in groups.values():
             _, model, X_first, _, _ = prepared[positions[0]]
-            batch_size = max(
-                1, min(_MAX_BATCHED_MEMBERS, _MAX_BATCHED_ELEMENTS // X_first.numel())
-            )
+            batch_size = _batched_member_count(X_first, device)
             performance_options = dataclasses.replace(
                 model.get_default_performance_options(),
                 save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
