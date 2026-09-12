@@ -334,6 +334,7 @@ def create_inference_engine(  # noqa: PLR0913
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+    batch_ensemble_members: bool = False,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -369,6 +370,8 @@ def create_inference_engine(  # noqa: PLR0913
             ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
             ``"fp8"`` stores it as 8-bit floats (same size, float rounding
             semantics); ``"auto"`` keeps the computed dtype.
+        batch_ensemble_members: Only for ``fit_mode="fit_preprocessors"``. Stack
+            equal-shape ensemble members into one forward pass on a single device.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -392,6 +395,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
+            batch_ensemble_members=batch_ensemble_members,
         )
     if fit_mode == "fit_with_cache":
         return InferenceEngineExplicitKVCache(
