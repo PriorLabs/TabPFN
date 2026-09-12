@@ -944,7 +944,16 @@ def test__kv_cache_chunking__matches_unchunked(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize(
+    "cache_kwargs",
+    [
+        {"fit_mode": "fit_with_cache"},
+        {"fit_mode": "fit_preprocessors", "kv_cache_at_predict": True},
+        {"fit_mode": "low_memory", "kv_cache_at_predict": True},
+    ],
+)
 def test__kv_cache__embeddings_test_only_and_chunk_safe(
+    cache_kwargs: dict[str, Any],
     device: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -967,15 +976,13 @@ def test__kv_cache__embeddings_test_only_and_chunk_safe(
         random_state=42,
         device=device,
         inference_precision=torch.float64,
-        fit_mode="fit_with_cache",
+        **cache_kwargs,
     )
     model.fit(X[:n_train], y[:n_train])
     X_test = X[n_train:]
 
     monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", chunk)
-    with pytest.raises(
-        TabPFNValidationError, match='not supported with fit_mode="fit_with_cache"'
-    ):
+    with pytest.raises(TabPFNValidationError, match="cached predict pass"):
         get_embeddings(model, X_test, data_source="train")
 
     test_emb = get_embeddings(model, X_test, data_source="test")

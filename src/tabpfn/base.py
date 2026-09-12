@@ -701,17 +701,19 @@ def get_embeddings(
     """
     check_is_fitted(model)
 
-    if data_source == "train" and isinstance(
+    predicts_through_kv_cache = isinstance(
         model.executor_, InferenceEngineExplicitKVCache
-    ):
+    ) or getattr(model.executor_, "kv_cache_at_predict", False)
+    if data_source == "train" and predicts_through_kv_cache:
         # The cached predict pass only ever sees the test rows: the cache holds
         # the ICL key/value pairs and the projected decoder keys, not the train
         # embeddings themselves, so there is nothing to return here.
         raise TabPFNValidationError(
             'get_embeddings(..., data_source="train") is not supported with '
-            'fit_mode="fit_with_cache", because the cached predict pass does not '
-            "run the training rows through the transformer. Refit the model with "
-            'fit_mode="fit_preprocessors" to obtain training embeddings.'
+            'fit_mode="fit_with_cache" or kv_cache_at_predict=True, because the '
+            "cached predict pass does not run the training rows through the "
+            'transformer. Refit the model with fit_mode="fit_preprocessors" and '
+            "kv_cache_at_predict=False to obtain training embeddings."
         )
 
     data_map = {"train": "train_embeddings", "test": "test_embeddings"}
