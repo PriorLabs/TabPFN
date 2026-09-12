@@ -507,14 +507,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             kv_cache_precision:
                 Only relevant when `fit_mode="fit_with_cache"` or
                 `kv_cache_at_predict=True`. Resolved against
-                what the model architecture supports. `None` (default) picks the
-                architecture default (`"int8"` when it can quantize, e.g. TabPFN-3,
-                else `"auto"`); `"int8"` quantizes the key-value cache to save
-                memory; `"fp8"` stores it as 8-bit floats instead (same size,
-                float rounding semantics; not supported on MPS);
-                `"auto"` keeps the computed dtype. Requesting a
-                quantized precision on an architecture that cannot quantize
-                warns and falls back to `"auto"`.
+                what the model architecture supports. `"int8"` quantizes the
+                key-value cache to save memory; `"fp8"` stores it as 8-bit floats
+                instead (same size, float rounding semantics; not supported on
+                MPS); `"auto"` keeps the computed dtype. `None` (default) picks
+                the architecture default for `fit_mode="fit_with_cache"` (`"int8"`
+                when it can quantize, e.g. TabPFN-3, else `"auto"`) and `"auto"`
+                for `kv_cache_at_predict`, whose cache lives for one predict only
+                and where quantizing it would move the predictions for a small
+                memory saving. Requesting a quantized precision on an
+                architecture that cannot quantize warns and falls back to
+                `"auto"`.
 
             kv_cache_at_predict:
                 Only relevant when `fit_mode="low_memory"` or

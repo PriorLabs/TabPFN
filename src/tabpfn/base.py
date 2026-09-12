@@ -366,11 +366,12 @@ def create_inference_engine(  # noqa: PLR0913
             resident device memory at the cost of per-call transfers.
         kv_cache_precision: For ``fit_mode="fit_with_cache"`` and
             ``kv_cache_at_predict``. Resolved against what the architecture
-            supports. ``None`` (default) picks the architecture default
-            (``"int8"`` when it can quantize, else ``"auto"``); ``"int8"``
-            quantizes the KV cache to save memory; ``"fp8"`` stores it as 8-bit
-            floats (same size, float rounding semantics); ``"auto"`` keeps the
-            computed dtype.
+            supports. ``"int8"`` quantizes the KV cache to save memory; ``"fp8"``
+            stores it as 8-bit floats (same size, float rounding semantics);
+            ``"auto"`` keeps the computed dtype. ``None`` (default) picks the
+            architecture default for ``fit_with_cache`` (``"int8"`` when it can
+            quantize, else ``"auto"``) and ``"auto"`` for ``kv_cache_at_predict``,
+            whose cache lives for one predict only.
         kv_cache_at_predict: For ``fit_mode="low_memory"`` and
             ``"fit_preprocessors"``. If True, each predict builds every ensemble
             member's KV cache from its training rows, runs the test rows through

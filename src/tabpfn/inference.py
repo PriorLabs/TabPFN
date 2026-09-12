@@ -362,7 +362,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 cache from the training rows, predicts the test rows through it in
                 chunks of ``settings.tabpfn.max_batched_test_rows`` and drops the
                 cache, instead of one forward over train and test rows together.
-            kv_cache_precision: Cache dtype for ``kv_cache_at_predict``; see
+            kv_cache_precision: Cache dtype for ``kv_cache_at_predict``. None keeps
+                the computed dtype; ``"int8"``/``"fp8"`` are resolved by
                 :func:`_resolve_kv_cache_precision`.
         """
         super().__init__(
@@ -702,7 +703,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 cache, instead of one forward over train and test rows together.
                 Only applies while torch inference mode is on; a forward that needs
                 gradients keeps the joint pass.
-            kv_cache_precision: Cache dtype for ``kv_cache_at_predict``; see
+            kv_cache_precision: Cache dtype for ``kv_cache_at_predict``. None keeps
+                the computed dtype; ``"int8"``/``"fp8"`` are resolved by
                 :func:`_resolve_kv_cache_precision`.
         """
         super().__init__(
@@ -1045,8 +1047,14 @@ def _forward_with_temporary_kv_cache(  # noqa: PLR0913
         y_train = y_train.type(force_inference_dtype)
     batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
-    precision = _resolve_kv_cache_precision(
-        kv_cache_precision, architecture=model, device=device
+    # The cache lives for this call only, so quantizing it saves little memory
+    # while moving the predictions; None keeps the computed dtype here.
+    precision = (
+        "auto"
+        if kv_cache_precision is None
+        else _resolve_kv_cache_precision(
+            kv_cache_precision, architecture=model, device=device
+        )
     )
     performance_options = dataclasses.replace(
         model.get_default_performance_options(),

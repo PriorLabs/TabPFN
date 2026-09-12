@@ -1065,7 +1065,6 @@ def test__kv_cache_at_predict__matches_joint_forward(
         n_test,
         fit_mode=fit_mode,
         kv_cache_at_predict=True,
-        kv_cache_precision="auto",
     )
     reference.fit(X_train, y_train)
     cached.fit(X_train, y_train)
@@ -1080,10 +1079,16 @@ def test__kv_cache_at_predict__matches_joint_forward(
 
 
 @pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
-def test__kv_cache_at_predict__default_precision_predicts(fit_mode: str) -> None:
-    """The architecture's default cache precision runs end to end."""
+def test__kv_cache_at_predict__quantized_cache_predicts(fit_mode: str) -> None:
+    """An explicitly quantized predict-time cache runs end to end."""
     model, X_train, y_train, X_test, predict = _make_estimator_and_data(
-        "classifier", "cpu", 32, 12, fit_mode=fit_mode, kv_cache_at_predict=True
+        "classifier",
+        "cpu",
+        32,
+        12,
+        fit_mode=fit_mode,
+        kv_cache_at_predict=True,
+        kv_cache_precision="int8",
     )
     model.fit(X_train, y_train)
     proba = predict(model, X_test)
