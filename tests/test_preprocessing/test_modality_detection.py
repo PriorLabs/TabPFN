@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import decimal
 import warnings
 from typing import Any
 
@@ -23,6 +24,7 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
+    _count_distinct_per_column,
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
@@ -900,3 +902,127 @@ def test__category_and_text_thresholds__move_independently() -> None:
 
     assert schema.features[0].modality is FeatureModality.NUMERICAL
     assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+
+def _reference_modalities(
+    X: np.ndarray, *, provided: set[int], **thresholds: int
+) -> list[FeatureModality]:
+    """The per-column decision, column by column, as before the block-wise count."""
+    big_enough = len(X) > thresholds["min_samples_for_inference"]
+    return [
+        _detect_feature_modality(
+            s=pd.Series(X[:, j]),
+            reported_categorical=j in provided,
+            max_unique_for_category=thresholds["max_unique_for_category"],
+            min_unique_for_numerical=thresholds["min_unique_for_numerical"],
+            min_cardinality_for_text=thresholds["min_cardinality_for_text"],
+            big_enough_n_to_infer_cat=big_enough,
+        )
+        for j in range(X.shape[1])
+    ]
+
+
+@pytest.mark.parametrize("seed", range(120))
+def test__numeric_arrays__block_wise_count_matches_per_column(seed: int) -> None:
+    """On a numeric array the modalities equal the per-column decisions."""
+    rng = np.random.default_rng(seed)
+    n_rows = int(rng.choice([1, 2, 7, 300, 1024, 1025, 2500]))
+    n_cols = int(rng.integers(1, 12))
+    kind = rng.integers(4)
+    if kind == 0:
+        pool = np.array([0.0, -0.0, np.nan, np.inf, -np.inf, 1.5, 2.5, 3.5])
+        X = rng.choice(pool, size=(n_rows, n_cols))
+        X[:, rng.integers(n_cols)] = np.nan  # an all-missing column
+        if n_cols > 1:
+            X[:, 0] = 7.0  # a constant column
+    elif kind == 1:
+        levels = int(rng.choice([2, 5, 40]))
+        X = rng.integers(0, levels, size=(n_rows, n_cols)).astype(np.int64)
+    elif kind == 2:
+        X = rng.integers(0, 2, size=(n_rows, n_cols)).astype(bool)
+    else:
+        X = rng.normal(size=(n_rows, n_cols)).astype(np.float32)
+        X[rng.random(size=X.shape) < 0.2] = np.nan
+    thresholds = {
+        "min_samples_for_inference": int(rng.choice([0, 100, 5000])),
+        "max_unique_for_category": int(rng.choice([2, 10, 30])),
+        "min_unique_for_numerical": int(rng.choice([2, 4, 20])),
+        "min_cardinality_for_text": int(rng.choice([1, 50, 200])),
+    }
+    n_provided = int(rng.integers(0, n_cols + 1))
+    provided = {int(j) for j in rng.choice(n_cols, size=n_provided, replace=False)}
+
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=None,
+        provided_categorical_indices=sorted(provided),
+        **thresholds,
+    )
+    got = [f.modality for f in schema.features]
+    assert got == _reference_modalities(X, provided=provided, **thresholds)
+
+
+def test__count_distinct_per_column__matches_nunique() -> None:
+    X = np.array(
+        [
+            [0.0, np.nan, 1.0, np.inf, 1.0],
+            [-0.0, np.nan, 2.0, np.inf, np.nan],
+            [0.0, np.nan, 3.0, -np.inf, 1.0],
+        ]
+    )
+    expected = [pd.Series(X[:, j]).nunique(dropna=False) for j in range(X.shape[1])]
+    assert _count_distinct_per_column(X).tolist() == expected == [1, 1, 3, 2, 2]
+    ints = np.array([[1, 2], [1, 3], [1, 2]])
+    assert _count_distinct_per_column(ints).tolist() == [1, 2]
+    bools = np.array([[True], [False], [True]])
+    assert _count_distinct_per_column(bools).tolist() == [2]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1.5, np.nan, 2.5], True),
+        ([1, 2, None], True),
+        ([True, False, None], True),
+        ([1, 2.5, 3], True),
+        ([decimal.Decimal("1.5"), None], True),
+        ([None, None], True),
+        ([np.nan, pd.NA], True),
+        (["1.5", "2", None], True),  # spelled-out numbers still count
+        (["1.5", "x"], False),
+        (["a", "b"], False),
+        ([1, "x"], False),
+        ([b"1", b"2"], True),
+        ([pd.Timestamp("2020-01-01"), None], False),
+    ],
+)
+def test__is_numeric_pandas_series__object_column(values: list, expected: bool) -> None:
+    """The C-level shortcut and the value walk agree on object columns.
+
+    Complex values are left out: the shortcut does not settle them, and the two
+    existing paths disagree on them (`float()` rejects a complex number, `pd.to_numeric`
+    accepts it), so their answer depends on the pandas version.
+    """
+    s = pd.Series(values, dtype=object)
+    assert _is_numeric_pandas_series(s) is expected
+    if PANDAS_BELOW_3:
+        walk = all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
+        assert walk is expected
+
+
+def test__count_distinct_per_column__bool_array__matches_nunique() -> None:
+    """A bool column is counted without sorting: constant gives 1, mixed gives 2."""
+    X = np.array(
+        [
+            [True, False, True, False],
+            [True, True, True, False],
+            [True, False, False, False],
+        ]
+    )
+    expected = np.array(
+        [pd.Series(X[:, j]).nunique(dropna=False) for j in range(X.shape[1])]
+    )
+    counts = _count_distinct_per_column(X)
+    np.testing.assert_array_equal(counts, expected)
+    assert counts.dtype == np.int64
+    np.testing.assert_array_equal(_count_distinct_per_column(X[:1]), [1, 1, 1, 1])
