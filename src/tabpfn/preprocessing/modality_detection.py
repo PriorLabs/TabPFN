@@ -275,12 +275,16 @@ def _numeric_n_unique_per_column(
 
 
 def _count_distinct_per_column(X: np.ndarray) -> np.ndarray:
-    """`pd.Series(column).nunique(dropna=False)` for every column of a numeric array.
+    """`pd.Series(column).nunique(dropna=False)` per column of a numeric or bool array.
 
-    Sorting puts equal values next to each other and NaN last, so the count is one
-    plus the number of adjacent unequal pairs, with NaN counted once when present.
-    `-0.0` equals `0.0` and `inf` equals `inf` here as under `nunique`.
+    A bool column holds one or two distinct values, told apart by `any` and `all`.
+    For the other dtypes, sorting puts equal values next to each other and NaN
+    last, so the count is one plus the number of adjacent unequal pairs, with NaN
+    counted once when present. `-0.0` equals `0.0` and `inf` equals `inf` here as
+    under `nunique`.
     """
+    if X.dtype.kind == "b":
+        return 1 + (X.any(axis=0) & ~X.all(axis=0)).astype(np.int64)
     values = np.sort(X, axis=0)
     if values.dtype.kind == "f":
         missing = np.isnan(values)
