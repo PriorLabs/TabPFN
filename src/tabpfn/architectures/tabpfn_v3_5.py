@@ -521,6 +521,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
 
     @override
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if input.dtype == torch.float16:
+            # The squares of the residual stream exceed the fp16 range, and the
+            # kernels of torch releases before 2.14 take the mean in fp16, on CPU
+            # and on CUDA alike, so the variance is inf and the output all zeros.
+            return F.rms_norm(
+                input.float(), self.normalized_shape, self.weight.float(), self.eps
+            ).to(input.dtype)
         if self.weight.dtype != input.dtype:
             return F.rms_norm(
                 input,
@@ -529,6 +536,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
                 self.eps,
             )
         return super().forward(input)
+
+
+def _is_cpu_fp16(x: torch.Tensor) -> bool:
+    """fp16 on CPU has no attention kernel that accumulates in fp32, so the scores
+    overflow where CUDA's do not. Such attention is computed in fp32 instead.
+    """
+    return x.dtype == torch.float16 and x.device.type == "cpu"
 
 
 class ManyClassDecoder(nn.Module):
@@ -1021,6 +1035,17 @@ def _batched_scaled_dot_product_attention(
         assert k is not None
         src_len = k.shape[1]
         q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
+    if _is_cpu_fp16(q_BSHD):
+        # The scaled queries reach ~1e4, so the scores exceed the fp16 range;
+        # the CPU flash kernel of older torch releases then returns NaN.
+        out = scaled_dot_product_attention(
+            q_BSHD.float(),
+            None if k_BSJD is None else k_BSJD.float(),
+            None if v_BSJD is None else v_BSJD.float(),
+            _backends_override,
+            quantized_kv=quantized_kv,
+        )
+        return out.to(q_BSHD.dtype)
     return scaled_dot_product_attention(
         q_BSHD,
         k_BSJD,
