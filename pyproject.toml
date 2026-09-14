@@ -115,7 +115,7 @@ xfail_strict = true
 addopts = "--durations=10 -vv"
 markers = [
     "slow: slow tests that we run only on merge, rather than in PRs",
-    "hopper: tests requiring a Hopper-class GPU (sm90+) and the flash_attn_interface package; skipped automatically elsewhere",
+    "hopper: tests requiring a Hopper-class GPU (sm90) and the flash-attn-4 package; skipped automatically elsewhere",
     "blackwell: tests requiring a Blackwell-class GPU (sm100+) and the flash-attn-4 package; FA4 tests carry both hopper and blackwell since FA4 serves either; skipped automatically elsewhere",
 ]
 

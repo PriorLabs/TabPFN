@@ -78,10 +78,11 @@ the constant should become per-architecture, is decided by the Blackwell
 measurement (tracked in TabPFN#1235). Update the constant and this table when
 that lands.
 
-## Differences from the FA3 backend
+## Differences from FA3
 
-Things in `fa4_backend.py` that exist because FA4 4.0.0b30 differs from
-`flash_attn_interface`:
+FA4 replaces the FA3 (`flash_attn_interface`) backend TabPFN shipped for
+Hopper. Things in `fa4_backend.py` that exist because FA4 4.0.0b30 differs
+from it:
 
 - `flash_attn.cute.flash_attn_func` returns `(out, lse)` unconditionally.
 - Split-KV is not implemented on sm_90 and sm_12x only accepts `num_splits=1`,
