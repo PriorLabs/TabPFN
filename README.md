@@ -98,9 +98,13 @@ Choose the right TabPFN implementation for your needs:
 
 ## License
 
+The code in this repository is licensed under the [Apache License 2.0](LICENSE). Third-party code is subject to its own licenses and attribution requirements; see [Third-Party Notices](THIRD-PARTY-NOTICES.md).
+
+Model weights are licensed separately.
+
 The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under non-commercial licenses (TabPFN-3 [license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE); see the [Models page](https://docs.priorlabs.ai/models#tabpfn-model-license) for prior releases). TabPFN-3 is used by default.
 
-The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
+The TabPFN-2 model weights are licensed under the Prior Labs License (Apache 2.0 with an additional attribution requirement): [classifier license](https://huggingface.co/Prior-Labs/TabPFN-v2-clf/blob/main/LICENSE.txt), [regressor license](https://huggingface.co/Prior-Labs/TabPFN-v2-reg/blob/main/LICENSE.txt). To use the v2 model weights, instantiate your model as follows:
 
 ```python
 from tabpfn import TabPFNRegressor

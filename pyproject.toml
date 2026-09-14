@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -48,7 +48,8 @@ classifiers = [
   'Programming Language :: Python :: 3.13',
   'Programming Language :: Python :: 3.14',
 ]
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
