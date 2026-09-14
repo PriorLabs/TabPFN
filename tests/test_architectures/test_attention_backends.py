@@ -20,10 +20,12 @@ import torch
 import tabpfn.architectures.shared.scaled_dot_product_attention as _sdpa_mod
 from tabpfn.architectures.shared import (
     fa3_backend,
+    fa4_backend,
     torch_mps_backend as _torch_mps_mod,
 )
 from tabpfn.architectures.shared.attention_backends import AttentionSpec
 from tabpfn.architectures.shared.fa3_backend import FA3_BACKEND, is_fa3_eligible
+from tabpfn.architectures.shared.fa4_backend import FA4_BACKEND, is_fa4_eligible
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
@@ -38,6 +40,12 @@ def _has_hopper() -> bool:
 _FA3_RUNNABLE = _has_hopper() and FA3_BACKEND.is_available()
 _skip_unless_fa3 = pytest.mark.skipif(
     not _FA3_RUNNABLE, reason="requires Hopper GPU and flash_attn_interface"
+)
+
+# FA4 serves Hopper and Blackwell; ``_has_hopper`` is ``>= 9`` so it covers both.
+_FA4_RUNNABLE = _has_hopper() and FA4_BACKEND.is_available()
+_skip_unless_fa4 = pytest.mark.skipif(
+    not _FA4_RUNNABLE, reason="requires Hopper/Blackwell GPU and flash-attn-4"
 )
 
 
@@ -128,6 +136,55 @@ def test__preferred_falls_back_to_sdpa_below_seqlen_threshold(
     assert not FA3_BACKEND.is_preferred(spec(None, None))
 
 
+def test__fa4_preferred_falls_back_to_sdpa_below_seqlen_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same contract as the FA3 test above, for the FA4 backend.
+
+    ``_FA4_MIN_SEQLEN_FOR_SPEEDUP`` is a placeholder until the FA4 benchmark
+    lands; the test pins the *shape* of the rule, not the number.
+    """
+    monkeypatch.setattr(fa4_backend, "is_fa4_eligible", lambda *_a, **_k: True)
+
+    def spec(seq_len_q: int | None, seq_len_kv: int | None) -> AttentionSpec:
+        return AttentionSpec(
+            seq_len_q=seq_len_q,
+            seq_len_kv=seq_len_kv,
+            num_heads=8,
+            num_kv_heads=8,
+            head_dim=64,
+            dtype=torch.float16,
+            device=torch.device("cpu"),
+            batch_size=1,
+        )
+
+    seq_below = fa4_backend._FA4_MIN_SEQLEN_FOR_SPEEDUP - 1
+    seq_at = fa4_backend._FA4_MIN_SEQLEN_FOR_SPEEDUP
+    assert not FA4_BACKEND.is_preferred(spec(seq_below, seq_below))
+    assert FA4_BACKEND.is_preferred(spec(seq_at, seq_at))
+    assert FA4_BACKEND.is_preferred(spec(256, 100_000))
+    assert not FA4_BACKEND.is_preferred(spec(None, None))
+
+
+def test__fa4_eligibility_head_dim_range_per_arch() -> None:
+    """FA4's head-dim range differs by architecture: 256 on sm_90, 128 on sm_100+."""
+    if not torch.cuda.is_available():
+        pytest.skip("eligibility check needs CUDA")
+    device = torch.device("cuda")
+    major = torch.cuda.get_device_capability(device)[0]
+    if major not in fa4_backend._FA4_MAX_HEAD_DIM:
+        pytest.skip(f"FA4 has no kernels for compute capability {major}.x")
+    max_hd = fa4_backend._FA4_MAX_HEAD_DIM[major]
+    assert is_fa4_eligible(device, torch.float16, head_dim=64)
+    assert is_fa4_eligible(device, torch.bfloat16, head_dim=max_hd)
+    assert not is_fa4_eligible(device, torch.float16, head_dim=max_hd + 8)
+    assert not is_fa4_eligible(device, torch.float32, head_dim=64)
+    assert not is_fa4_eligible(device, torch.float16, head_dim=60)  # not %8
+    # Unlike FA3, FA4 takes any multiple of 8 from 8 up, so the v3
+    # dist-embedder shape (head_dim=16) is eligible; the seqlen gate still applies.
+    assert is_fa4_eligible(device, torch.float16, head_dim=16)
+
+
 # ---------------------------------------------------------------------
 # Numerical equivalence on Hopper — needs the FA3 wheel
 # ---------------------------------------------------------------------
@@ -200,6 +257,96 @@ def test__fa3_matches_sdpa_within_tolerance(
 
     # 5e-3 abs matches the contributor's test_fa3.py for the same shapes.
     torch.testing.assert_close(out_fa3, out_sdpa, atol=5e-3, rtol=5e-3)
+
+
+# ---------------------------------------------------------------------
+# Numerical equivalence for FA4 — needs flash-attn-4 and Hopper/Blackwell
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.hopper
+@_skip_unless_fa4
+def test__fa4_batch_above_cuda_max_grid() -> None:
+    """FA4 launches one grid entry per batch element, so ``batch > 65535``
+    fails with ``cudaErrorInvalidValue``; ``fa4_attn_func`` must chunk.
+
+    ``fa3_backend`` gets this for free from FA3's kernel; FA4 does not.
+    """
+    batch = 70_000  # > 65_535
+    seq, head_dim = 16, 64
+    n_heads = 1
+    q = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
+    k = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
+    v = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
+
+    out_sdpa = scaled_dot_product_attention(q, k, v, backend=None)
+    out_fa4 = scaled_dot_product_attention(q, k, v, backend=FA4_BACKEND)
+
+    torch.testing.assert_close(out_fa4, out_sdpa, atol=5e-3, rtol=5e-3)
+
+
+@pytest.mark.hopper
+@_skip_unless_fa4
+@pytest.mark.parametrize(
+    ("seq_q", "seq_kv", "n_heads_q", "n_heads_kv"),
+    [
+        # MHA self-attn over training rows (icl_emsize=512, 8 heads, head_dim=64)
+        (1024, 1024, 8, 8),
+        # MQA cross-attn for test rows (test queries vs train keys)
+        (256, 1024, 8, 1),
+        # GQA mid-point (e.g. icl_num_kv_heads=2)
+        (512, 512, 8, 2),
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test__fa4_matches_sdpa_within_tolerance(
+    seq_q: int,
+    seq_kv: int,
+    n_heads_q: int,
+    n_heads_kv: int,
+    dtype: torch.dtype,
+) -> None:
+    q, k, v = _make_qkv(
+        batch=2,
+        seq_q=seq_q,
+        seq_kv=seq_kv,
+        n_heads_q=n_heads_q,
+        n_heads_kv=n_heads_kv,
+        head_dim=64,
+        device="cuda",
+        dtype=dtype,
+    )
+
+    out_sdpa = scaled_dot_product_attention(q, k, v, backend=None)
+    # FA4 regardless of the seqlen threshold.
+    out_fa4 = scaled_dot_product_attention(q, k, v, backend=FA4_BACKEND)
+
+    # Same tolerance as the FA3 test above.
+    torch.testing.assert_close(out_fa4, out_sdpa, atol=5e-3, rtol=5e-3)
+
+
+@pytest.mark.hopper
+@_skip_unless_fa4
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test__fa4_long_kv_cross_attention_matches_sdpa(dtype: torch.dtype) -> None:
+    """Short Q against a long KV: the shape FA3 split-KV was written for.
+
+    FA4 has no split-KV on sm_90, so this runs unsplit there; it must still
+    be numerically right whichever ``num_splits`` the architecture allows.
+    """
+    q, k, v = _make_qkv(
+        batch=1,
+        seq_q=256,
+        seq_kv=100_000,
+        n_heads_q=8,
+        n_heads_kv=1,
+        head_dim=64,
+        device="cuda",
+        dtype=dtype,
+    )
+    out_sdpa = scaled_dot_product_attention(q, k, v, backend=None)
+    out_fa4 = scaled_dot_product_attention(q, k, v, backend=FA4_BACKEND)
+    torch.testing.assert_close(out_fa4, out_sdpa, atol=5e-3, rtol=5e-3)
 
 
 def _gqa_inputs(
