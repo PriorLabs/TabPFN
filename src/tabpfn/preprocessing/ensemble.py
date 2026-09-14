@@ -245,6 +245,7 @@ class TabPFNEnsemblePreprocessor:
                 task_type=task_type,
             )
 
+        self.sample_subsampling_method_ = resolved_sample_subsampling_method
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
             num_estimators=len(self.configs),
@@ -254,6 +255,45 @@ class TabPFNEnsemblePreprocessor:
             y=y_train,
             task_type=task_type,
         )
+
+        # Majority downsampling is a known target-dependent sampling design, so
+        # it can report the inclusion probability of every training row and of
+        # target values absent from training. The estimators use these to undo
+        # the prior shift the design introduces. Explicit index lists carry no
+        # such information.
+        self.row_sampling_distribution_: tuple[np.ndarray, float] | None = None
+        if (
+            isinstance(subsample_samples, (int, float))
+            and self.subsample_row_indices is not None
+            and resolved_sample_subsampling_method
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+        ):
+            assert y_train is not None
+            _, inverse, counts = np.unique(
+                _targets_to_numpy(y_train), return_inverse=True, return_counts=True
+            )
+            if np.count_nonzero(counts == counts.max()) > 1:
+                # Match the fallback already taken by the row sampler.
+                self.sample_subsampling_method_ = _resolve_sample_subsampling_method(
+                    SampleSubsamplingMethod.AUTO, task_type=task_type
+                )
+            elif len(counts) > 1:
+                # Every estimator gets the same group counts, so the inclusion
+                # rates follow from the budget, not from realized draws.
+                target_counts = _compute_majority_downsample_group_counts(
+                    group_sizes=counts,
+                    subsample_size=len(self.subsample_row_indices[0]),
+                )
+                probabilities = (target_counts / counts)[inverse.reshape(-1)]
+                # Any unobserved target value is non-majority and would be kept.
+                self.row_sampling_distribution_ = (probabilities, 1.0)
+
+    @property
+    def downsample_shifted_prior(self) -> bool:
+        """True when majority downsampling changed the target prior of every
+        context and the estimators should correct for it.
+        """
+        return self.row_sampling_distribution_ is not None
 
     def any_estimator_uses_gpu_svd(self) -> bool:
         """True if any ensemble estimator will run SVD on the GPU.
@@ -623,20 +663,6 @@ def _subsample_rows_majority_downsample(
         group_sizes=group_sizes,
         subsample_size=subsample_size,
     )
-
-    majority_group = int(majority_groups[0])
-    if task_type == "classifier" and len(group_sizes) > 1:
-        largest_non_majority_size = int(np.delete(group_sizes, majority_group).max())
-        sampled_majority_size = int(target_counts[majority_group])
-        if sampled_majority_size < largest_non_majority_size:
-            warnings.warn(
-                "majority_downsample changes the class prior so the original "
-                f"majority class has {sampled_majority_size} rows, fewer than "
-                f"another class with {largest_non_majority_size} rows. Predicted "
-                "probabilities may require calibration.",
-                UserWarning,
-                stacklevel=2,
-            )
 
     # Non-majority groups are identical for every estimator; only the single
     # majority group needs the round-robin pool.
