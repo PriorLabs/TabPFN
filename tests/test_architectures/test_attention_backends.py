@@ -10,6 +10,9 @@ capability 9.0+) AND the ``flash_attn_interface`` package built from
 Dao-AILab/flash-attention's ``hopper/`` directory. They ``skip``
 automatically on any other host; run them manually on an H100 until a
 Hopper CI runner is in place.
+
+The FA4 tests carry both ``hopper`` and ``blackwell`` markers: FA4 runs on
+either, and needs the ``flash-attn-4`` package (``pip install tabpfn[fa4]``).
 """
 
 from __future__ import annotations
@@ -42,11 +45,25 @@ _skip_unless_fa3 = pytest.mark.skipif(
     not _FA3_RUNNABLE, reason="requires Hopper GPU and flash_attn_interface"
 )
 
-# FA4 serves Hopper and Blackwell; ``_has_hopper`` is ``>= 9`` so it covers both.
-_FA4_RUNNABLE = _has_hopper() and FA4_BACKEND.is_available()
-_skip_unless_fa4 = pytest.mark.skipif(
-    not _FA4_RUNNABLE, reason="requires Hopper/Blackwell GPU and flash-attn-4"
-)
+
+def _has_fa4_gpu() -> bool:
+    """Hopper or Blackwell: the architectures ``fa4_backend`` dispatches on."""
+    if not torch.cuda.is_available():
+        return False
+    return torch.cuda.get_device_capability(0)[0] in fa4_backend._FA4_MAX_HEAD_DIM
+
+
+_FA4_RUNNABLE = _has_fa4_gpu() and FA4_BACKEND.is_available()
+
+
+def _skip_unless_fa4(test):  # noqa: ANN202
+    """Mark an FA4 GPU test: ``hopper`` and ``blackwell`` (it runs on either),
+    skipped unless such a GPU and ``flash-attn-4`` are present.
+    """
+    skip = pytest.mark.skipif(
+        not _FA4_RUNNABLE, reason="requires Hopper/Blackwell GPU and flash-attn-4"
+    )
+    return pytest.mark.blackwell(pytest.mark.hopper(skip(test)))
 
 
 def _make_qkv(
@@ -264,7 +281,6 @@ def test__fa3_matches_sdpa_within_tolerance(
 # ---------------------------------------------------------------------
 
 
-@pytest.mark.hopper
 @_skip_unless_fa4
 def test__fa4_batch_above_cuda_max_grid() -> None:
     """FA4 launches one grid entry per batch element, so ``batch > 65535``
@@ -285,7 +301,6 @@ def test__fa4_batch_above_cuda_max_grid() -> None:
     torch.testing.assert_close(out_fa4, out_sdpa, atol=5e-3, rtol=5e-3)
 
 
-@pytest.mark.hopper
 @_skip_unless_fa4
 @pytest.mark.parametrize(
     ("seq_q", "seq_kv", "n_heads_q", "n_heads_kv"),
@@ -325,7 +340,6 @@ def test__fa4_matches_sdpa_within_tolerance(
     torch.testing.assert_close(out_fa4, out_sdpa, atol=5e-3, rtol=5e-3)
 
 
-@pytest.mark.hopper
 @_skip_unless_fa4
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test__fa4_long_kv_cross_attention_matches_sdpa(dtype: torch.dtype) -> None:
