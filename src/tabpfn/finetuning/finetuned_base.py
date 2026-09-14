@@ -925,6 +925,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             use_chunkwise_inference=False,
         )
 
+        # A multitask checkpoint (v3.5) holds the heads of both tasks in one
+        # module. Freeze the other task's parameters before wrapping in DDP, so
+        # it does not wait for gradients that never come.
+        task_type = "multiclass" if self._model_type == "classifier" else "regression"
+        for param in self.finetuned_estimator_.model_.parameters_unused_by_task(
+            task_type
+        ):
+            param.requires_grad = False
+
         # --- DDP model wrapping ---
         model_for_optimization = self.finetuned_estimator_.model_
         self._ddp_module_ = None

@@ -2135,6 +2135,20 @@ class TabPFNV3p5(Architecture):
         return self.icl_emsize
 
     @override
+    def parameters_unused_by_task(self, task_type: TaskType) -> list[nn.Parameter]:
+        """The target encoders and head of the other task."""
+        if task_type == "multiclass":
+            other = "regression"
+            heads = [self.heads.mlp_regression, self.heads.output_projection]
+        elif task_type == "regression":
+            other = "multiclass"
+            heads = [self.heads.mlp_classification, self.heads.many_class_decoder]
+        else:
+            raise ValueError(f"Unsupported task type: {task_type}")
+        modules = [self.col_y_encoder[other], self.icl_y_encoder[other], *heads]
+        return [p for m in modules for p in m.parameters()]
+
+    @override
     def forward(
         self,
         x: torch.Tensor | dict[str, torch.Tensor],

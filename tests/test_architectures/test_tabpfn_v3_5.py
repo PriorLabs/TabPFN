@@ -1175,3 +1175,35 @@ def test__get_cache_size__tabpfn3_5_classifier_1000_rows() -> None:
     )
     # Numbers need manual update if we bump the default architecture.
     assert total == 3_072_000 + 96 + 4 + 768_000 + inducing + ecdf
+
+
+# ---------------------------------------------------------------------------
+# Fine-tuning support
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("task_type", TASK_TYPES)
+def test__parameters_unused_by_task__is_exactly_the_set_without_gradient(
+    task_type: TaskType,
+) -> None:
+    """Freezing this set is what lets DDP fine-tune one task of the shared model."""
+    arch = _get_model()
+    x, y = _inputs(task_type)
+    arch(x, y, task_type=task_type).float().sum().backward()
+
+    # Non-learnable parameters (RoPE frequencies) never get a gradient either.
+    without_grad = {
+        id(p) for p in arch.parameters() if p.requires_grad and p.grad is None
+    }
+    unused = arch.parameters_unused_by_task(task_type)
+
+    assert unused, "a multitask model always has another task's parameters"
+    assert {id(p) for p in unused} == without_grad
+
+
+def test__parameters_unused_by_task__tasks_own_disjoint_parameters() -> None:
+    arch = _get_model()
+    multiclass = {id(p) for p in arch.parameters_unused_by_task("multiclass")}
+    regression = {id(p) for p in arch.parameters_unused_by_task("regression")}
+    assert multiclass.isdisjoint(regression)
+    assert multiclass | regression < {id(p) for p in arch.parameters()}
