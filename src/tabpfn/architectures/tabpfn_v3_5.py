@@ -538,6 +538,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
         return super().forward(input)
 
 
+def _at_least_fp32(dtype: torch.dtype) -> torch.dtype:
+    """The dtype the embedding math runs in: half dtypes are widened to fp32, and
+    fp64 stays fp64, so a float64 forward is not silently rounded to fp32.
+    """
+    return torch.promote_types(dtype, torch.float32)
+
+
 def _is_cpu_fp16(x: torch.Tensor) -> bool:
     """fp16 on CPU has no attention kernel that accumulates in fp32, so the scores
     overflow where CUDA's do not. Such attention is computed in fp32 instead.
@@ -835,7 +842,8 @@ class FourierFeatureGroupEmbedder(nn.Module):
     def forward(self, x_G: torch.Tensor) -> torch.Tensor:
         """Embed grouped cell values `(..., G)` into `(..., E)`."""
         dt = x_G.dtype
-        proj = x_G.unsqueeze(-1).float() * self.frequencies.float()  # (..., G, F)
+        compute = _at_least_fp32(dt)
+        proj = x_G.unsqueeze(-1).to(compute) * self.frequencies.to(compute)
         feats_G = torch.cat([proj.sin(), proj.cos()], dim=-1).to(dt)  # (..., G, 2F)
         return self.in_linear(feats_G.sum(dim=-2))  # (..., E)
 
@@ -931,13 +939,15 @@ class FourierPlusMetadataFeatureGroupEmbedder(nn.Module):
             ],
             dim=-1,
         )
-        # fp32 metadata projection even under bf16 autocast. Cast the weight too
-        # so this holds under bf16 parameters, not just bf16 inputs.
+        # The metadata projection runs at fp32 or above even under bf16 autocast.
+        # Cast the weight too so this holds under bf16 parameters, not just bf16
+        # inputs.
+        compute = _at_least_fp32(dt)
         with torch.autocast(device_type=x_grouped_G.device.type, enabled=False):
             metadata_out = F.linear(
-                metadata_G.float(), self.metadata_linear.weight.float()
+                metadata_G.to(compute), self.metadata_linear.weight.to(compute)
             )  # (..., E)
-        return self.layernorm((fourier_out.float() + metadata_out).to(dt))
+        return self.layernorm((fourier_out.to(compute) + metadata_out).to(dt))
 
 
 class SoftmaxScalingMLP(nn.Module):

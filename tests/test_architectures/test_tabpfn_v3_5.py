@@ -1247,3 +1247,18 @@ def test__batched_sdpa__fp16_cpu_queries_beyond_fp16_scores__matches_fp32() -> N
     assert actual.dtype == torch.float16
     assert torch.isfinite(actual).all()
     torch.testing.assert_close(actual.float(), expected, rtol=2e-2, atol=2e-2)
+
+
+@torch.no_grad()
+def test__cell_embedder__fp64_input__computes_in_fp64() -> None:
+    """A float64 forward must not round the cell embedding through fp32."""
+    embedder = tabpfn_v3_5.FourierFeatureGroupEmbedder(
+        group_size=2, embed_dim=16, num_freq=8
+    )
+    embedder = embedder.to(torch.float64)
+    x = torch.randn(5, 3, 2, generator=torch.Generator().manual_seed(0)).double()
+    proj = x.unsqueeze(-1) * embedder.frequencies
+    expected = embedder.in_linear(torch.cat([proj.sin(), proj.cos()], -1).sum(-2))
+    actual = embedder(x)
+    assert actual.dtype == torch.float64
+    torch.testing.assert_close(actual, expected, rtol=1e-13, atol=1e-13)
