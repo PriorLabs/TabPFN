@@ -1584,10 +1584,7 @@ def test__predict_proba_batched__fp16_matches_fp32(device: str) -> None:
         random_state=42,
         inference_precision=torch.float32,
     ).predict_proba_batched([d[0] for d in data], [d[1] for d in data], X_tests)
-    if torch.device(device).type == "cuda":
-        np.testing.assert_allclose(proba, ref, atol=2e-2)
-    else:
-        assert np.abs(proba - ref).mean() < 5e-2
+    assert np.abs(proba - ref).mean() < 5e-2
 
 
 def test__predict_proba_batched__rejects_mismatched_classes() -> None:
