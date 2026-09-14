@@ -10,7 +10,6 @@ import torch
 
 from tabpfn.architectures.kv_cache import FP8_KV_DTYPE, KVCacheEntry
 from tabpfn.architectures.shared import attention_backends
-from tabpfn.architectures.shared.fa3_backend import FA3_BACKEND
 from tabpfn.architectures.shared.fa4_backend import FA4_BACKEND
 from tabpfn.architectures.shared.mlx_backend import MLX_BACKEND
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
@@ -185,5 +184,5 @@ def test_lazy_spec_describes_the_live_call() -> None:
 def test_in_tree_backends_are_registered_when_available() -> None:
     """Only backends whose dependency is installed get registered."""
     names = [b.name for b in attention_backends.registered_attention_backends()]
-    for backend in (FA4_BACKEND, FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND):
+    for backend in (FA4_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND):
         assert (backend.name in names) is backend.is_available(), backend.name

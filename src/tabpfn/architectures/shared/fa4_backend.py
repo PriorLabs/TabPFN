@@ -11,7 +11,8 @@ backend serves both the architecture FA3 already covers and the one it cannot.
 FA4 requires fp16/bf16 inputs; the supported head dims depend on the
 architecture (see ``_fa4_max_head_dim``).
 
-Differences from the FA3 backend next to this file that matter here:
+FA4 replaces the FA3 backend this module descends from. Differences from
+``flash_attn_interface`` (FA3) that shaped it:
 
 - ``flash_attn.cute.flash_attn_func`` returns ``(out, lse)`` unconditionally.
 - Split-KV is not implemented for sm_90 (``"SplitKV not supported on SM 9.0"``)
@@ -47,10 +48,10 @@ _FA4_HEAD_DIM_ALIGNMENT = 8
 # FA4 also has kernels for Ampere (sm_80), but SDPA already dispatches FA2
 # there, so Ampere is deliberately absent from the table above.
 
-# PLACEHOLDER, NOT MEASURED FOR FA4. Inherited from ``fa3_backend`` so the
-# whole-model benchmark dispatches FA3 and FA4 at the same call sites; the
-# FA4 crossover is set by that benchmark, per architecture if Hopper and
-# Blackwell cross at different lengths (TabPFN#1235).
+# PLACEHOLDER, NOT MEASURED FOR FA4. Inherited from the FA3 backend's
+# H100 crossover. On Hopper, FA4 shows no low-end penalty (see fa4_setup.md);
+# the value is set by the benchmark, per architecture if Hopper and Blackwell
+# cross at different lengths (TabPFN#1235).
 _FA4_MIN_SEQLEN_FOR_SPEEDUP = 10_000
 
 # ``num_splits`` passed to FA4 where split-KV exists (sm_100/110). ``0``
@@ -155,10 +156,9 @@ def fa4_attn_func(
 class FA4Backend(AttentionBackend):
     """FA4 as an :class:`~.attention_backends.AttentionBackend`.
 
-    Same shape as :class:`~.fa3_backend.FA3Backend`: an eligibility gate, a
-    sequence-length crossover, and a ``run`` that hands dense ``k``/``v`` to
-    the kernel. Registered by the shared SDPA module ahead of FA3 so that on
-    Hopper, where both are eligible, FA4 is consulted first.
+    An eligibility gate, a sequence-length crossover, and a ``run`` that
+    hands dense ``k``/``v`` to the kernel. Registered by the shared SDPA
+    module, which owns the consult order.
     """
 
     name = "fa4"
@@ -171,7 +171,7 @@ class FA4Backend(AttentionBackend):
     def is_preferred(self, spec: AttentionSpec) -> bool:
         """Eligibility plus the speedup crossover.
 
-        Mirrors ``FA3Backend.is_preferred``: compares ``max(seq_q, seq_kv)``
+        Compares ``max(seq_q, seq_kv)``
         so cross-attention with small Q against a large K still routes here;
         unknown (None) lengths count as 0 and never argue for FA4.
         """
