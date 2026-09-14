@@ -49,7 +49,7 @@ classifiers = [
   'Programming Language :: Python :: 3.14',
 ]
 license = "Apache-2.0"
-license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
