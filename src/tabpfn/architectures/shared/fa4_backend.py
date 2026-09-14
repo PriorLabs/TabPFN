@@ -3,12 +3,13 @@
 """FlashAttention-4 (CuTeDSL) backend availability and dispatch.
 
 FA4 ships on PyPI as the ``flash-attn-4`` package (``pip install
-flash-attn-4``; beta releases only, so ``--pre``) and is imported as
-``flash_attn.cute``. Its kernels are written in CuTeDSL and cover Hopper
-(sm_90), Blackwell datacenter (sm_100/sm_110) and Blackwell consumer / DGX
-Spark (sm_120/sm_121), so one backend serves both the architecture FA3 already
-covers and the one it cannot. FA4 requires fp16/bf16 inputs; the supported head
-dims depend on the architecture (see ``_fa4_max_head_dim``).
+"tabpfn[fa4]"`` or ``"tabpfn[fa4-cu13]"``; beta releases only) and is imported
+as ``flash_attn.cute``. See ``fa4_setup.md`` next to this file. Its kernels
+are written in CuTeDSL and cover Hopper (sm_90), Blackwell datacenter
+(sm_100/sm_110) and Blackwell consumer / DGX Spark (sm_120/sm_121), so one
+backend serves both the architecture FA3 already covers and the one it cannot.
+FA4 requires fp16/bf16 inputs; the supported head dims depend on the
+architecture (see ``_fa4_max_head_dim``).
 
 Differences from the FA3 backend next to this file that matter here:
 
@@ -36,8 +37,6 @@ from tabpfn.architectures.shared.attention_backends import AttentionBackend
 if TYPE_CHECKING:
     from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
-_HOPPER_COMPUTE_CAPABILITY_MAJOR = 9
-
 # Largest head dim FA4 accepts per compute-capability major; head dims must
 # also be a multiple of 8. sm_90 takes up to 256, sm_100/110 up to 128 (plus
 # DeepSeek-specific shapes TabPFN does not use). sm_12x is not validated by
@@ -45,10 +44,8 @@ _HOPPER_COMPUTE_CAPABILITY_MAJOR = 9
 _FA4_MAX_HEAD_DIM: dict[int, int] = {9: 256, 10: 128, 11: 128, 12: 128}
 _FA4_HEAD_DIM_ALIGNMENT = 8
 
-# Compute-capability majors on which FA4 has kernels and where TabPFN wants to
-# use them. FA4 also runs on Ampere (sm_80) but SDPA already dispatches FA2
-# there, so Ampere is left to SDPA.
-_FA4_COMPUTE_CAPABILITY_MAJORS = frozenset(_FA4_MAX_HEAD_DIM)
+# FA4 also has kernels for Ampere (sm_80), but SDPA already dispatches FA2
+# there, so Ampere is deliberately absent from the table above.
 
 # PLACEHOLDER, NOT MEASURED FOR FA4. Inherited from ``fa3_backend`` so the
 # whole-model benchmark dispatches FA3 and FA4 at the same call sites; the
@@ -135,7 +132,7 @@ def fa4_attn_func(
     if fn is None:
         raise RuntimeError(
             "FA4 path requested but flash_attn.cute is not importable; "
-            "install it with `pip install --pre flash-attn-4` "
+            "install it with `pip install 'tabpfn[fa4]'` "
             "(see fa4_setup.md next to this file)."
         )
     if num_splits is None:
@@ -148,7 +145,9 @@ def fa4_attn_func(
     outputs = []
     for start in range(0, batch, _FA4_MAX_BATCH_PER_CALL):
         stop = start + _FA4_MAX_BATCH_PER_CALL
-        out, _lse = fn(q[start:stop], k[start:stop], v[start:stop], num_splits=num_splits)
+        out, _lse = fn(
+            q[start:stop], k[start:stop], v[start:stop], num_splits=num_splits
+        )
         outputs.append(out)
     return torch.cat(outputs)
 
