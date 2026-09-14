@@ -42,9 +42,10 @@ NUMERIC_DTYPE_KINDS = "?bBiufm"
 # a frame need not be built to convert it. Timedeltas ("m") are excluded: pandas
 # converts those through its own units rather than numpy's raw integers.
 FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
-# `O` object, `V` void (structured records), `U` fixed-width unicode strings: pandas
-# reads the cells to work out each column's dtype.
-OBJECT_OR_STRING_DTYPE_KINDS = "OVU"
+# `O` object, `V` void (structured records), `U` fixed-width unicode strings, `T`
+# variable-width unicode strings (numpy 2's `StringDType`): pandas reads the cells to
+# work out each column's dtype.
+OBJECT_OR_STRING_DTYPE_KINDS = "OVUT"
 # `S` fixed-width byte strings and `a`, its legacy alias: refused.
 BYTES_DTYPE_KINDS = "Sa"
 # `c` complex, `M` datetime64. Not needed, just for completeness.
