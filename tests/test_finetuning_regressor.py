@@ -50,8 +50,11 @@ rng = np.random.default_rng(42)
 
 @pytest.fixture(autouse=True)
 def _finetune_the_v3_5_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run the fine-tuning tests against the multitask v3.5 checkpoint."""
-    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5)
+    """Run the fine-tuning tests against the multitask v3.5 architecture.
+
+    The fast variant shares the architecture class and is cheaper on CI.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
 
 
 devices = get_pytest_devices()
