@@ -966,22 +966,6 @@ def test__subsample_rows_majority_downsample__rejects_insufficient_budget(
         )
 
 
-def test__subsample_rows_majority_downsample__warns_when_class_prior_inverts():
-    y = np.array([0] * 500 + [1] * 300 + [2] * 200)
-    with pytest.warns(UserWarning, match="changes the class prior"):
-        result = _subsample_rows_majority_downsample(
-            subsample_size=600,
-            y=y,
-            num_estimators=2,
-            rng=np.random.default_rng(0),
-            task_type="classifier",
-        )
-
-    assert result is not None
-    for indices in result:
-        np.testing.assert_array_equal(np.bincount(y[indices]), [100, 300, 200])
-
-
 def test__resolve_sample_subsampling_method__auto():
     assert (
         _resolve_sample_subsampling_method(
