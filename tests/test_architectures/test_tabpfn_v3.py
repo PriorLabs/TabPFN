@@ -20,6 +20,7 @@ from tabpfn.architectures.kv_cache import (
     QuantizedKVCacheEntry,
 )
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, get_cache_size
+from tabpfn.constants import ModelVersion
 from tabpfn.utils import get_autocast_context
 
 
@@ -816,7 +817,7 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
     """Pin calculate_cache_size for the real Prior-Labs/tabpfn_3 classifier at
     1,000 train rows (1 estimator, engine defaults: int8 KV, fp16 rest).
     """
-    clf = TabPFNClassifier()
+    clf = TabPFNClassifier.create_default_for_version(ModelVersion.V3)
     # Loads the checkpoint (config + weights) without needing fit data.
     clf._initialize_model_variables()
     config = clf.model_.config

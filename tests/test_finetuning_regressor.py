@@ -24,6 +24,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from tabpfn.architectures.shared.bar_distribution import BarDistribution
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,
@@ -36,6 +37,7 @@ from tabpfn.finetuning.finetuned_regressor import (
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
+from tabpfn.settings import settings
 
 from .utils import (
     get_pytest_devices,
@@ -46,6 +48,14 @@ from .utils import (
 rng = np.random.default_rng(42)
 
 devices = get_pytest_devices()
+
+
+@pytest.fixture(autouse=True)
+def _finetune_the_fast_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fine-tuning holds the base model, its fine-tuned copy and the optimizer
+    state at once; the fast checkpoint keeps that within the CI runners' memory.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
 
 
 def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]:
@@ -85,7 +95,7 @@ def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]
         first_param = next(self.parameters())
         param_contribution = 0.0 * first_param.sum()
 
-        n_out = int(getattr(self, "n_out", 1))
+        n_out = self.heads.output_projection.out_features
         return (
             torch.randn(
                 num_test_rows,
@@ -213,7 +223,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+        "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -271,7 +281,7 @@ def test__regressor_checkpoint_contains_mse_metric(
     mock_forward = create_mock_architecture_forward_regression()
     with (
         mock.patch(
-            "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+            "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
             autospec=True,
             side_effect=mock_forward,
         ),

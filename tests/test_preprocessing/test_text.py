@@ -468,12 +468,14 @@ def test__fit_with_transform_text__reports_the_caller_s_own_columns(
 def test__fit_without_transform_text__reads_the_column_as_before(
     estimator_cls: type,
 ) -> None:
-    """Off by default: the column is untouched, so detection labels it text and
-    warns about it, as without this transformer.
+    """With the transform off, the column is untouched, so detection labels it
+    text and warns about it, as without this transformer.
     """
     X, y = _estimator_data(estimator_cls, _review_column())
 
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
 
