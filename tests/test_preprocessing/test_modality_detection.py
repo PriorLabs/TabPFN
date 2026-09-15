@@ -776,7 +776,9 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
+def test__fit_with_text_column__transform_text_off__warns_at_call_site(
+    estimator_cls: type,
+) -> None:
     """`fit` runs `detect_feature_modalities`, so a free-text column warns.
 
     Both estimators share the detection path, so one parametrized test pins the
@@ -798,7 +800,9 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         else rng.normal(size=n)
     )
 
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'review'" in str(record[0].message)
@@ -823,7 +827,7 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_declared_high_cardinality_strings__reads_them_as_categorical(
+def test__fit_with_declared_strings__transform_text_off__reads_them_as_categorical(
     estimator_cls: type,
 ) -> None:
     """A `category` dtype column is folded into `categorical_features_indices_`,
@@ -846,7 +850,9 @@ def test__fit_with_declared_high_cardinality_strings__reads_them_as_categorical(
     )
 
     # Only the plain string column is undeclared, so only it is text.
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'sku'" in str(record[0].message)

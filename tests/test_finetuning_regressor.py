@@ -60,6 +60,14 @@ def _finetune_the_v3_5_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
 devices = get_pytest_devices()
 
 
+@pytest.fixture(autouse=True)
+def _finetune_the_fast_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fine-tuning holds the base model, its fine-tuned copy and the optimizer
+    state at once; the fast checkpoint keeps that within the CI runners' memory.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
+
+
 def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]:
     """Return a side_effect for mocking the internal Architecture forward in regression.
 

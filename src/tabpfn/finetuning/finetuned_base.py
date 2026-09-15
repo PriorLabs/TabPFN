@@ -544,6 +544,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         config = copy.deepcopy(base_config)
         existing_inference_config = dict(config.get("inference_config", {}) or {})
         existing_inference_config["ENABLE_GPU_PREPROCESSING"] = False
+        # The training loop hands the model numpy arrays, which the text and date
+        # transformers never touch, so the estimators built here must not run them
+        # either: otherwise the final model would see features the weights were
+        # not tuned on.
+        existing_inference_config["TRANSFORM_TEXT"] = False
+        existing_inference_config["TRANSFORM_DATES"] = False
         config["inference_config"] = existing_inference_config
         if n_estimators_override is not None:
             config["n_estimators"] = n_estimators_override

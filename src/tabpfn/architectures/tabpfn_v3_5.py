@@ -521,6 +521,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
 
     @override
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if input.dtype == torch.float16:
+            # The squares of the residual stream exceed the fp16 range, and the
+            # kernels of torch releases before 2.14 take the mean in fp16, on CPU
+            # and on CUDA alike, so the variance is inf and the output all zeros.
+            return F.rms_norm(
+                input.float(), self.normalized_shape, self.weight.float(), self.eps
+            ).to(input.dtype)
         if self.weight.dtype != input.dtype:
             return F.rms_norm(
                 input,
@@ -529,6 +536,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
                 self.eps,
             )
         return super().forward(input)
+
+
+def _at_least_fp32(dtype: torch.dtype) -> torch.dtype:
+    """The dtype the embedding math runs in: half dtypes are widened to fp32, and
+    fp64 stays fp64, so a float64 forward is not silently rounded to fp32.
+    """
+    return torch.promote_types(dtype, torch.float32)
 
 
 class ManyClassDecoder(nn.Module):
@@ -821,7 +835,8 @@ class FourierFeatureGroupEmbedder(nn.Module):
     def forward(self, x_G: torch.Tensor) -> torch.Tensor:
         """Embed grouped cell values `(..., G)` into `(..., E)`."""
         dt = x_G.dtype
-        proj = x_G.unsqueeze(-1).float() * self.frequencies.float()  # (..., G, F)
+        compute = _at_least_fp32(dt)
+        proj = x_G.unsqueeze(-1).to(compute) * self.frequencies.to(compute)
         feats_G = torch.cat([proj.sin(), proj.cos()], dim=-1).to(dt)  # (..., G, 2F)
         return self.in_linear(feats_G.sum(dim=-2))  # (..., E)
 
@@ -917,13 +932,15 @@ class FourierPlusMetadataFeatureGroupEmbedder(nn.Module):
             ],
             dim=-1,
         )
-        # fp32 metadata projection even under bf16 autocast. Cast the weight too
-        # so this holds under bf16 parameters, not just bf16 inputs.
+        # The metadata projection runs at fp32 or above even under bf16 autocast.
+        # Cast the weight too so this holds under bf16 parameters, not just bf16
+        # inputs.
+        compute = _at_least_fp32(dt)
         with torch.autocast(device_type=x_grouped_G.device.type, enabled=False):
             metadata_out = F.linear(
-                metadata_G.float(), self.metadata_linear.weight.float()
+                metadata_G.to(compute), self.metadata_linear.weight.to(compute)
             )  # (..., E)
-        return self.layernorm((fourier_out.float() + metadata_out).to(dt))
+        return self.layernorm((fourier_out.to(compute) + metadata_out).to(dt))
 
 
 class SoftmaxScalingMLP(nn.Module):
@@ -1021,6 +1038,18 @@ def _batched_scaled_dot_product_attention(
         assert k is not None
         src_len = k.shape[1]
         q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
+    if q_BSHD.dtype == torch.float16 and q_BSHD.device.type == "cpu":
+        # The scaled queries reach ~1e4, so the scores exceed the fp16 range. The
+        # CUDA kernels accumulate in fp32; the CPU flash kernel of older torch
+        # releases does not and returns NaN.
+        out = scaled_dot_product_attention(
+            q_BSHD.float(),
+            None if k_BSJD is None else k_BSJD.float(),
+            None if v_BSJD is None else v_BSJD.float(),
+            _backends_override,
+            quantized_kv=quantized_kv,
+        )
+        return out.to(q_BSHD.dtype)
     return scaled_dot_product_attention(
         q_BSHD,
         k_BSJD,

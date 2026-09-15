@@ -1218,3 +1218,47 @@ def test__many_class_decoder_attention_weights__matches_forward(
         train_keys, test_emb, targets, num_present_classes=int(targets.max()) + 1
     )
     torch.testing.assert_close(logits, expected, atol=1e-4, rtol=1e-4)
+
+
+@torch.no_grad()
+def test__rmsnorm__fp16_input_with_large_values__matches_fp32() -> None:
+    """The squares of a 3.5 residual overflow fp16; the norm must not return zeros."""
+    norm = tabpfn_v3_5._DtypeMatchingRMSNorm(64).to(torch.float16)
+    x = torch.randn(8, 64, generator=torch.Generator().manual_seed(0)) * 300
+    expected = tabpfn_v3_5._DtypeMatchingRMSNorm(64)(x)
+    actual = norm(x.to(torch.float16))
+    assert actual.dtype == torch.float16
+    torch.testing.assert_close(actual.float(), expected, rtol=1e-2, atol=1e-2)
+
+
+@torch.no_grad()
+def test__batched_sdpa__fp16_cpu_queries_beyond_fp16_scores__matches_fp32() -> None:
+    """Softmax-scaled queries push q.k^T past the fp16 range; the output must be
+    finite and match the fp32 attention.
+    """
+    gen = torch.Generator().manual_seed(0)
+    q = torch.randn(1, 16, 4, 64, generator=gen) * 1000
+    k = torch.randn(1, 32, 4, 64, generator=gen) * 10
+    v = torch.randn(1, 32, 4, 64, generator=gen)
+    expected = tabpfn_v3_5._batched_scaled_dot_product_attention(q, k, v)
+    actual = tabpfn_v3_5._batched_scaled_dot_product_attention(
+        q.to(torch.float16), k.to(torch.float16), v.to(torch.float16)
+    )
+    assert actual.dtype == torch.float16
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual.float(), expected, rtol=2e-2, atol=2e-2)
+
+
+@torch.no_grad()
+def test__cell_embedder__fp64_input__computes_in_fp64() -> None:
+    """A float64 forward must not round the cell embedding through fp32."""
+    embedder = tabpfn_v3_5.FourierFeatureGroupEmbedder(
+        group_size=2, embed_dim=16, num_freq=8
+    )
+    embedder = embedder.to(torch.float64)
+    x = torch.randn(5, 3, 2, generator=torch.Generator().manual_seed(0)).double()
+    proj = x.unsqueeze(-1) * embedder.frequencies
+    expected = embedder.in_linear(torch.cat([proj.sin(), proj.cos()], -1).sum(-2))
+    actual = embedder(x)
+    assert actual.dtype == torch.float64
+    torch.testing.assert_close(actual, expected, rtol=1e-13, atol=1e-13)
