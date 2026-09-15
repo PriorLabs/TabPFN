@@ -521,6 +521,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
 
     @override
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if input.dtype == torch.float16:
+            # The squares of the residual stream exceed the fp16 range, and the
+            # kernels of torch releases before 2.14 take the mean in fp16, on CPU
+            # and on CUDA alike, so the variance is inf and the output all zeros.
+            return F.rms_norm(
+                input.float(), self.normalized_shape, self.weight.float(), self.eps
+            ).to(input.dtype)
         if self.weight.dtype != input.dtype:
             return F.rms_norm(
                 input,
@@ -529,6 +536,13 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
                 self.eps,
             )
         return super().forward(input)
+
+
+def _at_least_fp32(dtype: torch.dtype) -> torch.dtype:
+    """The dtype the embedding math runs in: half dtypes are widened to fp32, and
+    fp64 stays fp64, so a float64 forward is not silently rounded to fp32.
+    """
+    return torch.promote_types(dtype, torch.float32)
 
 
 class ManyClassDecoder(nn.Module):
@@ -570,6 +584,23 @@ class ManyClassDecoder(nn.Module):
         k_BNE = self.k_projection(train_embeddings_BNE)
         return k_BNE.view(*k_BNE.shape[:2], self.num_heads, self.head_dim).contiguous()
 
+    def _project_queries(
+        self,
+        train_keys_BNHD: torch.Tensor,
+        test_embeddings_BME: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Project test rows to per-head queries, and match the keys' dtype to them.
+
+        Mirrors the dtype guard in ICLAttention's cached path: keys built under
+        autocast, or read back from the cache, may not match the query dtype.
+        """
+        B, M, _ = test_embeddings_BME.shape
+        q_BME = self.q_projection(test_embeddings_BME)
+        q_BMHD = q_BME.view(B, M, self.num_heads, self.head_dim).contiguous()
+        if train_keys_BNHD.dtype != q_BMHD.dtype:
+            train_keys_BNHD = train_keys_BNHD.to(q_BMHD.dtype)
+        return q_BMHD, train_keys_BNHD
+
     @override
     def forward(
         self,
@@ -581,17 +612,15 @@ class ManyClassDecoder(nn.Module):
     ) -> torch.Tensor:
         """Perform a forward pass, on keys already built by `project_keys`."""
         B, M, _ = test_embeddings_BME.shape
-        q_BME = self.q_projection(test_embeddings_BME)
-        # Mirrors the dtype guard in ICLAttention's cached path: keys built under
-        # autocast, or read back from the cache, may not match the query dtype.
-        if train_keys_BNHD.dtype != q_BME.dtype:
-            train_keys_BNHD = train_keys_BNHD.to(q_BME.dtype)
+        q_BMHD, train_keys_BNHD = self._project_queries(
+            train_keys_BNHD, test_embeddings_BME
+        )
 
         if M == 0:
             # Flash attention rejects a query sequence of length 0, so return
             # early. The zero-weighted sums keep both inputs in the graph.
             empty = test_embeddings_BME.new_empty((0, B, self.max_num_classes))
-            return empty + (q_BME.sum() + train_keys_BNHD.sum()) * 0.0
+            return empty + (q_BMHD.sum() + train_keys_BNHD.sum()) * 0.0
 
         # Mask out non-finite target rows. Those shouldn't contribute to the output
         # and the .long conversion results in different values on different platforms.
@@ -606,9 +635,8 @@ class ManyClassDecoder(nn.Module):
             is_finite_BN[..., None],
             F.one_hot(targets_long, num_classes=num_present_classes),
             0,
-        ).to(dtype=q_BME.dtype)
+        ).to(dtype=q_BMHD.dtype)
 
-        q_BMHD = q_BME.view(B, M, self.num_heads, self.head_dim).contiguous()
         k_BNHD = train_keys_BNHD
         one_hot_targets_BNHT = (
             one_hot_targets_BNT.unsqueeze(2)
@@ -633,6 +661,28 @@ class ManyClassDecoder(nn.Module):
         test_output_MBT = test_output_BMT.transpose(0, 1)
         # convert to logits:
         return torch.log(torch.clamp(test_output_MBT, min=1e-5) + 3e-5)
+
+    def attention_weights(
+        self,
+        train_keys_BNHD: torch.Tensor,
+        test_embeddings_BME: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-train-row attention weights, averaged over heads: `(B, M, N)`.
+
+        `weights[..., n]` is the vote mass a test row places on train row `n`;
+        non-negative and summing to 1 over the training axis. Collapsing it by
+        training label recovers the pre-log class average that `forward` turns
+        into logits. `forward` fuses this into one attention kernel rather than
+        materializing the O(N*M) tensor.
+        """
+        q_BMHD, train_keys_BNHD = self._project_queries(
+            train_keys_BNHD, test_embeddings_BME
+        )
+        if self.softmax_scaling_layer is not None:
+            q_BMHD = self.softmax_scaling_layer(q_BMHD, train_keys_BNHD.shape[1])
+        scores_BHMN = torch.einsum("bmhd,bnhd->bhmn", q_BMHD, train_keys_BNHD).float()
+        scores_BHMN /= math.sqrt(self.head_dim)
+        return torch.softmax(scores_BHMN, dim=-1).mean(dim=1)
 
 
 def _chunked_class_attention(
@@ -785,7 +835,8 @@ class FourierFeatureGroupEmbedder(nn.Module):
     def forward(self, x_G: torch.Tensor) -> torch.Tensor:
         """Embed grouped cell values `(..., G)` into `(..., E)`."""
         dt = x_G.dtype
-        proj = x_G.unsqueeze(-1).float() * self.frequencies.float()  # (..., G, F)
+        compute = _at_least_fp32(dt)
+        proj = x_G.unsqueeze(-1).to(compute) * self.frequencies.to(compute)
         feats_G = torch.cat([proj.sin(), proj.cos()], dim=-1).to(dt)  # (..., G, 2F)
         return self.in_linear(feats_G.sum(dim=-2))  # (..., E)
 
@@ -881,13 +932,15 @@ class FourierPlusMetadataFeatureGroupEmbedder(nn.Module):
             ],
             dim=-1,
         )
-        # fp32 metadata projection even under bf16 autocast. Cast the weight too
-        # so this holds under bf16 parameters, not just bf16 inputs.
+        # The metadata projection runs at fp32 or above even under bf16 autocast.
+        # Cast the weight too so this holds under bf16 parameters, not just bf16
+        # inputs.
+        compute = _at_least_fp32(dt)
         with torch.autocast(device_type=x_grouped_G.device.type, enabled=False):
             metadata_out = F.linear(
-                metadata_G.float(), self.metadata_linear.weight.float()
+                metadata_G.to(compute), self.metadata_linear.weight.to(compute)
             )  # (..., E)
-        return self.layernorm((fourier_out.float() + metadata_out).to(dt))
+        return self.layernorm((fourier_out.to(compute) + metadata_out).to(dt))
 
 
 class SoftmaxScalingMLP(nn.Module):
@@ -985,6 +1038,18 @@ def _batched_scaled_dot_product_attention(
         assert k is not None
         src_len = k.shape[1]
         q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
+    if q_BSHD.dtype == torch.float16 and q_BSHD.device.type == "cpu":
+        # The scaled queries reach ~1e4, so the scores exceed the fp16 range. The
+        # CUDA kernels accumulate in fp32; the CPU flash kernel of older torch
+        # releases does not and returns NaN.
+        out = scaled_dot_product_attention(
+            q_BSHD.float(),
+            None if k_BSJD is None else k_BSJD.float(),
+            None if v_BSJD is None else v_BSJD.float(),
+            _backends_override,
+            quantized_kv=quantized_kv,
+        )
+        return out.to(q_BSHD.dtype)
     return scaled_dot_product_attention(
         q_BSHD,
         k_BSJD,

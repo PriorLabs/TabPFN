@@ -24,6 +24,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from tabpfn.architectures.shared.bar_distribution import BarDistribution
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,
@@ -36,6 +37,7 @@ from tabpfn.finetuning.finetuned_regressor import (
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
+from tabpfn.settings import settings
 
 from .utils import (
     get_pytest_devices,
@@ -45,7 +47,25 @@ from .utils import (
 
 rng = np.random.default_rng(42)
 
+
+@pytest.fixture(autouse=True)
+def _finetune_the_v3_5_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the fine-tuning tests against the multitask v3.5 architecture.
+
+    The fast variant shares the architecture class and is cheaper on CI.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
+
+
 devices = get_pytest_devices()
+
+
+@pytest.fixture(autouse=True)
+def _finetune_the_fast_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fine-tuning holds the base model, its fine-tuned copy and the optimizer
+    state at once; the fast checkpoint keeps that within the CI runners' memory.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
 
 
 def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]:
@@ -85,7 +105,9 @@ def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]
         first_param = next(self.parameters())
         param_contribution = 0.0 * first_param.sum()
 
-        n_out = int(getattr(self, "n_out", 1))
+        # v3 exposes the bar count as `n_out`; the multitask v3.5 model only
+        # carries the borders.
+        n_out = getattr(self, "n_out", None) or self.regression_borders.numel() - 1
         return (
             torch.randn(
                 num_test_rows,
@@ -213,7 +235,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+        "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -271,7 +293,7 @@ def test__regressor_checkpoint_contains_mse_metric(
     mock_forward = create_mock_architecture_forward_regression()
     with (
         mock.patch(
-            "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+            "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
             autospec=True,
             side_effect=mock_forward,
         ),

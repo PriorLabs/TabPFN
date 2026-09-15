@@ -1175,3 +1175,90 @@ def test__get_cache_size__tabpfn3_5_classifier_1000_rows() -> None:
     )
     # Numbers need manual update if we bump the default architecture.
     assert total == 3_072_000 + 96 + 4 + 768_000 + inducing + ecdf
+
+
+@pytest.mark.parametrize("use_softmax_scaling", [False, True])
+@torch.no_grad()
+def test__many_class_decoder_attention_weights__matches_forward(
+    use_softmax_scaling: bool,
+) -> None:
+    """The weights are a distribution over train rows and reproduce the fused
+    forward's logits once collapsed by class label.
+    """
+    torch.manual_seed(0)
+    B, N, M, E, max_num_classes = 2, 40, 7, 48, 10
+    head_dim, num_heads = 16, 3
+    scaling = (
+        tabpfn_v3_5.SoftmaxScalingMLP(num_heads=num_heads, head_dim=head_dim)
+        if use_softmax_scaling
+        else None
+    )
+    decoder = tabpfn_v3_5.ManyClassDecoder(
+        max_num_classes=max_num_classes,
+        input_size=E,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        softmax_scaling_layer=scaling,
+    )
+    train_emb = torch.randn(B, N, E)
+    test_emb = torch.randn(B, M, E)
+    targets = torch.randint(0, max_num_classes, (B, N)).float()
+
+    train_keys = decoder.project_keys(train_emb)
+    weights = decoder.attention_weights(train_keys, test_emb)
+    assert weights.shape == (B, M, N)
+    assert torch.all(weights >= 0)
+    torch.testing.assert_close(weights.sum(-1), torch.ones(B, M))
+
+    one_hot = torch.nn.functional.one_hot(targets.long(), max_num_classes).float()
+    class_avg = torch.einsum("bmn,bnt->bmt", weights, one_hot)
+    logits = torch.log(torch.clamp(class_avg, min=1e-5) + 3e-5).transpose(0, 1)
+
+    expected = decoder(
+        train_keys, test_emb, targets, num_present_classes=int(targets.max()) + 1
+    )
+    torch.testing.assert_close(logits, expected, atol=1e-4, rtol=1e-4)
+
+
+@torch.no_grad()
+def test__rmsnorm__fp16_input_with_large_values__matches_fp32() -> None:
+    """The squares of a 3.5 residual overflow fp16; the norm must not return zeros."""
+    norm = tabpfn_v3_5._DtypeMatchingRMSNorm(64).to(torch.float16)
+    x = torch.randn(8, 64, generator=torch.Generator().manual_seed(0)) * 300
+    expected = tabpfn_v3_5._DtypeMatchingRMSNorm(64)(x)
+    actual = norm(x.to(torch.float16))
+    assert actual.dtype == torch.float16
+    torch.testing.assert_close(actual.float(), expected, rtol=1e-2, atol=1e-2)
+
+
+@torch.no_grad()
+def test__batched_sdpa__fp16_cpu_queries_beyond_fp16_scores__matches_fp32() -> None:
+    """Softmax-scaled queries push q.k^T past the fp16 range; the output must be
+    finite and match the fp32 attention.
+    """
+    gen = torch.Generator().manual_seed(0)
+    q = torch.randn(1, 16, 4, 64, generator=gen) * 1000
+    k = torch.randn(1, 32, 4, 64, generator=gen) * 10
+    v = torch.randn(1, 32, 4, 64, generator=gen)
+    expected = tabpfn_v3_5._batched_scaled_dot_product_attention(q, k, v)
+    actual = tabpfn_v3_5._batched_scaled_dot_product_attention(
+        q.to(torch.float16), k.to(torch.float16), v.to(torch.float16)
+    )
+    assert actual.dtype == torch.float16
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual.float(), expected, rtol=2e-2, atol=2e-2)
+
+
+@torch.no_grad()
+def test__cell_embedder__fp64_input__computes_in_fp64() -> None:
+    """A float64 forward must not round the cell embedding through fp32."""
+    embedder = tabpfn_v3_5.FourierFeatureGroupEmbedder(
+        group_size=2, embed_dim=16, num_freq=8
+    )
+    embedder = embedder.to(torch.float64)
+    x = torch.randn(5, 3, 2, generator=torch.Generator().manual_seed(0)).double()
+    proj = x.unsqueeze(-1) * embedder.frequencies
+    expected = embedder.in_linear(torch.cat([proj.sin(), proj.cos()], -1).sum(-2))
+    actual = embedder(x)
+    assert actual.dtype == torch.float64
+    torch.testing.assert_close(actual, expected, rtol=1e-13, atol=1e-13)
