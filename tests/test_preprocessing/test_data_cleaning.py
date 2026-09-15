@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from packaging.version import Version
 from sklearn.preprocessing import OrdinalEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -1326,6 +1327,34 @@ def test__fix_dtypes__unicode_array__is_read_like_an_object_array() -> None:
     )
 
 
+# numpy 2's variable-width `StringDType` (dtype kind `T`) does not exist before 2.0, and
+# before 2.5 `np.isdtype` raised on it, so scikit-learn's input validation refused the
+# array before it reached TabPFN.
+NUMPY_HAS_STRINGDTYPE = Version(np.__version__) >= Version("2.0")
+NUMPY_ISDTYPE_ACCEPTS_STRINGDTYPE = Version(np.__version__) >= Version("2.5")
+
+
+@pytest.mark.skipif(not NUMPY_HAS_STRINGDTYPE, reason="StringDType needs numpy>=2.0")
+@pytest.mark.parametrize("dtype_kwargs", [{}, {"na_object": None}])
+def test__fix_dtypes__stringdtype_array__is_read_like_an_object_array(
+    dtype_kwargs: dict[str, object],
+) -> None:
+    """A variable-width `StringDType` array is read like an `object` array of `str`,
+    with or without a missing-value sentinel.
+    """
+    missing = None if dtype_kwargs else "2.5"
+    strings = np.array(
+        [["a", "1.5"], ["b", missing], ["a", "3.5"]],
+        dtype=np.dtypes.StringDType(**dtype_kwargs),
+    )
+    assert strings.dtype.kind == "T"
+
+    pd.testing.assert_frame_equal(
+        fix_dtypes(strings, cat_indices=[0]),
+        fix_dtypes(strings.astype(object), cat_indices=[0]),
+    )
+
+
 def test__fix_dtypes__bytes_array__is_refused() -> None:
     with pytest.raises(ValueError, match="Byte string dtypes are not supported"):
         fix_dtypes(np.array([[b"a"], [b"b"]]), cat_indices=None)
@@ -1342,6 +1371,38 @@ def test__fit_predict__unicode_array__is_accepted_like_an_object_array(
     n = 40
     X = np.array([[f"c{i % 3}", f"{i % 5}"] for i in range(n)])
     assert X.dtype.kind == "U"
+    y = np.arange(n) % 2 if estimator_cls is TabPFNClassifier else np.arange(n) / n
+
+    fitted_on_array = estimator_cls(n_estimators=1, device="cpu", random_state=0)
+    fitted_on_array.fit(X, y)
+    np.testing.assert_array_equal(
+        fitted_on_array.predict(X), fitted_on_array.predict(X.astype(object))
+    )
+
+    fitted_on_frame = estimator_cls(n_estimators=1, device="cpu", random_state=0)
+    fitted_on_frame.fit(pd.DataFrame(X), y)
+    np.testing.assert_array_equal(
+        fitted_on_frame.predict(X), fitted_on_frame.predict(X.astype(object))
+    )
+
+
+@pytest.mark.skipif(
+    not NUMPY_ISDTYPE_ACCEPTS_STRINGDTYPE,
+    reason="scikit-learn's input validation refuses StringDType before numpy 2.5",
+)
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_predict__stringdtype_array__is_accepted_like_an_object_array(
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> None:
+    """A `StringDType` array is accepted at fit and at predict, and predicts the same
+    as the same strings in an `object` array, whether the model was fitted on the
+    string array or on a DataFrame of it.
+    """
+    n = 40
+    X = np.array(
+        [[f"c{i % 3}", f"{i % 5}"] for i in range(n)], dtype=np.dtypes.StringDType()
+    )
+    assert X.dtype.kind == "T"
     y = np.arange(n) % 2 if estimator_cls is TabPFNClassifier else np.arange(n) / n
 
     fitted_on_array = estimator_cls(n_estimators=1, device="cpu", random_state=0)
