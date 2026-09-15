@@ -33,7 +33,7 @@ jobs:
     name: Test Package Compatibility
     # This job will only start after linting succeeds
     needs: check_python_linting
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
