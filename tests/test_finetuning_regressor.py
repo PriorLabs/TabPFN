@@ -47,6 +47,16 @@ from .utils import (
 
 rng = np.random.default_rng(42)
 
+
+@pytest.fixture(autouse=True)
+def _finetune_the_v3_5_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the fine-tuning tests against the multitask v3.5 architecture.
+
+    The fast variant shares the architecture class and is cheaper on CI.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
+
+
 devices = get_pytest_devices()
 
 
@@ -95,7 +105,9 @@ def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]
         first_param = next(self.parameters())
         param_contribution = 0.0 * first_param.sum()
 
-        n_out = self.heads.output_projection.out_features
+        # v3 exposes the bar count as `n_out`; the multitask v3.5 model only
+        # carries the borders.
+        n_out = getattr(self, "n_out", None) or self.regression_borders.numel() - 1
         return (
             torch.randn(
                 num_test_rows,

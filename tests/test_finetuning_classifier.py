@@ -43,6 +43,7 @@ from tabpfn.finetuning.finetuned_base import (
     EvalResult,
     _get_estimator_shard,
     _get_loss_for_logging,
+    _parameters_unused_by_task,
     _slice_batch_estimators,
 )
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
@@ -53,6 +54,10 @@ from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.settings import settings
 
+from .test_architectures.test_tabpfn_v3_5 import (
+    _get_model as _get_small_v3_5_model,
+    _inputs as _v3_5_inputs,
+)
 from .utils import (
     get_pytest_devices,
     get_pytest_devices_with_mps_marked_slow,
@@ -60,6 +65,16 @@ from .utils import (
 )
 
 rng = np.random.default_rng(42)
+
+
+@pytest.fixture(autouse=True)
+def _finetune_the_v3_5_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the fine-tuning tests against the multitask v3.5 architecture.
+
+    The fast variant shares the architecture class and is cheaper on CI.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
+
 
 devices = get_pytest_devices()
 
@@ -295,6 +310,37 @@ def test__get_estimator_shard__rejects_empty_rank_shards() -> None:
     """Every DDP rank must run a forward/backward to avoid collective deadlock."""
     with pytest.raises(ValueError, match="n_estimators_finetune >= world_size"):
         _get_estimator_shard(2, rank=0, world_size=4)
+
+
+@pytest.mark.parametrize("task_type", ["multiclass", "regression"])
+def test__parameters_unused_by_task__v3_5__is_exactly_the_set_without_gradient(
+    task_type: str,
+) -> None:
+    """Freezing this set is what lets DDP fine-tune one task of the shared model."""
+    arch = _get_small_v3_5_model()
+    x, y = _v3_5_inputs(task_type)  # type: ignore[arg-type]
+    arch(x, y, task_type=task_type).float().sum().backward()
+
+    # Non-learnable parameters (RoPE frequencies) never get a gradient either.
+    without_grad = {
+        id(p) for p in arch.parameters() if p.requires_grad and p.grad is None
+    }
+    unused = _parameters_unused_by_task(arch, task_type)  # type: ignore[arg-type]
+
+    assert unused, "a multitask model always has another task's parameters"
+    assert {id(p) for p in unused} == without_grad
+
+
+def test__parameters_unused_by_task__tasks_own_disjoint_parameters() -> None:
+    arch = _get_small_v3_5_model()
+    multiclass = {id(p) for p in _parameters_unused_by_task(arch, "multiclass")}
+    regression = {id(p) for p in _parameters_unused_by_task(arch, "regression")}
+    assert multiclass.isdisjoint(regression)
+    assert multiclass | regression < {id(p) for p in arch.parameters()}
+
+
+def test__parameters_unused_by_task__single_task_model__is_empty() -> None:
+    assert _parameters_unused_by_task(torch.nn.Linear(2, 2), "multiclass") == []
 
 
 def test__get_loss_for_logging__reports_global_estimator_mean() -> None:
@@ -1635,22 +1681,27 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     )
 
     tensor_p1_full = None
-    # Record the tensor the internal model receives. `autospec` keeps the real
-    # signature, so the engine still sees and passes `task_type`; `side_effect`
-    # runs the real forward.
+    # Patch the standard classifier's *internal model's* forward method
+    # The internal model typically receives the combined train+test sequence
+    # Patch on the class: the inference engine runs per-device copies of the
+    # model, and autospec keeps the signature the engine inspects for `task_type`.
+    model_cls = type(clf_standard.models_[0])
     with patch.object(
-        clf_standard.models_[0],
-        "forward",
-        autospec=True,
-        side_effect=clf_standard.models_[0].forward,
+        model_cls, "forward", autospec=True, side_effect=model_cls.forward
     ) as mock_forward_p1:
         _ = clf_standard.predict_proba(X_test_raw)
-    assert mock_forward_p1.called, "Standard models_[0].forward was not called."
-    assert len(mock_forward_p1.call_args.args) > 1, (
-        f"Standard models_[0].forward call had unexpected arguments: "
-        f"{mock_forward_p1.call_args.args}"
-    )
-    tensor_p1_full = mock_forward_p1.call_args.args[0]
+        assert mock_forward_p1.called, "Standard models_[0].forward was not called."
+
+        # Capture the tensor input 'x' (usually the second positional argument)
+        call_args_list = mock_forward_p1.call_args_list
+        assert len(call_args_list) > 0, (
+            "No calls recorded for standard models_[0].forward."
+        )
+        assert len(call_args_list[0].args) > 1, (
+            f"Standard models_[0].forward call had "
+            f"unexpected arguments: {call_args_list[0].args}"
+        )
+        tensor_p1_full = mock_forward_p1.call_args.args[1]  # (self, x, ...)
 
     assert tensor_p1_full is not None, "Failed to capture tensor from standard path."
     # Shape might be [1, N_Total, Features+1] or similar. Check the actual shape.
@@ -1705,18 +1756,21 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     # to the *internal transformer model*
     tensor_p2_full = None
     with patch.object(
-        clf_batched.models_[0],
-        "forward",
-        autospec=True,
-        side_effect=clf_batched.models_[0].forward,
+        model_cls, "forward", autospec=True, side_effect=model_cls.forward
     ) as mock_forward_p2:
         _ = clf_batched.forward(batch.X_query)
-    assert mock_forward_p2.called, "Batched models_[0].forward was not called."
-    assert len(mock_forward_p2.call_args.args) > 1, (
-        f"Batched models_[0].forward call had unexpected arguments: "
-        f"{mock_forward_p2.call_args.args}"
-    )
-    tensor_p2_full = mock_forward_p2.call_args.args[0]
+        assert mock_forward_p2.called, "Batched models_[0].forward was not called."
+
+        # Capture the tensor input 'x' (assuming same argument position as Path 1)
+        call_args_list = mock_forward_p2.call_args_list
+        assert len(call_args_list) > 0, (
+            "No calls recorded for batched models_[0].forward."
+        )
+        assert len(call_args_list[0].args) > 1, (
+            f"Batched models_[0].forward call had "
+            f"unexpected arguments: {call_args_list[0].args}"
+        )
+        tensor_p2_full = mock_forward_p2.call_args.args[1]  # (self, x, ...)
 
     assert tensor_p2_full is not None, "Failed to capture tensor from batched path."
     # The internal model in this path should
