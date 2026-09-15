@@ -40,6 +40,7 @@ from tabpfn.base import (
     expand_dates_and_text,
     get_embeddings,
     initialize_model_variables_helper,
+    inspect_input_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
@@ -90,7 +91,10 @@ from tabpfn.preprocessing.ensemble import (
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
-from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.modality_detection import (
+    detect_feature_modalities_with_decisions,
+)
+from tabpfn.preprocessing.report import InputReport, build_input_report, input_settings
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
@@ -185,6 +189,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     inferred_feature_schema_: FeatureSchema
     """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
+
+    input_report_: InputReport
+    """How each column of the fit input was read: its dtype, whether it was
+    declared categorical, its distinct-value count, the modality it was detected
+    as or the features it was expanded into, whether it was ordinal-encoded, the
+    rule that decided and the setting that changes it. Set by `fit` on array or
+    DataFrame input; `inspect_input` builds the same report before fitting."""
 
     classes_: npt.NDArray[Any]
     """The unique classes found in the target data during `fit()`."""
@@ -686,6 +697,31 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self._initialize_model_variables()
         return copy.deepcopy(self.inference_config_)
 
+    def inspect_input(self, X: XType) -> InputReport:
+        """Report how `fit` would read each column of `X`, without loading the model.
+
+        Runs the input handling of `fit` on its own: declared categoricals are
+        resolved, datetime and text columns are expanded when the corresponding
+        `inference_config` flags are on, each column's modality is detected and
+        the ordinal encoder is fitted. Every column's outcome is reported with
+        the rule that decided it and the setting that would change it. The
+        estimator is left as it is, nothing is downloaded, and no warning is
+        raised: the report carries the findings.
+
+        The thresholds come from `inference_config_` once the estimator has one
+        (after `fit`, or after `get_inference_config`), and until then from the
+        package defaults with this estimator's `inference_config` applied on top.
+        A checkpoint may declare other values for them, in which case
+        `input_report_` after `fit` is the one to trust.
+
+        Args:
+            X: The training input, as it would be passed to `fit`.
+
+        Returns:
+            One `ColumnReport` per column of `X`, wrapped in an `InputReport`.
+        """
+        return inspect_input_helper(self, X)
+
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -785,14 +821,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # not the wider frame expansion can make of it, so they come off the raw
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        # The report reads labels, dtypes and example values off the input as the
+        # caller passed it, so it is kept past the conversions below.
+        input_X = X
 
-        categorical_indices = resolve_categorical_features_indices(
+        declared_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
         )
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
                 X,
-                categorical_features_indices=categorical_indices,
+                categorical_features_indices=declared_indices,
                 inference_config=self.inference_config_,
             )
         )
@@ -810,7 +849,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             devices=self.devices_,
         )
 
-        feature_schema = detect_feature_modalities(
+        feature_schema, modality_decisions = detect_feature_modalities_with_decisions(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=categorical_indices,
@@ -829,6 +868,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.date_transformer_ = date_transformer
         self.text_transformer_ = text_transformer
         self.categorical_features_indices_ = categorical_indices
+        self.input_report_ = build_input_report(
+            input_X,
+            declared=declared_indices,
+            date_transformer=date_transformer,
+            text_transformer=text_transformer,
+            decisions=modality_decisions,
+            feature_schema=feature_schema,
+            ordinal_encoder=ordinal_encoder,
+            settings=input_settings(self.inference_config_),
+        )
         self.n_train_samples_ = len(X)
 
         # Label encoding

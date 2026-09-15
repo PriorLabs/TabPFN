@@ -91,6 +91,13 @@ class DateTransformer:
         self._check_is_fitted()
         return sorted(self.fitted_columns_)
 
+    @property
+    def expansions(self) -> dict[int, list[str]]:
+        """Each expanded input position and the names of its calendar features."""
+        return {
+            i: list(self.fitted_columns_[i].output_names) for i in self.expanded_indices
+        }
+
     def fit(self, X: XType) -> DateTransformer:
         """Fit one encoder per point in time in `X`, refusing a date it cannot.
 

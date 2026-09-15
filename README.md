@@ -227,6 +227,25 @@ TabPFN requires **Python 3.10+** due to newer language features. Compatible vers
 
 </details>
 
+<details>
+<summary><b>Q: How can I see how TabPFN read my columns?</b></summary>
+
+TabPFN decides on its own whether a column is numerical, categorical or text, honours a declared categorical up to a cardinality cap, and expands datetime or text columns when `TRANSFORM_DATES` or `TRANSFORM_TEXT` is on. `inspect_input` reports these decisions for your data before fitting, without loading the model, and a fitted estimator keeps the same report as `input_report_`:
+
+```python
+from tabpfn import TabPFNClassifier
+
+clf = TabPFNClassifier(categorical_features_indices=[2])
+print(clf.inspect_input(X))  # no download, no fit
+
+clf.fit(X, y)
+print(clf.input_report_)  # same rows, with the checkpoint's thresholds
+```
+
+Each row gives the column's dtype, a few of its values, how many are missing, whether it was declared categorical, its distinct-value count, what it was read as, whether it was ordinal-encoded, the rule that decided, and the `inference_config` setting or argument that changes it. `report.to_frame()`, `report.to_dict()` and `report.to_markdown()` return the same content as a DataFrame, as plain values, and as a Markdown table.
+
+</details>
+
 ### **Installation & Setup**
 
 <details>

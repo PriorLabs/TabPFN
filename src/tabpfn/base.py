@@ -42,9 +42,14 @@ from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
 )
-from tabpfn.preprocessing.clean import clean_data_transform
+from tabpfn.preprocessing.clean import clean_data, clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.modality_detection import (
+    decide_feature_modalities,
+    schema_from_decisions,
+)
+from tabpfn.preprocessing.report import build_input_report, input_settings
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
@@ -53,6 +58,7 @@ from tabpfn.utils import (
 )
 from tabpfn.validation import (
     check_input_shape_matches,
+    ensure_compatible_inspect_input,
     ensure_compatible_predict_input_sklearn,
     validate_categorical_features_indices,
 )
@@ -63,6 +69,7 @@ if TYPE_CHECKING:
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.constants import MemorySavingMode
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+    from tabpfn.preprocessing.report import InputReport
     from tabpfn.regressor import TabPFNRegressor
 
 
@@ -479,6 +486,87 @@ def expand_dates_and_text(
         text_transformer,
         text_transformer.feature_names_out_,
         text_transformer.output_indices(categorical_indices),
+    )
+
+
+def resolve_input_config(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+) -> InferenceConfig:
+    """The config an input is read with, without loading a checkpoint.
+
+    The fitted config once the estimator has one, set by `fit` or by
+    `get_inference_config`, since it carries the checkpoint's own values. Before
+    that, the package defaults with the constructor's `inference_config` applied
+    on top. Public checkpoints so far have declared the package defaults for the
+    fields that steer how a column is read, so the two agree; one may declare
+    other values, in which case the fitted `input_report_` is the one to trust.
+    """
+    fitted = getattr(estimator, "inference_config_", None)
+    if fitted is not None:
+        return fitted
+    defaults = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    return defaults.override_with_user_input_and_resolve_auto(
+        user_config=estimator.inference_config
+    )
+
+
+def inspect_input_helper(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    X: XType,
+) -> InputReport:
+    """Read `X` the way `fit` would and report on every column, touching no model.
+
+    The input handling of `fit`, in its order, without the target, the dataset
+    size limits and the model: declared categoricals are resolved, dates and text
+    are expanded as the config says, the values are validated, modalities are
+    decided and the ordinal encoder is fitted. Nothing is stored on the estimator
+    and no warning is raised; the report carries the findings instead.
+
+    Args:
+        estimator: Supplies `categorical_features_indices` and the config, see
+            `resolve_input_config`.
+        X: The training input, as it would be passed to `fit`.
+
+    Returns:
+        One `ColumnReport` per column of `X`, wrapped in an `InputReport`.
+    """
+    inference_config = resolve_input_config(estimator)
+    declared = resolve_categorical_features_indices(
+        X, estimator.categorical_features_indices
+    )
+    expanded, date_transformer, text_transformer, feature_names, declared_after = (
+        expand_dates_and_text(
+            X,
+            categorical_features_indices=declared,
+            inference_config=inference_config,
+        )
+    )
+    validated = ensure_compatible_inspect_input(
+        expanded, passthrough_inf=inference_config.PASSTHROUGH_INF
+    )
+    decisions = decide_feature_modalities(
+        validated,
+        min_samples_for_inference=inference_config.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+        max_unique_for_category=inference_config.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+        min_unique_for_numerical=inference_config.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+        min_cardinality_for_text=inference_config.MIN_CARDINALITY_FOR_TEXT,
+        provided_categorical_indices=declared_after,
+    )
+    feature_schema = schema_from_decisions(feature_names, decisions)
+    _, ordinal_encoder, feature_schema = clean_data(
+        X=validated,
+        feature_schema=feature_schema,
+        passthrough_inf=inference_config.PASSTHROUGH_INF,
+    )
+    return build_input_report(
+        X,
+        declared=declared,
+        date_transformer=date_transformer,
+        text_transformer=text_transformer,
+        decisions=decisions,
+        feature_schema=feature_schema,
+        ordinal_encoder=ordinal_encoder,
+        settings=input_settings(inference_config),
     )
 
 

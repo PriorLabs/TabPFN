@@ -23,11 +23,15 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
+    _decide_feature_modality,
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
     _warn_on_text,
+    decide_feature_modalities,
     detect_feature_modalities,
+    detect_feature_modalities_with_decisions,
+    schema_from_decisions,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
 
@@ -624,7 +628,7 @@ class TestWarnOnText:
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
         assert "'review'" in message
-        assert INPUT_FEATURE_PREFIX not in message
+        assert f"{INPUT_FEATURE_PREFIX}review" not in message
         # The message must state all remedies.
         assert "numeric dtype" in message
         assert "TRANSFORM_TEXT" in message
@@ -900,3 +904,79 @@ def test__category_and_text_thresholds__move_independently() -> None:
 
     assert schema.features[0].modality is FeatureModality.NUMERICAL
     assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+
+def test__decide_feature_modality__prefix_clears_thresholds__n_unique_is_not_exact():
+    """Past the prefix rows, a column that already cleared every threshold keeps
+    the prefix count as a lower bound; a column that did not is counted in full.
+    """
+    n = _EARLY_EXIT_PREFIX_ROWS + 500
+    thresholds = {
+        "max_unique_for_category": 30,
+        "min_unique_for_numerical": 4,
+        "min_cardinality_for_text": 30,
+        "big_enough_n_to_infer_cat": True,
+    }
+    high = _decide_feature_modality(
+        s=pd.Series(np.arange(n, dtype=float)), reported_categorical=False, **thresholds
+    )
+    assert high.modality is FeatureModality.NUMERICAL
+    assert high.n_unique == _EARLY_EXIT_PREFIX_ROWS
+    assert not high.n_unique_is_exact
+    assert high.numeric_like is True
+
+    low = _decide_feature_modality(
+        s=pd.Series(np.arange(n) % 3, dtype=float),
+        reported_categorical=False,
+        **thresholds,
+    )
+    assert low.modality is FeatureModality.CATEGORICAL
+    assert low.n_unique == 3
+    assert low.n_unique_is_exact
+
+    constant = _decide_feature_modality(
+        s=pd.Series([np.nan] * 10), reported_categorical=False, **thresholds
+    )
+    assert constant.modality is FeatureModality.CONSTANT
+    assert constant.numeric_like is None
+
+
+def test__detect_feature_modalities__matches_decide_feature_modalities():
+    """The schema path and the decision path read every column the same way, and
+    only the schema path warns.
+    """
+    n = 200
+    df = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype=float),
+            "low": np.arange(n) % 3,
+            "text": [f"free text {i}" for i in range(n)],
+            "cat": [f"c{i % 5}" for i in range(n)],
+        }
+    )
+    thresholds = {
+        "min_samples_for_inference": 100,
+        "max_unique_for_category": 30,
+        "min_unique_for_numerical": 4,
+        "min_cardinality_for_text": 30,
+    }
+    X = df.to_numpy(dtype=object)
+
+    with pytest.warns(UserWarning, match="look like free text"):
+        schema, decisions = detect_feature_modalities_with_decisions(
+            X, df.columns.tolist(), **thresholds
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        silent = decide_feature_modalities(X, **thresholds)
+
+    assert silent == decisions
+    assert schema == schema_from_decisions(df.columns.tolist(), decisions)
+    assert [d.modality for d in decisions] == [
+        FeatureModality.NUMERICAL,
+        FeatureModality.CATEGORICAL,
+        FeatureModality.TEXT,
+        FeatureModality.CATEGORICAL,
+    ]
+    with pytest.warns(UserWarning, match="look like free text"):
+        assert detect_feature_modalities(X, df.columns.tolist(), **thresholds) == schema

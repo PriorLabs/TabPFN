@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import warnings
 from collections.abc import Sequence
@@ -29,6 +30,27 @@ _EARLY_EXIT_PREFIX_ROWS = 1024
 #: Cap on how many column names the likely-text warning lists, so a wide frame of
 #: text columns does not produce an unreadable multi-kilobyte message.
 _MAX_TEXT_COLUMNS_IN_WARNING = 10
+
+
+@dataclasses.dataclass(frozen=True)
+class ModalityDecision:
+    """One column's detected modality and the evidence behind it.
+
+    Attributes:
+        modality: The detected modality.
+        n_unique: Distinct values counted, a missing value counting as one of
+            them. A lower bound when `n_unique_is_exact` is False.
+        n_unique_is_exact: Whether `n_unique` is the full count. Counting stops
+            once a prefix of the column has cleared every cardinality threshold,
+            since the rest of the column cannot change the outcome.
+        numeric_like: Whether every value is a number or a spelling of one.
+            `None` when the column was settled as constant before this was read.
+    """
+
+    modality: FeatureModality
+    n_unique: int
+    n_unique_is_exact: bool
+    numeric_like: bool | None
 
 
 def detect_feature_modalities(
@@ -65,25 +87,108 @@ def detect_feature_modalities(
     Returns:
         The inferred `FeatureSchema`.
     """
-    features: list[Feature] = []
+    feature_schema, _ = detect_feature_modalities_with_decisions(
+        X,
+        feature_names,
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
+        provided_categorical_indices=provided_categorical_indices,
+    )
+    return feature_schema
+
+
+def detect_feature_modalities_with_decisions(
+    X: np.ndarray,
+    feature_names: list[str] | None,
+    *,
+    min_samples_for_inference: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
+    provided_categorical_indices: Sequence[int] | None = None,
+) -> tuple[FeatureSchema, list[ModalityDecision]]:
+    """`detect_feature_modalities`, also returning the evidence behind each column.
+
+    Args:
+        X: The data to infer feature modalities from.
+        feature_names: The names of the features.
+        min_samples_for_inference: As for `detect_feature_modalities`.
+        max_unique_for_category: As for `detect_feature_modalities`.
+        min_unique_for_numerical: As for `detect_feature_modalities`.
+        min_cardinality_for_text: As for `detect_feature_modalities`.
+        provided_categorical_indices: As for `detect_feature_modalities`.
+
+    Returns:
+        The inferred `FeatureSchema` and one `ModalityDecision` per column.
+    """
+    decisions = decide_feature_modalities(
+        X,
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
+        provided_categorical_indices=provided_categorical_indices,
+    )
+    feature_schema = schema_from_decisions(feature_names, decisions)
+    _warn_on_text(feature_schema)
+    return feature_schema, decisions
+
+
+def decide_feature_modalities(
+    X: np.ndarray,
+    *,
+    min_samples_for_inference: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
+    provided_categorical_indices: Sequence[int] | None = None,
+) -> list[ModalityDecision]:
+    """Decide each column's modality, keeping the evidence and warning about nothing.
+
+    The rules of `detect_feature_modalities`, which builds a schema from these
+    decisions and warns about text columns. Silent, so a caller that only wants
+    to look at the decisions gets no warning.
+
+    Args:
+        X: The data to infer feature modalities from.
+        min_samples_for_inference: As for `detect_feature_modalities`.
+        max_unique_for_category: As for `detect_feature_modalities`.
+        min_unique_for_numerical: As for `detect_feature_modalities`.
+        min_cardinality_for_text: As for `detect_feature_modalities`.
+        provided_categorical_indices: As for `detect_feature_modalities`.
+
+    Returns:
+        One decision per column of `X`, in column order.
+    """
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
-    unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
-    for i, index in enumerate(range(X.shape[1])):
-        feature_name = unique_feature_names[i]
-        X_slice: np.ndarray = X[:, index]
-        reported_categorical = index in (provided_categorical_indices or ())
-        feat_modality = _detect_feature_modality(
-            s=pd.Series(X_slice, name=feature_name),
-            reported_categorical=reported_categorical,
+    declared = set(provided_categorical_indices or ())
+    return [
+        _decide_feature_modality(
+            s=pd.Series(X[:, index]),
+            reported_categorical=index in declared,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             min_cardinality_for_text=min_cardinality_for_text,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-        features.append(Feature(name=feature_name, modality=feat_modality))
-    feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema)
-    return feature_schema
+        for index in range(X.shape[1])
+    ]
+
+
+def schema_from_decisions(
+    feature_names: list[str] | None,
+    decisions: Sequence[ModalityDecision],
+) -> FeatureSchema:
+    """The schema the decisions describe, its input feature names made unique."""
+    names = build_input_feature_names(feature_names, len(decisions))
+    return FeatureSchema(
+        features=[
+            Feature(name=name, modality=decision.modality)
+            for name, decision in zip(names, decisions, strict=True)
+        ]
+    )
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -120,7 +225,8 @@ def _warn_on_text(feature_schema: FeatureSchema) -> None:
         "distinct values. If it holds genuine text, give it pandas' `string` dtype "
         'and set `inference_config={"TRANSFORM_TEXT": True}` to expand it into '
         "numeric features, or consider the tabpfn-client API, which embeds text "
-        "natively: https://github.com/PriorLabs/tabpfn-client",
+        "natively: https://github.com/PriorLabs/tabpfn-client\n"
+        "After `fit`, `input_report_` lists how every column was read.",
         UserWarning,
         # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
         # `warning.filename` asserts in the tests.
@@ -138,6 +244,26 @@ def _detect_feature_modality(
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
     """Decide a single column's modality via heuristics."""
+    return _decide_feature_modality(
+        s=s,
+        reported_categorical=reported_categorical,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
+        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+    ).modality
+
+
+def _decide_feature_modality(
+    s: pd.Series,
+    *,
+    reported_categorical: bool,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
+    big_enough_n_to_infer_cat: bool,
+) -> ModalityDecision:
+    """Decide a single column's modality via heuristics, keeping the evidence."""
     assert not isinstance(s.dtype, pd.CategoricalDtype), (
         "Categorical dtype must be converted before modality detection; "
         "preserve its intent in provided_categorical_indices."
@@ -159,34 +285,53 @@ def _detect_feature_modality(
         n_unique = _get_unique_with_sklearn_compatible_error(
             s.iloc[:_EARLY_EXIT_PREFIX_ROWS]
         )
-    if n_unique < decided_at:
+    # A prefix count that already clears every threshold is kept as a lower bound.
+    n_unique_is_exact = n_unique < decided_at
+    if n_unique_is_exact:
         n_unique = _get_unique_with_sklearn_compatible_error(s)
 
     if n_unique <= 1 and not reported_categorical:
         # All-missing or single-value. A declared-categorical column is exempt so
         # it still routes through the ordinal encoder instead of crashing as a
         # constant numeric column when predict sees an unseen string value.
-        return FeatureModality.CONSTANT
+        return ModalityDecision(
+            modality=FeatureModality.CONSTANT,
+            n_unique=n_unique,
+            n_unique_is_exact=n_unique_is_exact,
+            numeric_like=None,
+        )
 
     if _is_numeric_pandas_series(s):
-        if _detect_numeric_as_categorical(
+        is_categorical = _detect_numeric_as_categorical(
             n_unique=n_unique,
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        ):
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.NUMERICAL
+        )
+        return ModalityDecision(
+            modality=FeatureModality.CATEGORICAL
+            if is_categorical
+            else FeatureModality.NUMERICAL,
+            n_unique=n_unique,
+            n_unique_is_exact=n_unique_is_exact,
+            numeric_like=True,
+        )
 
     # A pandas `category` column never arrives here as such: `X` is a numpy array
     # by now, and its intent travels in `provided_categorical_indices` instead.
     if pd.api.types.is_string_dtype(s.dtype):
         # A declared categorical is taken at face value: the cardinality cutoff
         # only sorts undeclared string columns into category or text.
-        if reported_categorical or n_unique <= min_cardinality_for_text:
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.TEXT
+        is_categorical = reported_categorical or n_unique <= min_cardinality_for_text
+        return ModalityDecision(
+            modality=FeatureModality.CATEGORICAL
+            if is_categorical
+            else FeatureModality.TEXT,
+            n_unique=n_unique,
+            n_unique_is_exact=n_unique_is_exact,
+            numeric_like=False,
+        )
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )

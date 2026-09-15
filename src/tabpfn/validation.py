@@ -174,6 +174,39 @@ def ensure_compatible_fit_inputs(
     return X, y, original_y_name
 
 
+def ensure_compatible_inspect_input(X: XType, *, passthrough_inf: bool) -> np.ndarray:
+    """Validate the values of a fit input on its own, for reading it without a model.
+
+    The `X` half of `ensure_compatible_fit_inputs_sklearn`: the same nullable-dtype
+    coercion and the same `check_array` settings, without a `y` or an estimator, so
+    an input can be read the way `fit` reads it before any checkpoint is loaded.
+
+    Args:
+        X: The input data, already date-resolved (`DateTransformer`).
+        passthrough_inf: Whether +/-inf is admitted, as `PASSTHROUGH_INF` says.
+
+    Returns:
+        The validated input as np.ndarray.
+
+    Raises:
+        TabPFNValidationError: On what `check_array` rejects.
+    """
+    if isinstance(X, pd.DataFrame):
+        X = coerce_nullable_dtypes_to_numpy(X)
+    try:
+        result = check_array(
+            X,
+            accept_sparse=False,
+            dtype=None,
+            ensure_all_finite=False if passthrough_inf else "allow-nan",
+            ensure_min_samples=2,
+            ensure_min_features=1,
+        )
+    except (ValueError, TypeError) as e:
+        raise TabPFNValidationError(str(e)) from e
+    return typing.cast("np.ndarray", result)
+
+
 def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,

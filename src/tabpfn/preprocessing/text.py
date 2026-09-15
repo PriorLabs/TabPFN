@@ -104,6 +104,13 @@ class TextTransformer:
         self._check_is_fitted()
         return sorted(self.fitted_columns_)
 
+    @property
+    def expansions(self) -> dict[int, list[str]]:
+        """Each expanded input position and the names of its text features."""
+        return {
+            i: list(self.fitted_columns_[i].output_names) for i in self.expanded_indices
+        }
+
     def fit(self, X: XType) -> TextTransformer:
         """Fit one encoder per text column in `X`, if `transform_text` is on.
 

@@ -22,12 +22,15 @@ from .presets import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
+from .report import ColumnReport, InputReport
 from .transform import fit_preprocessing
 
 __all__ = [
     "ClassifierEnsembleConfig",
+    "ColumnReport",
     "EnsembleConfig",
     "FeatureSubsamplingMethod",
+    "InputReport",
     "PreprocessingPipeline",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
