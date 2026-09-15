@@ -12,7 +12,6 @@ This module contains tests for:
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -1636,10 +1635,9 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     )
 
     tensor_p1_full = None
-    # Patch the standard classifier's *internal model's* forward method
-    # The internal model typically receives the combined train+test sequence
-    # `autospec` keeps the real signature, so the engine still sees and passes
-    # `task_type`; `side_effect` runs the real forward.
+    # Record the tensor the internal model receives. `autospec` keeps the real
+    # signature, so the engine still sees and passes `task_type`; `side_effect`
+    # runs the real forward.
     with patch.object(
         clf_standard.models_[0],
         "forward",
@@ -1706,7 +1704,6 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     # Step 3c: Call forward and capture the input tensor
     # to the *internal transformer model*
     tensor_p2_full = None
-    # Patch the *batched* classifier's internal model's forward method
     with patch.object(
         clf_batched.models_[0],
         "forward",
@@ -1965,9 +1962,7 @@ def test__finetuned_classifier__text_column__final_estimator_keeps_it_unexpanded
         n_estimators_final_inference=1,
         random_state=0,
     )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        clf.fit(X, y)
+    clf.fit(X, y)
     final = clf.finetuned_inference_classifier_
     assert final.inference_config_.TRANSFORM_TEXT is False
     assert final.inference_config_.TRANSFORM_DATES is False
