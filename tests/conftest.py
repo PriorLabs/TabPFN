@@ -31,6 +31,20 @@ def default_to_fast_model() -> None:
         settings.tabpfn.model_version = ModelVersion.V3_5_FAST
 
 
+@pytest.fixture(autouse=True, scope="session")
+def freeze_import_time_objects() -> None:
+    """Move everything alive after collection out of the garbage collector's reach.
+
+    ``release_mps_memory`` runs a full ``gc.collect()`` after every test. By the
+    time the first test runs, tabpfn, torch and sklearn have put a few hundred
+    thousand long-lived objects on the collector's lists, and scanning them on
+    every test adds up to minutes on the macOS CI runners. Freezing them once
+    makes each later collection scan only the objects that tests created.
+    """
+    gc.collect()
+    gc.freeze()
+
+
 @pytest.fixture(autouse=True, scope="function")  # noqa: PT003
 def set_global_seed() -> None:
     seed = 42
