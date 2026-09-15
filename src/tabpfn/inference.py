@@ -13,7 +13,7 @@ from copy import deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -342,6 +342,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
+        kv_cache_at_predict: bool = False,
+        kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
     ) -> None:
         """Initialize the on-demand inference engine.
 
@@ -356,6 +358,13 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            kv_cache_at_predict: If True, each member's forward builds its key-value
+                cache from the training rows, predicts the test rows through it in
+                chunks of ``settings.tabpfn.max_batched_test_rows`` and drops the
+                cache, instead of one forward over train and test rows together.
+            kv_cache_precision: Cache dtype for ``kv_cache_at_predict``. None keeps
+                the computed dtype; ``"int8"``/``"fp8"`` are resolved by
+                :func:`_resolve_kv_cache_precision`.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -367,6 +376,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         self.X_train = X_train
         self.y_train = y_train
         self.ensemble_preprocessor = ensemble_preprocessor
+        self.kv_cache_at_predict = kv_cache_at_predict
+        self.kv_cache_precision = kv_cache_precision
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
@@ -457,6 +468,23 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         different threads, one for each device in the system.
         """
         model = self.model_caches[model_index].get(device)
+
+        if self.kv_cache_at_predict:
+            return _forward_with_temporary_kv_cache(
+                model=model,
+                device=device,
+                force_inference_dtype=self.force_inference_dtype,
+                X_train=X_train,
+                X_test=X_test,
+                y_train=y_train,
+                feature_schema=feature_schema,
+                gpu_preprocessor=gpu_preprocessor,
+                autocast=autocast,
+                only_return_standard_out=only_return_standard_out,
+                save_peak_mem=save_peak_mem,
+                kv_cache_precision=self.kv_cache_precision,
+                task_type=task_type,
+            )
 
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
@@ -636,7 +664,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     forward pass through the model which is currently done sequentially.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
@@ -649,6 +677,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
         no_preprocessing: bool = False,
+        kv_cache_at_predict: bool = False,
+        kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
     ) -> None:
         """Initialize the cache preprocessing inference engine.
 
@@ -667,6 +697,15 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 (this is quicker but disables backpropagation)
             no_preprocessing: If True, skip preprocessing on test data.
                 Used for differentiability.
+            kv_cache_at_predict: If True, each member's forward builds its key-value
+                cache from the training rows, predicts the test rows through it in
+                chunks of ``settings.tabpfn.max_batched_test_rows`` and drops the
+                cache, instead of one forward over train and test rows together.
+                Only applies while torch inference mode is on; a forward that needs
+                gradients keeps the joint pass.
+            kv_cache_precision: Cache dtype for ``kv_cache_at_predict``. None keeps
+                the computed dtype; ``"int8"``/``"fp8"`` are resolved by
+                :func:`_resolve_kv_cache_precision`.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -677,6 +716,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         self.inference_mode = inference_mode
         self.no_preprocessing = no_preprocessing
+        self.kv_cache_at_predict = kv_cache_at_predict
+        self.kv_cache_precision = kv_cache_precision
         self.X_train_shape_before_preprocessing = X_train.shape
         self.ensemble_preprocessor = ensemble_preprocessor
 
@@ -781,6 +822,23 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         """
         model = self.model_caches[model_index].get(device)
 
+        if self.kv_cache_at_predict and self.inference_mode:
+            return _forward_with_temporary_kv_cache(
+                model=model,
+                device=device,
+                force_inference_dtype=self.force_inference_dtype,
+                X_train=X_train,
+                X_test=X_test,
+                y_train=y_train,
+                feature_schema=feature_schema,
+                gpu_preprocessor=gpu_preprocessor,
+                autocast=autocast,
+                only_return_standard_out=only_return_standard_out,
+                save_peak_mem=save_peak_mem,
+                kv_cache_precision=self.kv_cache_precision,
+                task_type=task_type,
+            )
+
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
@@ -854,6 +912,191 @@ def _resolve_kv_cache_precision(
         )
         return "auto"
     return kv_cache_precision
+
+
+def _build_kv_cache(
+    model: Architecture,
+    X_train: torch.Tensor,
+    y_train: torch.Tensor,
+    *,
+    batched_cat_ix: list[list[int]],
+    performance_options: Any,
+    autocast: bool,
+    device: torch.device,
+    model_kwargs: dict[str, Any],
+) -> KVCache:
+    """Run the training rows through ``model`` and return the key-value cache.
+
+    ``X_train`` is the preprocessed training tensor of shape ``(n_train, 1, f)``.
+    ``performance_options`` carries the dtype the cache is stored in.
+    """
+    with get_autocast_context(device, enabled=autocast), torch.inference_mode():
+        _, cache = model(
+            X_train,
+            y_train,
+            only_return_standard_out=True,
+            categorical_inds=batched_cat_ix,
+            performance_options=performance_options,
+            return_kv_cache=True,
+            **model_kwargs,
+        )
+    assert cache is not None
+    return cache
+
+
+def _forward_test_rows_with_kv_cache(
+    model: Architecture,
+    X_test: torch.Tensor,
+    y_train: torch.Tensor,
+    *,
+    kv_cache: KVCache,
+    batched_cat_ix: list[list[int]],
+    performance_options: Any,
+    autocast: bool,
+    only_return_standard_out: bool,
+    device: torch.device,
+    model_kwargs: dict[str, Any],
+) -> torch.Tensor | dict[str, torch.Tensor]:
+    """Predict ``X_test`` (shape ``(n_test, 1, f)``) against a built key-value cache.
+
+    ``y_train`` still carries the full train labels for the many-class decoder.
+    Test rows are independent given the cache, so they are run in chunks of at
+    most ``settings.tabpfn.max_batched_test_rows`` and concatenated, bounding peak
+    activation memory. Chunking is mathematically equivalent; outputs may differ
+    slightly due to floating-point non-associativity
+    (see github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425).
+    32768 already saturates the hardware, so larger chunks give tiny speedup.
+    """
+
+    def run(x_test: torch.Tensor) -> torch.Tensor | dict[str, torch.Tensor]:
+        with get_autocast_context(device, enabled=autocast), torch.inference_mode():
+            return model(
+                x_test,
+                y_train,
+                only_return_standard_out=only_return_standard_out,
+                categorical_inds=batched_cat_ix,
+                performance_options=performance_options,
+                kv_cache=kv_cache,
+                x_is_test_only=True,
+                **model_kwargs,
+            )
+
+    max_rows = settings.tabpfn.max_batched_test_rows
+    n_test = X_test.shape[0]
+    if max_rows <= 0 or n_test <= max_rows:
+        return run(X_test)
+
+    outputs = [run(X_test[i : i + max_rows]) for i in range(0, n_test, max_rows)]
+    if not isinstance(outputs[0], dict):
+        return torch.cat(outputs)
+
+    concat_keys = {"standard", "test_embeddings"}
+    # Not emitted by the v3 cached path, but v2 still replicates it per chunk.
+    shared_keys = {"train_embeddings"}
+    unexpected = outputs[0].keys() - concat_keys - shared_keys
+    if unexpected:
+        raise RuntimeError(
+            f"KV-cache test-row chunking has no reassembly rule for model "
+            f"output key(s) {sorted(unexpected)}; update the chunk-merge logic "
+            f"in _forward_test_rows_with_kv_cache."
+        )
+    return {
+        k: outputs[0][k] if k in shared_keys else torch.cat([o[k] for o in outputs])
+        for k in outputs[0]
+    }
+
+
+def _forward_with_temporary_kv_cache(  # noqa: PLR0913
+    *,
+    model: Architecture,
+    device: torch.device,
+    force_inference_dtype: torch.dtype | None,
+    X_train: torch.Tensor | np.ndarray,
+    X_test: torch.Tensor | np.ndarray,
+    y_train: torch.Tensor | np.ndarray,
+    feature_schema: FeatureSchema,
+    gpu_preprocessor: TorchPreprocessingPipeline | None,
+    autocast: bool,
+    only_return_standard_out: bool,
+    save_peak_mem: bool,
+    kv_cache_precision: Literal["auto", "int8", "fp8"] | None,
+    task_type: str,
+) -> torch.Tensor | dict[str, torch.Tensor]:
+    """One ensemble member's forward as a key-value cache built for this call only.
+
+    Preprocesses train and test rows together exactly as the joint forward does,
+    builds the member's cache from the training rows, runs the test rows through it
+    in chunks and drops the cache before returning. Peak activation memory is that
+    of the training rows plus one test chunk, instead of train plus all test rows
+    at once.
+    """
+    X_full, y_train = _prepare_model_inputs(
+        device, force_inference_dtype, X_train, X_test, y_train
+    )
+    n_train = X_train.shape[0]
+    X_full, feature_schema = _maybe_run_gpu_preprocessing(
+        X_full,
+        gpu_preprocessor=gpu_preprocessor,
+        num_train_rows=n_train,
+        feature_schema=feature_schema,
+    )
+    # GPU preprocessing may emit fp32 internally (SVD/quantile for numerical
+    # stability) even under a fp16 run.
+    if force_inference_dtype is not None:
+        X_full = X_full.type(force_inference_dtype)
+        y_train = y_train.type(force_inference_dtype)
+    batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
+
+    # The cache lives for this call only, so quantizing it saves little memory
+    # while moving the predictions; None keeps the computed dtype here.
+    precision = (
+        "auto"
+        if kv_cache_precision is None
+        else _resolve_kv_cache_precision(
+            kv_cache_precision, architecture=model, device=device
+        )
+    )
+    performance_options = dataclasses.replace(
+        model.get_default_performance_options(),
+        save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
+        if save_peak_mem
+        else None,
+    )
+    build_options = dataclasses.replace(
+        performance_options,
+        kv_cache_dtype=(
+            KV_CACHE_PRECISION_DTYPES[precision] if precision != "auto" else None
+        ),
+    )
+    model_kwargs: dict[str, Any] = {}
+    if _model_expectes_task_type_arg(model):
+        model_kwargs["task_type"] = task_type
+
+    cache = _build_kv_cache(
+        model,
+        X_full[:n_train],
+        y_train,
+        batched_cat_ix=batched_cat_ix,
+        performance_options=build_options,
+        autocast=autocast,
+        device=device,
+        model_kwargs=model_kwargs,
+    )
+    try:
+        return _forward_test_rows_with_kv_cache(
+            model,
+            X_full[n_train:],
+            y_train,
+            kv_cache=cache,
+            batched_cat_ix=batched_cat_ix,
+            performance_options=performance_options,
+            autocast=autocast,
+            only_return_standard_out=only_return_standard_out,
+            device=device,
+            model_kwargs=model_kwargs,
+        )
+    finally:
+        del cache
 
 
 class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
@@ -1074,25 +1317,20 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             ),
         )
 
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if _model_expectes_task_type_arg(model):
             kwargs["task_type"] = self.task_type
 
-        with (
-            get_autocast_context(device, enabled=autocast),
-            torch.inference_mode(),
-        ):
-            _, cache = model(
-                X,
-                y,
-                only_return_standard_out=True,
-                categorical_inds=batched_cat_ix,
-                performance_options=performance_options,
-                return_kv_cache=True,
-                **kwargs,
-            )
-
-        assert cache is not None
+        cache = _build_kv_cache(
+            model,
+            X,
+            y,
+            batched_cat_ix=batched_cat_ix,
+            performance_options=performance_options,
+            autocast=autocast,
+            device=device,
+            model_kwargs=kwargs,
+        )
         if not self.keep_cache_on_device or stage_cache_on_cpu:
             cache = cache.to("cpu")
         return cache, device
@@ -1213,7 +1451,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             else None,
         )
 
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if _model_expectes_task_type_arg(model):
             kwargs["task_type"] = task_type
 
@@ -1224,53 +1462,18 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             # Persist on-device copy so subsequent calls skip the transfer
             self.kv_caches[cache_index] = cache_on_device
 
-        def run(x_test: torch.Tensor) -> torch.Tensor | dict[str, torch.Tensor]:
-            with (
-                get_autocast_context(device, enabled=autocast),
-                torch.inference_mode(),
-            ):
-                return model(
-                    x_test,
-                    y_train,
-                    only_return_standard_out=only_return_standard_out,
-                    categorical_inds=batched_cat_ix,
-                    performance_options=performance_options,
-                    kv_cache=cache_on_device,
-                    x_is_test_only=True,
-                    **kwargs,
-                )
-
-        # Test rows are independent given the KV cache, so we run the
-        # forward pass in chunks of at most max_batched_test_rows and concatenate
-        # to bound peak activation memory. Chunking is mathematically equivalent;
-        # outputs may differ slightly due to floating-point non-associativity
-        # (see github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425).
-        # 32768 already saturates the hardware, so larger chunks give tiny speedup.
-        max_rows = settings.tabpfn.max_batched_test_rows
-        n_test = X_test_tensor.shape[0]
-        if max_rows <= 0 or n_test <= max_rows:
-            return run(X_test_tensor)
-
-        outputs = [
-            run(X_test_tensor[i : i + max_rows]) for i in range(0, n_test, max_rows)
-        ]
-        if not isinstance(outputs[0], dict):
-            return torch.cat(outputs)
-
-        concat_keys = {"standard", "test_embeddings"}
-        # Not emitted by the v3 cached path, but v2 still replicates it per chunk.
-        shared_keys = {"train_embeddings"}
-        unexpected = outputs[0].keys() - concat_keys - shared_keys
-        if unexpected:
-            raise RuntimeError(
-                f"KV-cache test-row chunking has no reassembly rule for model "
-                f"output key(s) {sorted(unexpected)}; update the chunk-merge logic "
-                f"in InferenceEngineExplicitKVCache._call_model."
-            )
-        return {
-            k: outputs[0][k] if k in shared_keys else torch.cat([o[k] for o in outputs])
-            for k in outputs[0]
-        }
+        return _forward_test_rows_with_kv_cache(
+            model,
+            X_test_tensor,
+            y_train,
+            kv_cache=cache_on_device,
+            batched_cat_ix=batched_cat_ix,
+            performance_options=performance_options,
+            autocast=autocast,
+            only_return_standard_out=only_return_standard_out,
+            device=device,
+            model_kwargs=kwargs,
+        )
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:

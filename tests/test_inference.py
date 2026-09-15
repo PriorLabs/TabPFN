@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, overload
+from typing import Any, Literal, overload
 from typing_extensions import override
 
 import numpy as np
@@ -944,7 +944,16 @@ def test__kv_cache_chunking__matches_unchunked(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize(
+    "cache_kwargs",
+    [
+        {"fit_mode": "fit_with_cache"},
+        {"fit_mode": "fit_preprocessors", "kv_cache_at_predict": True},
+        {"fit_mode": "low_memory", "kv_cache_at_predict": True},
+    ],
+)
 def test__kv_cache__embeddings_test_only_and_chunk_safe(
+    cache_kwargs: dict[str, Any],
     device: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -967,15 +976,13 @@ def test__kv_cache__embeddings_test_only_and_chunk_safe(
         random_state=42,
         device=device,
         inference_precision=torch.float64,
-        fit_mode="fit_with_cache",
+        **cache_kwargs,
     )
     model.fit(X[:n_train], y[:n_train])
     X_test = X[n_train:]
 
     monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", chunk)
-    with pytest.raises(
-        TabPFNValidationError, match='not supported with fit_mode="fit_with_cache"'
-    ):
+    with pytest.raises(TabPFNValidationError, match="cached predict pass"):
         get_embeddings(model, X_test, data_source="train")
 
     test_emb = get_embeddings(model, X_test, data_source="test")
@@ -1001,3 +1008,96 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             "int8", architecture=arch, device=torch.device("cpu")
         )
     assert resolved == "auto"
+
+
+def _make_estimator_and_data(
+    estimator: str, device: str, n_train: int, n_test: int, **kwargs: Any
+) -> tuple[Any, np.ndarray, np.ndarray, np.ndarray, Any]:
+    """An estimator in float64 with a train/test split and its prediction function."""
+    common: dict[str, Any] = dict(
+        n_estimators=2,
+        random_state=42,
+        device=device,
+        inference_precision=torch.float64,
+        **kwargs,
+    )
+    if estimator == "classifier":
+        X, y = sklearn.datasets.make_classification(
+            n_samples=n_train + n_test,
+            n_features=5,
+            n_informative=3,
+            n_classes=3,
+            random_state=0,
+        )
+        model: Any = TabPFNClassifier(**common)
+
+        def predict(m: Any, x: np.ndarray) -> np.ndarray:
+            return m.predict_proba(x)
+    else:
+        X, y, _ = sklearn.datasets.make_regression(
+            n_samples=n_train + n_test, n_features=5, random_state=0, coef=True
+        )
+        model = TabPFNRegressor(**common)
+
+        def predict(m: Any, x: np.ndarray) -> np.ndarray:
+            return m.predict(x, output_type="mean")
+
+    return model, X[:n_train], y[:n_train], X[n_train:], predict
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
+@pytest.mark.parametrize("estimator", ["classifier", "regressor"])
+def test__kv_cache_at_predict__matches_joint_forward(
+    estimator: str,
+    fit_mode: str,
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache built per predict gives the joint forward's predictions, chunked, and
+    leaves no cache behind.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+    # n_test exceeds the chunk size and is not a multiple of it, so the chunked
+    # path and its ragged last chunk are exercised.
+    n_train, n_test, chunk = 32, 37, 8
+    reference, X_train, y_train, X_test, predict = _make_estimator_and_data(
+        estimator, device, n_train, n_test, fit_mode=fit_mode
+    )
+    cached, *_ = _make_estimator_and_data(
+        estimator,
+        device,
+        n_train,
+        n_test,
+        fit_mode=fit_mode,
+        kv_cache_at_predict=True,
+    )
+    reference.fit(X_train, y_train)
+    cached.fit(X_train, y_train)
+
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", chunk)
+    pred_cached = predict(cached, X_test)
+    pred_reference = predict(reference, X_test)
+
+    np.testing.assert_allclose(pred_cached, pred_reference, rtol=1e-6, atol=1e-6)
+    assert not hasattr(cached.executor_, "kv_caches"), "the cache is dropped"
+    assert type(cached.executor_) is type(reference.executor_)
+
+
+@pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
+def test__kv_cache_at_predict__quantized_cache_predicts(fit_mode: str) -> None:
+    """An explicitly quantized predict-time cache runs end to end."""
+    model, X_train, y_train, X_test, predict = _make_estimator_and_data(
+        "classifier",
+        "cpu",
+        32,
+        12,
+        fit_mode=fit_mode,
+        kv_cache_at_predict=True,
+        kv_cache_precision="int8",
+    )
+    model.fit(X_train, y_train)
+    proba = predict(model, X_test)
+    assert proba.shape == (12, 3)
+    np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-6)
