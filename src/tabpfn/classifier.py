@@ -269,6 +269,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         memory_saving_mode: MemorySavingMode = "auto",
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+        batch_ensemble_members: bool = False,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -488,6 +489,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 quantized precision on an architecture that cannot quantize
                 warns and falls back to `"auto"`.
 
+            batch_ensemble_members:
+                If True and a single device is used, estimators whose preprocessed
+                inputs have the same shape run as one batched forward pass, which
+                removes most of the kernel-launch overhead on small tables. Only
+                with `fit_mode="fit_preprocessors"`. Under autocast the outputs
+                differ from the per-estimator pass by roughly 1e-3 in probability;
+                in float32 they agree to about 1e-6.
+
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
                 results and see the scikit-learn glossary for more information. If
@@ -575,6 +584,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.keep_cache_on_device = keep_cache_on_device
         self.kv_cache_precision = kv_cache_precision
+        self.batch_ensemble_members = batch_ensemble_members
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -972,6 +982,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             inference_mode=True,
             keep_cache_on_device=self.keep_cache_on_device,
             kv_cache_precision=self.kv_cache_precision,
+            batch_ensemble_members=self.batch_ensemble_members,
         )
 
         return self

@@ -1001,3 +1001,98 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             "int8", architecture=arch, device=torch.device("cpu")
         )
     assert resolved == "auto"
+
+
+class _BatchAwareTestModel(Architecture):
+    """A test model whose output for each batch element depends on that element only."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parameter = torch.nn.Parameter(torch.tensor(1.0))
+
+    @override
+    def forward(
+        self,
+        x: Tensor | dict[str, Tensor],
+        y: Tensor | dict[str, Tensor] | None,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        performance_options: PerformanceOptions | None = None,
+        task_type: str | None = None,
+    ) -> Tensor | dict[str, Tensor]:
+        assert isinstance(x, Tensor)
+        assert isinstance(y, Tensor)
+        n_train = y.shape[0]
+        # (n_test, B, 3): each class column a different function of the element's rows
+        test = x[n_train:]
+        scale = torch.stack([test.sum(-1), test.mean(-1), test.amax(-1)], dim=-1)
+        return scale + y.sum(0).reshape(1, -1, 1)
+
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return 2
+
+    @property
+    def features_per_group(self) -> int:
+        return 2
+
+    def reset_save_peak_mem_factor(self, factor: int | None = None) -> None:
+        pass
+
+
+def test__cache_preprocessing__batched_members_match_per_member_outputs() -> None:
+    """Stacking equal-shape members into one forward yields the per-member outputs, in
+    member order, for classification configs whose preprocessing produces two shapes.
+    """
+    rng = default_rng(seed=0)
+    n_train, n_features, n_classes = 120, 5, 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(7, n_features))
+
+    def make_engine(
+        *, batch_ensemble_members: bool
+    ) -> InferenceEngineCachePreprocessing:
+        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+            configs=_create_test_ensemble_configs(
+                n_configs=6, n_classes=n_classes, num_models=1
+            ),
+            n_samples=n_train,
+            feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+            random_state=default_rng(seed=1),
+            n_preprocessing_jobs=1,
+        )
+        engine = InferenceEngineCachePreprocessing(
+            X_train,
+            y_train,
+            ensemble_preprocessor=ensemble_preprocessor,
+            models=[_BatchAwareTestModel()],
+            devices=[torch.device("cpu")],
+            dtype_byte_size=4,
+            force_inference_dtype=None,
+            save_peak_mem=False,
+            inference_mode=True,
+            batch_ensemble_members=batch_ensemble_members,
+        )
+        engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
+        return engine
+
+    kwargs = {"autocast": False, "task_type": "multiclass"}
+    per_member = list(
+        make_engine(batch_ensemble_members=False).iter_outputs(X_test, **kwargs)
+    )
+    batched_engine = make_engine(batch_ensemble_members=True)
+    batched = list(batched_engine.iter_outputs(X_test, **kwargs))
+
+    assert len(batched) == len(per_member) == 6
+    shapes = {tuple(member.X_train.shape) for member in batched_engine.ensemble_members}
+    assert len(shapes) >= 1
+    for (out_b, config_b), (out_s, config_s) in zip(batched, per_member, strict=True):
+        assert config_b is not config_s  # separate engines
+        assert type(config_b) is type(config_s)
+        assert isinstance(out_b, Tensor)
+        assert out_b.shape == out_s.shape == (7, n_classes)
+        torch.testing.assert_close(out_b, out_s, rtol=0, atol=0)
+    assert batched_engine._speed_metrics["predict_model_forward_seconds"] > 0

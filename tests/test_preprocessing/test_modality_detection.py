@@ -1008,3 +1008,21 @@ def test__is_numeric_pandas_series__object_column(values: list, expected: bool) 
     if PANDAS_BELOW_3:
         walk = all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
         assert walk is expected
+
+
+def test__count_distinct_per_column__bool_array__matches_nunique() -> None:
+    """A bool column is counted without sorting: constant gives 1, mixed gives 2."""
+    X = np.array(
+        [
+            [True, False, True, False],
+            [True, True, True, False],
+            [True, False, False, False],
+        ]
+    )
+    expected = np.array(
+        [pd.Series(X[:, j]).nunique(dropna=False) for j in range(X.shape[1])]
+    )
+    counts = _count_distinct_per_column(X)
+    np.testing.assert_array_equal(counts, expected)
+    assert counts.dtype == np.int64
+    np.testing.assert_array_equal(_count_distinct_per_column(X[:1]), [1, 1, 1, 1])
