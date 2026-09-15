@@ -12,6 +12,7 @@ This module contains tests for:
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -20,6 +21,7 @@ from unittest import mock
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn
 import torch
@@ -1941,3 +1943,33 @@ def test__finetuned_tabpfn_classifier__validation_set_of_another_width__raises(
 
     with pytest.raises(TabPFNValidationError, match="expecting"):
         finetuned_clf.fit(X, y, X_val=X[:, :-1], y_val=y)
+
+
+def test__finetuned_classifier__text_column__final_estimator_keeps_it_unexpanded() -> (
+    None
+):
+    """The loop trains on numpy input, where text is ordinal-encoded, so the final
+    estimator must not expand the column either, whatever the checkpoint's default.
+    """
+    rng = np.random.default_rng(0)
+    n = 120
+    X = pd.DataFrame(rng.normal(size=(n, 4)), columns=[f"f{i}" for i in range(4)])
+    X["text"] = pd.array(
+        [f"item {i} note {rng.integers(10**6)}" for i in range(n)], dtype="string"
+    )
+    y = (X["f0"] > 0).astype(int).to_numpy()
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=1,
+        validation_split_ratio=0.2,
+        n_estimators_final_inference=1,
+        random_state=0,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        clf.fit(X, y)
+    final = clf.finetuned_inference_classifier_
+    assert final.inference_config_.TRANSFORM_TEXT is False
+    assert final.inference_config_.TRANSFORM_DATES is False
+    assert final.text_transformer_.expanded_indices == []
+    assert clf.predict(X.iloc[:5]).shape == (5,)
