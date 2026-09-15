@@ -5,12 +5,30 @@
 from __future__ import annotations
 
 import gc
+import os
 import random
 from collections.abc import Generator
 
 import numpy as np
 import pytest
 import torch
+
+from tabpfn.constants import ModelVersion
+from tabpfn.settings import settings
+
+
+@pytest.fixture(autouse=True, scope="session")
+def default_to_fast_model() -> None:
+    """Run tests that do not pin a version on the fast TabPFN-3.5 checkpoint.
+
+    The full 3.5 checkpoint is roughly four times the size of TabPFN-3 and made a
+    default fit-and-predict cycle 3 to 6 times slower in CI. Most tests only need
+    *a* model; the ones that check the full model pin ``ModelVersion.V3_5`` and are
+    unaffected. Set ``TABPFN_MODEL_VERSION`` explicitly to run everything on
+    another version, e.g. ``TABPFN_MODEL_VERSION=v3.5 pytest``.
+    """
+    if "TABPFN_MODEL_VERSION" not in os.environ:
+        settings.tabpfn.model_version = ModelVersion.V3_5_FAST
 
 
 @pytest.fixture(autouse=True, scope="function")  # noqa: PT003
