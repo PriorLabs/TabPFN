@@ -42,7 +42,7 @@
   <!-- network box -->
   <rect x="358" y="80" width="158" height="58" rx="4" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
   <use href="#priorLogo" x="393" y="84" width="21" height="21"/>
-  <text x="418" y="100" text-anchor="start" font-size="14" font-weight="700" fill="#101010">TabPFN-3</text>
+  <text x="418" y="100" text-anchor="start" font-size="14" font-weight="700" fill="#101010">TabPFN-3.5</text>
   <text x="437" y="120" text-anchor="middle" font-size="10.5" fill="#374151">neural network</text>
   <text x="437" y="133" text-anchor="middle" font-size="10.5" fill="#374151">parameterized by θ</text>
 
@@ -103,7 +103,7 @@
   <!-- network box -->
   <rect x="1016" y="112" width="120" height="50" rx="4" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
   <use href="#priorLogo" x="1039" y="128" width="17" height="17"/>
-  <text x="1060" y="141" text-anchor="start" font-size="12" font-weight="700" fill="#101010">TabPFN-3</text>
+  <text x="1060" y="141" text-anchor="start" font-size="12" font-weight="700" fill="#101010">TabPFN-3.5</text>
 
   <!-- arrow to prediction -->
   <line x1="1136" y1="137" x2="1172" y2="137" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
