@@ -1175,3 +1175,46 @@ def test__get_cache_size__tabpfn3_5_classifier_1000_rows() -> None:
     )
     # Numbers need manual update if we bump the default architecture.
     assert total == 3_072_000 + 96 + 4 + 768_000 + inducing + ecdf
+
+
+@pytest.mark.parametrize("use_softmax_scaling", [False, True])
+@torch.no_grad()
+def test__many_class_decoder_attention_weights__matches_forward(
+    use_softmax_scaling: bool,
+) -> None:
+    """The weights are a distribution over train rows and reproduce the fused
+    forward's logits once collapsed by class label.
+    """
+    torch.manual_seed(0)
+    B, N, M, E, max_num_classes = 2, 40, 7, 48, 10
+    head_dim, num_heads = 16, 3
+    scaling = (
+        tabpfn_v3_5.SoftmaxScalingMLP(num_heads=num_heads, head_dim=head_dim)
+        if use_softmax_scaling
+        else None
+    )
+    decoder = tabpfn_v3_5.ManyClassDecoder(
+        max_num_classes=max_num_classes,
+        input_size=E,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        softmax_scaling_layer=scaling,
+    )
+    train_emb = torch.randn(B, N, E)
+    test_emb = torch.randn(B, M, E)
+    targets = torch.randint(0, max_num_classes, (B, N)).float()
+
+    train_keys = decoder.project_keys(train_emb)
+    weights = decoder.attention_weights(train_keys, test_emb)
+    assert weights.shape == (B, M, N)
+    assert torch.all(weights >= 0)
+    torch.testing.assert_close(weights.sum(-1), torch.ones(B, M))
+
+    one_hot = torch.nn.functional.one_hot(targets.long(), max_num_classes).float()
+    class_avg = torch.einsum("bmn,bnt->bmt", weights, one_hot)
+    logits = torch.log(torch.clamp(class_avg, min=1e-5) + 3e-5).transpose(0, 1)
+
+    expected = decoder(
+        train_keys, test_emb, targets, num_present_classes=int(targets.max()) + 1
+    )
+    torch.testing.assert_close(logits, expected, atol=1e-4, rtol=1e-4)
