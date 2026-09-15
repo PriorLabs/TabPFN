@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
 import pytest
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OrdinalEncoder
 
 from tabpfn.preprocessing.datamodel import (
     Feature,
@@ -18,6 +20,9 @@ from tabpfn.preprocessing.datamodel import (
 )
 from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
+from tabpfn.preprocessing.steps.encode_categorical_features_step import (
+    NumericOrdinalEncoder,
+)
 from tabpfn.preprocessing.steps.preprocessing_helpers import EfficientColumnTransformer
 
 
@@ -679,3 +684,115 @@ def test__encode_categorical__ordinal__one_row_fit_learns_every_category() -> No
     assert len(fitted.categories_) == len(expected.categories_)
     for learned, wanted in zip(fitted.categories_, expected.categories_, strict=True):
         np.testing.assert_array_equal(learned, wanted)
+
+
+# ---------------------------------------------------------------------------
+# The numpy ordinal encoder against the sklearn encoder it replaces
+# ---------------------------------------------------------------------------
+
+
+def _sklearn_ordinal_encoder() -> OrdinalEncoder:
+    return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=np.nan)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "with_nan", "with_unknown"),
+    [
+        pytest.param(np.float64, False, False, id="plain"),
+        pytest.param(np.float64, True, False, id="missing-values"),
+        pytest.param(np.float64, False, True, id="unknown-at-transform"),
+        pytest.param(np.float64, True, True, id="missing-and-unknown"),
+        pytest.param(np.float32, True, True, id="float32"),
+    ],
+)
+def test__numeric_ordinal_encoder__matches_sklearn(
+    dtype: Any, with_nan: bool, with_unknown: bool
+) -> None:
+    """Codes, NaN handling, unknown handling and the category count per column match."""
+    rng = np.random.default_rng(0)
+    X = np.column_stack(
+        [rng.integers(0, k, size=80).astype(float) for k in (2, 3, 7, 12)]
+    )
+    if with_nan:
+        X[rng.random(X.shape) < 0.1] = np.nan
+    X_test = X[:20].copy()
+    if with_unknown:
+        X_test[:3, 1] = 99.0
+    X = X.astype(dtype)
+    X_test = X_test.astype(dtype)
+
+    reference = _sklearn_ordinal_encoder()
+    encoder = NumericOrdinalEncoder()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        expected_fit = reference.fit_transform(X)
+        expected_test = reference.transform(X_test)
+
+    np.testing.assert_array_equal(encoder.fit_transform(X), expected_fit)
+    np.testing.assert_array_equal(encoder.transform(X_test), expected_test)
+    assert encoder.transform(X_test).dtype == expected_test.dtype
+    assert [len(c) for c in encoder.categories_] == [
+        len(c) for c in reference.categories_
+    ]
+    assert encoder.n_features_in_ == reference.n_features_in_
+
+
+def test__numeric_ordinal_encoder__degenerate_columns_match_sklearn() -> None:
+    """An all-NaN column and a constant column encode as sklearn encodes them."""
+    X = np.column_stack(
+        [np.full(10, np.nan), np.ones(10), np.arange(10, dtype=float) % 3]
+    )
+    reference = _sklearn_ordinal_encoder()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        expected = reference.fit_transform(X)
+    np.testing.assert_array_equal(NumericOrdinalEncoder().fit_transform(X), expected)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "expected_type"),
+    [
+        pytest.param(np.float64, NumericOrdinalEncoder, id="float64"),
+        pytest.param(np.int64, NumericOrdinalEncoder, id="int64"),
+        pytest.param(object, OrdinalEncoder, id="object"),
+    ],
+)
+def test__get_transformer__ordinal__encoder_follows_input_dtype(
+    dtype: Any, expected_type: type
+) -> None:
+    """Numeric arrays get the numpy encoder; anything else keeps sklearn's."""
+    X = _ordinal_case(np.float64, [0, 1], with_nan=False).astype(dtype)
+    ct, _ = EncodeCategoricalFeaturesStep("ordinal")._get_transformer(X, [0, 1])
+    assert isinstance(ct.transformers[0][1], expected_type)
+
+
+@pytest.mark.parametrize("transform_name", ["ordinal", "ordinal_shuffled"])
+def test__encode_categorical__ordinal__step_matches_sklearn_encoder(
+    transform_name: str,
+) -> None:
+    """The whole step's output is what it was with sklearn's encoder inside."""
+    X = _ordinal_case(np.float64, [1, 3], with_nan=True)
+    X_test = X[:15].copy()
+    X_test[0, 1] = 42.0
+    schema = _make_feature_schema(X.shape[1], [1, 3])
+
+    step = EncodeCategoricalFeaturesStep(transform_name, random_state=0)
+    result = step.fit_transform(X, schema)
+    transformed = step.transform(X_test)
+
+    reference = EncodeCategoricalFeaturesStep(transform_name, random_state=0)
+    ct, _ = reference._get_transformer(X, [1, 3])
+    ct.set_params(ordinal_encoder=_sklearn_ordinal_encoder())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        expected = ct.fit_transform(X)
+        expected_test = ct.transform(X_test)
+    if transform_name == "ordinal_shuffled":
+        for col_ix, perm in step.random_mappings_.items():
+            for block in (expected, expected_test):
+                column = block[:, col_ix]
+                mask = ~np.isnan(column)
+                column[mask] = perm[column[mask].astype(int)]
+
+    np.testing.assert_array_equal(result.X, expected)
+    np.testing.assert_array_equal(transformed.X, expected_test)

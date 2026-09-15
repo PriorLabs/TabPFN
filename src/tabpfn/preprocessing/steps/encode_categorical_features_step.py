@@ -9,6 +9,7 @@ import warnings
 from typing_extensions import override
 
 import numpy as np
+from sklearn.base import BaseEstimator, OneToOneFeatureMixin, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
@@ -91,6 +92,58 @@ def _get_all_cat_indices_after_onehot(
         if i not in onehot_input_cols
     ]
     return sorted(onehot_out + skipped_cat_out)
+
+
+class NumericOrdinalEncoder(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+    """Ordinal codes for numeric columns: one `np.unique` and `np.searchsorted` each.
+
+    Gives the same output as `OrdinalEncoder(handle_unknown="use_encoded_value",
+    unknown_value=np.nan)`: a column's sorted distinct non-NaN values become
+    `0..k-1` as float64, NaN stays NaN, and a value not seen at fit becomes NaN.
+    `categories_` lists NaN last for a column that held NaN at fit, as sklearn's does,
+    so the category count per column is the same. sklearn's encoder spends most of a
+    call on input validation, which on a small table dwarfs the encoding itself; this
+    one assumes a numeric 2D array and validates nothing.
+    """
+
+    def fit(self, X: np.ndarray, y: None = None) -> NumericOrdinalEncoder:
+        """Record each column's sorted distinct values."""
+        del y
+        X = np.asarray(X, dtype=np.float64)
+        self.n_features_in_ = X.shape[1]
+        self.categories_: list[np.ndarray] = []
+        for column in X.T:
+            missing = np.isnan(column)
+            categories = np.unique(column[~missing])
+            if missing.any():
+                categories = np.append(categories, np.nan)
+            self.categories_.append(categories)
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Map each value to the position of its category; NaN where there is none."""
+        X = np.asarray(X, dtype=np.float64)
+        encoded = np.full(X.shape, np.nan, dtype=np.float64)
+        for index, categories in enumerate(self.categories_):
+            known = categories[~np.isnan(categories)]
+            if len(known) == 0:
+                continue
+            column = X[:, index]
+            # NaN sorts past every category, so it lands out of range like an
+            # unseen value.
+            position = np.searchsorted(known, column)
+            in_range = position < len(known)
+            hit = np.zeros(len(column), dtype=bool)
+            hit[in_range] = known[position[in_range]] == column[in_range]
+            encoded[hit, index] = position[hit]
+        return encoded
+
+
+def _ordinal_encoder(X: np.ndarray) -> NumericOrdinalEncoder | OrdinalEncoder:
+    """The numpy encoder for a numeric array, sklearn's for anything else."""
+    if np.issubdtype(X.dtype, np.number):
+        return NumericOrdinalEncoder()
+    return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=np.nan)
 
 
 def _get_least_common_category_count(x_column: np.ndarray) -> int:
@@ -236,14 +289,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             # each transformer's full-size output.
             ct = EfficientColumnTransformer(
                 [
-                    (
-                        "ordinal_encoder",
-                        OrdinalEncoder(
-                            handle_unknown="use_encoded_value",
-                            unknown_value=np.nan,
-                        ),  # 'sparse' has been deprecated
-                        categorical_features,
-                    ),
+                    ("ordinal_encoder", _ordinal_encoder(X), categorical_features),
                 ],
                 # The column numbers to be transformed
                 remainder="passthrough",  # Leave the rest of the columns untouched
@@ -466,4 +512,5 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
 __all__ = [
     "EncodeCategoricalFeaturesStep",
+    "NumericOrdinalEncoder",
 ]

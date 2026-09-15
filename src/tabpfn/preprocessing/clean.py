@@ -226,12 +226,16 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
 
     ``category``/``string``/``object`` columns are left untouched.
     """
-    cols = [
-        col
-        for col, dtype in X.dtypes.items()
+    dtypes = X.dtypes
+    # Decided once per distinct dtype rather than once per column: a wide frame has
+    # thousands of columns and a handful of dtypes.
+    dtypes_to_cast = {
+        dtype
+        for dtype in dtypes.unique()
         if pd.api.types.is_bool_dtype(dtype)
         or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
-    ]
+    }
+    cols = [col for col, dtype in dtypes.items() if dtype in dtypes_to_cast]
     return _cast_columns(X, cols, "float64")
 
 
