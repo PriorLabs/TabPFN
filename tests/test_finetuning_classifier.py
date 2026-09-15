@@ -42,6 +42,7 @@ from tabpfn.finetuning.finetuned_base import (
     EvalResult,
     _get_estimator_shard,
     _get_loss_for_logging,
+    _parameters_unused_by_task,
     _slice_batch_estimators,
 )
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
@@ -52,6 +53,10 @@ from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.settings import settings
 
+from .test_architectures.test_tabpfn_v3_5 import (
+    _get_model as _get_small_v3_5_model,
+    _inputs as _v3_5_inputs,
+)
 from .utils import (
     get_pytest_devices,
     get_pytest_devices_with_mps_marked_slow,
@@ -286,6 +291,37 @@ def test__get_estimator_shard__rejects_empty_rank_shards() -> None:
     """Every DDP rank must run a forward/backward to avoid collective deadlock."""
     with pytest.raises(ValueError, match="n_estimators_finetune >= world_size"):
         _get_estimator_shard(2, rank=0, world_size=4)
+
+
+@pytest.mark.parametrize("task_type", ["multiclass", "regression"])
+def test__parameters_unused_by_task__v3_5__is_exactly_the_set_without_gradient(
+    task_type: str,
+) -> None:
+    """Freezing this set is what lets DDP fine-tune one task of the shared model."""
+    arch = _get_small_v3_5_model()
+    x, y = _v3_5_inputs(task_type)  # type: ignore[arg-type]
+    arch(x, y, task_type=task_type).float().sum().backward()
+
+    # Non-learnable parameters (RoPE frequencies) never get a gradient either.
+    without_grad = {
+        id(p) for p in arch.parameters() if p.requires_grad and p.grad is None
+    }
+    unused = _parameters_unused_by_task(arch, task_type)  # type: ignore[arg-type]
+
+    assert unused, "a multitask model always has another task's parameters"
+    assert {id(p) for p in unused} == without_grad
+
+
+def test__parameters_unused_by_task__tasks_own_disjoint_parameters() -> None:
+    arch = _get_small_v3_5_model()
+    multiclass = {id(p) for p in _parameters_unused_by_task(arch, "multiclass")}
+    regression = {id(p) for p in _parameters_unused_by_task(arch, "regression")}
+    assert multiclass.isdisjoint(regression)
+    assert multiclass | regression < {id(p) for p in arch.parameters()}
+
+
+def test__parameters_unused_by_task__single_task_model__is_empty() -> None:
+    assert _parameters_unused_by_task(torch.nn.Linear(2, 2), "multiclass") == []
 
 
 def test__get_loss_for_logging__reports_global_estimator_mean() -> None:

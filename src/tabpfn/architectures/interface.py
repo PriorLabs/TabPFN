@@ -7,15 +7,12 @@ from __future__ import annotations
 import dataclasses
 from abc import ABC, abstractmethod
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Literal, Protocol, overload
+from typing import Any, Literal, Protocol, overload
 from typing_extensions import override
 
 import torch
 from pydantic.dataclasses import dataclass
 from torch import Tensor, nn
-
-if TYPE_CHECKING:
-    from tabpfn.constants import TaskType
 
 
 @dataclass
@@ -263,18 +260,6 @@ class Architecture(nn.Module, ABC):
             force_recompute_layer=False,
             use_chunkwise_inference=False,
         )
-
-    def parameters_unused_by_task(
-        self,
-        task_type: TaskType,  # noqa: ARG002
-    ) -> list[nn.Parameter]:
-        """Parameters that a forward pass for ``task_type`` never touches.
-
-        A multitask architecture holds one target encoder and head per task, so
-        fine-tuning one task must freeze the others' parameters. Single-task
-        architectures return ``[]``.
-        """
-        return []
 
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
         """KV cache storage dtypes this architecture supports (``fit_with_cache``).
