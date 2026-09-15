@@ -858,3 +858,53 @@ def test__load_ckpt_without_softmax_temperature__uses_legacy_default(
     )
 
     assert inference_config.SOFTMAX_TEMPERATURE == DEFAULT_SOFTMAX_TEMPERATURE == 0.9
+
+
+@pytest.mark.parametrize("architecture_name", ["tabpfn_v2", "tabpfn_v3"])
+def test__load_model__skips_the_random_init_and_matches_the_checkpoint(
+    tmp_path: Path, architecture_name: str
+) -> None:
+    """A model built without parameter initialisation matches the checkpoint exactly."""
+    if architecture_name == "tabpfn_v2":
+        config = _get_minimal_v2_config()
+        source = tabpfn_v2.get_architecture(config, cache_trainset_representation=False)
+        checkpoint = {"state_dict": source.state_dict(), "config": asdict(config)}
+    else:
+        inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+        checkpoint = _build_small_v3_checkpoint(inference_config, max_num_classes=10)
+        source = tabpfn_v3.get_architecture(
+            TabPFNV3Config(**checkpoint["config"]), cache_trainset_representation=False
+        )
+        source.load_state_dict(checkpoint["state_dict"])
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded, *_ = model_loading.load_model(
+        path=checkpoint_path,
+        estimator_type="classifier",
+        cache_trainset_representation=False,
+    )
+    source_params = dict(source.named_parameters())
+    loaded_params = dict(loaded.named_parameters())
+    assert loaded_params.keys() == source_params.keys()
+    for name, parameter in source_params.items():
+        torch.testing.assert_close(loaded_params[name], parameter, rtol=0, atol=0)
+    source_buffers = dict(source.named_buffers())
+    loaded_buffers = dict(loaded.named_buffers())
+    assert loaded_buffers.keys() == source_buffers.keys()
+    for name, buffer in source_buffers.items():
+        torch.testing.assert_close(loaded_buffers[name], buffer, rtol=0, atol=0)
+
+
+def test__skip_parameter_init__is_scoped_to_the_block() -> None:
+    """Inside the block the init functions leave tensors alone; outside they work."""
+    tensor = torch.ones(3)
+    with model_loading._skip_parameter_init():
+        torch.nn.init.zeros_(tensor)
+        assert torch.equal(tensor, torch.ones(3))
+        layer = nn.Linear(
+            2, 2
+        )  # built inside: allocated, not initialised, still usable
+        assert layer.weight.shape == (2, 2)
+    torch.nn.init.zeros_(tensor)
+    assert torch.equal(tensor, torch.zeros(3))
