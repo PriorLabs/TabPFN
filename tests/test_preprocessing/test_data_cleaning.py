@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -27,6 +28,7 @@ from tabpfn.preprocessing.clean import (
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    CategoryOrdinalEncoder,
     EfficientColumnTransformer,
     get_ordinal_encoder,
 )
@@ -1060,9 +1062,9 @@ def test__clean_data__object_passthrough_falls_back_to_the_encoder() -> None:
     # The real call still works, through sklearn, and learns the categories exactly
     # once. Declining the assembly *after* fitting them would pay for a second pass
     # over the data and then discard it, since `fit_transform` fits again itself.
-    unpatched_fit = OrdinalEncoder.fit
+    unpatched_fit = CategoryOrdinalEncoder._fit
     with mock.patch.object(
-        OrdinalEncoder, "fit", autospec=True, side_effect=unpatched_fit
+        CategoryOrdinalEncoder, "_fit", autospec=True, side_effect=unpatched_fit
     ) as fitted:
         out = process_text_na_dataframe(
             frame, ord_encoder=get_ordinal_encoder(), fit_encoder=True
@@ -1372,3 +1374,103 @@ def test__coerce_nullable_dtypes_to_numpy__selects_by_dtype() -> None:
             assert out[c].dtype == X[c].dtype, c
     assert list(out.columns) == list(X.columns)
     assert out["boolean"].isna().tolist() == [False, True, False]
+
+
+# ---------------------------------------------------------------------------
+# The pandas ordinal encoder against the sklearn encoder it replaces
+# ---------------------------------------------------------------------------
+
+
+def _sklearn_frozen_encoder() -> OrdinalEncoder:
+    """The encoder `get_ordinal_encoder` used to wrap."""
+    return OrdinalEncoder(
+        categories="auto",
+        dtype=np.float64,
+        handle_unknown="use_encoded_value",
+        unknown_value=-1,
+        encoded_missing_value=np.nan,
+    )
+
+
+def _category_frame() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Category and string columns as `fix_dtypes` hands them on, at fit and predict."""
+    fit = pd.DataFrame(
+        {
+            "strings": pd.Categorical(["b", "a", None, "b", "c"]),
+            "ints": pd.Categorical([2, 1, 2, 1, 3]),
+            "floats": pd.Categorical([2.0, np.nan, 1.0, 2.0, 1.0]),
+            "unused_category": pd.Categorical(["x"] * 5, categories=["x", "y"]),
+            "string_dtype": pd.array(["p", "q", "p", "q", "p"], dtype="string"),
+            "all_missing": pd.Categorical([None] * 5, categories=["m"]),
+        }
+    )
+    predict = pd.DataFrame(
+        {
+            "strings": pd.Categorical(["a", "zzz", None]),
+            "ints": pd.Categorical([1, 5, 2]),
+            "floats": pd.Categorical([1.0, 7.0, np.nan]),
+            "unused_category": pd.Categorical(["y", "x", "x"]),
+            "string_dtype": pd.array(["q", "new", "p"], dtype="string"),
+            "all_missing": pd.Categorical(["m", None, "z"]),
+        }
+    )
+    return fit, predict
+
+
+def test__category_ordinal_encoder__matches_sklearn() -> None:
+    """Codes, unknown and missing handling and `categories_` match sklearn's encoder."""
+    fit, predict = _category_frame()
+    reference = _sklearn_frozen_encoder()
+    encoder = CategoryOrdinalEncoder()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        expected_fit = reference.fit_transform(fit)
+        expected_predict = reference.transform(predict)
+
+    np.testing.assert_array_equal(encoder.fit_transform(fit), expected_fit)
+    np.testing.assert_array_equal(encoder.transform(predict), expected_predict)
+    assert encoder.n_features_in_ == reference.n_features_in_
+    for ours, theirs in zip(encoder.categories_, reference.categories_, strict=True):
+        assert ours.dtype == theirs.dtype
+        assert len(ours) == len(theirs)
+        for a, b in zip(ours, theirs, strict=True):
+            assert (pd.isna(a) and pd.isna(b)) or a == b
+
+
+def test__category_ordinal_encoder__mixed_types_raise_like_sklearn() -> None:
+    """A column mixing strings and numbers is rejected, as sklearn rejects it."""
+    frame = pd.DataFrame({"mixed": np.array(["a", 1, "b"], dtype=object)})
+    with pytest.raises(TypeError, match="uniformly strings or numbers"):
+        CategoryOrdinalEncoder().fit(frame)
+
+
+def test__get_ordinal_encoder__matches_sklearn_through_clean_data() -> None:
+    """`clean_data` and a predict-time transform match the sklearn-backed encoder."""
+    fit, predict = _category_frame()
+    fit = fit.assign(number=np.arange(5, dtype=np.float64))
+    predict = predict.assign(number=np.arange(3, dtype=np.float64))
+    schema = FeatureSchema.from_only_categorical_indices(list(range(6)), 7)
+
+    cleaned, encoder, _ = clean_data(
+        X=fit.to_numpy(dtype=object), feature_schema=schema
+    )
+    transformed = clean_data_transform(
+        X=predict.to_numpy(dtype=object),
+        cat_indices=list(range(6)),
+        ord_encoder=encoder,
+    )
+
+    reference = get_ordinal_encoder()
+    reference.set_params(encoder=_sklearn_frozen_encoder())
+    fit_frame = fix_dtypes(fit.to_numpy(dtype=object), cat_indices=list(range(6)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        expected = process_text_na_dataframe(
+            fit_frame, ord_encoder=reference, fit_encoder=True
+        )
+        expected_predict = process_text_na_dataframe(
+            fix_dtypes(predict.to_numpy(dtype=object), cat_indices=list(range(6))),
+            ord_encoder=reference,
+        )
+    np.testing.assert_array_equal(cleaned, expected)
+    np.testing.assert_array_equal(transformed, expected_predict)

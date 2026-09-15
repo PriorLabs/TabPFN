@@ -12,11 +12,13 @@ import pandas as pd
 from scipy import sparse
 from sklearn import get_config
 from sklearn.base import (
+    BaseEstimator,
     OneToOneFeatureMixin,
+    TransformerMixin,
     check_is_fitted,
 )
 from sklearn.compose import ColumnTransformer, make_column_selector
-from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
+from sklearn.preprocessing import FunctionTransformer
 
 from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
 from tabpfn.preprocessing.steps.utils import is_identity_transformer
@@ -550,19 +552,146 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
         return names[self._stacked_positions(list(original_columns))]
 
 
+class CategoryOrdinalEncoder(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
+    """Ordinal codes for category and string columns, computed with pandas.
+
+    Same output as sklearn's `OrdinalEncoder(categories="auto",
+    handle_unknown="use_encoded_value", unknown_value=-1,
+    encoded_missing_value=np.nan)`: a column's sorted distinct values become
+    `0..k-1`, a value unseen at fit becomes -1,
+    and a missing value becomes NaN where the column had missing values at fit and -1
+    where it had none. `categories_` lists each column's values in that order, missing
+    last, in the dtype of the column's values (object for strings, numeric for numeric
+    categories), which the dtype alignment at predict reads. sklearn's encoder extracts
+    and validates every column separately on each call, which on a table of a few
+    hundred rows dwarfs the encoding; this one reads a category column's codes directly
+    and looks the rest up in a `pd.Index`.
+    """
+
+    def __init__(self, dtype: Any = np.float64):
+        self.dtype = dtype
+
+    def fit(self, X: XType, y: Any = None) -> Self:
+        """Record each column's sorted distinct values, missing last."""
+        del y
+        self._fit(_as_frame(X), encode=False)
+        return self
+
+    def fit_transform(self, X: XType, y: Any = None) -> np.ndarray:
+        """Fit and encode in one pass over the columns."""
+        del y
+        return self._fit(_as_frame(X), encode=True)
+
+    def transform(self, X: XType) -> np.ndarray:
+        """Map each value to its category's position; -1 if unseen, NaN if missing."""
+        X = _as_frame(X)
+        encoded = np.empty(X.shape, dtype=self.dtype)
+        for position, (_, column) in enumerate(X.items()):
+            known = self._known[position]
+            missing_code = self._missing_code[position]
+            if isinstance(column.dtype, pd.CategoricalDtype):
+                # Position of each of the column's own categories among the fitted
+                # ones, then one gather over the codes.
+                lookup = pd.Index(known).get_indexer(np.asarray(column.cat.categories))
+                encoded[:, position] = self._gather(
+                    column.cat.codes.to_numpy(), lookup, missing_code
+                )
+            else:
+                values = column.to_numpy()
+                out = pd.Index(known).get_indexer(values).astype(self.dtype)
+                out[pd.isna(values)] = missing_code
+                encoded[:, position] = out
+        return encoded
+
+    def _fit(self, X: pd.DataFrame, *, encode: bool) -> np.ndarray | None:
+        self.n_features_in_ = X.shape[1]
+        if all(isinstance(name, str) for name in X.columns):
+            self.feature_names_in_ = np.asarray(X.columns, dtype=object)
+        self.categories_: list[np.ndarray] = []
+        self._known: list[np.ndarray] = []
+        # What a missing value encodes to per column: NaN where the column had missing
+        # values at fit (they are then a category of their own), -1 (unseen) otherwise.
+        self._missing_code: list[float] = []
+        encoded = np.empty(X.shape, dtype=self.dtype) if encode else None
+        for position, (_, column) in enumerate(X.items()):
+            is_categorical = isinstance(column.dtype, pd.CategoricalDtype)
+            if is_categorical:
+                # The codes already say which categories occur; a `Categorical` holds
+                # every kind of missing value as NaN.
+                codes = column.cat.codes.to_numpy()
+                used = np.unique(codes)
+                has_missing = bool(len(used)) and used[0] < 0
+                used = used[1:] if has_missing else used
+                present = np.asarray(column.cat.categories)[used]
+                missing: list[Any] = [np.nan] if has_missing else []
+            else:
+                values = column.to_numpy()
+                missing_mask = pd.isna(values)
+                present = values[~missing_mask]
+                missing_values = values[missing_mask].tolist()
+                missing = []
+                if any(value is None for value in missing_values):
+                    missing.append(None)
+                if any(value is not None for value in missing_values):
+                    missing.append(np.nan)
+            known = _sorted_distinct(present)
+            if present.dtype == object:
+                categories = np.array(list(known) + missing, dtype=object)
+            else:
+                categories = np.append(known, np.nan) if missing else known
+            missing_code = np.nan if missing else -1.0
+            self.categories_.append(categories)
+            self._known.append(known)
+            self._missing_code.append(missing_code)
+            if encoded is None:
+                continue
+            if is_categorical:
+                # Every used category is known, so its rank among them is its code.
+                rank = {value: index for index, value in enumerate(known.tolist())}
+                lookup = np.full(len(column.cat.categories), -1)
+                lookup[used] = [rank[value] for value in present.tolist()]
+                encoded[:, position] = self._gather(codes, lookup, missing_code)
+            else:
+                out = pd.Index(known).get_indexer(values).astype(self.dtype)
+                out[missing_mask] = missing_code
+                encoded[:, position] = out
+        return encoded
+
+    def _gather(
+        self, codes: np.ndarray, lookup: np.ndarray, missing_code: float
+    ) -> np.ndarray:
+        """`lookup[codes]`, with the missing code (-1) mapped to `missing_code`."""
+        out = np.full(len(codes), missing_code, dtype=self.dtype)
+        seen = codes >= 0
+        out[seen] = lookup[codes[seen]]
+        return out
+
+
+def _sorted_distinct(present: np.ndarray) -> np.ndarray:
+    """`present`'s distinct values in sorted order, as sklearn's encoder orders them."""
+    if present.dtype != object:
+        return np.unique(present)
+    try:
+        return np.array(sorted(set(present.tolist())), dtype=object)
+    except TypeError as error:
+        types = sorted({type(value).__qualname__ for value in present})
+        raise TypeError(
+            "Encoders require their input argument must be uniformly strings or "
+            f"numbers. Got {types}"
+        ) from error
+
+
+def _as_frame(X: XType) -> pd.DataFrame:
+    """`X` as a frame, so columns can be read one at a time with their dtype."""
+    return X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+
+
 def get_ordinal_encoder(
     *,
     numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
 ) -> OrderPreservingColumnTransformer:
     """Create a ColumnTransformer that ordinally encodes string/category columns."""
-    oe = OrdinalEncoder(
-        # TODO: Could utilize the categorical dtype values directly instead of "auto"
-        categories="auto",
-        dtype=numpy_dtype,  # type: ignore
-        handle_unknown="use_encoded_value",
-        unknown_value=-1,
-        encoded_missing_value=np.nan,  # Missing stays missing
-    )
+    oe = CategoryOrdinalEncoder(dtype=numpy_dtype)
     # Documentation of sklearn, deferring to pandas is misleading here. It's done
     # using a regex on the type of the column, and using `object`, `"object"` and
     # `np.object` will not pick up strings.
