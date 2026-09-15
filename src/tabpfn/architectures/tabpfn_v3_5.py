@@ -545,13 +545,6 @@ def _at_least_fp32(dtype: torch.dtype) -> torch.dtype:
     return torch.promote_types(dtype, torch.float32)
 
 
-def _is_cpu_fp16(x: torch.Tensor) -> bool:
-    """fp16 on CPU has no attention kernel that accumulates in fp32, so the scores
-    overflow where CUDA's do not. Such attention is computed in fp32 instead.
-    """
-    return x.dtype == torch.float16 and x.device.type == "cpu"
-
-
 class ManyClassDecoder(nn.Module):
     """Attention-based retrieval decoder for many-class classification.
 
@@ -1045,9 +1038,10 @@ def _batched_scaled_dot_product_attention(
         assert k is not None
         src_len = k.shape[1]
         q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
-    if _is_cpu_fp16(q_BSHD):
-        # The scaled queries reach ~1e4, so the scores exceed the fp16 range;
-        # the CPU flash kernel of older torch releases then returns NaN.
+    if q_BSHD.dtype == torch.float16 and q_BSHD.device.type == "cpu":
+        # The scaled queries reach ~1e4, so the scores exceed the fp16 range. The
+        # CUDA kernels accumulate in fp32; the CPU flash kernel of older torch
+        # releases does not and returns NaN.
         out = scaled_dot_product_attention(
             q_BSHD.float(),
             None if k_BSJD is None else k_BSJD.float(),
