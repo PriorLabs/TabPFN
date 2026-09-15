@@ -293,8 +293,11 @@ class BarDistribution(nn.Module):
         )
 
         rest_prob = left_prob - cumprobs.gather(-1, idx[..., None]).squeeze(-1)
-        left_border = self.borders[idx]
-        right_border = self.borders[idx + 1]
+        # `idx` comes from `logits`, so index a same-device view of the borders.
+        # No-op when they already match.
+        borders = self.borders.to(logits.device)
+        left_border = borders[idx]
+        right_border = borders[idx + 1]
         return left_border + (right_border - left_border) * rest_prob / probs.gather(
             -1,
             idx[..., None],
@@ -346,9 +349,13 @@ class BarDistribution(nn.Module):
 
     def mode(self, logits: torch.Tensor) -> torch.Tensor:
         """Mode of the distribution (center of the highest-density bucket)."""
-        density = logits.softmax(-1) / self.bucket_widths
+        # Same-device view of the borders; `bucket_widths` derives from them.
+        # No-op when they already match.
+        borders = self.borders.to(logits.device)
+        widths = borders[1:] - borders[:-1]
+        density = logits.softmax(-1) / widths
         mode_inds = density.argmax(-1)
-        bucket_means = self.borders[:-1] + self.bucket_widths / 2
+        bucket_means = borders[:-1] + widths / 2
         return bucket_means[mode_inds]
 
     def ei(
