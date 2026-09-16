@@ -3,10 +3,10 @@
 """What `fit` saw of its input, kept so the reading of each column can be explained.
 
 Fit converts, expands, validates and encodes its input before any model sees it,
-and afterwards only the outcome is left. The record keeps the little that is lost
-on the way: each input column as received, and the evidence behind each modality
-decision. Everything in it is read off state fit computes anyway, except for a
-few example values per column drawn from the first rows.
+and afterwards only the outcome is left. The inspection keeps the little that is
+lost on the way: each input column as received, and the evidence behind each
+modality decision. Everything in it is read off state fit computes anyway, except
+for a few example values per column drawn from the first rows.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ _EXAMPLE_ROWS = 1000
 
 
 @dataclasses.dataclass(frozen=True)
-class InputRecord:
+class InputInspection:
     """What `fit` saw of its input, before any conversion, and what it decided.
 
     Attributes:
@@ -56,21 +56,23 @@ class InputRecord:
     decisions: tuple[ModalityDecision, ...]
 
 
-def record_input(X: XType, *, decisions: Sequence[ModalityDecision]) -> InputRecord:
-    """Record the fit input `X` as the caller passed it, with the decisions taken on it.
+def build_input_inspection(
+    X: XType, *, decisions: Sequence[ModalityDecision]
+) -> InputInspection:
+    """Inspect the fit input `X` as received, with the decisions taken on it.
 
     Args:
         X: The fit input, before any conversion or expansion.
         decisions: The modality decisions for the expanded, validated input.
 
     Returns:
-        The record.
+        The inspection.
     """
     is_frame = isinstance(X, pd.DataFrame)
     head = X.iloc[:_EXAMPLE_ROWS] if is_frame else X[:_EXAMPLE_ROWS]
     values = _as_array(head)
     missing = pd.isna(values)
-    return InputRecord(
+    return InputInspection(
         labels=tuple(str(label) for label in X.columns) if is_frame else None,
         dtypes=_dtypes(X, n_columns=values.shape[1]),
         examples=tuple(
@@ -120,4 +122,9 @@ def _examples(present: np.ndarray) -> tuple[str, ...]:
     )
 
 
-__all__ = ["MAX_EXAMPLES", "MAX_EXAMPLE_LENGTH", "InputRecord", "record_input"]
+__all__ = [
+    "MAX_EXAMPLES",
+    "MAX_EXAMPLE_LENGTH",
+    "InputInspection",
+    "build_input_inspection",
+]

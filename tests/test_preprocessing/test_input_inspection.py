@@ -1,5 +1,5 @@
 #  Copyright (c) Prior Labs GmbH 2026.
-"""Tests for the record fit keeps of its input."""
+"""Tests for the inspection fit keeps of its input."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.input_record import (
+from tabpfn.preprocessing.input_inspection import (
     MAX_EXAMPLE_LENGTH,
     MAX_EXAMPLES,
-    InputRecord,
-    record_input,
+    InputInspection,
+    build_input_inspection,
 )
 from tabpfn.preprocessing.modality_detection import (
     ModalityDecision,
@@ -56,17 +56,17 @@ def _decisions(X: pd.DataFrame | np.ndarray) -> list[ModalityDecision]:
     return decisions
 
 
-def test__record_input__mixed_frame__keeps_labels_dtypes_examples_and_declarations():
+def test__build_input_inspection__mixed_frame__keeps_every_fact():
     X = _mixed_frame()
 
-    record = record_input(X, decisions=_decisions(X))
+    inspection = build_input_inspection(X, decisions=_decisions(X))
 
-    assert record.labels == ("amount", "level", "city", "note", "empty")
+    assert inspection.labels == ("amount", "level", "city", "note", "empty")
     string = "object" if PANDAS_BELOW_3 else "str"
-    assert record.dtypes == ("float64", "category", string, string, "float64")
-    assert record.category_dtype_positions == (1,)
-    assert len(record.decisions) == X.shape[1]
-    amount, level, city, note, empty = record.examples
+    assert inspection.dtypes == ("float64", "category", string, string, "float64")
+    assert inspection.category_dtype_positions == (1,)
+    assert len(inspection.decisions) == X.shape[1]
+    amount, level, city, note, empty = inspection.examples
     assert len(amount) == MAX_EXAMPLES
     assert set(level) == {"0", "1", "2"}
     assert city[:2] == ("'c1'", "'c2'")
@@ -75,34 +75,36 @@ def test__record_input__mixed_frame__keeps_labels_dtypes_examples_and_declaratio
     assert empty == ()
 
 
-def test__record_input__array_input__has_positional_facts():
+def test__build_input_inspection__array_input__has_positional_facts():
     X = np.column_stack([np.arange(10, dtype=float), np.arange(10) % 2])
 
-    record = record_input(X, decisions=_decisions(X))
+    inspection = build_input_inspection(X, decisions=_decisions(X))
 
-    assert record.labels is None
-    assert record.dtypes == ("float64", "float64")
-    assert record.category_dtype_positions == ()
-    assert record.examples[1] == ("0.0", "1.0")
-    assert record.examples[0] == ("0.0", "1.0", "2.0", "3.0", "4.0")
+    assert inspection.labels is None
+    assert inspection.dtypes == ("float64", "float64")
+    assert inspection.category_dtype_positions == ()
+    assert inspection.examples[1] == ("0.0", "1.0")
+    assert inspection.examples[0] == ("0.0", "1.0", "2.0", "3.0", "4.0")
 
 
-def test__record_input__list_input__has_no_dtypes():
+def test__build_input_inspection__list_input__has_no_dtypes():
     X = [[1.0, "a"], [2.0, "b"], [3.0, "a"]]
 
-    record = record_input(X, decisions=_decisions(np.asarray(X, dtype=object)))
+    inspection = build_input_inspection(
+        X, decisions=_decisions(np.asarray(X, dtype=object))
+    )
 
-    assert record.labels is None
-    assert record.dtypes is None
-    assert record.examples == (("1.0", "2.0", "3.0"), ("'a'", "'b'"))
+    assert inspection.labels is None
+    assert inspection.dtypes is None
+    assert inspection.examples == (("1.0", "2.0", "3.0"), ("'a'", "'b'"))
 
 
-def test__record_input__integer_labels__are_kept_as_text():
+def test__build_input_inspection__integer_labels__are_kept_as_text():
     X = pd.DataFrame(np.arange(20, dtype=float).reshape(10, 2))
 
-    record = record_input(X, decisions=_decisions(X))
+    inspection = build_input_inspection(X, decisions=_decisions(X))
 
-    assert record.labels == ("0", "1")
+    assert inspection.labels == ("0", "1")
 
 
 def _fit_data(estimator_cls: type) -> tuple[pd.DataFrame, np.ndarray]:
@@ -118,7 +120,7 @@ def _fit_data(estimator_cls: type) -> tuple[pd.DataFrame, np.ndarray]:
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit__sets_input_record__matching_the_input_and_the_schema(
+def test__fit__sets_input_inspection__matching_the_input_and_the_schema(
     estimator_cls: type,
 ) -> None:
     X, y = _fit_data(estimator_cls)
@@ -127,16 +129,16 @@ def test__fit__sets_input_record__matching_the_input_and_the_schema(
     with pytest.warns(UserWarning, match="look like free text"):
         model.fit(X, y)
 
-    record = model.input_record_
-    assert isinstance(record, InputRecord)
-    assert record.labels == tuple(X.columns)
-    assert record.category_dtype_positions == (1,)
-    assert len(record.decisions) == model.inferred_feature_schema_.num_columns
-    assert [d.modality for d in record.decisions] == [
+    inspection = model.input_inspection_
+    assert isinstance(inspection, InputInspection)
+    assert inspection.labels == tuple(X.columns)
+    assert inspection.category_dtype_positions == (1,)
+    assert len(inspection.decisions) == model.inferred_feature_schema_.num_columns
+    assert [d.modality for d in inspection.decisions] == [
         f.modality for f in model.inferred_feature_schema_.features
     ]
-    assert record.decisions[3].modality is FeatureModality.TEXT
-    assert record.decisions[4].modality is FeatureModality.CONSTANT
+    assert inspection.decisions[3].modality is FeatureModality.TEXT
+    assert inspection.decisions[4].modality is FeatureModality.CONSTANT
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
@@ -155,15 +157,15 @@ def test__fit__with_transform_dates__decisions_cover_the_expanded_columns(
     with pytest.warns(UserWarning, match="look like free text"):
         model.fit(X, y)
 
-    record = model.input_record_
-    assert record.labels == tuple(X.columns)
-    assert record.dtypes[-1].startswith("datetime64")
-    assert record.examples[-1][0] == "2024-01-01 00:00:00"
-    assert len(record.decisions) == model.inferred_feature_schema_.num_columns
-    assert len(record.decisions) > X.shape[1]
+    inspection = model.input_inspection_
+    assert inspection.labels == tuple(X.columns)
+    assert inspection.dtypes[-1].startswith("datetime64")
+    assert inspection.examples[-1][0] == "2024-01-01 00:00:00"
+    assert len(inspection.decisions) == model.inferred_feature_schema_.num_columns
+    assert len(inspection.decisions) > X.shape[1]
 
 
-def test__save_and_load_fitted_model__keeps_input_record(tmp_path: Path) -> None:
+def test__save_and_load_fitted_model__keeps_input_inspection(tmp_path: Path) -> None:
     X, y = _fit_data(TabPFNClassifier)
     model = TabPFNClassifier(n_estimators=1, device="cpu")
     with pytest.warns(UserWarning, match="look like free text"):
@@ -172,4 +174,4 @@ def test__save_and_load_fitted_model__keeps_input_record(tmp_path: Path) -> None
     save_fitted_tabpfn_model(model, tmp_path / "model.tabpfn_fit")
     loaded = load_fitted_tabpfn_model(tmp_path / "model.tabpfn_fit", device="cpu")
 
-    assert loaded.input_record_ == model.input_record_
+    assert loaded.input_inspection_ == model.input_inspection_
