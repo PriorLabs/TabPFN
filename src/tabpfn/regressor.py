@@ -91,6 +91,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.input_record import InputRecord, record_input
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -263,6 +264,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     columns declared through pandas `category` dtype. Expanded source columns are
     removed and their generated features appended, so these positions can differ
     from those in the original fit input."""
+
+    input_record_: InputRecord
+    """What `fit` saw of its input, before any conversion: each column's label,
+    dtype and a few of its values, the columns declared categorical through pandas'
+    `category` dtype, and the modality decision taken for each column after
+    date/text expansion. Kept so the reading can be explained later without another
+    pass over the data. Not set by the differentiable fit path, which runs no
+    modality detection."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -931,6 +940,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # not the wider frame expansion can make of it, so they come off the raw
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        # Kept as received, for the record written once the reading below is done.
+        input_X = X
 
         categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
@@ -957,7 +968,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Set class variables for sklearn compatibility
         self.n_train_samples_ = len(X)
 
-        feature_schema = detect_feature_modalities(
+        feature_schema, modality_decisions = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=categorical_indices,
@@ -976,6 +987,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.date_transformer_ = date_transformer
         self.text_transformer_ = text_transformer
         self.categorical_features_indices_ = categorical_indices
+        self.input_record_ = record_input(input_X, decisions=modality_decisions)
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
