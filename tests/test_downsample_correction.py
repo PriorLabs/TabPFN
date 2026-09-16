@@ -6,9 +6,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
 
 import tabpfn.inference_tuning as tuning
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.downsample_correction import (
     apply_class_weights,
@@ -16,6 +19,10 @@ from tabpfn.downsample_correction import (
     downsample_bucket_log_weights,
     downsample_class_weights,
     temper_and_correct_logits,
+)
+from tabpfn.finetuning.data_util import (
+    get_preprocessed_dataset_chunks,
+    meta_dataset_collator,
 )
 from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
@@ -562,3 +569,80 @@ def test__regressor__temperature_calibration_runs_with_correction():
     )
     assert reg.downsample_correction_log_weights_ is not None
     assert reg.ensemble_softmax_temperature_ > 0
+
+
+# --------------------------------------------------------------------------- #
+# Finetuning path: fit_from_preprocessed must not inherit a correction
+# --------------------------------------------------------------------------- #
+
+
+def _finetuning_batch(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    X: np.ndarray,
+    y: np.ndarray,
+    model_type: str,
+) -> object:
+    chunks = get_preprocessed_dataset_chunks(
+        estimator,
+        X,
+        y,
+        train_test_split,
+        100,
+        model_type=model_type,
+        equal_split_size=True,
+        data_shuffle_seed=42,
+        preprocessing_random_state=42,
+    )
+    return next(
+        iter(DataLoader(chunks, batch_size=1, collate_fn=meta_dataset_collator))
+    )
+
+
+def test__classifier__fit_from_preprocessed_clears_stale_correction():
+    """fit() under majority_downsample stores weights; a later finetuning batch
+    has no prior shift, so forward() must match a never-corrected estimator.
+    """
+    X, y = _imbalanced_classification(n_majority=180, n_minority=20)
+    stale = _downsampling_classifier().fit(X, y)
+    assert stale.downsample_correction_weights_ is not None
+    fresh = _downsampling_classifier()
+
+    batch = _finetuning_batch(stale, X, y, "classifier")
+    cat_indices = batch.cat_indices
+    outputs = []
+    for clf in (stale, fresh):
+        clf.fit_from_preprocessed(
+            batch.X_context,
+            batch.y_context,
+            cat_indices,
+            batch.configs,
+            performance_options=PerformanceOptions(),
+        )
+        assert clf.downsample_correction_weights_ is None
+        outputs.append(clf.forward(batch.X_query).detach())
+    torch.testing.assert_close(outputs[0], outputs[1])
+
+
+def test__regressor__fit_from_preprocessed_clears_stale_correction():
+    X, y = _zero_inflated_regression(n_zeros=180, n_nonzero=20)
+    stale = _downsampling_regressor().fit(X, y)
+    assert stale.downsample_correction_log_weights_ is not None
+    fresh = _downsampling_regressor()
+
+    batch = _finetuning_batch(stale, X, y, "regressor")
+    outputs = []
+    for reg in (stale, fresh):
+        reg.fit_from_preprocessed(
+            batch.X_context,
+            batch.y_context,
+            batch.cat_indices,
+            batch.configs,
+            performance_options=PerformanceOptions(),
+        )
+        # The finetuning loop hands the batch's bar distributions to the estimator.
+        reg.znorm_space_bardist_ = batch.znorm_space_bardist
+        reg.raw_space_bardist_ = batch.raw_space_bardist
+        assert reg.downsample_correction_log_weights_ is None
+        out = reg.forward(batch.X_query)
+        outputs.append((out[0] if isinstance(out, tuple) else out).detach())
+    torch.testing.assert_close(outputs[0], outputs[1])

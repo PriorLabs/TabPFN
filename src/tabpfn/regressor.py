@@ -1121,6 +1121,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "batched"
 
+        # Finetuning batches are built without row subsampling, so no context
+        # prior shift exists here. Clear any correction left over from an earlier
+        # fit(); otherwise the logit reduction would reweight every batch.
+        self.downsample_correction_log_weights_ = None
+
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
             byte_size = self._initialize_model_variables()

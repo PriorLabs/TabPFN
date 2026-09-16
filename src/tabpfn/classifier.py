@@ -1056,6 +1056,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
         self.fit_mode = "batched"
 
+        # Finetuning batches are built without row subsampling, so no context
+        # prior shift exists here. Clear any correction left over from an earlier
+        # fit(); otherwise forward() would reweight every batch for a shift the
+        # batch never had.
+        self.downsample_correction_weights_ = None
+
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
             byte_size = self._initialize_model_variables()
