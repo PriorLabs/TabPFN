@@ -52,6 +52,11 @@ from tabpfn.constants import (
     XType,
     YType,
 )
+from tabpfn.downsample_correction import (
+    apply_class_weights,
+    context_class_prior,
+    downsample_class_weights,
+)
 from tabpfn.errors import handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
@@ -240,6 +245,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     ensemble_configs_: list[ClassifierEnsembleConfig]
     """The ensemble configurations used during fit.
     Stored for reuse in prompt tuning."""
+
+    downsample_correction_weights_: np.ndarray | None
+    """Per-class weights that undo the prior shift of
+    `SAMPLE_SUBSAMPLING_METHOD="majority_downsample"`, applied to the averaged
+    probabilities. `None` when that sampler is not in effect."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -867,6 +877,39 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return ensemble_configs, X, y
 
+    def _compute_downsample_correction(self, *, y_encoded: np.ndarray) -> None:
+        """Set `downsample_correction_weights_` from the fitted row sampler.
+
+        Requires `ensemble_preprocessor_` and `n_classes_`. Uses `class_counts_`
+        when the label encoder produced it, and the encoded labels otherwise (the
+        differentiable-input path skips the encoder).
+        """
+        preprocessor = self.ensemble_preprocessor_
+        if not preprocessor.downsample_shifted_prior:
+            self.downsample_correction_weights_ = None
+            return
+        assert preprocessor.subsample_row_indices is not None
+        train_counts = getattr(self, "class_counts_", None)
+        if train_counts is None:
+            train_counts = np.bincount(
+                np.asarray(y_encoded).astype(np.int64), minlength=self.n_classes_
+            )
+        context_prior = context_class_prior(
+            y_encoded, preprocessor.subsample_row_indices, self.n_classes_
+        )
+        self.downsample_correction_weights_ = downsample_class_weights(
+            train_counts, context_prior
+        )
+
+    def _uses_majority_downsample(self) -> bool:
+        """Whether the configured row sampler is majority downsampling."""
+        config = self.get_inference_config()
+        return (
+            config.SUBSAMPLE_SAMPLES is not None
+            and SampleSubsamplingMethod(config.SAMPLE_SUBSAMPLING_METHOD)
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+        )
+
     def _get_tuning_classifier(self, **overwrite_kwargs: Any) -> TabPFNClassifier:
         """Return a fresh classifier configured for holdout tuning."""
         params = self.get_params(deep=False)
@@ -931,8 +974,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.ensemble_configs_ = ensemble_configs
 
-        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
-
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             n_samples=X.shape[0],
@@ -956,6 +997,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_train=y,
             task_type=self.estimator_type,
         )
+
+        # Needs the row sampler's context prior, and must precede the tuning
+        # step so calibration and thresholds see the corrected probabilities.
+        self._compute_downsample_correction(y_encoded=y)
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
 
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
@@ -1009,6 +1055,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "Automatically switching to 'batched' mode for finetuning."
             )
         self.fit_mode = "batched"
+
+        # Finetuning batches are built without row subsampling, so no context
+        # prior shift exists here. Clear any correction left over from an earlier
+        # fit(); otherwise forward() would reweight every batch for a shift the
+        # batch never had.
+        self.downsample_correction_weights_ = None
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
@@ -1087,8 +1139,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ValueError: If the input lists have unequal or zero length, the
                 datasets do not all share the same set of classes, or the training
                 (or test) arrays do not all share one shape.
-            NotImplementedError: If ``balance_probabilities`` or ``tuning_config``
-                is configured on the estimator — their state is per-dataset and
+            NotImplementedError: If ``balance_probabilities``, ``tuning_config``,
+                or ``SAMPLE_SUBSAMPLING_METHOD="majority_downsample"`` is
+                configured on the estimator — their state is per-dataset and
                 cannot be applied correctly across a shared batch. Score those
                 datasets individually with ``predict_proba``. Also raised for
                 ``inference_precision=torch.float64``, which the fused forward
@@ -1122,6 +1175,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             raise NotImplementedError(
                 "predict_proba_batched does not support balance_probabilities=True; "
                 "score datasets individually with predict_proba."
+            )
+        if self._uses_majority_downsample():
+            raise NotImplementedError(
+                "predict_proba_batched does not support "
+                "SAMPLE_SUBSAMPLING_METHOD='majority_downsample'; its prior "
+                "correction is fitted per dataset. Score datasets individually "
+                "with predict_proba."
             )
         if self.tuning_config is not None:
             raise NotImplementedError(
@@ -1322,6 +1382,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_train=y,
             task_type=self.estimator_type,
         )
+        self._compute_downsample_correction(y_encoded=y.detach().cpu().float().numpy())
 
         self.executor_ = InferenceEngineCachePreprocessing(
             X_train=X,
@@ -1412,11 +1473,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "tune_decision_thresholds=False."
             )
 
-        holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
-            X=X,
-            y=y,
-            holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
-            n_folds=int(tuning_config_resolved.tuning_n_folds),
+        holdout_raw_logits, holdout_y_true, holdout_weights = (
+            self._compute_holdout_validation_data(
+                X=X,
+                y=y,
+                holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
+                n_folds=int(tuning_config_resolved.tuning_n_folds),
+            )
         )
 
         # WARNING: ensure the calibration happens before threshold tuning!
@@ -1424,6 +1487,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             calibrated_softmax_temperature = self._get_calibrated_softmax_temperature(
                 holdout_raw_logits=holdout_raw_logits,
                 holdout_y_true=holdout_y_true,
+                holdout_correction_weights=holdout_weights,
             )
             # The calibrated temperature is fitted on this dataset and replaces
             # whatever the checkpoint declared.
@@ -1431,7 +1495,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if tuning_config_resolved.tune_decision_thresholds:
             holdout_probas = (
-                self.logits_to_probabilities(holdout_raw_logits)
+                self.logits_to_probabilities(
+                    holdout_raw_logits,
+                    downsample_correction_weights=holdout_weights,
+                )
                 .float()
                 .detach()
                 .cpu()
@@ -1451,15 +1518,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: YType,
         holdout_frac: float,
         n_folds: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Compute holdout validation data.
 
         Returns:
-            tuple[np.ndarray, np.ndarray]:
+            tuple[np.ndarray, np.ndarray, np.ndarray]:
                 - holdout_raw_logits: Array of holdout raw logits
                     (shape `[n_estimators, n_holdout_samples, n_classes]`).
                 - holdout_y_true: Array of holdout y true labels
                     (shape `[n_holdout_samples]`).
+                - holdout_correction_weights: Per-sample downsampling correction
+                    weights (shape `[n_holdout_samples, n_classes]`), taken from
+                    the fold's own tuning classifier. Each fold trains on a
+                    different split, so under an absolute context budget its
+                    class ratios differ from the full model's, and a fold too
+                    small to be subsampled applies no correction at all. Such
+                    rows carry weight one; the array is always explicit so that
+                    tuning never falls back to the full model's weights.
         """
         splits = get_tuning_splits(
             X=copy.deepcopy(X),
@@ -1471,6 +1546,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         holdout_raw_logits = []
         holdout_y_true = []
+        holdout_weights: list[np.ndarray] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
             holdout_y_true.append(y_holdout_Nh)
@@ -1487,10 +1563,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # E=num estimators, Nh=num holdout samples, C=num classes
             raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF)
             holdout_raw_logits.append(raw_logits_ENhC)
+            fold_weights = calibration_classifier.downsample_correction_weights_
+            if fold_weights is None:
+                fold_weights = np.ones(self.n_classes_)
+            holdout_weights.append(
+                np.broadcast_to(fold_weights, (len(y_holdout_Nh), self.n_classes_))
+            )
 
         holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
         holdout_y_true__all = np.concatenate(holdout_y_true, axis=0)
-        return holdout_raw_logits_all, holdout_y_true__all
+        holdout_weights_all = np.concatenate(holdout_weights, axis=0)
+        return holdout_raw_logits_all, holdout_y_true__all, holdout_weights_all
 
     def _raw_predict(
         self,
@@ -1642,8 +1725,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         holdout_raw_logits: np.ndarray,
         holdout_y_true: np.ndarray,
+        holdout_correction_weights: np.ndarray,
     ) -> float:
-        """Calibrate temperature based on the holdout logits and true labels."""
+        """Calibrate temperature based on the holdout logits and true labels.
+
+        `holdout_correction_weights` are the per-sample downsampling correction
+        weights of the folds that produced the logits (ones where a fold applied
+        none), so the objective scores the probabilities those folds would
+        actually have predicted rather than falling back to this model's weights.
+        """
 
         def logits_to_probabilities_fn(
             raw_logits: np.ndarray | torch.Tensor,
@@ -1654,6 +1744,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     raw_logits=raw_logits,
                     softmax_temperature=softmax_temperature,
                     average_before_softmax=self.average_before_softmax,
+                    downsample_correction_weights=holdout_correction_weights,
                     balance_probabilities=self.balance_probabilities,
                 )
                 .float()
@@ -1719,6 +1810,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         softmax_temperature: float | None = None,
         average_before_softmax: bool | None = None,
         balance_probabilities: bool | None = None,
+        downsample_correction_weights: np.ndarray | None = None,
     ) -> torch.Tensor:
         """Convert logits to probabilities using the classifier's post-processing.
 
@@ -1729,6 +1821,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             softmax_temperature: Optional override for temperature scaling.
             average_before_softmax: Optional override for averaging order.
             balance_probabilities: Optional override for probability balancing.
+            downsample_correction_weights: Optional override for the fitted
+                `downsample_correction_weights_`, either one vector or one row
+                per sample. `None` means "use the fitted weights"; tuning always
+                passes explicit weights (ones where a fold applied no
+                correction) because its folds carry their own correction.
 
         Returns:
             Probabilities with shape (n_samples, n_classes).
@@ -1777,6 +1874,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Expected logits with 2 or more dims, got {raw_logits.ndim}"
             )
 
+        # Restore the training prior first, so balancing (if requested) acts on
+        # probabilities that express the training prior rather than the context's.
+        correction_weights = (
+            getattr(self, "downsample_correction_weights_", None)
+            if downsample_correction_weights is None
+            else downsample_correction_weights
+        )
+        if correction_weights is not None:
+
+            def apply_correction(probas: torch.Tensor) -> torch.Tensor:
+                return apply_class_weights(probas, correction_weights)
+
+            steps.append(apply_correction)
         if use_balance:
             steps.append(self._apply_balancing)
 

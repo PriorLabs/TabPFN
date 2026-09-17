@@ -9,7 +9,7 @@ import dataclasses
 import warnings
 from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 from typing_extensions import Self
 
 import numpy as np
@@ -23,16 +23,14 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import KFold, StratifiedKFold
 
+from tabpfn.architectures.shared.bar_distribution import (
+    FullSupportBarDistribution,
+)
+from tabpfn.downsample_correction import temper_and_correct_logits
 from tabpfn.regression_metrics import (
     ranked_probability_score_loss_from_bar_logits,
 )
 from tabpfn.utils import infer_random_state
-
-if TYPE_CHECKING:
-    from tabpfn.architectures.shared.bar_distribution import (
-        FullSupportBarDistribution,
-    )
-
 
 MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING = 500
 
@@ -481,8 +479,16 @@ def find_optimal_temperature(
     return best_temperature
 
 
+RegressionHoldoutFold = (
+    tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]
+    | tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor, torch.Tensor | None]
+)
+"""`(logits, raw_space_bardist, y_true)` with an optional fourth entry holding the
+fold's per-bar downsampling correction log weights."""
+
+
 def find_regression_optimal_temperature(
-    holdout_folds: list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]],
+    holdout_folds: list[RegressionHoldoutFold],
     metric_name: RegressorEvalMetrics,
     current_default_temperature: float,
 ) -> float:
@@ -498,11 +504,14 @@ def find_regression_optimal_temperature(
     own borders.
 
     Args:
-        holdout_folds: One `(logits, raw_space_bardist, y_true)` triple per fold,
-            where `logits` has shape [n_holdout, n_buckets] and `y_true` shape
-            [n_holdout]. Each triple must be internally consistent: the targets in
-            the units of that bar distribution's borders, and all three on the same
-            device.
+        holdout_folds: One `(logits, raw_space_bardist, y_true[, log_weights])`
+            tuple per fold, where `logits` has shape [n_holdout, n_buckets] and
+            carries neither temperature nor correction, and `y_true` has shape
+            [n_holdout]. The optional `log_weights` is the fold's per-bar
+            downsampling correction, added after the temperature exactly as
+            `TabPFNRegressor` does at predict time. Each tuple must be internally
+            consistent: the targets in the units of that bar distribution's
+            borders, and everything on the same device.
         metric_name: The metric to minimize.
         current_default_temperature: The temperature to fall back to when the sweep
             has nothing usable to choose from.
@@ -514,14 +523,19 @@ def find_regression_optimal_temperature(
     # buffer on every call, so sweep on copies and leave the callers' bar
     # distributions clean.
     folds = [
-        (logits, copy.deepcopy(raw_space_bardist), y_true)
-        for logits, raw_space_bardist, y_true in holdout_folds
-        if logits.shape[0] > 0
+        (
+            fold[0],
+            copy.deepcopy(fold[1]),
+            fold[2],
+            fold[3] if len(fold) > 3 else None,
+        )
+        for fold in holdout_folds
+        if fold[0].shape[0] > 0
     ]
     if not folds:
         return current_default_temperature
 
-    n_holdout_total = sum(logits.shape[0] for logits, _, _ in folds)
+    n_holdout_total = sum(logits.shape[0] for logits, *_ in folds)
     temperatures = get_tuning_temperatures()
     best_loss = float("inf")
     best_temperature = current_default_temperature
@@ -536,11 +550,15 @@ def find_regression_optimal_temperature(
                         compute_regression_metric_to_minimize(
                             metric_name=metric_name,
                             raw_space_bardist=raw_space_bardist,
-                            logits=logits / temperature,
+                            logits=temper_and_correct_logits(
+                                logits,
+                                temperature=float(temperature),
+                                log_weights=log_weights,
+                            ),
                             y_true=y_true,
                         ).mean()
                     )
-                    for logits, raw_space_bardist, y_true in folds
+                    for logits, raw_space_bardist, y_true, log_weights in folds
                 )
                 / n_holdout_total
             )

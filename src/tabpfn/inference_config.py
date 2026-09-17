@@ -245,13 +245,19 @@ class InferenceConfig:
           non-majority rows so at least one majority row remains. If there is no unique
           most frequent target value, a warning is emitted and the method falls back
           to "stratified" for classification or "balanced" for regression.
-          Downsampling the majority shifts the target prior that the model sees: the
-          majority value is underrepresented in every context relative to the training
-          data. Predicted probabilities and regression means inherit that shift, so
-          the predicted level typically needs a correction, for example rescaling
-          regression predictions to the training mean. Rankings are unaffected. For
-          classification, a warning is emitted if subsampling makes the original
-          majority class smaller than another class.
+          Downsampling the majority shifts the target prior that the model sees,
+          so the estimators correct for it automatically: predicted class
+          probabilities are multiplied by the training-to-context class ratio and
+          renormalized, and the regression bar distribution is reweighted by the
+          same ratio per bar, both derived from the sampler's known inclusion
+          probabilities. For binary classification the correction is monotone
+          and preserves the ranking of the positive class; for multiclass it can
+          change the predicted class. It assumes the model adopts the context
+          prior fully, which holds only approximately for regression: on the
+          zero-inflated targets we tested, the corrected level was still off by up
+          to a factor of two, though much closer than without the correction.
+          Batched prediction is not supported with this method because the
+          correction is fitted per dataset.
         - "auto": "stratified" for classification and "balanced" for regression.
     """
 
