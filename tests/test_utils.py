@@ -455,6 +455,123 @@ def test__translate_probs_across_borders__fills_buckets_outside_source_range() -
     assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
 
 
+def test__translate_probs_across_borders__closed_form_fills_upper_tail() -> None:
+    """Upper-tail buckets must not cancel against a CDF that has rounded to 1.
+
+    Differencing recovers the bulk, but out in the upper tail the float64 CDF
+    saturates at exactly 1.0 and the difference is 0 regardless of precision.
+    Inside a tail the mass has the closed form `p * (SF(a) - SF(b))`, two small
+    numbers with nothing near 1 to cancel against, so those buckets are taken
+    that way instead.
+    """
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.15, 4.15, num_buckets + 1, dtype=torch.float64)
+    p_outer = 0.05
+    probs = torch.full(
+        (num_buckets,), (1.0 - 2 * p_outer) / (num_buckets - 2), dtype=torch.float64
+    )
+    probs[0] = probs[-1] = p_outer
+    logits = probs.log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+
+    # Buckets fully past the top of the source grid, far enough out that the
+    # CDF there is 1.0 to the last float64 bit.
+    past_top = (to[:-1] >= frm[-1]).nonzero().flatten()
+    assert len(past_top) > 5
+    assert (out[past_top] > 0).all(), "far upper-tail buckets came out as zero"
+
+    # The two tails must be treated symmetrically: an asymmetric zero pattern
+    # is what biases a model comparison.
+    past_bottom = (to[1:] <= frm[0]).nonzero().flatten()
+    assert int((out[past_bottom] == 0).sum()) == int((out[past_top] == 0).sum())
+    torch.testing.assert_close(
+        out[past_bottom].flip(0), out[past_top], rtol=1e-12, atol=0.0
+    )
+
+    # And the closed form must not disturb the total.
+    assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
+
+
+def test__translate_probs_across_borders__closed_form_matches_analytic() -> None:
+    """The closed-form tail masses must match the half-normal they come from."""
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.2, 4.2, num_buckets + 1, dtype=torch.float64)
+    p_outer = 0.05
+    probs = torch.full(
+        (num_buckets,), (1.0 - 2 * p_outer) / (num_buckets - 2), dtype=torch.float64
+    )
+    probs[0] = probs[-1] = p_outer
+    logits = probs.log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+
+    sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(
+        frm[-1] - frm[-2],
+    ).scale
+
+    def survival(distance: torch.Tensor) -> torch.Tensor:
+        return torch.erfc(distance / (sigma * math.sqrt(2.0)))
+
+    past_top = (to[:-1] >= frm[-2]).nonzero().flatten()
+    # The outermost destination bucket absorbs everything beyond `to[-1]`.
+    upper = to[1:].clone()
+    upper[-1] = torch.inf
+    expected = p_outer * (
+        survival(to[:-1][past_top] - frm[-2]) - survival(upper[past_top] - frm[-2])
+    )
+
+    torch.testing.assert_close(out[past_top], expected, rtol=1e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test__translate_probs_across_borders__log_probs_survive_the_float32_cast(
+    chunked: bool,
+) -> None:
+    """`return_log_probs` must keep masses that float32 cannot represent.
+
+    float32 has no value below ~1e-45, so returning probabilities throws away
+    exactly the small buckets the float64 differencing recovered. Taking the
+    log first keeps them: log(1e-300) is -690, an ordinary float32 number.
+    """
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.2, 4.2, num_buckets + 1, dtype=torch.float64)
+    # A spiky source, so the far buckets really do hold ~1e-100 and below.
+    mids = (frm[1:] + frm[:-1]) / 2
+    density = torch.exp(-0.5 * (mids / 0.05) ** 2)
+    logits = (density / density.sum()).clamp_min(1e-300).log()[None, :].float()
+    budget = {"chunk_budget_elements": num_buckets + 1} if chunked else {}
+
+    as_probs = translate_probs_across_borders(
+        logits, frm=frm.float(), to=to.float(), **budget
+    )
+    as_logs = translate_probs_across_borders(
+        logits, frm=frm.float(), to=to.float(), return_log_probs=True, **budget
+    )
+
+    assert as_logs.shape == as_probs.shape
+    assert as_logs.dtype == logits.dtype
+
+    tiny = torch.finfo(torch.float32).tiny
+    # Where float32 held the probability as a normal number, the two agree.
+    # Subnormals are excluded on purpose: they carry only a few significant
+    # bits, so `log(float32(p))` there is genuinely coarser than the log taken
+    # before the cast, which is the whole reason for this option.
+    normal = as_probs > tiny
+    assert int(normal.sum()) > 0
+    torch.testing.assert_close(
+        as_logs[normal], as_probs[normal].log(), rtol=1e-6, atol=1e-5
+    )
+
+    # And the buckets float32 could not hold at all come back finite.
+    rescued = (as_probs == 0) & torch.isfinite(as_logs)
+    assert int(rescued.sum()) > 0, "no bucket was rescued, the test proves nothing"
+    assert (as_logs[rescued] < math.log(tiny)).all()
+
+
 @pytest.mark.parametrize("chunked", [False, True])
 def test__translate_probs_across_borders__mps_matches_cpu(chunked: bool) -> None:
     """The float64 differencing must survive a device that has no float64.

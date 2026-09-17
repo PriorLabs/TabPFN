@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 import typing
 import warnings
 from collections.abc import Iterator, Sequence
@@ -1653,9 +1654,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Run the ensemble and aggregate it into one log-probability tensor.
 
         Each estimator's bucket probabilities are translated onto the
-        `znorm_space_bardist_` borders, averaged across the ensemble
-        (before or after the softmax, per `average_before_softmax` flat),
-        and returned in log space.
+        `znorm_space_bardist_` borders and pooled across the ensemble entirely
+        in log space (before or after the softmax, per
+        `average_before_softmax`), so no bucket mass is lost to float32 on the
+        way in. The result is log-probabilities.
 
         Shared by `predict` and `_maybe_calibrate_ensemble_temperature`.
 
@@ -1700,19 +1702,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 unit="estimator",
                 disable=not self.show_progress_bar,
             ):
+                # Log-probabilities, not probabilities: float32 cannot hold a
+                # bucket mass below ~1e-45, so pooling probabilities throws away
+                # exactly the small buckets the float64 differencing recovered
+                # and turns them into `-inf` at the `.log()` below. Their logs
+                # are ordinary numbers, so the whole reduction stays in log
+                # space and nothing is lost on this boundary.
                 transformed = translate_probs_across_borders(
                     output,
                     frm=torch.as_tensor(borders_t, device=output.device),
                     to=self.znorm_space_bardist_.borders.to(output.device),
+                    return_log_probs=True,
                 )
 
-                if self.average_before_softmax:
-                    transformed = transformed.log()
-
-                if accumulated_logits is None:
-                    accumulated_logits = transformed
-                else:
-                    accumulated_logits = accumulated_logits + transformed
+                accumulated_logits = _accumulate_member_log_probs(
+                    accumulated_logits,
+                    transformed,
+                    average_before_softmax=self.average_before_softmax,
+                )
                 n_estimators += 1
 
         assert n_estimators > 0
@@ -1739,8 +1746,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Args:
             accumulated_logits:
-                Summed per-estimator output for one dataset. Already in log space
-                if `average_before_softmax` is True.
+                Per-estimator output for one dataset, accumulated in log space by
+                `_accumulate_member_log_probs`: a running `logsumexp` of the
+                members' log-probabilities, or their plain sum if
+                `average_before_softmax` is True.
             n_estimators: How many estimators contributed to the sum.
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction after the temperature.
@@ -1750,12 +1759,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `ensemble_softmax_temperature_` applied.
         """
         if self.average_before_softmax:
-            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
+            # Averaging the members' log-probabilities, then renormalising.
+            logits = torch.log_softmax(accumulated_logits / n_estimators, dim=-1)
         else:
-            logits = accumulated_logits / n_estimators
+            # `log(mean_i p_i) = logsumexp_i(log p_i) - log(n)`: the same
+            # arithmetic mixture as averaging the probabilities would give, but
+            # it never materialises a probability, so a bucket whose mass is
+            # below float32's smallest subnormal still comes out finite.
+            logits = accumulated_logits - math.log(n_estimators)
 
-        # Post-process the logits
-        logits = logits.log()
         if logits.dtype == torch.float16:
             logits = logits.float()
 
@@ -2018,11 +2030,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                             znorm_borders=znorm_borders,
                             std_borders=std_borders,
                         )
-                        previous = accumulated[lane]
-                        accumulated[lane] = (
-                            contribution
-                            if previous is None
-                            else previous + contribution
+                        accumulated[lane] = _accumulate_member_log_probs(
+                            accumulated[lane],
+                            contribution,
+                            average_before_softmax=worker.average_before_softmax,
                         )
                     n_estimators += 1
                     del output
@@ -2077,12 +2088,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             out_d = out_d.clone()
             out_d[..., logit_cancel_mask] = float("-inf")
 
-        transformed = translate_probs_across_borders(
+        # Log space throughout, for the reason given in `predict`.
+        return translate_probs_across_borders(
             out_d,
             frm=torch.as_tensor(borders_t, device=out_d.device),
             to=znorm_borders.to(out_d.device),
+            return_log_probs=True,
         )
-        return transformed.log() if self.average_before_softmax else transformed
 
     def _decode_batched_dataset(
         self,
@@ -2363,6 +2375,34 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.znorm_space_bardist_.to(self.devices_[0])
         if hasattr(self, "raw_space_bardist_"):
             self.raw_space_bardist_.to(self.devices_[0])
+
+
+def _accumulate_member_log_probs(
+    accumulated: torch.Tensor | None,
+    contribution: torch.Tensor,
+    *,
+    average_before_softmax: bool,
+) -> torch.Tensor:
+    """Fold one estimator's log-probabilities into the running accumulator.
+
+    The ensemble pools its members as an arithmetic mixture by default, and
+    `log(mean_i p_i) = logsumexp_i(log p_i) - log(n)`, so the sum over members
+    is a running `logsumexp` rather than a running sum. Doing it this way keeps
+    the reduction in log space from end to end: a bucket mass of 1e-300 is not
+    representable in float32 but its log is, so nothing is lost to the dtype on
+    the way in, and `_reduce_accumulated_logits` subtracts the `log(n)`.
+
+    With `average_before_softmax` the members' *log*-probabilities are what get
+    averaged, so there the accumulator is a plain sum, as before.
+
+    A bucket that no member put mass in stays `-inf` here, which is the honest
+    answer; `torch.logaddexp` propagates it only when every member agrees.
+    """
+    if accumulated is None:
+        return contribution
+    if average_before_softmax:
+        return accumulated + contribution
+    return torch.logaddexp(accumulated, contribution)
 
 
 def _logits_to_output(

@@ -462,11 +462,70 @@ def _translate_compute_device(device: torch.device) -> torch.device:
     return torch.device("cpu") if device.type == "mps" else device
 
 
+def _overwrite_tail_bucket_masses(
+    mass: torch.Tensor,
+    *,
+    logits: torch.Tensor,
+    frm: torch.Tensor,
+    to: torch.Tensor,
+) -> None:
+    """Recompute, in place, the destination buckets that lie inside a tail.
+
+    Differencing the CDF is exact in the bulk but destroys the upper tail: out
+    there the CDF has rounded to exactly 1.0, so the difference is 0 even in
+    float64 and even though the true mass is not. Inside a tail the mass over
+    ``[a, b]`` has the closed form ``p_outer * (SF(a) - SF(b))`` -- two small
+    numbers with nothing near 1 to cancel against -- so it is taken that way.
+
+    Both tails are done, not just the offending upper one. The lower tail does
+    not round to zero, but differencing two nearly equal small numbers still
+    costs it relative accuracy, and an asymmetric treatment of the two tails
+    would bias a model comparison toward whichever side reads low.
+    """
+    # With fewer than three buckets the two tail regions are not disjoint and
+    # the whole grid is tail; leave the differenced values alone.
+    if not bool(frm[1] < frm[-2]):
+        return
+
+    # Only the outermost two bucket probabilities are needed, so take the
+    # log-softmax normaliser rather than materialise a second full softmax.
+    log_norm = torch.logsumexp(logits, dim=-1, keepdim=True)
+    p_first = (logits[..., 0:1] - log_norm).exp()
+    p_last = (logits[..., -1:] - log_norm).exp()
+
+    widths = frm[1:] - frm[:-1]
+    lower_border, upper_border = to[:-1], to[1:]
+    # `_cdf` is pinned to 0 at `to[0]` and 1 at `to[-1]`, so the outermost
+    # destination buckets absorb everything beyond `to`. Pushing their outer
+    # edge to infinity expresses exactly that, and keeps the closed form
+    # telescoping to the same total the differencing produced.
+    inf = torch.inf
+    lower_border_ext = lower_border.clone()
+    lower_border_ext[0] = -inf
+    upper_border_ext = upper_border.clone()
+    upper_border_ext[-1] = inf
+
+    in_lower_tail = upper_border <= frm[1]
+    mass[..., in_lower_tail] = p_first * (
+        _halfnormal_tail_survival(frm[1] - upper_border[in_lower_tail], widths[0])
+        - _halfnormal_tail_survival(frm[1] - lower_border_ext[in_lower_tail], widths[0])
+    )
+
+    in_upper_tail = lower_border >= frm[-2]
+    mass[..., in_upper_tail] = p_last * (
+        _halfnormal_tail_survival(lower_border[in_upper_tail] - frm[-2], widths[-1])
+        - _halfnormal_tail_survival(
+            upper_border_ext[in_upper_tail] - frm[-2], widths[-1]
+        )
+    )
+
+
 def _translate_probs_across_borders_unchunked(
     logits: torch.Tensor,
     *,
     frm: torch.Tensor,
     to: torch.Tensor,
+    return_log_probs: bool = False,
 ) -> torch.Tensor:
     out_dtype = logits.dtype
     out_device = logits.device
@@ -474,11 +533,11 @@ def _translate_probs_across_borders_unchunked(
     # Move first, then cast. A combined `.to(device=..., dtype=...)` off MPS
     # converts the dtype on the source device, and MPS has no float64, so it
     # silently yields all zeros instead of raising.
-    prob_left = _cdf(
-        logits.to(device).to(_TRANSLATE_COMPUTE_DTYPE),
-        borders=frm.to(device).to(_TRANSLATE_COMPUTE_DTYPE),
-        ys=to.to(device).to(_TRANSLATE_COMPUTE_DTYPE),
-    )
+    logits = logits.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
+    frm = frm.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
+    to = to.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
+
+    prob_left = _cdf(logits, borders=frm, ys=to)
     # `_cdf` gives `to[0]` and `to[-1]` the source's half-normal tail mass;
     # pinning to 0 and 1 folds whatever lies beyond `to` into the outermost
     # destination buckets, where the destination `FullSupportBarDistribution`'s
@@ -487,10 +546,16 @@ def _translate_probs_across_borders_unchunked(
     # round-off of the cast back to the caller's dtype.
     prob_left[..., 0] = 0.0
     prob_left[..., -1] = 1.0
-    diff = (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+    mass = (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+    _overwrite_tail_bucket_masses(mass, logits=logits, frm=frm, to=to)
+    if return_log_probs:
+        # Taken here, at `_TRANSLATE_COMPUTE_DTYPE`, which is the whole point:
+        # a mass of 1e-300 does not survive the cast to float32, but its log
+        # (-690) does. A bucket no member put mass in stays `-inf`.
+        mass = mass.log()
     # Cast before moving, for the same reason and because it halves the bytes
     # crossing the bus.
-    return diff.to(out_dtype).to(out_device)
+    return mass.to(out_dtype).to(out_device)
 
 
 # `_cdf` allocates ~8 intermediate tensors of shape (batch, len(to)). Targeting
@@ -508,6 +573,7 @@ def translate_probs_across_borders(
     frm: torch.Tensor,
     to: torch.Tensor,
     chunk_budget_elements: int = _TRANSLATE_CHUNK_BUDGET_ELEMENTS,
+    return_log_probs: bool = False,
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
@@ -538,9 +604,16 @@ def translate_probs_across_borders(
             ``_cdf`` transient near ~80 MB at ``_TRANSLATE_COMPUTE_DTYPE``.
             Lower values reduce peak memory at a small time cost; primarily
             useful for testing.
+        return_log_probs: Return log-probabilities instead of probabilities,
+            with the log taken before the cast back to the caller's dtype.
+            Prefer this whenever the caller only needs the log, which is the
+            case for every ensemble reduction: float32 cannot represent a
+            bucket mass below ~1e-45, so a narrow-kernel head loses its far
+            buckets to the cast, while their logs are ordinary small numbers.
+            A bucket with no mass at all is ``-inf``.
 
     Returns:
-        The translated probabilities.
+        The translated probabilities, or their log if ``return_log_probs``.
     """
     batch_shape = logits.shape[:-1]
     num_buckets_frm = logits.shape[-1]
@@ -548,7 +621,9 @@ def translate_probs_across_borders(
     num_buckets_to = num_borders_to - 1
 
     if len(batch_shape) == 0:
-        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+        return _translate_probs_across_borders_unchunked(
+            logits, frm=frm, to=to, return_log_probs=return_log_probs
+        )
 
     # Flatten batch dims so chunking is independent of which dim is large.
     logits_flat = logits.reshape(-1, num_buckets_frm)
@@ -557,7 +632,9 @@ def translate_probs_across_borders(
     # `(batch, num_borders_to)`, so budget against borders, not buckets.
     chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
     if num_rows <= chunk_size:
-        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+        return _translate_probs_across_borders_unchunked(
+            logits, frm=frm, to=to, return_log_probs=return_log_probs
+        )
 
     # Preallocate output and write chunks in-place to avoid the transient
     # `torch.cat` would create (which would double peak memory).
@@ -569,7 +646,10 @@ def translate_probs_across_borders(
     )
     for i in range(0, num_rows, chunk_size):
         out_flat[i : i + chunk_size] = _translate_probs_across_borders_unchunked(
-            logits_flat[i : i + chunk_size], frm=frm, to=to
+            logits_flat[i : i + chunk_size],
+            frm=frm,
+            to=to,
+            return_log_probs=return_log_probs,
         )
     return out_flat.reshape(*batch_shape, num_buckets_to)
 
