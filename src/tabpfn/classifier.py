@@ -94,6 +94,10 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.input_inspection import (
+    InputInspection,
+    build_input_inspection,
+)
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.text import TextTransformer
@@ -229,6 +233,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     columns declared through pandas `category` dtype. Expanded source columns are
     removed and their generated features appended, so these positions can differ
     from those in the original fit input."""
+
+    input_inspection_: InputInspection
+    """What `fit` saw of its input and how it read it: each column's label, dtype
+    and a few of its values as received, the columns declared categorical by index
+    or through pandas' `category` dtype, the columns expanded into date or text
+    features and the features they became, the modality decision on each column
+    of the expanded input, and the columns the ordinal encoder encoded. Kept so the
+    reading can be explained later without another pass over the data. Not set by
+    the differentiable fit path, which runs no modality detection."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -795,6 +808,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # not the wider frame expansion can make of it, so they come off the raw
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        # Kept as received, inspected once the reading below is done.
+        input_X = X
 
         categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
@@ -820,7 +835,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             devices=self.devices_,
         )
 
-        feature_schema = detect_feature_modalities(
+        feature_schema, modality_decisions = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=categorical_indices,
@@ -839,6 +854,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.date_transformer_ = date_transformer
         self.text_transformer_ = text_transformer
         self.categorical_features_indices_ = categorical_indices
+        self.input_inspection_ = build_input_inspection(
+            input_X,
+            declared_positions=self.categorical_features_indices,
+            date_transformer=date_transformer,
+            text_transformer=text_transformer,
+            decisions=modality_decisions,
+            ordinal_encoder=ordinal_encoder,
+        )
         self.n_train_samples_ = len(X)
 
         # Label encoding
