@@ -230,12 +230,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     from those in the original fit input."""
 
     input_inspection_: InputInspection
-    """What `fit` saw of its input, before any conversion: each column's label,
-    dtype and a few of its values, the columns declared categorical through pandas'
-    `category` dtype, and the modality decision taken for each column after
-    date/text expansion. Kept so the reading can be explained later without another
-    pass over the data. Not set by the differentiable fit path, which runs no
-    modality detection."""
+    """What `fit` saw of its input and how it read it: each column's label, dtype
+    and a few of its values as received, the columns declared categorical by index
+    or through pandas' `category` dtype, the columns expanded into date or text
+    features and the features they became, the modality decision on each column
+    of the expanded input, and the columns the ordinal encoder encoded. Kept so the
+    reading can be explained later without another pass over the data. Not set by
+    the differentiable fit path, which runs no modality detection."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -844,7 +845,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.text_transformer_ = text_transformer
         self.categorical_features_indices_ = categorical_indices
         self.input_inspection_ = build_input_inspection(
-            input_X, decisions=modality_decisions
+            input_X,
+            declared_positions=self.categorical_features_indices,
+            date_transformer=date_transformer,
+            text_transformer=text_transformer,
+            decisions=modality_decisions,
+            ordinal_encoder=ordinal_encoder,
         )
         self.n_train_samples_ = len(X)
 
