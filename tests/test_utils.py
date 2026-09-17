@@ -586,8 +586,10 @@ def test__translate_probs_across_borders__mps_matches_cpu(chunked: bool) -> None
         pytest.skip("MPS not available")
 
     torch.manual_seed(0)
-    num_buckets = 2000
-    logits = torch.randn(512, num_buckets)
+    # Deliberately small: the suite shares one process-global MPS memory cap,
+    # so a test that reserves much of it makes unrelated tests flaky.
+    num_buckets = 300
+    logits = torch.randn(64, num_buckets)
     frm = torch.linspace(-4.0, 4.0, num_buckets + 1)
     to = torch.linspace(-4.2, 4.2, num_buckets + 1)
     budget = {"chunk_budget_elements": num_buckets + 1} if chunked else {}
