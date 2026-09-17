@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import warnings
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
@@ -354,10 +356,43 @@ def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
     return ix
 
 
+def _halfnormal_tail_survival(
+    distance_from_inner_border: torch.Tensor,
+    outer_bucket_width: torch.Tensor,
+) -> torch.Tensor:
+    """Mass fraction of an outer bucket lying past `distance_from_inner_border`.
+
+    `FullSupportBarDistribution` replaces the two outer bars with half-normals
+    scaled so that half of the outer bucket's mass falls inside the bucket and
+    half falls beyond the outermost border. Distance is measured inwards-to-
+    outwards from the bucket's *inner* border, so this returns 1.0 at distance
+    0, 0.5 at one bucket width, and decays to 0 further out.
+
+    Written with `erfc` and not a literal `1 - HalfNormal.cdf(...)`: the
+    subtraction cancels to exactly zero a few sigma out, which is the very
+    underflow the tails are here to avoid.
+    """
+    # Repaired borders can leave a degenerate outer bucket (`_repair_borders`
+    # cannot widen an outer border that sits exactly at 0.0). Flooring the
+    # width keeps the degenerate case a point mass at the inner border instead
+    # of the 0/0 NaN a zero scale would produce.
+    width = outer_bucket_width.clamp_min(torch.finfo(outer_bucket_width.dtype).tiny)
+    sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(width).scale
+    return torch.erfc(distance_from_inner_border / (sigma * math.sqrt(2.0)))
+
+
 # TODO (eddiebergman): Can probably put this back to the Bar distribution.
 # However we don't really need the full BarDistribution class and this was
 # put here to make that a bit more obvious in terms of what was going on.
 def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+    """CDF of the bar distribution given by `logits` over `borders`, at `ys`.
+
+    Matches `FullSupportBarDistribution.forward`, which is the definition both
+    the training loss and the NLL metric use: the interior buckets are uniform
+    bars, and the two outer buckets are half-normal tails that give the
+    distribution support over all of R. `ys` outside `borders` therefore get a
+    small non-zero (resp. below-one) CDF rather than a hard 0 (resp. 1).
+    """
     ys = ys.repeat((*logits.shape[:-1], 1))
     n_bars = len(borders) - 1
     y_buckets = _map_to_bucket_ix(ys, borders).clamp(0, n_bars - 1).to(logits.device)
@@ -373,9 +408,58 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     prob_in_bucket = probs.gather(index=y_buckets, dim=-1) * share_of_bucket_left
     prob_left_of_ys = prob_left_of_bucket + prob_in_bucket
 
-    prob_left_of_ys[ys <= borders[0]] = 0.0
-    prob_left_of_ys[ys >= borders[-1]] = 1.0
+    # Replace the uniform reading of the two outer buckets with their
+    # half-normal tails. Both write over the whole outer bucket, not just the
+    # part outside `borders`, because the tail redistributes mass *within* the
+    # bucket too; `CDF(borders[1]) == probs[..., 0]` either way, so the
+    # interior buckets are untouched. Masked assignment keeps the tail
+    # transients proportional to the number of `ys` in the outer buckets,
+    # which is normally a handful, rather than to all of `ys`.
+    if n_bars > 1:
+        in_lower_tail = ys <= borders[1]
+        prob_left_of_ys[in_lower_tail] = probs[..., 0:1].expand_as(ys)[
+            in_lower_tail
+        ] * _halfnormal_tail_survival(
+            borders[1] - ys[in_lower_tail],
+            bucket_widths[0],
+        )
+        in_upper_tail = ys >= borders[-2]
+        prob_left_of_ys[in_upper_tail] = 1.0 - probs[..., -1:].expand_as(ys)[
+            in_upper_tail
+        ] * _halfnormal_tail_survival(
+            ys[in_upper_tail] - borders[-2],
+            bucket_widths[-1],
+        )
+
     return prob_left_of_ys.clip(0.0, 1.0)
+
+
+# A destination bucket's mass is the difference of two CDF values, so its
+# resolution is that of the CDF near 1, not near 0: in float32 that is ~6e-8,
+# and any bucket holding less than that rounds to exactly zero. `regressor.py`
+# takes `.log()` of the pooled probabilities, so such a bucket becomes -inf and
+# the bar distribution's NLL is infinite for a target landing in it. float64
+# moves that resolution to ~1e-16, below anything a 5000-bucket grid puts in a
+# single bucket.
+#
+# The result is cast back to the caller's dtype, which keeps every downstream
+# dtype unchanged. That still bounds what survives: float32 cannot hold a mass
+# below ~1e-45, so a head with a narrow enough kernel keeps losing its far
+# buckets here even though the differencing found them. Fixing that needs the
+# pooling in `regressor.py` to stay in log space (`logsumexp` over members)
+# rather than a wider dtype on this boundary.
+_TRANSLATE_COMPUTE_DTYPE = torch.float64
+
+
+def _translate_compute_device(device: torch.device) -> torch.device:
+    """Where to run the float64 differencing for a tensor on `device`.
+
+    MPS has no float64 at all -- casting to it raises -- so that path is
+    computed on the CPU and moved back. Chunking already bounds the working
+    set, so the extra transfer is bounded too. Every other backend keeps the
+    data where it is.
+    """
+    return torch.device("cpu") if device.type == "mps" else device
 
 
 def _translate_probs_across_borders_unchunked(
@@ -384,17 +468,38 @@ def _translate_probs_across_borders_unchunked(
     frm: torch.Tensor,
     to: torch.Tensor,
 ) -> torch.Tensor:
-    prob_left = _cdf(logits, borders=frm, ys=to)
+    out_dtype = logits.dtype
+    out_device = logits.device
+    device = _translate_compute_device(out_device)
+    # Move first, then cast. A combined `.to(device=..., dtype=...)` off MPS
+    # converts the dtype on the source device, and MPS has no float64, so it
+    # silently yields all zeros instead of raising.
+    prob_left = _cdf(
+        logits.to(device).to(_TRANSLATE_COMPUTE_DTYPE),
+        borders=frm.to(device).to(_TRANSLATE_COMPUTE_DTYPE),
+        ys=to.to(device).to(_TRANSLATE_COMPUTE_DTYPE),
+    )
+    # `_cdf` gives `to[0]` and `to[-1]` the source's half-normal tail mass;
+    # pinning to 0 and 1 folds whatever lies beyond `to` into the outermost
+    # destination buckets, where the destination `FullSupportBarDistribution`'s
+    # own tails carry it. This keeps the output summing to 1 and keeps an
+    # identity remap (`to == frm`) returning the input probabilities, up to the
+    # round-off of the cast back to the caller's dtype.
     prob_left[..., 0] = 0.0
     prob_left[..., -1] = 1.0
-    return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+    diff = (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+    # Cast before moving, for the same reason and because it halves the bytes
+    # crossing the bus.
+    return diff.to(out_dtype).to(out_device)
 
 
 # `_cdf` allocates ~8 intermediate tensors of shape (batch, len(to)). Targeting
 # `chunk_size * len(to) <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient
-# around ~80 MB (fp32) and the total under ~1 GB, which holds translate_probs's
-# contribution to peak memory roughly constant in n_test.
-_TRANSLATE_CHUNK_BUDGET_ELEMENTS = 20_000_000
+# around ~80 MB and the total under ~1 GB, which holds translate_probs's
+# contribution to peak memory roughly constant in n_test. The budget counts
+# elements, so it is set against `_TRANSLATE_COMPUTE_DTYPE` (8 bytes/element),
+# not against the caller's dtype.
+_TRANSLATE_CHUNK_BUDGET_ELEMENTS = 10_000_000
 
 
 def translate_probs_across_borders(
@@ -405,6 +510,13 @@ def translate_probs_across_borders(
     chunk_budget_elements: int = _TRANSLATE_CHUNK_BUDGET_ELEMENTS,
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
+
+    The differencing is done in float64 regardless of the caller's dtype and
+    the result cast back, because a destination bucket's mass is the difference
+    of two CDF values and float32 rounds anything below ~6e-8 of the total to
+    exactly zero. Out-of-range destination buckets are fed by the source's
+    half-normal tails, the same reading of the outer buckets that
+    ``FullSupportBarDistribution.forward`` uses.
 
     For large batches the computation is chunked so that the peak memory
     footprint of the intermediate ``(batch, len(to))`` tensors allocated
@@ -423,8 +535,9 @@ def translate_probs_across_borders(
         to: The borders to translate to.
         chunk_budget_elements: Maximum number of ``logits[..., -1]`` elements
             processed per chunk. Defaults to a value that keeps each
-            ``_cdf`` transient near ~80 MB (fp32). Lower values reduce peak
-            memory at a small time cost; primarily useful for testing.
+            ``_cdf`` transient near ~80 MB at ``_TRANSLATE_COMPUTE_DTYPE``.
+            Lower values reduce peak memory at a small time cost; primarily
+            useful for testing.
 
     Returns:
         The translated probabilities.

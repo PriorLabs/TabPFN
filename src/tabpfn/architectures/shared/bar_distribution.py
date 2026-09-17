@@ -501,13 +501,29 @@ class FullSupportBarDistribution(BarDistribution):
 
     @staticmethod
     def halfnormal_with_p_weight_before(
-        range_max: float,
+        range_max: float | torch.Tensor,
         p: float = 0.5,
     ) -> torch.distributions.HalfNormal:
-        """Build a half-normal placing ``p`` of its mass below ``range_max``."""
-        s = range_max / torch.distributions.HalfNormal(torch.tensor(1.0)).icdf(
-            torch.tensor(p),
+        """Build a half-normal placing ``p`` of its mass below ``range_max``.
+
+        The reference half-normal is built in ``range_max``'s own floating
+        dtype. Hardcoding ``torch.tensor(1.0)`` would evaluate ``icdf`` in
+        float32 and cap the returned scale at ~1e-8 relative accuracy, which
+        is a float32-sized error in an otherwise float64 tail computation.
+        A float (or non-floating) ``range_max`` keeps the default dtype, so
+        float32 callers are unaffected.
+        """
+        as_tensor = torch.as_tensor(range_max)
+        dtype = (
+            as_tensor.dtype
+            if as_tensor.dtype.is_floating_point
+            else torch.get_default_dtype()
         )
+        # The reference stays on the CPU: it is a scalar, and moving it would
+        # expose the tiny CPU/CUDA `erfinv` differences to the caller's device.
+        s = range_max / torch.distributions.HalfNormal(
+            torch.tensor(1.0, dtype=dtype),
+        ).icdf(torch.tensor(p, dtype=dtype))
         return torch.distributions.HalfNormal(s)
 
     @override
