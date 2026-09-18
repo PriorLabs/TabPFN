@@ -455,14 +455,14 @@ def test__translate_probs_across_borders__fills_buckets_outside_source_range() -
     assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
 
 
-def test__translate_probs_across_borders__closed_form_fills_upper_tail() -> None:
+def test__translate_probs_across_borders__survival_fills_upper_tail() -> None:
     """Upper-tail buckets must not cancel against a CDF that has rounded to 1.
 
-    Differencing recovers the bulk, but out in the upper tail the float64 CDF
-    saturates at exactly 1.0 and the difference is 0 regardless of precision.
-    Inside a tail the mass has the closed form `p * (SF(a) - SF(b))`, two small
-    numbers with nothing near 1 to cancel against, so those buckets are taken
-    that way instead.
+    Differencing the CDF recovers the bulk, but out in the upper tail the
+    float64 CDF saturates at exactly 1.0 and the difference is 0 regardless of
+    precision. The survival function out there is `p * SF(y)`, a small number
+    with nothing near 1 to cancel against, so the upper half is differenced
+    from that end instead.
     """
     num_buckets = 500
     frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
@@ -490,12 +490,12 @@ def test__translate_probs_across_borders__closed_form_fills_upper_tail() -> None
         out[past_bottom].flip(0), out[past_top], rtol=1e-12, atol=0.0
     )
 
-    # And the closed form must not disturb the total.
+    # And the survival-side differencing must not disturb the total.
     assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
 
 
-def test__translate_probs_across_borders__closed_form_matches_analytic() -> None:
-    """The closed-form tail masses must match the half-normal they come from."""
+def test__translate_probs_across_borders__upper_tail_matches_analytic() -> None:
+    """The upper-tail masses must match the half-normal they come from."""
     num_buckets = 500
     frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
     to = torch.linspace(-4.2, 4.2, num_buckets + 1, dtype=torch.float64)
@@ -524,6 +524,57 @@ def test__translate_probs_across_borders__closed_form_matches_analytic() -> None
     )
 
     torch.testing.assert_close(out[past_top], expected, rtol=1e-12, atol=0.0)
+
+
+def test__translate_probs_across_borders__interior_is_mirror_symmetric() -> None:
+    """A source and its mirror image must remap to mirror images.
+
+    Differencing the CDF is only accurate where the CDF is small: near 1 it has
+    rounded away anything below ~1e-16 of the total, so interior buckets in the
+    upper half of the grid lose masses that the same buckets in the lower half
+    keep. `to` sits strictly inside `frm` here, so no tail bucket is involved
+    and the symmetry can only be broken by the differencing itself.
+    """
+    num_buckets = 5000
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-3.9, 3.9, num_buckets + 1, dtype=torch.float64)
+    mids = (frm[1:] + frm[:-1]) / 2
+    # A narrow head off-centre, so its far side spans many decades of mass.
+    log_density = -0.5 * ((mids - 1.0) / 0.3) ** 2
+    logits = (log_density - log_density.logsumexp(0))[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+    out_mirrored = translate_probs_across_borders(logits.flip(-1), frm=frm, to=to)[0]
+
+    assert int((out == 0).sum()) == int((out_mirrored == 0).sum())
+    torch.testing.assert_close(out.flip(0), out_mirrored, rtol=1e-9, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("frm", "to"),
+    [
+        ([0.0, 10.0, 11.0, 12.0], [1.0, 2.0, 3.0]),
+        ([0.0, 1.0, 2.0, 12.0], [9.0, 10.0, 11.0]),
+    ],
+    ids=["inside_lower_tail", "inside_upper_tail"],
+)
+def test__translate_probs_across_borders__to_inside_one_source_tail_sums_to_one(
+    frm: list[float], to: list[float]
+) -> None:
+    """The output must still sum to 1 when all of `to` lies inside one tail.
+
+    The outermost destination buckets absorb everything beyond `to`. When the
+    whole destination grid sits inside a single source tail, the bucket at the
+    far end from that tail must keep absorbing the rest of the distribution
+    rather than be treated as one more sliver of the tail.
+    """
+    frm_t = torch.tensor(frm, dtype=torch.float64)
+    to_t = torch.tensor(to, dtype=torch.float64)
+    logits = torch.tensor([0.2, 0.5, 0.3], dtype=torch.float64).log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm_t, to=to_t)[0]
+
+    assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
 
 
 @pytest.mark.parametrize("chunked", [False, True])

@@ -384,29 +384,40 @@ def _halfnormal_tail_survival(
 # TODO (eddiebergman): Can probably put this back to the Bar distribution.
 # However we don't really need the full BarDistribution class and this was
 # put here to make that a bit more obvious in terms of what was going on.
-def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
-    """CDF of the bar distribution given by `logits` over `borders`, at `ys`.
+def _cdf_and_survival(
+    logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """CDF and survival function of the bar distribution over `borders`, at `ys`.
 
     Matches `FullSupportBarDistribution.forward`, which is the definition both
     the training loss and the NLL metric use: the interior buckets are uniform
     bars, and the two outer buckets are half-normal tails that give the
     distribution support over all of R. `ys` outside `borders` therefore get a
     small non-zero (resp. below-one) CDF rather than a hard 0 (resp. 1).
+
+    The survival function is accumulated from the top rather than taken as
+    `1 - CDF`, so that near the top of the distribution it carries the small
+    numbers the CDF has rounded away. Each is accurate where it is small.
     """
     ys = ys.repeat((*logits.shape[:-1], 1))
     n_bars = len(borders) - 1
     y_buckets = _map_to_bucket_ix(ys, borders).clamp(0, n_bars - 1).to(logits.device)
 
     probs = torch.softmax(logits, dim=-1)
-    prob_so_far = torch.cumsum(probs, dim=-1) - probs
-    prob_left_of_bucket = prob_so_far.gather(index=y_buckets, dim=-1)
+    prob_in_bucket = probs.gather(index=y_buckets, dim=-1)
+    prob_below_bucket = (torch.cumsum(probs, dim=-1) - probs).gather(
+        index=y_buckets, dim=-1
+    )
+    prob_above_bucket = (torch.cumsum(probs.flip(-1), dim=-1).flip(-1) - probs).gather(
+        index=y_buckets, dim=-1
+    )
 
     bucket_widths = borders[1:] - borders[:-1]
     share_of_bucket_left = (ys - borders[y_buckets]) / bucket_widths[y_buckets]
     share_of_bucket_left = share_of_bucket_left.clamp(0.0, 1.0)
 
-    prob_in_bucket = probs.gather(index=y_buckets, dim=-1) * share_of_bucket_left
-    prob_left_of_ys = prob_left_of_bucket + prob_in_bucket
+    cdf = prob_below_bucket + prob_in_bucket * share_of_bucket_left
+    survival = prob_above_bucket + prob_in_bucket * (1.0 - share_of_bucket_left)
 
     # Replace the uniform reading of the two outer buckets with their
     # half-normal tails. Both write over the whole outer bucket, not just the
@@ -417,26 +428,39 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     # which is normally a handful, rather than to all of `ys`.
     if n_bars > 1:
         in_lower_tail = ys <= borders[1]
-        prob_left_of_ys[in_lower_tail] = probs[..., 0:1].expand_as(ys)[
+        lower_tail = probs[..., 0:1].expand_as(ys)[
             in_lower_tail
         ] * _halfnormal_tail_survival(
             borders[1] - ys[in_lower_tail],
             bucket_widths[0],
         )
+        cdf[in_lower_tail] = lower_tail
+        survival[in_lower_tail] = 1.0 - lower_tail
         in_upper_tail = ys >= borders[-2]
-        prob_left_of_ys[in_upper_tail] = 1.0 - probs[..., -1:].expand_as(ys)[
+        upper_tail = probs[..., -1:].expand_as(ys)[
             in_upper_tail
         ] * _halfnormal_tail_survival(
             ys[in_upper_tail] - borders[-2],
             bucket_widths[-1],
         )
+        cdf[in_upper_tail] = 1.0 - upper_tail
+        survival[in_upper_tail] = upper_tail
 
-    return prob_left_of_ys.clip(0.0, 1.0)
+    return cdf.clip(0.0, 1.0), survival.clip(0.0, 1.0)
 
 
-# A destination bucket's mass is the difference of two CDF values, so its
-# resolution is that of the CDF near 1, not near 0: in float32 that is ~6e-8,
-# and any bucket holding less than that rounds to exactly zero. `regressor.py`
+def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+    """CDF of the bar distribution given by `logits` over `borders`, at `ys`.
+
+    See `_cdf_and_survival`.
+    """
+    return _cdf_and_survival(logits, borders, ys)[0]
+
+
+# A destination bucket's mass is the difference of two cumulative values, so
+# in the bulk its resolution is that of a number near 1/2, not near 0: in
+# float32 that is ~3e-8, and any bucket holding less than that rounds to
+# exactly zero. `regressor.py`
 # takes `.log()` of the pooled probabilities, so such a bucket becomes -inf and
 # the bar distribution's NLL is infinite for a target landing in it. float64
 # moves that resolution to ~1e-16, below anything a 5000-bucket grid puts in a
@@ -462,64 +486,6 @@ def _translate_compute_device(device: torch.device) -> torch.device:
     return torch.device("cpu") if device.type == "mps" else device
 
 
-def _overwrite_tail_bucket_masses(
-    mass: torch.Tensor,
-    *,
-    logits: torch.Tensor,
-    frm: torch.Tensor,
-    to: torch.Tensor,
-) -> None:
-    """Recompute, in place, the destination buckets that lie inside a tail.
-
-    Differencing the CDF is exact in the bulk but destroys the upper tail: out
-    there the CDF has rounded to exactly 1.0, so the difference is 0 even in
-    float64 and even though the true mass is not. Inside a tail the mass over
-    ``[a, b]`` has the closed form ``p_outer * (SF(a) - SF(b))`` -- two small
-    numbers with nothing near 1 to cancel against -- so it is taken that way.
-
-    Both tails are done, not just the offending upper one. The lower tail does
-    not round to zero, but differencing two nearly equal small numbers still
-    costs it relative accuracy, and an asymmetric treatment of the two tails
-    would bias a model comparison toward whichever side reads low.
-    """
-    # With fewer than three buckets the two tail regions are not disjoint and
-    # the whole grid is tail; leave the differenced values alone.
-    if not bool(frm[1] < frm[-2]):
-        return
-
-    # Only the outermost two bucket probabilities are needed, so take the
-    # log-softmax normaliser rather than materialise a second full softmax.
-    log_norm = torch.logsumexp(logits, dim=-1, keepdim=True)
-    p_first = (logits[..., 0:1] - log_norm).exp()
-    p_last = (logits[..., -1:] - log_norm).exp()
-
-    widths = frm[1:] - frm[:-1]
-    lower_border, upper_border = to[:-1], to[1:]
-    # `_cdf` is pinned to 0 at `to[0]` and 1 at `to[-1]`, so the outermost
-    # destination buckets absorb everything beyond `to`. Pushing their outer
-    # edge to infinity expresses exactly that, and keeps the closed form
-    # telescoping to the same total the differencing produced.
-    inf = torch.inf
-    lower_border_ext = lower_border.clone()
-    lower_border_ext[0] = -inf
-    upper_border_ext = upper_border.clone()
-    upper_border_ext[-1] = inf
-
-    in_lower_tail = upper_border <= frm[1]
-    mass[..., in_lower_tail] = p_first * (
-        _halfnormal_tail_survival(frm[1] - upper_border[in_lower_tail], widths[0])
-        - _halfnormal_tail_survival(frm[1] - lower_border_ext[in_lower_tail], widths[0])
-    )
-
-    in_upper_tail = lower_border >= frm[-2]
-    mass[..., in_upper_tail] = p_last * (
-        _halfnormal_tail_survival(lower_border[in_upper_tail] - frm[-2], widths[-1])
-        - _halfnormal_tail_survival(
-            upper_border_ext[in_upper_tail] - frm[-2], widths[-1]
-        )
-    )
-
-
 def _translate_probs_across_borders_unchunked(
     logits: torch.Tensor,
     *,
@@ -537,17 +503,31 @@ def _translate_probs_across_borders_unchunked(
     frm = frm.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
     to = to.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
 
-    prob_left = _cdf(logits, borders=frm, ys=to)
-    # `_cdf` gives `to[0]` and `to[-1]` the source's half-normal tail mass;
-    # pinning to 0 and 1 folds whatever lies beyond `to` into the outermost
-    # destination buckets, where the destination `FullSupportBarDistribution`'s
-    # own tails carry it. This keeps the output summing to 1 and keeps an
-    # identity remap (`to == frm`) returning the input probabilities, up to the
-    # round-off of the cast back to the caller's dtype.
+    prob_left, prob_right = _cdf_and_survival(logits, borders=frm, ys=to)
+    # `_cdf_and_survival` gives `to[0]` and `to[-1]` the source's half-normal
+    # tail mass; pinning to 0 and 1 folds whatever lies beyond `to` into the
+    # outermost destination buckets, where the destination
+    # `FullSupportBarDistribution`'s own tails carry it. This keeps the output
+    # summing to 1 and keeps an identity remap (`to == frm`) returning the
+    # input probabilities, up to the round-off of the cast back to the
+    # caller's dtype.
     prob_left[..., 0] = 0.0
     prob_left[..., -1] = 1.0
-    mass = (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
-    _overwrite_tail_bucket_masses(mass, logits=logits, frm=frm, to=to)
+    prob_right[..., 0] = 1.0
+    prob_right[..., -1] = 0.0
+    # A cumulative probability is accurate where it is small: near 1 it has
+    # rounded away anything below ~1e-16 of the total, and differencing two
+    # such values loses every bucket smaller than that -- in the upper tail
+    # entirely, since the CDF there is exactly 1.0. So each bucket is
+    # differenced from whichever end it is nearer to: the CDF in the lower
+    # half of the distribution, the survival function in the upper half.
+    # Treating both halves the same way matters as much as the accuracy: an
+    # asymmetric zero pattern biases a model comparison toward whichever side
+    # reads low.
+    from_below = prob_left[..., 1:] - prob_left[..., :-1]
+    from_above = prob_right[..., :-1] - prob_right[..., 1:]
+    mass = torch.where(prob_left[..., 1:] <= 0.5, from_below, from_above)
+    mass = mass.clamp_min(0.0)
     if return_log_probs:
         # Taken here, at `_TRANSLATE_COMPUTE_DTYPE`, which is the whole point:
         # a mass of 1e-300 does not survive the cast to float32, but its log
@@ -558,10 +538,11 @@ def _translate_probs_across_borders_unchunked(
     return mass.to(out_dtype).to(out_device)
 
 
-# `_cdf` allocates ~8 intermediate tensors of shape (batch, len(to)). Targeting
-# `chunk_size * len(to) <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient
-# around ~80 MB and the total under ~1 GB, which holds translate_probs's
-# contribution to peak memory roughly constant in n_test. The budget counts
+# `_cdf_and_survival` allocates ~10 intermediate tensors of shape
+# (batch, len(to)). Targeting `chunk_size * len(to) <=
+# _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient around ~80 MB and the
+# total around ~1 GB, which holds translate_probs's contribution to peak memory
+# roughly constant in n_test. The budget counts
 # elements, so it is set against `_TRANSLATE_COMPUTE_DTYPE` (8 bytes/element),
 # not against the caller's dtype.
 _TRANSLATE_CHUNK_BUDGET_ELEMENTS = 10_000_000
@@ -586,7 +567,7 @@ def translate_probs_across_borders(
 
     For large batches the computation is chunked so that the peak memory
     footprint of the intermediate ``(batch, len(to))`` tensors allocated
-    inside ``_cdf`` stays bounded. All batch dimensions are flattened
+    inside ``_cdf_and_survival`` stays bounded. All batch dimensions are flattened
     before chunking, so the memory cap holds regardless of which batch
     dimension is large (e.g. `(n_estimators, n_test, num_buckets)`). The
     output is numerically identical to the unchunked version.
@@ -601,7 +582,8 @@ def translate_probs_across_borders(
         to: The borders to translate to.
         chunk_budget_elements: Maximum number of ``logits[..., -1]`` elements
             processed per chunk. Defaults to a value that keeps each
-            ``_cdf`` transient near ~80 MB at ``_TRANSLATE_COMPUTE_DTYPE``.
+            ``_cdf_and_survival`` transient near ~80 MB at
+            ``_TRANSLATE_COMPUTE_DTYPE``.
             Lower values reduce peak memory at a small time cost; primarily
             useful for testing.
         return_log_probs: Return log-probabilities instead of probabilities,
@@ -628,7 +610,7 @@ def translate_probs_across_borders(
     # Flatten batch dims so chunking is independent of which dim is large.
     logits_flat = logits.reshape(-1, num_buckets_frm)
     num_rows = logits_flat.shape[0]
-    # The dominant intermediates inside `_cdf` are of shape
+    # The dominant intermediates inside `_cdf_and_survival` are of shape
     # `(batch, num_borders_to)`, so budget against borders, not buckets.
     chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
     if num_rows <= chunk_size:
