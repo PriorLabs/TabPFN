@@ -2059,7 +2059,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Map one estimator's output for one dataset onto the shared borders.
 
         Same border translation as :meth:`predict`, for a single
-        (estimator, dataset) pair of the fused forward.
+        (estimator, dataset) pair of the fused forward. Returns
+        log-probabilities in both `average_before_softmax` modes, ready for
+        `_accumulate_member_log_probs`.
         """
         out_d = output.float()
         temperature = resolved_softmax_temperature(self)
@@ -2385,6 +2387,17 @@ def _accumulate_member_log_probs(
         return contribution
     if average_before_softmax:
         return accumulated + contribution
+    if accumulated.requires_grad or contribution.requires_grad:
+        # `logaddexp(-inf, -inf)` is `-inf` but differentiates to NaN. Pool
+        # those buckets from a finite pair and put the `-inf` back, which
+        # zeroes their gradient. Inference skips the extra elementwise work.
+        both_empty = torch.isneginf(accumulated) & torch.isneginf(contribution)
+        filler = torch.zeros_like(accumulated)
+        pooled = torch.logaddexp(
+            torch.where(both_empty, filler, accumulated),
+            torch.where(both_empty, filler, contribution),
+        )
+        return pooled.masked_fill(both_empty, float("-inf"))
     return torch.logaddexp(accumulated, contribution)
 
 
