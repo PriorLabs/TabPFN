@@ -615,7 +615,7 @@ def test__translate_probs_across_borders__to_inside_one_source_tail_sums_to_one(
 
 @pytest.mark.parametrize("chunked", [False, True])
 def test__translate_probs_across_borders__log_probs_survive_the_float32_cast(
-    chunked: bool,
+    monkeypatch: pytest.MonkeyPatch, chunked: bool
 ) -> None:
     """`return_log_probs` must keep masses that float32 cannot represent.
 
@@ -630,8 +630,20 @@ def test__translate_probs_across_borders__log_probs_survive_the_float32_cast(
     mids = (frm[1:] + frm[:-1]) / 2
     density = torch.exp(-0.5 * (mids / 0.05) ** 2)
     logits = (density / density.sum()).clamp_min(1e-300).log()[None, :].float()
+    # Several rows, so that a budget of one row per chunk really chunks.
+    logits = logits.repeat(8, 1)
     budget = {"chunk_budget_elements": num_buckets + 1} if chunked else {}
 
+    calls = {"n": 0}
+    orig = _translate_probs_across_borders_unchunked
+
+    def counting_unchunked(*args, **kwargs) -> torch.Tensor:
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tabpfn.utils._translate_probs_across_borders_unchunked", counting_unchunked
+    )
     as_probs = translate_probs_across_borders(
         logits, frm=frm.float(), to=to.float(), **budget
     )
@@ -639,6 +651,11 @@ def test__translate_probs_across_borders__log_probs_survive_the_float32_cast(
         logits, frm=frm.float(), to=to.float(), return_log_probs=True, **budget
     )
 
+    # With the budget set to one row per chunk, every row is its own chunk;
+    # otherwise each call goes straight to the unchunked kernel.
+    assert calls["n"] == (2 * logits.shape[0] if chunked else 2)
+    if chunked:
+        assert calls["n"] > 2, "the chunked path was not exercised"
     assert as_logs.shape == as_probs.shape
     assert as_logs.dtype == logits.dtype
 
