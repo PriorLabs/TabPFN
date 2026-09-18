@@ -160,6 +160,30 @@ def test__fa4_bf16_declined_on_blackwell_with_one_warning(
     fa4_backend._warn_bf16_blackwell_once.cache_clear()
 
 
+def test__fa4_bf16_gate_does_not_break_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry consults ``is_preferred`` inside compiled regions, so the
+    Blackwell bf16 decline must be traceable: no ``warnings.warn`` while
+    Dynamo is tracing (it cannot trace the builtin and would break the graph).
+    """
+    fa4_backend._is_bf16_slow.cache_clear()
+    fa4_backend._warn_bf16_blackwell_once.cache_clear()
+    monkeypatch.setattr(fa4_backend, "_fa4_max_head_dim", lambda _d: 128)
+    monkeypatch.setattr(fa4_backend, "_compute_capability_major", lambda _d: 10)
+    spec = _spec(64, 64, dtype=torch.bfloat16)
+
+    torch._dynamo.reset()
+    compiled = torch.compile(FA4_BACKEND.is_preferred, fullgraph=True, backend="eager")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="FlashAttention-4")
+        preferred = compiled(spec)
+    assert preferred is False
+
+    fa4_backend._is_bf16_slow.cache_clear()
+    fa4_backend._warn_bf16_blackwell_once.cache_clear()
+
+
 def test__fa4_eligibility_head_dim_range_per_arch() -> None:
     """FA4's head-dim range differs by architecture: 256 on sm_90, 128 on sm_100+."""
     if not torch.cuda.is_available():
