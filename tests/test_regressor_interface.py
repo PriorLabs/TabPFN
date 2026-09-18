@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import itertools
+import math
 import os
 import typing
 from collections.abc import Callable
@@ -39,6 +40,7 @@ from tabpfn.inference_tuning import (
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.regressor import _accumulate_member_log_probs
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
@@ -2057,3 +2059,96 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
     round_tripped = TabPFNRegressor().set_params(**params)
     assert round_tripped.eval_metric == eval_metric
     assert round_tripped.tuning_config == tuning_config
+
+
+def test__accumulate_member_log_probs__matches_averaging_probabilities() -> None:
+    """Log-space pooling must be the same arithmetic mixture as before.
+
+    `log(mean_i p_i) = logsumexp_i(log p_i) - log(n)`, so the ensemble's
+    pooling is unchanged as a definition; only the representation moves, to
+    keep buckets whose mass float32 cannot hold (PRI-361).
+    """
+    torch.manual_seed(0)
+    n_members = 8
+    members = [torch.randn(64, 500).softmax(-1) for _ in range(n_members)]
+
+    summed = None
+    for probs in members:
+        summed = probs if summed is None else summed + probs
+    assert summed is not None
+    averaging_probabilities = (summed / n_members).log()
+
+    accumulated = None
+    for probs in members:
+        accumulated = _accumulate_member_log_probs(
+            accumulated, probs.log(), average_before_softmax=False
+        )
+    assert accumulated is not None
+    in_log_space = accumulated - math.log(n_members)
+
+    # float32 round-off only; the two are the same quantity.
+    torch.testing.assert_close(
+        in_log_space, averaging_probabilities, rtol=1e-5, atol=1e-6
+    )
+
+
+def test__accumulate_member_log_probs__average_before_softmax_sums_logs() -> None:
+    """With `average_before_softmax` the members' logs are averaged, as before."""
+    torch.manual_seed(1)
+    members = [torch.randn(16, 40).softmax(-1) for _ in range(4)]
+
+    accumulated = None
+    for probs in members:
+        accumulated = _accumulate_member_log_probs(
+            accumulated, probs.log(), average_before_softmax=True
+        )
+    assert accumulated is not None
+
+    expected = sum(probs.log() for probs in members)
+    torch.testing.assert_close(accumulated, expected)
+
+
+def test__accumulate_member_log_probs__keeps_masses_float32_cannot_hold() -> None:
+    """A bucket below float32's smallest subnormal must survive pooling.
+
+    This is the reason the reduction is in log space: as a probability the mass
+    is 0 and the ensemble's log is -inf, making the NLL infinite for a target
+    landing there.
+    """
+    log_probs = torch.log_softmax(
+        torch.tensor([[math.log(1e-300), -5.0, -5.0, -5.0]]), dim=-1
+    ).float()
+    assert log_probs[0, 0].exp().item() == 0.0, "expected float32 to lose the mass"
+
+    accumulated = None
+    for _ in range(8):
+        accumulated = _accumulate_member_log_probs(
+            accumulated, log_probs, average_before_softmax=False
+        )
+    assert accumulated is not None
+    pooled = accumulated - math.log(8)
+
+    assert bool(torch.isfinite(pooled).all())
+    # Eight identical members average to the same distribution.
+    torch.testing.assert_close(pooled, log_probs)
+
+
+def test__accumulate_member_log_probs__uncovered_bucket_stays_neg_inf() -> None:
+    """A bucket no member puts mass in must stay -inf, and one member is enough."""
+    neg_inf = -float("inf")
+    none_cover = torch.tensor([[neg_inf, -1.0]])
+    one_covers = torch.tensor([[-3.0, -1.0]])
+
+    both_empty = _accumulate_member_log_probs(
+        _accumulate_member_log_probs(None, none_cover, average_before_softmax=False),
+        none_cover,
+        average_before_softmax=False,
+    )
+    assert both_empty[0, 0].item() == neg_inf
+
+    one_nonempty = _accumulate_member_log_probs(
+        _accumulate_member_log_probs(None, none_cover, average_before_softmax=False),
+        one_covers,
+        average_before_softmax=False,
+    )
+    assert one_nonempty[0, 0].item() == pytest.approx(-3.0)
