@@ -454,7 +454,7 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
 # A bucket's mass is the difference of two cumulative values of order 1, so
 # in float32 anything below ~3e-8 rounds to exactly 0 and its NLL to inf.
 # float64 puts that floor at ~1e-16. The result is cast back to the caller's
-# dtype; use `return_log_probs` to keep masses float32 cannot hold.
+# dtype.
 _TRANSLATE_COMPUTE_DTYPE = torch.float64
 
 
@@ -474,7 +474,6 @@ def _translate_probs_across_borders_unchunked(
     *,
     frm: torch.Tensor,
     to: torch.Tensor,
-    return_log_probs: bool = False,
 ) -> torch.Tensor:
     out_dtype = logits.dtype
     out_device = logits.device
@@ -511,13 +510,7 @@ def _translate_probs_across_borders_unchunked(
     from_above = prob_right[..., :-1] - prob_right[..., 1:]
     mass = torch.where(prob_left[..., 1:] <= 0.5, from_below, from_above)
     mass = mass.clamp_min(0.0)
-    if return_log_probs:
-        # Taken here, at `_TRANSLATE_COMPUTE_DTYPE`, which is the whole point:
-        # a mass of 1e-300 does not survive the cast to float32, but its log
-        # (-690) does. A bucket no member put mass in stays `-inf`.
-        mass = mass.log()
-    # Cast before moving, for the same reason and because it halves the bytes
-    # crossing the bus.
+    # Cast before moving: it halves the bytes crossing the bus.
     return mass.to(out_dtype).to(out_device)
 
 
@@ -537,7 +530,6 @@ def translate_probs_across_borders(
     frm: torch.Tensor,
     to: torch.Tensor,
     chunk_budget_elements: int = _TRANSLATE_CHUNK_BUDGET_ELEMENTS,
-    return_log_probs: bool = False,
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
@@ -569,16 +561,9 @@ def translate_probs_across_borders(
             ``_TRANSLATE_COMPUTE_DTYPE``.
             Lower values reduce peak memory at a small time cost; primarily
             useful for testing.
-        return_log_probs: Return log-probabilities instead of probabilities,
-            with the log taken before the cast back to the caller's dtype.
-            Prefer this whenever the caller only needs the log, which is the
-            case for every ensemble reduction: float32 cannot represent a
-            bucket mass below ~1e-45, so a narrow-kernel head loses its far
-            buckets to the cast, while their logs are ordinary small numbers.
-            A bucket with no mass at all is ``-inf``.
 
     Returns:
-        The translated probabilities, or their log if ``return_log_probs``.
+        The translated probabilities.
     """
     batch_shape = logits.shape[:-1]
     num_buckets_frm = logits.shape[-1]
@@ -586,9 +571,7 @@ def translate_probs_across_borders(
     num_buckets_to = num_borders_to - 1
 
     if len(batch_shape) == 0:
-        return _translate_probs_across_borders_unchunked(
-            logits, frm=frm, to=to, return_log_probs=return_log_probs
-        )
+        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
     # Flatten batch dims so chunking is independent of which dim is large.
     logits_flat = logits.reshape(-1, num_buckets_frm)
@@ -597,9 +580,7 @@ def translate_probs_across_borders(
     # `(batch, num_borders_to)`, so budget against borders, not buckets.
     chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
     if num_rows <= chunk_size:
-        return _translate_probs_across_borders_unchunked(
-            logits, frm=frm, to=to, return_log_probs=return_log_probs
-        )
+        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
     # Preallocate output and write chunks in-place to avoid the transient
     # `torch.cat` would create (which would double peak memory).
@@ -611,10 +592,7 @@ def translate_probs_across_borders(
     )
     for i in range(0, num_rows, chunk_size):
         out_flat[i : i + chunk_size] = _translate_probs_across_borders_unchunked(
-            logits_flat[i : i + chunk_size],
-            frm=frm,
-            to=to,
-            return_log_probs=return_log_probs,
+            logits_flat[i : i + chunk_size], frm=frm, to=to
         )
     return out_flat.reshape(*batch_shape, num_buckets_to)
 
