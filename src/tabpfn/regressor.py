@@ -2061,8 +2061,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Same border translation as :meth:`predict`, for a single
         (estimator, dataset) pair of the fused forward. Returns
-        log-probabilities in both `average_before_softmax` modes, ready for
-        `_accumulate_member_log_probs`.
+        log-probabilities.
         """
         out_d = output.float()
         temperature = resolved_softmax_temperature(self)
