@@ -2152,3 +2152,31 @@ def test__accumulate_member_log_probs__uncovered_bucket_stays_neg_inf() -> None:
         average_before_softmax=False,
     )
     assert one_nonempty[0, 0].item() == pytest.approx(-3.0)
+
+
+def test__accumulate_member_log_probs__uncovered_bucket_differentiates_finitely() -> (
+    None
+):
+    """Pooling two empty buckets must not put NaN into the backward pass.
+
+    `torch.logaddexp(-inf, -inf)` is -inf but differentiates to NaN, where the
+    probability-space sum it replaces differentiated `0 + 0` to 1.
+    """
+    neg_inf = -float("inf")
+    members = [
+        torch.tensor([[neg_inf, -1.0]], requires_grad=True),
+        torch.tensor([[neg_inf, -2.0]], requires_grad=True),
+    ]
+
+    accumulated = None
+    for member in members:
+        accumulated = _accumulate_member_log_probs(
+            accumulated, member, average_before_softmax=False
+        )
+    assert accumulated is not None
+    assert accumulated[0, 0].item() == neg_inf
+
+    accumulated.nan_to_num(neginf=0.0).sum().backward()
+    for member in members:
+        assert member.grad is not None
+        assert torch.isfinite(member.grad).all(), member.grad
