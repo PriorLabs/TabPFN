@@ -496,9 +496,8 @@ def _translate_probs_across_borders_unchunked(
     mass = torch.where(prob_left[..., 1:] <= 0.5, from_below, from_above)
     mass = mass.clamp_min(0.0)
     if return_log_probs:
-        # Taken here, at `_TRANSLATE_COMPUTE_DTYPE`, which is the whole point:
-        # a mass of 1e-300 does not survive the cast to float32, but its log
-        # (-690) does. A bucket no member put mass in stays `-inf`.
+        # At `_TRANSLATE_COMPUTE_DTYPE`: a mass of 1e-300 does not survive
+        # the cast to float32, but its log does. An empty bucket is `-inf`.
         mass = mass.log()
     # Cast before moving, for the same reason and because it halves the bytes
     # crossing the bus.
