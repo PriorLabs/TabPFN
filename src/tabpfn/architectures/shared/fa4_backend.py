@@ -9,7 +9,8 @@ are written in CuTeDSL and cover Hopper (sm_90), Blackwell datacenter
 (sm_100/sm_110) and Blackwell consumer / DGX Spark (sm_120/sm_121), so one
 backend serves both the architecture FA3 already covers and the one it cannot.
 FA4 requires fp16/bf16 inputs; the supported head dims depend on the
-architecture (see ``_fa4_max_head_dim``).
+architecture (see ``_fa4_max_head_dim``), and bf16 is left to SDPA on
+Blackwell (see ``_is_bf16_slow``).
 
 FA4 replaces the FA3 backend this module descends from. Differences from
 ``flash_attn_interface`` (FA3) that shaped it:
@@ -28,6 +29,7 @@ Verified against ``flash-attn-4==4.0.0b30``.
 from __future__ import annotations
 
 import functools
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -48,11 +50,15 @@ _FA4_HEAD_DIM_ALIGNMENT = 8
 # FA4 also has kernels for Ampere (sm_80), but SDPA already dispatches FA2
 # there, so Ampere is deliberately absent from the table above.
 
-# PLACEHOLDER, NOT MEASURED FOR FA4. Inherited from the FA3 backend's
-# H100 crossover. On Hopper, FA4 shows no low-end penalty (see fa4_setup.md);
-# the value is set by the benchmark, per architecture if Hopper and Blackwell
-# cross at different lengths (TabPFN#1235).
-_FA4_MIN_SEQLEN_FOR_SPEEDUP = 10_000
+# No sequence-length gate. Measured on H100 and GB200 (TabPFN#1235), FA4 is
+# within noise of SDPA from n_train=100 up and ahead from ~3k, so unlike FA3
+# there is no short-sequence regime where SDPA should be preferred.
+
+# On Blackwell (compute capability 10.x+) FA4's bf16 kernels run ~20% slower
+# than SDPA's from ~10k rows up, while fp16 does not (flash-attn-4 4.0.0b30).
+# bf16 is therefore left to SDPA there, with a one-time warning so the user
+# knows why the backend is not being used. Re-measure per FA4 beta.
+_FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR = 10
 
 # ``num_splits`` passed to FA4 where split-KV exists (sm_100/110). ``0``
 # asks FA4's own heuristic. Whether that beats ``1`` on TabPFN's short-Q /
@@ -99,11 +105,33 @@ def is_fa4_eligible(device: torch.device, dtype: torch.dtype, head_dim: int) -> 
     Assumes the package is installed — see :meth:`FA4Backend.is_available`.
     """
     max_head_dim = _fa4_max_head_dim(device)
+    if max_head_dim is None or dtype not in (torch.float16, torch.bfloat16):
+        return False
+    if dtype is torch.bfloat16 and _is_bf16_slow(device):
+        _warn_bf16_blackwell_once()
+        return False
     return (
-        max_head_dim is not None
-        and dtype in (torch.float16, torch.bfloat16)
-        and _FA4_HEAD_DIM_ALIGNMENT <= head_dim <= max_head_dim
+        _FA4_HEAD_DIM_ALIGNMENT <= head_dim <= max_head_dim
         and head_dim % _FA4_HEAD_DIM_ALIGNMENT == 0
+    )
+
+
+@functools.cache
+def _is_bf16_slow(device: torch.device) -> bool:
+    """True on architectures where FA4 bf16 loses to SDPA (Blackwell)."""
+    major = _compute_capability_major(device)
+    return major is not None and major >= _FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR
+
+
+@functools.cache
+def _warn_bf16_blackwell_once() -> None:
+    """Tell the user, once per process, why bf16 calls stay on SDPA."""
+    warnings.warn(
+        "FlashAttention-4 is installed but is not used for bfloat16 attention "
+        "on Blackwell GPUs, where its bf16 kernels are slower than PyTorch "
+        "SDPA; falling back to SDPA. Use float16 (TabPFN's default autocast "
+        "dtype on CUDA) to enable FA4.",
+        stacklevel=4,
     )
 
 
@@ -156,8 +184,8 @@ def fa4_attn_func(
 class FA4Backend(AttentionBackend):
     """FA4 as an :class:`~.attention_backends.AttentionBackend`.
 
-    An eligibility gate, a sequence-length crossover, and a ``run`` that
-    hands dense ``k``/``v`` to the kernel. Registered by the shared SDPA
+    An eligibility gate and a ``run`` that hands dense ``k``/``v`` to the
+    kernel. Registered by the shared SDPA
     module, which owns the consult order.
     """
 
@@ -169,17 +197,11 @@ class FA4Backend(AttentionBackend):
         return _load_fa4_func() is not None
 
     def is_preferred(self, spec: AttentionSpec) -> bool:
-        """Eligibility plus the speedup crossover.
-
-        Compares ``max(seq_q, seq_kv)``
-        so cross-attention with small Q against a large K still routes here;
-        unknown (None) lengths count as 0 and never argue for FA4.
+        """Eligibility alone: FA4 has no measured short-sequence penalty, so
+        every call it can serve, it takes (see the module comment on the
+        absent sequence-length gate and the bf16 exception on Blackwell).
         """
-        max_seq_len = max(spec.seq_len_q or 0, spec.seq_len_kv or 0)
-        return (
-            is_fa4_eligible(spec.device, spec.dtype, spec.head_dim)
-            and max_seq_len >= _FA4_MIN_SEQLEN_FOR_SPEEDUP
-        )
+        return is_fa4_eligible(spec.device, spec.dtype, spec.head_dim)
 
     def run(
         self,
