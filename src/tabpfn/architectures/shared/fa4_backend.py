@@ -6,24 +6,22 @@ FA4 ships on PyPI as the ``flash-attn-4`` package (``pip install
 "tabpfn[fa4]"`` or ``"tabpfn[fa4-cu13]"``; beta releases only) and is imported
 as ``flash_attn.cute``. See ``fa4_setup.md`` next to this file. Its kernels
 are written in CuTeDSL and cover Hopper (sm_90), Blackwell datacenter
-(sm_100/sm_110) and Blackwell consumer / DGX Spark (sm_120/sm_121), so one
-backend serves both the architecture FA3 already covers and the one it cannot.
+(sm_100/sm_110) and Blackwell consumer / DGX Spark (sm_120/sm_121).
 FA4 requires fp16/bf16 inputs; the supported head dims depend on the
 architecture (see ``_fa4_max_head_dim``), and bf16 is left to SDPA on
 Blackwell (see ``_is_bf16_slow``).
 
-FA4 replaces the FA3 backend this module descends from. Differences from
-``flash_attn_interface`` (FA3) that shaped it:
+Properties of ``flash_attn.cute`` (as of ``flash-attn-4==4.0.0b30``) that
+this module accounts for:
 
-- ``flash_attn.cute.flash_attn_func`` returns ``(out, lse)`` unconditionally.
-- Split-KV is not implemented for sm_90 (``"SplitKV not supported on SM 9.0"``)
-  so FA3's manual ``num_splits`` rule cannot be carried over on Hopper, and
-  sm_12x only accepts ``num_splits=1``. FA4 does have a working
-  ``num_splits=0`` heuristic where split-KV exists.
+- ``flash_attn_func`` returns ``(out, lse)`` unconditionally.
+- Split-KV exists on sm_100/110 only, with a working ``num_splits=0``
+  heuristic; sm_90 has none and sm_12x accepts ``num_splits=1`` only.
 - The kernel launches one grid entry per batch element, so ``batch > 65535``
   fails with ``cudaErrorInvalidValue``; ``fa4_attn_func`` chunks the batch.
-
-Verified against ``flash-attn-4==4.0.0b30``.
+- ``flash_attn_func`` is not Dynamo-traceable, so under ``torch.compile``
+  each FA4 call is a graph break. Measured on v3 ``predict()`` (H100): within
+  noise at 30k rows, ~4% at 100k, with FA4 still well ahead of SDPA.
 """
 
 from __future__ import annotations
@@ -51,8 +49,8 @@ _FA4_HEAD_DIM_ALIGNMENT = 8
 # there, so Ampere is deliberately absent from the table above.
 
 # No sequence-length gate. Measured on H100 and GB200 (TabPFN#1235), FA4 is
-# within noise of SDPA from n_train=100 up and ahead from ~3k, so unlike FA3
-# there is no short-sequence regime where SDPA should be preferred.
+# within noise of SDPA from n_train=100 up and ahead from ~3k, so there is no
+# short-sequence regime where SDPA should be preferred.
 
 # On Blackwell (compute capability 10.x+) FA4's bf16 kernels run ~20% slower
 # than SDPA's from ~10k rows up, while fp16 does not (flash-attn-4 4.0.0b30).
@@ -108,7 +106,10 @@ def is_fa4_eligible(device: torch.device, dtype: torch.dtype, head_dim: int) -> 
     if max_head_dim is None or dtype not in (torch.float16, torch.bfloat16):
         return False
     if dtype is torch.bfloat16 and _is_bf16_slow(device):
-        _warn_bf16_blackwell_once()
+        # Not while tracing: ``warnings.warn`` is not traceable (it breaks the
+        # graph), and the registry consults backends inside compiled regions.
+        if not torch.compiler.is_compiling():
+            _warn_bf16_blackwell_once()
         return False
     return (
         _FA4_HEAD_DIM_ALIGNMENT <= head_dim <= max_head_dim
@@ -185,8 +186,7 @@ class FA4Backend(AttentionBackend):
     """FA4 as an :class:`~.attention_backends.AttentionBackend`.
 
     An eligibility gate and a ``run`` that hands dense ``k``/``v`` to the
-    kernel. Registered by the shared SDPA
-    module, which owns the consult order.
+    kernel.
     """
 
     name = "fa4"
@@ -218,5 +218,4 @@ class FA4Backend(AttentionBackend):
         )
 
 
-# Registered by the shared SDPA module, which owns the consult order.
 FA4_BACKEND = FA4Backend()
