@@ -360,17 +360,11 @@ def _halfnormal_tail_survival(
     distance_from_inner_border: torch.Tensor,
     outer_bucket_width: torch.Tensor,
 ) -> torch.Tensor:
-    """Mass fraction of an outer bucket lying past `distance_from_inner_border`.
+    """Fraction of an outer bucket's half-normal tail past `distance_from_inner_border`.
 
-    `FullSupportBarDistribution` replaces the two outer bars with half-normals
-    scaled so that half of the outer bucket's mass falls inside the bucket and
-    half falls beyond the outermost border. Distance is measured inwards-to-
-    outwards from the bucket's *inner* border, so this returns 1.0 at distance
-    0, 0.5 at one bucket width, and decays to 0 further out.
-
-    Written with `erfc` and not a literal `1 - HalfNormal.cdf(...)`: the
-    subtraction cancels to exactly zero a few sigma out, which is the very
-    underflow the tails are here to avoid.
+    1.0 at the inner border, 0.5 at one bucket width out, as in
+    `FullSupportBarDistribution`. Uses `erfc` rather than `1 - cdf`, which
+    cancels to exactly 0 a few sigma out.
     """
     # Repaired borders can leave a degenerate outer bucket (`_repair_borders`
     # cannot widen an outer border that sits exactly at 0.0). Flooring the
@@ -457,21 +451,10 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     return _cdf_and_survival(logits, borders, ys)[0]
 
 
-# A destination bucket's mass is the difference of two cumulative values, so
-# in the bulk its resolution is that of a number near 1/2, not near 0: in
-# float32 that is ~3e-8, and any bucket holding less than that rounds to
-# exactly zero. `regressor.py`
-# takes `.log()` of the pooled probabilities, so such a bucket becomes -inf and
-# the bar distribution's NLL is infinite for a target landing in it. float64
-# moves that resolution to ~1e-16, below anything a 5000-bucket grid puts in a
-# single bucket.
-#
-# The result is cast back to the caller's dtype, which keeps every downstream
-# dtype unchanged. That still bounds what survives: float32 cannot hold a mass
-# below ~1e-45, so a head with a narrow enough kernel keeps losing its far
-# buckets here even though the differencing found them. Fixing that needs the
-# pooling in `regressor.py` to stay in log space (`logsumexp` over members)
-# rather than a wider dtype on this boundary.
+# A bucket's mass is the difference of two cumulative values of order 1, so
+# in float32 anything below ~3e-8 rounds to exactly 0 and its NLL to inf.
+# float64 puts that floor at ~1e-16. The result is cast back to the caller's
+# dtype; use `return_log_probs` to keep masses float32 cannot hold.
 _TRANSLATE_COMPUTE_DTYPE = torch.float64
 
 

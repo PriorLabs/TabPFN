@@ -1702,12 +1702,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 unit="estimator",
                 disable=not self.show_progress_bar,
             ):
-                # Log-probabilities, not probabilities: float32 cannot hold a
-                # bucket mass below ~1e-45, so pooling probabilities throws away
-                # exactly the small buckets the float64 differencing recovered
-                # and turns them into `-inf` at the `.log()` below. Their logs
-                # are ordinary numbers, so the whole reduction stays in log
-                # space and nothing is lost on this boundary.
+                # Pool in log space: a bucket mass can underflow float32 while
+                # its log is still an ordinary number.
                 transformed = translate_probs_across_borders(
                     output,
                     frm=torch.as_tensor(borders_t, device=output.device),
@@ -2385,18 +2381,9 @@ def _accumulate_member_log_probs(
 ) -> torch.Tensor:
     """Fold one estimator's log-probabilities into the running accumulator.
 
-    The ensemble pools its members as an arithmetic mixture by default, and
-    `log(mean_i p_i) = logsumexp_i(log p_i) - log(n)`, so the sum over members
-    is a running `logsumexp` rather than a running sum. Doing it this way keeps
-    the reduction in log space from end to end: a bucket mass of 1e-300 is not
-    representable in float32 but its log is, so nothing is lost to the dtype on
-    the way in, and `_reduce_accumulated_logits` subtracts the `log(n)`.
-
-    With `average_before_softmax` the members' *log*-probabilities are what get
-    averaged, so there the accumulator is a plain sum, as before.
-
-    A bucket that no member put mass in stays `-inf` here, which is the honest
-    answer; `torch.logaddexp` propagates it only when every member agrees.
+    A running `logsumexp` for the default arithmetic mixture, whose `log(n)`
+    `_reduce_accumulated_logits` subtracts; a plain sum when
+    `average_before_softmax`. A bucket no member put mass in stays `-inf`.
     """
     if accumulated is None:
         return contribution

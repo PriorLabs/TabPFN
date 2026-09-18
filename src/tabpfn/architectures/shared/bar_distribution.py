@@ -506,12 +506,8 @@ class FullSupportBarDistribution(BarDistribution):
     ) -> torch.distributions.HalfNormal:
         """Build a half-normal placing ``p`` of its mass below ``range_max``.
 
-        The reference half-normal is built in ``range_max``'s own floating
-        dtype. Hardcoding ``torch.tensor(1.0)`` would evaluate ``icdf`` in
-        float32 and cap the returned scale at ~1e-8 relative accuracy, which
-        is a float32-sized error in an otherwise float64 tail computation.
-        A float (or non-floating) ``range_max`` keeps the default dtype, so
-        float32 callers are unaffected.
+        The scale is computed in ``range_max``'s floating dtype, or in the
+        default dtype when ``range_max`` is not a floating tensor.
         """
         as_tensor = torch.as_tensor(range_max)
         dtype = (
