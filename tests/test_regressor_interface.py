@@ -1574,11 +1574,11 @@ def test__predict_batched__rejects_tuning_config() -> None:
 
 
 def test__predict_batched__shares_its_logit_reduction_with_predict() -> None:
-    """The two paths must reduce accumulated logits through the same code.
+    """The two paths must reduce accumulated log-probabilities the same way.
 
     `predict_batched` once carried its own copy of the averaging tail and so
     silently dropped the `ensemble_softmax_temperature_` step that `predict`
-    applies. Pinning both to `_reduce_accumulated_logits` is what stops them
+    applies. Pinning both to `_reduce_accumulated_log_probs` is what stops them
     drifting apart again, so assert the batched path really routes through it.
     """
     reg = TabPFNRegressor(
@@ -1591,13 +1591,13 @@ def test__predict_batched__shares_its_logit_reduction_with_predict() -> None:
     datasets = [_mk_reg_dataset(s, n=40) for s in (0, 1)]
 
     calls = []
-    original = TabPFNRegressor._reduce_accumulated_logits
+    original = TabPFNRegressor._reduce_accumulated_log_probs
 
-    def spy(self, accumulated_logits, n_estimators):  # noqa: ANN202
+    def spy(self, accumulated_log_probs, n_estimators):  # noqa: ANN202
         calls.append(n_estimators)
-        return original(self, accumulated_logits, n_estimators)
+        return original(self, accumulated_log_probs, n_estimators)
 
-    with mock.patch.object(TabPFNRegressor, "_reduce_accumulated_logits", spy):
+    with mock.patch.object(TabPFNRegressor, "_reduce_accumulated_log_probs", spy):
         reg.predict_batched(
             [d[0] for d in datasets],
             [d[1] for d in datasets],
