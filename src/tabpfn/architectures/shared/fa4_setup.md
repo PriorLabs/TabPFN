@@ -6,7 +6,7 @@ Hopper (sm_90), Blackwell datacenter (sm_100/sm_110) and Blackwell consumer /
 DGX Spark (sm_120/sm_121), so one backend covers the GPUs FA3 serves and the
 ones it cannot. On Hopper, FA4 replaces the FA3 backend: measured on H100 it
 matches or beats FA3 at every sequence length and, unlike FA3, has no
-short-sequence penalty against SDPA (see [thresholds](#sequence-length-threshold)).
+short-sequence penalty against SDPA (see [measured speedups](#measured-speedups)).
 
 ## When FA4 is used
 
@@ -16,14 +16,19 @@ The dispatcher routes a call to FA4 only when **all** of the following hold:
 - The attention is on a CUDA tensor whose device has compute capability
   9.x, 10.x, 11.x or 12.x. ROCm is rejected explicitly. Ampere (8.x) is left
   to SDPA, which already dispatches FA2 there.
-- The dtype is `torch.float16` or `torch.bfloat16`.
+- The dtype is `torch.float16`, or `torch.bfloat16` on a pre-Blackwell GPU.
+  On compute capability 10.x+ bf16 stays on SDPA, with a one-time warning
+  (see [bf16 on Blackwell](#bf16-on-blackwell)).
 - The head dimension is a multiple of 8 within the architecture's range:
   8–256 on sm_90, 8–128 on sm_100 and above (`_FA4_MAX_HEAD_DIM` in
   `fa4_backend.py`). This is wider than FA3's `{64, 96, 128, 192, 256}`, and in
   particular includes the head_dim-16 feature-attention stages, which FA3
-  cannot serve and which are worth 5–10% of a forward pass at
-  `n_features >= 100`.
-- `max(seq_q, seq_kv) >= _FA4_MIN_SEQLEN_FOR_SPEEDUP`.
+  could not serve. On Blackwell those stages are where all of FA4's gain is
+  (see below).
+
+There is **no sequence-length threshold**, unlike FA3's
+`_FA3_MIN_SEQLEN_FOR_SPEEDUP = 10_000`: FA4 has no measured short-sequence
+penalty on either architecture.
 
 ## Installing
 
@@ -53,14 +58,14 @@ written and measured against `4.0.0b30`; the optional extra floors there
 rather than pinning, since betas fix things weekly. If a later beta regresses,
 `pip install "flash-attn-4==4.0.0b30"` is the known-good.
 
-## Sequence-length threshold
+## Measured speedups
 
-`_FA4_MIN_SEQLEN_FOR_SPEEDUP` is currently a **placeholder** inherited from
-FA3's 10 000 so the two backends dispatch at the same call sites while
-benchmarks are in progress. It is not FA4's measured crossover.
+TabPFN v3 `predict()` wall-clock, `n_estimators=1`, fp16 autocast, synthetic
+data, `n_test = n_train/10`; ratio = SDPA time / FA4 time (>1 is faster than
+SDPA). Full data and method in
+[TabPFN#1235](https://github.com/PriorLabs/TabPFN/issues/1235).
 
-Measured on H100 (v3 `predict()`, `n_estimators=1`, fp16, `n_test = n_train/10`,
-ratio = SDPA time / FA4 time):
+**H100 (sm_90)**, torch 2.14.0+cu130, flash-attn-4 4.0.0b30:
 
 | n_train | n_features 10 | 100 | 500 |
 |---:|---:|---:|---:|
@@ -72,11 +77,36 @@ ratio = SDPA time / FA4 time):
 | 100k | 1.25 | 1.19 | 1.17 |
 | 300k | 1.30 | 1.27 | – |
 
-FA4 is within noise of SDPA from `n_train=100` and ahead from 3k, so on Hopper
-the threshold can be 0. Whether Blackwell wants the same number, and whether
-the constant should become per-architecture, is decided by the Blackwell
-measurement (tracked in TabPFN#1235). Update the constant and this table when
-that lands.
+FA4 also matched or beat the FA3 backend it replaces at every point from 10k
+up (by 4–10%), and tied below.
+
+**GB200 (sm_100)**, same software:
+
+| n_train | n_features 10 | 100 | 500 |
+|---:|---:|---:|---:|
+| 300–3k | 0.95–1.04 | 0.98–1.02 | 0.98–1.03 |
+| 10k | 1.03 | 0.97 | 1.03 |
+| 30k | 1.05 | 1.13 | 1.12 |
+| 100k | 1.03 | 1.21 | 1.26 |
+| 300k | 1.02 | 1.13 | – |
+
+On Blackwell, torch's SDPA selects cuDNN attention, which already runs the
+head_dim-64 ICL calls at FA4 speed; the gain there comes entirely from the
+head_dim-16 feature-attention stages, hence the dependence on `n_features`.
+
+Below ~3k rows FA4 is within noise of SDPA on both GPUs, which is why there is
+no sequence-length gate.
+
+## bf16 on Blackwell
+
+On sm_100, FA4's bf16 forward is 18–23% slower than SDPA's from ~10k rows up
+(and ~20% slower than FA4's own fp16); fp16 shows no such dip, and Hopper
+has none in either dtype (flash-attn-4 4.0.0b30). The backend therefore
+declines bf16 calls on compute capability 10.x and above and emits one
+`UserWarning` per process saying so. TabPFN's default on CUDA is fp16
+autocast, so this only affects users who pass
+`inference_precision=torch.bfloat16`. Re-measure with each FA4 beta; the gate
+is `_FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR` in `fa4_backend.py`.
 
 ## Differences from FA3
 
