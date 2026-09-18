@@ -366,10 +366,8 @@ def _halfnormal_tail_survival(
     `FullSupportBarDistribution`. Uses `erfc` rather than `1 - cdf`, which
     cancels to exactly 0 a few sigma out.
     """
-    # Repaired borders can leave a degenerate outer bucket (`_repair_borders`
-    # cannot widen an outer border that sits exactly at 0.0). Flooring the
-    # width keeps the degenerate case a point mass at the inner border instead
-    # of the 0/0 NaN a zero scale would produce.
+    # Repaired borders can leave a degenerate outer bucket, whose zero scale
+    # would give 0/0. Flooring the width makes it a point mass instead.
     width = outer_bucket_width.clamp_min(torch.finfo(outer_bucket_width.dtype).tiny)
     sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(width).scale
     return torch.erfc(distance_from_inner_border / (sigma * math.sqrt(2.0)))
@@ -383,15 +381,12 @@ def _cdf_and_survival(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """CDF and survival function of the bar distribution over `borders`, at `ys`.
 
-    Matches `FullSupportBarDistribution.forward`, which is the definition both
-    the training loss and the NLL metric use: the interior buckets are uniform
-    bars, and the two outer buckets are half-normal tails that give the
-    distribution support over all of R. `ys` outside `borders` therefore get a
-    small non-zero (resp. below-one) CDF rather than a hard 0 (resp. 1).
+    Interior buckets are uniform bars and the outer two are half-normal tails,
+    as in `FullSupportBarDistribution.forward`, so `ys` outside `borders` get a
+    small non-zero CDF rather than a hard 0 or 1.
 
     The survival function is accumulated from the top rather than taken as
-    `1 - CDF`, so that near the top of the distribution it carries the small
-    numbers the CDF has rounded away. Each is accurate where it is small.
+    `1 - CDF`, so that each of the two is accurate where it is small.
     """
     ys = ys.repeat((*logits.shape[:-1], 1))
     n_bars = len(borders) - 1
@@ -413,13 +408,11 @@ def _cdf_and_survival(
     cdf = prob_below_bucket + prob_in_bucket * share_of_bucket_left
     survival = prob_above_bucket + prob_in_bucket * (1.0 - share_of_bucket_left)
 
-    # Replace the uniform reading of the two outer buckets with their
-    # half-normal tails. Both write over the whole outer bucket, not just the
-    # part outside `borders`, because the tail redistributes mass *within* the
-    # bucket too; `CDF(borders[1]) == probs[..., 0]` either way, so the
-    # interior buckets are untouched. Masked assignment keeps the tail
-    # transients proportional to the number of `ys` in the outer buckets,
-    # which is normally a handful, rather than to all of `ys`.
+    # Read the two outer buckets as their half-normal tails. The whole bucket
+    # is overwritten, not just the part outside `borders`, because the tail
+    # redistributes mass within the bucket too; `CDF(borders[1])` stays
+    # `probs[..., 0]`, so interior buckets are untouched. Masking sizes the
+    # tail transients by the `ys` in the outer buckets, not by all of `ys`.
     if n_bars > 1:
         in_lower_tail = ys <= borders[1]
         lower_tail = probs[..., 0:1].expand_as(ys)[
@@ -451,20 +444,17 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     return _cdf_and_survival(logits, borders, ys)[0]
 
 
-# A bucket's mass is the difference of two cumulative values of order 1, so
-# in float32 anything below ~3e-8 rounds to exactly 0 and its NLL to inf.
-# float64 puts that floor at ~1e-16. The result is cast back to the caller's
-# dtype.
+# A bucket's mass is the difference of two cumulative values of order 1, so in
+# float32 anything below ~3e-8 rounds to exactly 0 and its NLL to inf; float64
+# puts that floor at ~1e-16. The result is cast back to the caller's dtype.
 _TRANSLATE_COMPUTE_DTYPE = torch.float64
 
 
 def _translate_compute_device(device: torch.device) -> torch.device:
     """Where to run the float64 differencing for a tensor on `device`.
 
-    MPS has no float64 at all -- casting to it raises -- so that path is
-    computed on the CPU and moved back. Chunking already bounds the working
-    set, so the extra transfer is bounded too. Every other backend keeps the
-    data where it is.
+    MPS has no float64, so that path computes on the CPU and moves back; every
+    other backend keeps the data where it is.
     """
     return torch.device("cpu") if device.type == "mps" else device
 
@@ -486,26 +476,19 @@ def _translate_probs_across_borders_unchunked(
     to = to.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
 
     prob_left, prob_right = _cdf_and_survival(logits, borders=frm, ys=to)
-    # `_cdf_and_survival` gives `to[0]` and `to[-1]` the source's half-normal
-    # tail mass; pinning to 0 and 1 folds whatever lies beyond `to` into the
-    # outermost destination buckets, where the destination
-    # `FullSupportBarDistribution`'s own tails carry it. This keeps the output
-    # summing to 1 and keeps an identity remap (`to == frm`) returning the
-    # input probabilities, up to the round-off of the cast back to the
-    # caller's dtype.
+    # Pinning the ends folds whatever lies beyond `to` into the outermost
+    # destination buckets, where the destination distribution's own tails
+    # carry it. This keeps the output summing to 1 and an identity remap
+    # returning its input.
     prob_left[..., 0] = 0.0
     prob_left[..., -1] = 1.0
     prob_right[..., 0] = 1.0
     prob_right[..., -1] = 0.0
     # A cumulative probability is accurate where it is small: near 1 it has
-    # rounded away anything below ~1e-16 of the total, and differencing two
-    # such values loses every bucket smaller than that -- in the upper tail
-    # entirely, since the CDF there is exactly 1.0. So each bucket is
-    # differenced from whichever end it is nearer to: the CDF in the lower
-    # half of the distribution, the survival function in the upper half.
-    # Treating both halves the same way matters as much as the accuracy: an
-    # asymmetric zero pattern biases a model comparison toward whichever side
-    # reads low.
+    # rounded away anything below ~1e-16 of the total, and in the upper tail
+    # it is exactly 1.0. So each bucket is differenced from whichever end of
+    # the distribution it is nearer to, which also treats the two halves of
+    # the grid alike.
     from_below = prob_left[..., 1:] - prob_left[..., :-1]
     from_above = prob_right[..., :-1] - prob_right[..., 1:]
     mass = torch.where(prob_left[..., 1:] <= 0.5, from_below, from_above)
@@ -516,11 +499,9 @@ def _translate_probs_across_borders_unchunked(
 
 # `_cdf_and_survival` allocates ~10 intermediate tensors of shape
 # (batch, len(to)). Targeting `chunk_size * len(to) <=
-# _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient around ~80 MB and the
-# total around ~1 GB, which holds translate_probs's contribution to peak memory
-# roughly constant in n_test. The budget counts
-# elements, so it is set against `_TRANSLATE_COMPUTE_DTYPE` (8 bytes/element),
-# not against the caller's dtype.
+# _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient around ~80 MB at
+# `_TRANSLATE_COMPUTE_DTYPE`'s 8 bytes/element and the total around ~1 GB,
+# holding translate_probs's contribution to peak memory constant in n_test.
 _TRANSLATE_CHUNK_BUDGET_ELEMENTS = 10_000_000
 
 
@@ -533,17 +514,15 @@ def translate_probs_across_borders(
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
-    The differencing is done in float64 regardless of the caller's dtype and
-    the result cast back, because a destination bucket's mass is the difference
-    of two CDF values and float32 rounds anything below ~6e-8 of the total to
-    exactly zero. Out-of-range destination buckets are fed by the source's
-    half-normal tails, the same reading of the outer buckets that
-    ``FullSupportBarDistribution.forward`` uses.
+    The differencing runs in float64 and the result is cast back to the
+    caller's dtype, and destination buckets outside ``frm`` are fed by the
+    source's half-normal tails, as ``FullSupportBarDistribution.forward``
+    reads them.
 
     For large batches the computation is chunked so that the peak memory
     footprint of the intermediate ``(batch, len(to))`` tensors allocated
-    inside ``_cdf_and_survival`` stays bounded. All batch dimensions are flattened
-    before chunking, so the memory cap holds regardless of which batch
+    inside ``_cdf_and_survival`` stays bounded. All batch dimensions are
+    flattened before chunking, so the memory cap holds regardless of which batch
     dimension is large (e.g. `(n_estimators, n_test, num_buckets)`). The
     output is numerically identical to the unchunked version.
 
@@ -557,10 +536,8 @@ def translate_probs_across_borders(
         to: The borders to translate to.
         chunk_budget_elements: Maximum number of ``logits[..., -1]`` elements
             processed per chunk. Defaults to a value that keeps each
-            ``_cdf_and_survival`` transient near ~80 MB at
-            ``_TRANSLATE_COMPUTE_DTYPE``.
-            Lower values reduce peak memory at a small time cost; primarily
-            useful for testing.
+            ``_cdf_and_survival`` transient near ~80 MB. Lower values reduce
+            peak memory at a small time cost; primarily useful for testing.
 
     Returns:
         The translated probabilities.
