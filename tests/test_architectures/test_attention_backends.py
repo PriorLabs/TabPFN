@@ -13,6 +13,8 @@ until a CI runner is in place.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 import torch
 
@@ -92,34 +94,70 @@ def test__sdpa_backend_default_path_unchanged_when_fa4_unavailable() -> None:
     torch.testing.assert_close(out_forced_sdpa, out_auto)
 
 
-def test__fa4_preferred_falls_back_to_sdpa_below_seqlen_threshold(
+def _spec(
+    seq_len_q: int | None,
+    seq_len_kv: int | None,
+    *,
+    dtype: torch.dtype = torch.float16,
+    device: str = "cpu",
+) -> AttentionSpec:
+    return AttentionSpec(
+        seq_len_q=seq_len_q,
+        seq_len_kv=seq_len_kv,
+        num_heads=8,
+        num_kv_heads=8,
+        head_dim=64,
+        dtype=dtype,
+        device=torch.device(device),
+        batch_size=1,
+    )
+
+
+def test__fa4_preferred_is_eligibility_with_no_seqlen_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Auto dispatch must skip FA4 when both seq_q and seq_kv are too small.
-
-    ``_FA4_MIN_SEQLEN_FOR_SPEEDUP`` is a placeholder until the FA4 benchmark
-    lands; the test pins the *shape* of the rule, not the number.
+    """FA4 has no short-sequence penalty (TabPFN#1235), so ``is_preferred`` is
+    eligibility alone: tiny, huge, and unknown lengths all route to FA4 once
+    the call is eligible, and none do when it is not.
     """
     monkeypatch.setattr(fa4_backend, "is_fa4_eligible", lambda *_a, **_k: True)
+    assert FA4_BACKEND.is_preferred(_spec(8, 8))
+    assert FA4_BACKEND.is_preferred(_spec(256, 100_000))
+    assert FA4_BACKEND.is_preferred(_spec(None, None))
 
-    def spec(seq_len_q: int | None, seq_len_kv: int | None) -> AttentionSpec:
-        return AttentionSpec(
-            seq_len_q=seq_len_q,
-            seq_len_kv=seq_len_kv,
-            num_heads=8,
-            num_kv_heads=8,
-            head_dim=64,
-            dtype=torch.float16,
-            device=torch.device("cpu"),
-            batch_size=1,
-        )
+    monkeypatch.setattr(fa4_backend, "is_fa4_eligible", lambda *_a, **_k: False)
+    assert not FA4_BACKEND.is_preferred(_spec(100_000, 100_000))
 
-    seq_below = fa4_backend._FA4_MIN_SEQLEN_FOR_SPEEDUP - 1
-    seq_at = fa4_backend._FA4_MIN_SEQLEN_FOR_SPEEDUP
-    assert not FA4_BACKEND.is_preferred(spec(seq_below, seq_below))
-    assert FA4_BACKEND.is_preferred(spec(seq_at, seq_at))
-    assert FA4_BACKEND.is_preferred(spec(256, 100_000))
-    assert not FA4_BACKEND.is_preferred(spec(None, None))
+
+def test__fa4_bf16_declined_on_blackwell_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On compute capability >= 10, bf16 stays on SDPA and warns once; fp16
+    is unaffected, and pre-Blackwell parts take bf16 without a warning.
+
+    The capability lookup is mocked so this runs on any host.
+    """
+    fa4_backend._is_bf16_slow.cache_clear()
+    fa4_backend._warn_bf16_blackwell_once.cache_clear()
+    monkeypatch.setattr(fa4_backend, "_fa4_max_head_dim", lambda _d: 128)
+
+    monkeypatch.setattr(fa4_backend, "_compute_capability_major", lambda _d: 10)
+    device = torch.device("cpu")
+    with pytest.warns(UserWarning, match="not used for bfloat16 .* Blackwell"):
+        assert not fa4_backend.is_fa4_eligible(device, torch.bfloat16, head_dim=64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # a second warning would fail the test
+        assert not fa4_backend.is_fa4_eligible(device, torch.bfloat16, head_dim=64)
+        assert fa4_backend.is_fa4_eligible(device, torch.float16, head_dim=64)
+
+    fa4_backend._is_bf16_slow.cache_clear()
+    monkeypatch.setattr(fa4_backend, "_compute_capability_major", lambda _d: 9)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert fa4_backend.is_fa4_eligible(device, torch.bfloat16, head_dim=64)
+
+    fa4_backend._is_bf16_slow.cache_clear()
+    fa4_backend._warn_bf16_blackwell_once.cache_clear()
 
 
 def test__fa4_eligibility_head_dim_range_per_arch() -> None:
@@ -132,12 +170,17 @@ def test__fa4_eligibility_head_dim_range_per_arch() -> None:
         pytest.skip(f"FA4 has no kernels for compute capability {major}.x")
     max_hd = fa4_backend._FA4_MAX_HEAD_DIM[major]
     assert is_fa4_eligible(device, torch.float16, head_dim=64)
-    assert is_fa4_eligible(device, torch.bfloat16, head_dim=max_hd)
+    assert is_fa4_eligible(device, torch.float16, head_dim=max_hd)
+    # bf16 is served on Hopper but left to SDPA on Blackwell.
+    bf16_expected = major < fa4_backend._FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert is_fa4_eligible(device, torch.bfloat16, head_dim=64) is bf16_expected
     assert not is_fa4_eligible(device, torch.float16, head_dim=max_hd + 8)
     assert not is_fa4_eligible(device, torch.float32, head_dim=64)
     assert not is_fa4_eligible(device, torch.float16, head_dim=60)  # not %8
     # Unlike FA3, FA4 takes any multiple of 8 from 8 up, so the v3
-    # dist-embedder shape (head_dim=16) is eligible; the seqlen gate still applies.
+    # dist-embedder shape (head_dim=16) is eligible.
     assert is_fa4_eligible(device, torch.float16, head_dim=16)
 
 
