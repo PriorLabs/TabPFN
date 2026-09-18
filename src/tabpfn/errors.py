@@ -153,22 +153,33 @@ def is_oom_error(e: Exception) -> bool:
     )
 
 
+def _sizes_for_message(X: XType) -> tuple[int, int | None]:
+    """Read the row and column counts an OOM message should report."""
+    shape = getattr(X, "shape", None)
+    if shape is None:
+        return len(X), None
+    return shape[0], shape[1] if len(shape) > 1 else None
+
+
 @contextmanager
 def handle_oom_errors(
     devices: tuple[torch.device, ...],
     X: XType,
     model_type: str,
     n_train_samples: int | None = None,
-    n_features: int | None = None,
 ) -> Generator[None, None, None]:
     """Context manager to catch OOM errors and raise helpful TabPFN exceptions.
 
     Args:
         devices: The devices the model is running on.
-        X: The input data (used to get n_samples for the error message).
+        X: The input data as the model sees it, i.e. already converted, whose
+            sample and feature counts the error message reports. The width is
+            deliberately read from here rather than from `n_features_in_`, which
+            describes the caller's frame and can be narrower (date expansion) --
+            the message is about memory, so it has to name what the transformer
+            actually runs on.
         model_type: Either "classifier" or "regressor".
         n_train_samples: Number of training samples (for the error message).
-        n_features: Number of features (for the error message).
 
     Raises:
         TabPFNCUDAOutOfMemoryError: If a CUDA OOM error occurs.
@@ -177,7 +188,7 @@ def handle_oom_errors(
     try:
         yield
     except torch.OutOfMemoryError as e:
-        n_test_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+        n_test_samples, n_features = _sizes_for_message(X)
         raise TabPFNCUDAOutOfMemoryError(
             e,
             n_train_samples=n_train_samples,
@@ -189,7 +200,7 @@ def handle_oom_errors(
         is_mps = any(d.type == "mps" for d in devices)
         is_oom = "out of memory" in str(e).lower()
         if is_mps and is_oom:
-            n_test_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+            n_test_samples, n_features = _sizes_for_message(X)
             raise TabPFNMPSOutOfMemoryError(
                 e,
                 n_train_samples=n_train_samples,

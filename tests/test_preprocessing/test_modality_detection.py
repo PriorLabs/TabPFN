@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import decimal
 import warnings
 from typing import Any
 
@@ -23,11 +24,11 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
+    _count_distinct_per_column,
     _detect_feature_modality,
-    _is_date_like_pandas_series,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
-    _warn_on_multimodal,
+    _warn_on_text,
     detect_feature_modalities,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
@@ -278,10 +279,13 @@ def test__detected_categorical_without_reporting():
     assert result == FeatureModality.CATEGORICAL
 
 
-def test__detect_for_categorical_with_category_dtype():
-    s = pd.Series(["a", "b", "c", "a", "b", "c"], dtype="category")
-    result = _for_test_detect_with_defaults(s)
-    assert result == FeatureModality.CATEGORICAL
+@pytest.mark.parametrize("values", [["a", "b", "a"], [1, 2, 1]])
+def test__detect_for_categorical_with_category_dtype__rejects_unconverted_input(
+    values: list,
+) -> None:
+    s = pd.Series(values, dtype="category")
+    with pytest.raises(AssertionError, match="Categorical dtype must be converted"):
+        _for_test_detect_with_defaults(s)
 
 
 def test__detect_textual_feature():
@@ -311,6 +315,21 @@ def test__detect_long_texts():
     assert result == FeatureModality.TEXT
     result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
+
+
+def test__detect_reported_categorical_string__is_categorical_at_any_cardinality():
+    """`min_cardinality_for_text` only sorts undeclared string columns."""
+    s = pd.Series([f"sku_{i}" for i in range(50)])
+    assert (
+        _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
+        == FeatureModality.TEXT
+    )
+    assert (
+        _for_test_detect_with_defaults(
+            s, reported_categorical=True, min_cardinality_for_text=2
+        )
+        == FeatureModality.CATEGORICAL
+    )
 
 
 def test__detect_text_as_object():
@@ -475,26 +494,6 @@ def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
     assert result == FeatureModality.TEXT
 
 
-def _reference_is_date_like(s: pd.Series) -> bool:
-    """`_is_date_like_pandas_series` without the prefix rejection.
-
-    The prefix only skips work, so every answer must match this. Kept as a
-    literal copy of the pre-prefix implementation rather than expressed in terms
-    of the real one, so a change to the real one cannot silently change what
-    this compares against.
-    """
-    non_null = s.dropna()
-    if non_null.empty:
-        return False
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            parsed = pd.to_datetime(non_null, errors="coerce")
-    except (TypeError, ValueError):
-        return False
-    return bool(parsed.notna().all())
-
-
 def _reference_is_numeric(s: pd.Series) -> bool:
     """`_is_numeric_pandas_series` without the prefix rejection."""
     if pd.api.types.is_numeric_dtype(s.dtype):
@@ -503,10 +502,6 @@ def _reference_is_numeric(s: pd.Series) -> bool:
         return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
     coerced = pd.to_numeric(s, errors="coerce")
     return bool((coerced.notna() | s.isna()).all())
-
-
-def _dates_after(n: int, *, start: str = "2020-01-01") -> list[str]:
-    return list(pd.date_range(start, periods=n).strftime("%Y-%m-%d"))
 
 
 #: Prefix these tests run the rejection at. The logic is identical at any size,
@@ -531,29 +526,9 @@ def small_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
 _TAIL = 10
 _NUMBERS = [str(i) for i in range(_TEST_PREFIX_ROWS + _TAIL)]
 _PROBE_COLUMNS: dict[str, list[Any]] = {
-    # Clean prefix and clean tail: the guard must fall through and answer True.
-    # Without this, a guard that rejects whenever the prefix is clean still
-    # agrees with the reference on every column that is genuinely not a date.
-    "dates": _dates_after(_TEST_PREFIX_ROWS + _TAIL),
     # Fails on its very first value.
     "text": [f"a sentence, number {i}" for i in range(_TEST_PREFIX_ROWS + _TAIL)],
-    # Clean prefix, one bad value the prefix can see.
-    "bad_inside_prefix": [
-        *_dates_after(_TEST_PREFIX_ROWS - 1),
-        "not a date",
-        *_dates_after(_TAIL),
-    ],
-    # Clean prefix, one bad value only the full parse can see.
-    "bad_beyond_prefix": [*_dates_after(_TEST_PREFIX_ROWS + _TAIL), "not a date"],
-    # Prefix is one format, the tail another. `to_datetime` infers a format from
-    # the first value, so the tail coerces to NaT and this is not a date column.
-    "format_switches_beyond_prefix": [
-        *_dates_after(_TEST_PREFIX_ROWS + 1),
-        *pd.date_range("2020-06-01", periods=_TAIL).strftime("%d/%m/%Y"),
-    ],
-    # An entirely missing prefix says nothing, so it must fall through.
-    "missing_prefix_then_dates": [None] * _TEST_PREFIX_ROWS + _dates_after(_TAIL),
-    "missing_prefix_then_text": [None] * _TEST_PREFIX_ROWS + ["not a date"] * _TAIL,
+    "missing_prefix_then_text": [None] * _TEST_PREFIX_ROWS + ["not a number"] * _TAIL,
     "all_missing": [None] * (_TEST_PREFIX_ROWS + _TAIL),
     # Numeric strings, with the offending value on either side of the prefix.
     "numeric_strings": _NUMBERS,
@@ -567,40 +542,24 @@ _PROBE_COLUMNS: dict[str, list[Any]] = {
 def test__prefix_rejection__agrees_with_parsing_the_whole_column(name: str) -> None:
     """The prefix rejection is exact, not an approximation.
 
-    One unparseable value settles an all-or-nothing check, so rejecting on a
+    One non-numeric value settles an all-or-nothing check, so rejecting on a
     prefix can only skip work. A clean prefix proves nothing about the tail and
     must fall through, including when the prefix is entirely missing.
     """
     s = pd.Series(_PROBE_COLUMNS[name], dtype=object)
-    assert _is_date_like_pandas_series(s) == _reference_is_date_like(s)
     assert _is_numeric_pandas_series(s) == _reference_is_numeric(s)
 
 
-@pytest.mark.parametrize(
-    ("helper_name", "detect", "passing_values"),
-    [
-        ("_all_parse_as_dates", _is_date_like_pandas_series, _dates_after),
-        pytest.param(
-            "_all_numeric_or_missing",
-            _is_numeric_pandas_series,
-            lambda n: [str(i) for i in range(n)],
-            marks=pytest.mark.skipif(
-                PANDAS_BELOW_3,
-                reason=(
-                    "Below pandas 3 the numeric check walks values through an "
-                    "`all(...)` generator that already stops at the first "
-                    "non-numeric one, so it has no prefix guard to skip and never "
-                    "calls `_all_numeric_or_missing`."
-                ),
-            ),
-        ),
-    ],
+@pytest.mark.skipif(
+    PANDAS_BELOW_3,
+    reason=(
+        "Below pandas 3 the numeric check walks values through an `all(...)` "
+        "generator that already stops at the first non-numeric one, so it has "
+        "no prefix guard to skip and never calls `_all_numeric_or_missing`."
+    ),
 )
 @pytest.mark.usefixtures("small_prefix")
 def test__prefix_rejection__skips_the_guard_on_a_short_column(
-    helper_name: str,
-    detect: Any,
-    passing_values: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A column no longer than the prefix is parsed once, not twice.
@@ -609,59 +568,30 @@ def test__prefix_rejection__skips_the_guard_on_a_short_column(
     same answer. A longer column that clears its prefix is parsed twice, which
     is the cost this trade accepts.
     """
-    real = getattr(modality_detection, helper_name)
+    real = modality_detection._all_numeric_or_missing
     parses = []
 
     def counting(s: pd.Series) -> bool:
         parses.append(len(s))
         return real(s)
 
-    monkeypatch.setattr(modality_detection, helper_name, counting)
+    monkeypatch.setattr(modality_detection, "_all_numeric_or_missing", counting)
 
-    assert detect(pd.Series(passing_values(_TEST_PREFIX_ROWS), dtype=object)) is True
+    def passing_values(n: int) -> list[str]:
+        return [str(i) for i in range(n)]
+
+    s = pd.Series(passing_values(_TEST_PREFIX_ROWS), dtype=object)
+    assert _is_numeric_pandas_series(s) is True
     assert len(parses) == 1
 
     parses.clear()
     assert (
-        detect(pd.Series(passing_values(_TEST_PREFIX_ROWS + 2), dtype=object)) is True
+        _is_numeric_pandas_series(
+            pd.Series(passing_values(_TEST_PREFIX_ROWS + 2), dtype=object)
+        )
+        is True
     )
     assert len(parses) == 2
-
-
-@pytest.mark.usefixtures("small_prefix")
-def test__prefix_rejection__reads_the_head_so_day_first_dates_survive() -> None:
-    """A real date column must not be rejected off an unrepresentative prefix.
-
-    `to_datetime` infers a format from the first non-null value and applies it to
-    the rest, so a prefix starting anywhere else can infer a different format and
-    coerce valid values to `NaT`. Here `13/01/2020` pins `%d/%m/%Y` for the whole
-    column and every value parses, but a prefix starting at `06/03/2020` is
-    ambiguous, infers `%m/%d/%Y`, and rejects `13/01/2020` as month 13. Reading
-    the head keeps the prefix and the full pass in agreement; sampling would not.
-    """
-    s = pd.Series(["13/01/2020", "05/02/2020", "06/03/2020"] * 30, dtype=object)
-    assert _is_date_like_pandas_series(s) is True
-    assert _is_date_like_pandas_series(s) == _reference_is_date_like(s)
-
-
-def test__prefix_rejection__fires_within_the_real_prefix() -> None:
-    """The guard rejects off `_EARLY_EXIT_PREFIX_ROWS`, not some other length.
-
-    The tests above shrink the prefix, so this is the one that exercises the
-    production value. A tail that raises when parsed proves the full column was
-    never reached, which only holds if the guard rejected inside the leading
-    `_EARLY_EXIT_PREFIX_ROWS` rows.
-    """
-
-    class Unparseable:
-        def __str__(self) -> str:  # pragma: no cover - must never be reached
-            raise AssertionError("the tail must not be parsed")
-
-    s = pd.Series(
-        ["a fairly long sentence"] * _EARLY_EXIT_PREFIX_ROWS + [Unparseable()] * 10,
-        dtype=object,
-    )
-    assert _is_date_like_pandas_series(s) is False
 
 
 def _text_schema(*names: str) -> FeatureSchema:
@@ -674,8 +604,8 @@ def _text_schema(*names: str) -> FeatureSchema:
     )
 
 
-class TestWarnOnMultimodal:
-    """Schema-level unit tests for `_warn_on_multimodal`."""
+class TestWarnOnText:
+    """Schema-level unit tests for `_warn_on_text`."""
 
     def test__no_text_features__does_not_warn(self) -> None:
         schema = FeatureSchema(
@@ -687,11 +617,11 @@ class TestWarnOnMultimodal:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_multimodal(schema)
+            _warn_on_text(schema)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_multimodal(_text_schema("review"))
+            _warn_on_text(_text_schema("review"))
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -699,21 +629,9 @@ class TestWarnOnMultimodal:
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
         assert "numeric dtype" in message
+        assert "TRANSFORM_TEXT" in message
         assert "https://github.com/PriorLabs/tabpfn-client" in message
         assert "categorical_features_indices" in message
-
-    def test__declared_cat_indices__are_not_reported(self) -> None:
-        schema = _text_schema("sku", "review")
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_multimodal(schema, declared_cat_indices=[0])
-        message = str(record[0].message)
-        assert "'review'" in message
-        assert "'sku'" not in message
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_on_multimodal(schema, declared_cat_indices=[0, 1])
 
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
@@ -721,7 +639,7 @@ class TestWarnOnMultimodal:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_multimodal(schema)
+            _warn_on_text(schema)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
@@ -826,11 +744,14 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
         assert "'ids'" in str(record[0].message)
 
-    def test__declared_categorical_columns__do_not_warn(self) -> None:
-        """Declaring a column categorical states intent, so it must stay quiet.
+    def test__declared_categorical_columns__are_categorical_and_do_not_warn(
+        self,
+    ) -> None:
+        """Declaring a column categorical is taken at face value.
 
         Covers both a plain string column and an explicit pandas `category`
-        dtype, each above the cardinality threshold.
+        dtype, each above the cardinality threshold: undeclared they are TEXT
+        and warn, declared they are CATEGORICAL and quiet.
         """
         X = pd.DataFrame(
             {
@@ -845,17 +766,21 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
         # Without the declaration the columns really are detected as TEXT and warn.
         with pytest.warns(UserWarning, match="look like free text"):
-            self._detect(X)
+            schema = self._detect(X)
+        assert schema.indices_for(FeatureModality.TEXT) == declared
 
-        # Declaring them silences the warning; the columns are still labelled TEXT.
+        # Declared, they are categoricals at any cardinality, with nothing to warn.
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             schema = self._detect(X, declared)
-        assert schema.indices_for(FeatureModality.TEXT) == declared
+        assert schema.indices_for(FeatureModality.TEXT) == []
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == declared
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
+def test__fit_with_text_column__transform_text_off__warns_at_call_site(
+    estimator_cls: type,
+) -> None:
     """`fit` runs `detect_feature_modalities`, so a free-text column warns.
 
     Both estimators share the detection path, so one parametrized test pins the
@@ -877,7 +802,9 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         else rng.normal(size=n)
     )
 
-    model = estimator_cls(n_estimators=1, device="cpu")
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'review'" in str(record[0].message)
@@ -899,6 +826,59 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         warnings.simplefilter("always")
         model.fit(X, y)
     assert not [w for w in caught if "look like free text" in str(w.message)]
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_declared_strings__transform_text_off__reads_them_as_categorical(
+    estimator_cls: type,
+) -> None:
+    """A `category` dtype column is folded into `categorical_features_indices_`,
+    and every declared string column is CATEGORICAL at any cardinality, so the
+    free-text warning has nothing to say about them.
+    """
+    n = 120
+    rng = np.random.default_rng(seed=0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "sku_cat": pd.Series([f"sku_{i % 60}" for i in range(n)], dtype="category"),
+            "sku": [f"sku_{i % 60}" for i in range(n)],
+        }
+    )
+    y = (
+        rng.integers(0, 2, size=n)
+        if estimator_cls is TabPFNClassifier
+        else rng.normal(size=n)
+    )
+
+    # Only the plain string column is undeclared, so only it is text.
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_TEXT": False}
+    )
+    with pytest.warns(UserWarning, match="look like free text") as record:
+        model.fit(X, y)
+    assert "'sku'" in str(record[0].message)
+    assert "'sku_cat'" not in str(record[0].message)
+    assert model.categorical_features_indices_ == [1]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1
+    ]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == [2]
+
+    # Declaring the other one too makes both categorical; the lists merge.
+    model = estimator_cls(
+        n_estimators=1, device="cpu", categorical_features_indices=[2]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        model.fit(X, y)
+    assert model.categorical_features_indices_ == [1, 2]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1,
+        2,
+    ]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.TEXT) == []
+    assert len(model.predict(X)) == n
 
 
 def test__category_and_text_thresholds__move_independently() -> None:
@@ -930,100 +910,125 @@ def test__category_and_text_thresholds__move_independently() -> None:
     assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
 
-class TestDateLikeColumnDetection:
-    """`detect_feature_modalities` recognizing date-like string columns.
+def _reference_modalities(
+    X: np.ndarray, *, provided: set[int], **thresholds: int
+) -> list[FeatureModality]:
+    """The per-column decision, column by column, as before the block-wise count."""
+    big_enough = len(X) > thresholds["min_samples_for_inference"]
+    return [
+        _detect_feature_modality(
+            s=pd.Series(X[:, j]),
+            reported_categorical=j in provided,
+            max_unique_for_category=thresholds["max_unique_for_category"],
+            min_unique_for_numerical=thresholds["min_unique_for_numerical"],
+            min_cardinality_for_text=thresholds["min_cardinality_for_text"],
+            big_enough_n_to_infer_cat=big_enough,
+        )
+        for j in range(X.shape[1])
+    ]
 
-    Nothing expands a date into calendar features yet, so a recognized date is
-    always demoted to whichever of CATEGORICAL/TEXT its cardinality implies --
-    exactly the modality a non-date string of the same shape would get. The
-    only observable difference recognizing it makes right now is the warning:
-    a demoted date is named as a date, not reported as generic free text.
+
+@pytest.mark.parametrize("seed", range(120))
+def test__numeric_arrays__block_wise_count_matches_per_column(seed: int) -> None:
+    """On a numeric array the modalities equal the per-column decisions."""
+    rng = np.random.default_rng(seed)
+    n_rows = int(rng.choice([1, 2, 7, 300, 1024, 1025, 2500]))
+    n_cols = int(rng.integers(1, 12))
+    kind = rng.integers(4)
+    if kind == 0:
+        pool = np.array([0.0, -0.0, np.nan, np.inf, -np.inf, 1.5, 2.5, 3.5])
+        X = rng.choice(pool, size=(n_rows, n_cols))
+        X[:, rng.integers(n_cols)] = np.nan  # an all-missing column
+        if n_cols > 1:
+            X[:, 0] = 7.0  # a constant column
+    elif kind == 1:
+        levels = int(rng.choice([2, 5, 40]))
+        X = rng.integers(0, levels, size=(n_rows, n_cols)).astype(np.int64)
+    elif kind == 2:
+        X = rng.integers(0, 2, size=(n_rows, n_cols)).astype(bool)
+    else:
+        X = rng.normal(size=(n_rows, n_cols)).astype(np.float32)
+        X[rng.random(size=X.shape) < 0.2] = np.nan
+    thresholds = {
+        "min_samples_for_inference": int(rng.choice([0, 100, 5000])),
+        "max_unique_for_category": int(rng.choice([2, 10, 30])),
+        "min_unique_for_numerical": int(rng.choice([2, 4, 20])),
+        "min_cardinality_for_text": int(rng.choice([1, 50, 200])),
+    }
+    n_provided = int(rng.integers(0, n_cols + 1))
+    provided = {int(j) for j in rng.choice(n_cols, size=n_provided, replace=False)}
+
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=None,
+        provided_categorical_indices=sorted(provided),
+        **thresholds,
+    )
+    got = [f.modality for f in schema.features]
+    assert got == _reference_modalities(X, provided=provided, **thresholds)
+
+
+def test__count_distinct_per_column__matches_nunique() -> None:
+    X = np.array(
+        [
+            [0.0, np.nan, 1.0, np.inf, 1.0],
+            [-0.0, np.nan, 2.0, np.inf, np.nan],
+            [0.0, np.nan, 3.0, -np.inf, 1.0],
+        ]
+    )
+    expected = [pd.Series(X[:, j]).nunique(dropna=False) for j in range(X.shape[1])]
+    assert _count_distinct_per_column(X).tolist() == expected == [1, 1, 3, 2, 2]
+    ints = np.array([[1, 2], [1, 3], [1, 2]])
+    assert _count_distinct_per_column(ints).tolist() == [1, 2]
+    bools = np.array([[True], [False], [True]])
+    assert _count_distinct_per_column(bools).tolist() == [2]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([1.5, np.nan, 2.5], True),
+        ([1, 2, None], True),
+        ([True, False, None], True),
+        ([1, 2.5, 3], True),
+        ([decimal.Decimal("1.5"), None], True),
+        ([None, None], True),
+        ([np.nan, pd.NA], True),
+        (["1.5", "2", None], True),  # spelled-out numbers still count
+        (["1.5", "x"], False),
+        (["a", "b"], False),
+        ([1, "x"], False),
+        ([b"1", b"2"], True),
+        ([pd.Timestamp("2020-01-01"), None], False),
+    ],
+)
+def test__is_numeric_pandas_series__object_column(values: list, expected: bool) -> None:
+    """The C-level shortcut and the value walk agree on object columns.
+
+    Complex values are left out: the shortcut does not settle them, and the two
+    existing paths disagree on them (`float()` rejects a complex number, `pd.to_numeric`
+    accepts it), so their answer depends on the pandas version.
     """
+    s = pd.Series(values, dtype=object)
+    assert _is_numeric_pandas_series(s) is expected
+    if PANDAS_BELOW_3:
+        walk = all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
+        assert walk is expected
 
-    n_rows = 200
 
-    def _numeric_column(self) -> np.ndarray:
-        return np.random.default_rng(0).normal(size=self.n_rows)
-
-    def _detect(self, X: pd.DataFrame) -> FeatureSchema:
-        return detect_feature_modalities(
-            X=X.to_numpy(dtype=object),
-            feature_names=list(X.columns),
-            min_samples_for_inference=100,
-            max_unique_for_category=30,
-            min_unique_for_numerical=4,
-            min_cardinality_for_text=30,
-        )
-
-    def _dates(self, n_unique: int) -> list[str]:
-        pool = pd.date_range("2020-01-01", periods=n_unique).strftime("%Y-%m-%d")
-        return [pool[i % n_unique] for i in range(self.n_rows)]
-
-    def test__high_cardinality_date__is_text_like_a_same_shaped_string(self) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
-
-    def test__low_cardinality_date__is_categorical(self) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
-
-    def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:
-        """The date warning fires; the free-text warning must not repeat it."""
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._detect(X)
-        date_warnings = [w for w in caught if "hold dates" in str(w.message)]
-        text_warnings = [w for w in caught if "look like free text" in str(w.message)]
-        assert len(date_warnings) == 1
-        assert not text_warnings
-
-    def test__genuine_free_text__is_not_a_date(self) -> None:
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
-            }
-        )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.TEXT
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-
-    def test__mostly_dates_with_one_bad_value__is_not_a_date(self) -> None:
-        """All-or-nothing, like the numeric check: one bad value disqualifies it."""
-        values = self._dates(60)
-        values[0] = "not a date at all"
-        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._detect(X)
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-
-    def test__numeric_string_column__is_not_a_date(self) -> None:
-        """The numeric check runs first and wins, even for an 8-digit date shape."""
-        values = [f"2024010{i % 9 + 1}" for i in range(self.n_rows)]
-        X = pd.DataFrame({"num": self._numeric_column(), "code": values})
-        schema = self._detect(X)
-        assert schema.features[1].modality is FeatureModality.NUMERICAL
-
-    def test__declared_categorical_date_column__is_categorical(self) -> None:
-        """Declaring it categorical only wins within `max_unique_for_category`,
-        exactly like a declared-categorical numeric column.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(10)})
-        schema = detect_feature_modalities(
-            X=X.to_numpy(dtype=object),
-            feature_names=list(X.columns),
-            provided_categorical_indices=[1],
-            min_samples_for_inference=100,
-            max_unique_for_category=30,
-            min_unique_for_numerical=4,
-            min_cardinality_for_text=30,
-        )
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+def test__count_distinct_per_column__bool_array__matches_nunique() -> None:
+    """A bool column is counted without sorting: constant gives 1, mixed gives 2."""
+    X = np.array(
+        [
+            [True, False, True, False],
+            [True, True, True, False],
+            [True, False, False, False],
+        ]
+    )
+    expected = np.array(
+        [pd.Series(X[:, j]).nunique(dropna=False) for j in range(X.shape[1])]
+    )
+    counts = _count_distinct_per_column(X)
+    np.testing.assert_array_equal(counts, expected)
+    assert counts.dtype == np.int64
+    np.testing.assert_array_equal(_count_distinct_per_column(X[:1]), [1, 1, 1, 1])

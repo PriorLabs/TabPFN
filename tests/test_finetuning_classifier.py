@@ -20,6 +20,7 @@ from unittest import mock
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn
 import torch
@@ -29,8 +30,9 @@ from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
 from tabpfn.architectures.interface import PerformanceOptions
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3
+from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5
 from tabpfn.constants import ModelVersion
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
     DatasetCollectionWithPreprocessing,
@@ -41,14 +43,21 @@ from tabpfn.finetuning.finetuned_base import (
     EvalResult,
     _get_estimator_shard,
     _get_loss_for_logging,
+    _parameters_unused_by_task,
     _slice_batch_estimators,
 )
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
 from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
+from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.settings import settings
 
+from .test_architectures.test_tabpfn_v3_5 import (
+    _get_model as _get_small_v3_5_model,
+    _inputs as _v3_5_inputs,
+)
 from .utils import (
     get_pytest_devices,
     get_pytest_devices_with_mps_marked_slow,
@@ -56,6 +65,16 @@ from .utils import (
 )
 
 rng = np.random.default_rng(42)
+
+
+@pytest.fixture(autouse=True)
+def _finetune_the_v3_5_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the fine-tuning tests against the multitask v3.5 architecture.
+
+    The fast variant shares the architecture class and is cheaper on CI.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
+
 
 devices = get_pytest_devices()
 
@@ -136,6 +155,14 @@ for param in finetuned_param_order:
             finetuned_combinations.append(
                 tuple(config[param] for param in finetuned_param_order)
             )
+
+
+@pytest.fixture(autouse=True)
+def _finetune_the_fast_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fine-tuning holds the base model, its fine-tuned copy and the optimizer
+    state at once; the fast checkpoint keeps that within the CI runners' memory.
+    """
+    monkeypatch.setattr(settings.tabpfn, "model_version", ModelVersion.V3_5_FAST)
 
 
 def create_mock_architecture_forward(
@@ -283,6 +310,37 @@ def test__get_estimator_shard__rejects_empty_rank_shards() -> None:
     """Every DDP rank must run a forward/backward to avoid collective deadlock."""
     with pytest.raises(ValueError, match="n_estimators_finetune >= world_size"):
         _get_estimator_shard(2, rank=0, world_size=4)
+
+
+@pytest.mark.parametrize("task_type", ["multiclass", "regression"])
+def test__parameters_unused_by_task__v3_5__is_exactly_the_set_without_gradient(
+    task_type: str,
+) -> None:
+    """Freezing this set is what lets DDP fine-tune one task of the shared model."""
+    arch = _get_small_v3_5_model()
+    x, y = _v3_5_inputs(task_type)  # type: ignore[arg-type]
+    arch(x, y, task_type=task_type).float().sum().backward()
+
+    # Non-learnable parameters (RoPE frequencies) never get a gradient either.
+    without_grad = {
+        id(p) for p in arch.parameters() if p.requires_grad and p.grad is None
+    }
+    unused = _parameters_unused_by_task(arch, task_type)  # type: ignore[arg-type]
+
+    assert unused, "a multitask model always has another task's parameters"
+    assert {id(p) for p in unused} == without_grad
+
+
+def test__parameters_unused_by_task__tasks_own_disjoint_parameters() -> None:
+    arch = _get_small_v3_5_model()
+    multiclass = {id(p) for p in _parameters_unused_by_task(arch, "multiclass")}
+    regression = {id(p) for p in _parameters_unused_by_task(arch, "regression")}
+    assert multiclass.isdisjoint(regression)
+    assert multiclass | regression < {id(p) for p in arch.parameters()}
+
+
+def test__parameters_unused_by_task__single_task_model__is_empty() -> None:
+    assert _parameters_unused_by_task(torch.nn.Linear(2, 2), "multiclass") == []
 
 
 def test__get_loss_for_logging__reports_global_estimator_mean() -> None:
@@ -537,7 +595,7 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV3,
+        TabPFNV3p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -612,7 +670,7 @@ def test__finetuned_tabpfn_classifier__fit_without_validation(
     caplog.set_level(logging.INFO, logger="tabpfn.finetuning.finetuned_base")
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=mock_forward,
@@ -788,7 +846,7 @@ def test__finetuned_tabpfn_classifier__validation_frequency_schedules_evaluation
 
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=create_mock_architecture_forward(n_classes=n_classes),
@@ -848,7 +906,7 @@ def test__finetuned_tabpfn_classifier__validation_frequency_without_remaining_ev
     caplog.set_level(logging.INFO, logger="tabpfn.finetuning.finetuned_base")
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=create_mock_architecture_forward(n_classes=n_classes),
@@ -897,7 +955,7 @@ def test__finetuned_tabpfn_classifier__validation_frequency_counts_patience_chec
 
     with (
         mock.patch.object(
-            TabPFNV3,
+            TabPFNV3p5,
             "forward",
             autospec=True,
             side_effect=create_mock_architecture_forward(n_classes=n_classes),
@@ -981,7 +1039,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1066,7 +1126,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1104,7 +1166,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     )
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1215,7 +1279,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV3,
+        TabPFNV3p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -1284,7 +1348,9 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
+        mock.patch.object(
+            TabPFNV3p5, "forward", autospec=True, side_effect=mock_forward
+        ),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1538,6 +1604,8 @@ def test__tabpfn_classifier__fit_from_preprocessed_runs(
             batch.configs,
             performance_options=PerformanceOptions(),
         )
+        assert isinstance(clf.date_transformer_, DateTransformer)
+        assert isinstance(clf.text_transformer_, TextTransformer)
         preds = clf.forward(batch.X_query)
         assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
         assert preds.shape[0] == batch.X_query[0].shape[0]
@@ -1615,8 +1683,11 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     tensor_p1_full = None
     # Patch the standard classifier's *internal model's* forward method
     # The internal model typically receives the combined train+test sequence
+    # Patch on the class: the inference engine runs per-device copies of the
+    # model, and autospec keeps the signature the engine inspects for `task_type`.
+    model_cls = type(clf_standard.models_[0])
     with patch.object(
-        clf_standard.models_[0], "forward", wraps=clf_standard.models_[0].forward
+        model_cls, "forward", autospec=True, side_effect=model_cls.forward
     ) as mock_forward_p1:
         _ = clf_standard.predict_proba(X_test_raw)
         assert mock_forward_p1.called, "Standard models_[0].forward was not called."
@@ -1630,7 +1701,7 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
             f"Standard models_[0].forward call had "
             f"unexpected arguments: {call_args_list[0].args}"
         )
-        tensor_p1_full = mock_forward_p1.call_args.args[0]
+        tensor_p1_full = mock_forward_p1.call_args.args[1]  # (self, x, ...)
 
     assert tensor_p1_full is not None, "Failed to capture tensor from standard path."
     # Shape might be [1, N_Total, Features+1] or similar. Check the actual shape.
@@ -1684,9 +1755,8 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
     # Step 3c: Call forward and capture the input tensor
     # to the *internal transformer model*
     tensor_p2_full = None
-    # Patch the *batched* classifier's internal model's forward method
     with patch.object(
-        clf_batched.models_[0], "forward", wraps=clf_batched.models_[0].forward
+        model_cls, "forward", autospec=True, side_effect=model_cls.forward
     ) as mock_forward_p2:
         _ = clf_batched.forward(batch.X_query)
         assert mock_forward_p2.called, "Batched models_[0].forward was not called."
@@ -1700,7 +1770,7 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
             f"Batched models_[0].forward call had "
             f"unexpected arguments: {call_args_list[0].args}"
         )
-        tensor_p2_full = mock_forward_p2.call_args.args[0]
+        tensor_p2_full = mock_forward_p2.call_args.args[1]  # (self, x, ...)
 
     assert tensor_p2_full is not None, "Failed to capture tensor from batched path."
     # The internal model in this path should
@@ -1786,7 +1856,7 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     )
 
     with mock.patch.object(
-        TabPFNV3,
+        TabPFNV3p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -1901,3 +1971,54 @@ def test__batched_inference__matches_single_dataset(device: str) -> None:
         ).detach()
         assert single.shape[1] == 1
         assert torch.allclose(fused[:, i, :], single[:, 0, :], atol=1e-4)
+
+
+@pytest.mark.filterwarnings("ignore::UserWarning")
+def test__finetuned_tabpfn_classifier__validation_set_of_another_width__raises(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The validation set is checked against the training set's shape up front,
+    before any epoch runs, rather than failing inside the first evaluation.
+    """
+    X, y = synthetic_data
+    finetuned_clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=1,
+        n_finetune_ctx_plus_query_samples=50,
+        n_inference_subsample_samples=100,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        random_state=42,
+    )
+
+    with pytest.raises(TabPFNValidationError, match="expecting"):
+        finetuned_clf.fit(X, y, X_val=X[:, :-1], y_val=y)
+
+
+def test__finetuned_classifier__text_column__final_estimator_keeps_it_unexpanded() -> (
+    None
+):
+    """The loop trains on numpy input, where text is ordinal-encoded, so the final
+    estimator must not expand the column either, whatever the checkpoint's default.
+    """
+    rng = np.random.default_rng(0)
+    n = 120
+    X = pd.DataFrame(rng.normal(size=(n, 4)), columns=[f"f{i}" for i in range(4)])
+    X["text"] = pd.array(
+        [f"item {i} note {rng.integers(10**6)}" for i in range(n)], dtype="string"
+    )
+    y = (X["f0"] > 0).astype(int).to_numpy()
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=1,
+        validation_split_ratio=0.2,
+        n_estimators_final_inference=1,
+        random_state=0,
+    )
+    clf.fit(X, y)
+    final = clf.finetuned_inference_classifier_
+    assert final.inference_config_.TRANSFORM_TEXT is False
+    assert final.inference_config_.TRANSFORM_DATES is False
+    assert final.text_transformer_.expanded_indices == []
+    assert clf.predict(X.iloc[:5]).shape == (5,)

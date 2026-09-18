@@ -36,6 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
 from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5
 from tabpfn.finetuning._torch_compat import GradScaler, autocast, sdpa_kernel_context
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
@@ -52,12 +53,16 @@ from tabpfn.finetuning.train_util import (
 )
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices, infer_random_state
-from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
+from tabpfn.validation import (
+    check_input_shape_matches,
+    ensure_compatible_fit_inputs_sklearn,
+    extract_input_shape,
+)
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from tabpfn.constants import ModelVersion, XType, YType
+    from tabpfn.constants import ModelVersion, TaskType, XType, YType
 
 # Currently, we only support a batch size of 1 for finetuning.
 META_BATCH_SIZE = 1
@@ -222,6 +227,28 @@ def _ratio_ctx_query_split(
         return train_test_split(
             X, y, test_size=test_size, random_state=random_state, stratify=None
         )
+
+
+def _parameters_unused_by_task(
+    model: torch.nn.Module,
+    task_type: TaskType,
+) -> list[torch.nn.Parameter]:
+    """Parameters that a forward pass for ``task_type`` never touches.
+
+    A multitask checkpoint (v3.5) holds one target encoder and head per task in
+    a single module, so fine-tuning one task leaves the other's parameters
+    without a gradient. Single-task architectures have none and return ``[]``.
+    """
+    if not isinstance(model, TabPFNV3p5):
+        return []
+    if task_type == "multiclass":
+        other = "regression"
+        heads = [model.heads.mlp_regression, model.heads.output_projection]
+    else:
+        other = "multiclass"
+        heads = [model.heads.mlp_classification, model.heads.many_class_decoder]
+    modules = [model.col_y_encoder[other], model.icl_y_encoder[other], *heads]
+    return [p for m in modules for p in m.parameters()]
 
 
 class _TabPFNDDPWrapper(torch.nn.Module):
@@ -517,6 +544,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         config = copy.deepcopy(base_config)
         existing_inference_config = dict(config.get("inference_config", {}) or {})
         existing_inference_config["ENABLE_GPU_PREPROCESSING"] = False
+        # The training loop hands the model numpy arrays, which the text and date
+        # transformers never touch, so the estimators built here must not run them
+        # either: otherwise the final model would see features the weights were
+        # not tuned on.
+        existing_inference_config["TRANSFORM_TEXT"] = False
+        existing_inference_config["TRANSFORM_DATES"] = False
         config["inference_config"] = existing_inference_config
         if n_estimators_override is not None:
             config["n_estimators"] = n_estimators_override
@@ -561,11 +594,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
     @abstractmethod
     def _create_estimator(self, config: dict[str, Any]) -> Any:
         """Create and return the underlying TabPFN estimator with the given config."""
-        ...
-
-    @abstractmethod
-    def _setup_estimator(self) -> None:
-        """Perform any task-specific setup after estimator creation."""
         ...
 
     @abstractmethod
@@ -860,16 +888,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 finetuning_estimator_config["model_path"] = checkpoint_path
 
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
-        self._setup_estimator()
-
         self.finetuned_estimator_._initialize_model_variables()
-        X_validated, y_validated, self.feature_names_in_, self.n_features_in_ = (
-            ensure_compatible_fit_inputs_sklearn(
-                X,
-                y,
-                estimator=self.finetuned_estimator_,
-                ensure_y_numeric=self._model_type == "regressor",
-            )
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        X_validated, y_validated = ensure_compatible_fit_inputs_sklearn(
+            X,
+            y,
+            estimator=self.finetuned_estimator_,
+            ensure_y_numeric=self._model_type == "regressor",
         )
         self.X_ = X
         self.y_ = y
@@ -877,7 +902,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         if X_val is not None and y_val is not None:
             X_train, y_train = X, y
-            X_val, y_val, _, _ = ensure_compatible_fit_inputs_sklearn(
+            # The validation set has to match the shape the training set recorded
+            # above, not replace it.
+            check_input_shape_matches(X_val, estimator=self)
+            X_val, y_val = ensure_compatible_fit_inputs_sklearn(
                 X_val,
                 y_val,
                 estimator=self.finetuned_estimator_,
@@ -925,6 +953,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             force_recompute_layer=self.use_activation_checkpointing,
             use_chunkwise_inference=False,
         )
+
+        # Freeze the other task's parameters of a multitask checkpoint before
+        # wrapping in DDP, so it does not wait for gradients that never come.
+        task_type = "multiclass" if self._model_type == "classifier" else "regression"
+        for param in _parameters_unused_by_task(
+            self.finetuned_estimator_.model_, task_type
+        ):
+            param.requires_grad = False
 
         # --- DDP model wrapping ---
         model_for_optimization = self.finetuned_estimator_.model_

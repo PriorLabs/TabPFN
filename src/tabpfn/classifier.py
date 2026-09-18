@@ -37,9 +37,13 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     estimator_to_device,
+    expand_dates_and_text,
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolve_categorical_features_indices,
+    resolved_n_estimators,
+    resolved_softmax_temperature,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -47,6 +51,11 @@ from tabpfn.constants import (
     ModelVersion,
     XType,
     YType,
+)
+from tabpfn.downsample_correction import (
+    apply_class_weights,
+    context_class_prior,
+    downsample_class_weights,
 )
 from tabpfn.errors import handle_oom_errors
 from tabpfn.inference import (
@@ -74,17 +83,20 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     FeatureSubsamplingMethod,
     PreprocessorConfig,
+    SampleSubsamplingMethod,
     clean_data,
     generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -92,11 +104,15 @@ from tabpfn.utils import (
     infer_random_state,
 )
 from tabpfn.validation import (
+    check_input_shape_matches,
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
+    extract_input_shape,
     validate_dataset_size,
     validate_num_classes,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -122,7 +138,18 @@ DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
-    """TabPFNClassifier class."""
+    """TabPFN classifier with a scikit-learn-compatible interface.
+
+    Usage guidance:
+        - TabPFN-3 and later versions support up to 1,000,000 rows, subject to
+          feature count, checkpoint limits, and memory.
+        - For large datasets or limited memory, use per-estimator subsampling,
+          e.g. ``inference_config={"SUBSAMPLE_SAMPLES": 50_000}``.
+        - Pass raw pandas DataFrames to ``fit`` and ``predict``. Categorical
+          strings/categories and missing feature values are handled automatically;
+          no manual integer/one-hot encoding, imputation, scaling, or outlier
+          removal is needed.
+    """
 
     configs_: list[ArchitectureConfig]
     """The configurations of the loaded models to be used for inference.
@@ -191,6 +218,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
+    date_transformer_: DateTransformer
+    """The transformer that converted every temporal column before validation."""
+
+    text_transformer_: TextTransformer
+    """The transformer that expanded every text column before validation."""
+
+    categorical_features_indices_: list[int] | None
+    """Declared categorical column positions after date/text expansion, including
+    columns declared through pandas `category` dtype. Expanded source columns are
+    removed and their generated features appended, so these positions can differ
+    from those in the original fit input."""
+
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
     specified."""
@@ -199,12 +238,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The validated evaluation metric to optimize for during prediction."""
 
     softmax_temperature_: float
-    """The softmax temperature used for prediction. This is set to the default softmax
-    temperature if no temperature tuning is done"""
+    """The softmax temperature used for prediction. This is the resolved
+    `softmax_temperature`, i.e. the one the checkpoint declares when no temperature
+    tuning is done."""
 
     ensemble_configs_: list[ClassifierEnsembleConfig]
     """The ensemble configurations used during fit.
     Stored for reuse in prompt tuning."""
+
+    downsample_correction_weights_: np.ndarray | None
+    """Per-class weights that undo the prior shift of
+    `SAMPLE_SUBSAMPLING_METHOD="majority_downsample"`, applied to the averaged
+    probabilities. `None` when that sampler is not in effect."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -212,7 +257,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        softmax_temperature: float = 0.9,
+        softmax_temperature: float | Literal["auto"] = "auto",
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
         model_path: str
@@ -255,31 +300,39 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                  predictions of `n_estimators`-many forward passes of TabPFN. Each
                  forward pass has (slightly) different input data. Think of this as an
                  ensemble of `n_estimators`-many "prompts" of the input data.
-                 With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
-                 on wide datasets so every feature is seen by some estimator (i.e.
-                 when the data has more than `max_features_per_estimator` features
-                 per estimator), to the smallest value that lets every feature
-                 appear in at least one ensemble member, emitting a warning when it
-                 does so. That auto-scaled value is capped at
+                 With the default `"auto"`, the count comes from the checkpoint
+                 (`InferenceConfig.N_ESTIMATORS`), which is itself `"auto"` unless
+                 the checkpoint names a count.
+                 `"auto"` means `DEFAULT_N_ESTIMATORS`, raised
+                 on wide datasets so every feature is seen by some
+                 estimator (i.e. when the data has more than
+                 `max_features_per_estimator` features per estimator), to the
+                 smallest value that lets every feature appear in at least one
+                 ensemble member, emitting a warning when it does so. That
+                 auto-scaled value is capped at
                  `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
                  be sampled unless you raise `n_estimators` yourself. An explicit
-                 integer is never overridden — if it is too small to cover every
-                 feature, a warning is emitted at fit time and the value is used
-                 as given.
+                 integer — yours or the checkpoint's — is never overridden: if it is
+                 too small to cover every feature, a warning is emitted at fit time
+                 and the value is used as given. Your integer cannot be combined
+                 with an `N_ESTIMATORS` in `inference_config`, which is the other
+                 way of naming a count.
 
             auto_scale_n_estimators:
                 Deprecated, removed in v9 — pass an explicit `n_estimators`
                 instead. Only applies when `n_estimators="auto"`, where `False`
                 keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
-                it for feature coverage, exactly what passing
-                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
-                `FutureWarning` at fit time.
+                it for feature coverage, exactly what passing that count as
+                `n_estimators` does. Passing `False` emits a `FutureWarning` at
+                fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
                 categorical. If `None`, the model will infer the categorical columns.
-                If provided, we might ignore some of the suggestion to better fit the
-                data seen during pre-training.
+                A column with pandas' `category` dtype counts as listed here. A
+                string column declared this way is read as categorical whatever
+                its cardinality, never as text; for a numeric one, we might ignore
+                the suggestion to better fit the data seen during pre-training.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -295,6 +348,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 a post-processing step. Set `softmax_temperature=1.0` for no effect. Be
                 advised that `.predict()` does not currently sample, so this setting is
                 only relevant for `.predict_proba()` and `.predict_logits()`.
+
+                If `"auto"` (the default), the temperature is taken from the
+                checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
+                every checkpoint released up to and including v8.5.0. Passing a float
+                overrides the checkpoint for every model in the ensemble; it cannot be
+                combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
+                the other way of naming one.
 
             balance_probabilities:
                 Whether to balance the probabilities based on the class distribution
@@ -479,7 +539,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 - If `None`, the default InferenceConfig is used.
                 - If `dict`, the key-value pairs are used to update the default
                   `InferenceConfig`. Raises an error if an unknown key is passed.
-                - If `InferenceConfig`, the object is used as the configuration.
+                - If `InferenceConfig`, the object replaces the checkpoint's config
+                  as a whole, so any field not set on it takes a class default
+                  rather than the value the checkpoint declares. Deprecated.
 
             differentiable_input:
                 If true, the preprocessing will be adapted to be end-to-end
@@ -554,7 +616,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v2().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -562,7 +623,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v2_5().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -570,7 +630,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v2_6().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
             options = {
@@ -578,7 +637,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     ModelSource.get_classifier_v3().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V3_5:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_v3_5().default_filename
+                ),
+                "n_estimators": "auto",
+            }
+        elif version == ModelVersion.V3_5_FAST:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_v3_5_fast().default_filename
+                ),
+                "n_estimators": "auto",
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -681,10 +753,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             for i in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
+        # A tensor holds no dates or strings, so these fit nothing; set anyway, so
+        # every predict path converts through them without first checking.
+        self.date_transformer_ = DateTransformer().fit(X)
+        self.text_transformer_ = TextTransformer().fit(X)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -715,8 +791,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
+        # feature_names_in_/n_features_in_ have to describe what the caller passed,
+        # not the wider frame expansion can make of it, so they come off the raw
+        # input here, before any conversion.
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+
+        categorical_indices = resolve_categorical_features_indices(
+            X, self.categorical_features_indices
+        )
+        X, date_transformer, text_transformer, feature_names, categorical_indices = (
+            expand_dates_and_text(
+                X,
+                categorical_features_indices=categorical_indices,
+                inference_config=self.inference_config_,
+            )
+        )
+
         # Data validation and cleaning
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        X, y, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -731,7 +823,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
-            provided_categorical_indices=self.categorical_features_indices,
+            provided_categorical_indices=categorical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -744,8 +836,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.feature_names_in_ = feature_names
-        self.n_features_in_ = n_features
+        self.date_transformer_ = date_transformer
+        self.text_transformer_ = text_transformer
+        self.categorical_features_indices_ = categorical_indices
         self.n_train_samples_ = len(X)
 
         # Label encoding
@@ -760,7 +853,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Ensemble definition
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
-            n_estimators=self.n_estimators,
+            n_estimators=resolved_n_estimators(self),
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
@@ -784,6 +877,39 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return ensemble_configs, X, y
 
+    def _compute_downsample_correction(self, *, y_encoded: np.ndarray) -> None:
+        """Set `downsample_correction_weights_` from the fitted row sampler.
+
+        Requires `ensemble_preprocessor_` and `n_classes_`. Uses `class_counts_`
+        when the label encoder produced it, and the encoded labels otherwise (the
+        differentiable-input path skips the encoder).
+        """
+        preprocessor = self.ensemble_preprocessor_
+        if not preprocessor.downsample_shifted_prior:
+            self.downsample_correction_weights_ = None
+            return
+        assert preprocessor.subsample_row_indices is not None
+        train_counts = getattr(self, "class_counts_", None)
+        if train_counts is None:
+            train_counts = np.bincount(
+                np.asarray(y_encoded).astype(np.int64), minlength=self.n_classes_
+            )
+        context_prior = context_class_prior(
+            y_encoded, preprocessor.subsample_row_indices, self.n_classes_
+        )
+        self.downsample_correction_weights_ = downsample_class_weights(
+            train_counts, context_prior
+        )
+
+    def _uses_majority_downsample(self) -> bool:
+        """Whether the configured row sampler is majority downsampling."""
+        config = self.get_inference_config()
+        return (
+            config.SUBSAMPLE_SAMPLES is not None
+            and SampleSubsamplingMethod(config.SAMPLE_SUBSAMPLING_METHOD)
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+        )
+
     def _get_tuning_classifier(self, **overwrite_kwargs: Any) -> TabPFNClassifier:
         """Return a fresh classifier configured for holdout tuning."""
         params = self.get_params(deep=False)
@@ -804,6 +930,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "fit_mode": "fit_preprocessors",
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
+            # Fit on the already-expanded array, where a declared column may
+            # have moved down past an expanded date or text column.
+            "categorical_features_indices": self.categorical_features_indices_,
         }
 
         params.update(forced)
@@ -845,8 +974,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.ensemble_configs_ = ensemble_configs
 
-        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
-
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             n_samples=X.shape[0],
@@ -862,11 +989,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            sample_subsampling_method=SampleSubsamplingMethod(
+                self.inference_config_.SAMPLE_SUBSAMPLING_METHOD
+            ),
             importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
         )
+
+        # Needs the row sampler's context prior, and must precede the tuning
+        # step so calibration and thresholds see the corrected probabilities.
+        self._compute_downsample_correction(y_encoded=y)
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
 
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
@@ -921,6 +1056,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
         self.fit_mode = "batched"
 
+        # Finetuning batches are built without row subsampling, so no context
+        # prior shift exists here. Clear any correction left over from an earlier
+        # fit(); otherwise forward() would reweight every batch for a shift the
+        # batch never had.
+        self.downsample_correction_weights_ = None
+
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
             byte_size = self._initialize_model_variables()
@@ -941,6 +1082,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
+        # Preprocessed tensors hold no dates or strings either, so these fit
+        # nothing: the date transformer still refuses a date and converts a
+        # duration, like any fitted one.
+        self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
+        self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
+
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
@@ -958,7 +1105,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    def predict_proba_batched(
+    def predict_proba_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
         y_train_list: list[YType],
@@ -968,16 +1115,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Each ``(X_train, y_train, X_test)`` triple is preprocessed exactly as in
         ``fit()`` + ``predict_proba()`` (input validation, CPU and GPU
-        preprocessing, same ensemble configs), then all datasets are stacked along
-        the model's batch dimension and scored with a *single fused forward per
-        estimator*. For the supported cases below this is equivalent to calling
-        ``fit`` + ``predict_proba`` on each dataset independently.
+        preprocessing, same ensemble configs), then compatible model-input shapes
+        are fused. Heterogeneous post-preprocessing shapes run in separate groups.
 
         All datasets must share the same set of classes (they are scored together
-        with a single ``n_classes_``) and the same array shapes: the fused forward
-        stacks them on the batch dimension, and ragged batches are rejected rather
-        than padded (padding would feed the model fake context/query rows and
-        silently corrupt results). Group datasets by shape upstream if needed.
+        with a single ``n_classes_``) and the same raw array shapes. Fitted
+        transforms may produce different model-input shapes; these are grouped
+        internally without padding.
 
         This method does not modify the estimator: the per-dataset fits run on an
         internal clone, so ``self`` is unchanged on return (any prior ``fit`` is
@@ -995,8 +1139,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ValueError: If the input lists have unequal or zero length, the
                 datasets do not all share the same set of classes, or the training
                 (or test) arrays do not all share one shape.
-            NotImplementedError: If ``balance_probabilities`` or ``tuning_config``
-                is configured on the estimator — their state is per-dataset and
+            NotImplementedError: If ``balance_probabilities``, ``tuning_config``,
+                or ``SAMPLE_SUBSAMPLING_METHOD="majority_downsample"`` is
+                configured on the estimator — their state is per-dataset and
                 cannot be applied correctly across a shared batch. Score those
                 datasets individually with ``predict_proba``. Also raised for
                 ``inference_precision=torch.float64``, which the fused forward
@@ -1011,7 +1156,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         from tabpfn.finetuning.data_util import (  # noqa: PLC0415
             ClassifierBatch,
-            meta_dataset_collator,
+            _collate_same_shape_for_batched_inference,
+            _group_batches_by_shape,
         )
 
         if not len(X_train_list) == len(y_train_list) == len(X_test_list):
@@ -1029,6 +1175,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             raise NotImplementedError(
                 "predict_proba_batched does not support balance_probabilities=True; "
                 "score datasets individually with predict_proba."
+            )
+        if self._uses_majority_downsample():
+            raise NotImplementedError(
+                "predict_proba_batched does not support "
+                "SAMPLE_SUBSAMPLING_METHOD='majority_downsample'; its prior "
+                "correction is fitted per dataset. Score datasets individually "
+                "with predict_proba."
             )
         if self.tuning_config is not None:
             raise NotImplementedError(
@@ -1095,15 +1248,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
+            check_input_shape_matches(X_test, estimator=worker)
+            X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
+            X_test = worker.text_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test = fix_dtypes(  # noqa: PLW2901
+            X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X_test = process_text_na_dataframe(  # noqa: PLW2901
-                X=X_test,
                 ord_encoder=getattr(worker, "ordinal_encoder_", None),
             )
             members = worker.executor_.ensemble_members
@@ -1142,21 +1295,39 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             )
 
-        batch = meta_dataset_collator(items)
-        # The clone now drives the batched executor; set the mode so
-        # fit_from_preprocessed does not warn about switching out of fine-tuning mode.
+        results: list[np.ndarray | None] = [None] * len(items)
         worker.fit_mode = "batched"
-        worker.fit_from_preprocessed(
-            batch.X_context,
-            batch.y_context,
-            batch.cat_indices,
-            batch.configs,
-            performance_options=PerformanceOptions(),
-        )
-        # (n_test, n_datasets, n_classes)
-        out = worker.forward(batch.X_query, use_inference_mode=True)
-        out = out.detach().float().cpu().numpy()
-        return np.transpose(out, (1, 0, 2))  # -> (n_datasets, n_test, n_classes)
+        groups = _group_batches_by_shape(items)
+        if len(groups) > 1:
+            logger.debug(
+                "predict_proba_batched split %d datasets into %d "
+                "post-preprocessing shape groups with sizes %s; running one "
+                "inference pass per group may be slower than homogeneous batched "
+                "inference.",
+                len(items),
+                len(groups),
+                [len(group) for group in groups],
+            )
+        for group in groups:
+            indices, group_items = zip(*group, strict=True)
+            batch = _collate_same_shape_for_batched_inference(list(group_items))
+            worker.fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+                performance_options=PerformanceOptions(),
+            )
+            out = worker.forward(batch.X_query, use_inference_mode=True)
+            out = out.detach().float().cpu().numpy().transpose(1, 0, 2)
+            for index, probabilities in zip(indices, out, strict=True):
+                results[index] = probabilities
+
+        test_shape = next(iter(test_shapes))
+        expected = (test_shape[0], len(class_sets[0]))
+        if any(result is None or result.shape != expected for result in results):
+            raise RuntimeError("Internal error: invalid batched prediction shape.")
+        return np.stack(results)  # type: ignore[arg-type]
 
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
@@ -1205,7 +1376,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            sample_subsampling_method=SampleSubsamplingMethod(
+                self.inference_config_.SAMPLE_SUBSAMPLING_METHOD
+            ),
+            y_train=y,
+            task_type=self.estimator_type,
         )
+        self._compute_downsample_correction(y_encoded=y.detach().cpu().float().numpy())
 
         self.executor_ = InferenceEngineCachePreprocessing(
             X_train=X,
@@ -1236,8 +1413,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert self.eval_metric_ is not None
 
         # Always set this to stay compatible with sklearn interface.
+        # `softmax_temperature_` is already resolved by `_initialize_model_variables`.
         self.tuned_classification_thresholds_ = None
-        self.softmax_temperature_ = self.softmax_temperature
 
         tuning_config_resolved = resolve_tuning_config(
             tuning_config=self.tuning_config,
@@ -1269,20 +1446,40 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
+            if tuning_config_resolved.tune_decision_thresholds:
+                raise ValueError(
+                    "eval_metric='roc_auc' does not support "
+                    "tune_decision_thresholds=True: thresholds cannot change ROC "
+                    "AUC, which scores the ranking of the predicted probabilities. "
+                    "Pass eval_metric='balanced_accuracy' to keep the previous "
+                    "behaviour, or tune_decision_thresholds=False."
+                )
             warnings.warn(
                 f"You specified '{self.eval_metric_}' as the eval metric with "
-                "threshold tuning or temperature calibration enabled. "
-                "ROC AUC is independent of these tunings and they will not "
-                "improve this metric. Consider disabling them.",
+                "temperature calibration enabled. ROC AUC is independent of this "
+                "tuning and it will not improve this metric. Consider disabling "
+                "it.",
                 UserWarning,
                 stacklevel=2,
             )
+        elif (
+            self.eval_metric_ is ClassifierEvalMetrics.LOG_LOSS
+            and tuning_config_resolved.tune_decision_thresholds
+        ):
+            raise ValueError(
+                "eval_metric='log_loss' does not support "
+                "tune_decision_thresholds=True. Pass calibrate_temperature=True, "
+                "which optimizes log loss directly, or "
+                "tune_decision_thresholds=False."
+            )
 
-        holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
-            X=X,
-            y=y,
-            holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
-            n_folds=int(tuning_config_resolved.tuning_n_folds),
+        holdout_raw_logits, holdout_y_true, holdout_weights = (
+            self._compute_holdout_validation_data(
+                X=X,
+                y=y,
+                holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
+                n_folds=int(tuning_config_resolved.tuning_n_folds),
+            )
         )
 
         # WARNING: ensure the calibration happens before threshold tuning!
@@ -1290,12 +1487,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             calibrated_softmax_temperature = self._get_calibrated_softmax_temperature(
                 holdout_raw_logits=holdout_raw_logits,
                 holdout_y_true=holdout_y_true,
+                holdout_correction_weights=holdout_weights,
             )
+            # The calibrated temperature is fitted on this dataset and replaces
+            # whatever the checkpoint declared.
             self.softmax_temperature_ = calibrated_softmax_temperature
 
         if tuning_config_resolved.tune_decision_thresholds:
             holdout_probas = (
-                self.logits_to_probabilities(holdout_raw_logits)
+                self.logits_to_probabilities(
+                    holdout_raw_logits,
+                    downsample_correction_weights=holdout_weights,
+                )
                 .float()
                 .detach()
                 .cpu()
@@ -1315,15 +1518,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: YType,
         holdout_frac: float,
         n_folds: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Compute holdout validation data.
 
         Returns:
-            tuple[np.ndarray, np.ndarray]:
+            tuple[np.ndarray, np.ndarray, np.ndarray]:
                 - holdout_raw_logits: Array of holdout raw logits
                     (shape `[n_estimators, n_holdout_samples, n_classes]`).
                 - holdout_y_true: Array of holdout y true labels
                     (shape `[n_holdout_samples]`).
+                - holdout_correction_weights: Per-sample downsampling correction
+                    weights (shape `[n_holdout_samples, n_classes]`), taken from
+                    the fold's own tuning classifier. Each fold trains on a
+                    different split, so under an absolute context budget its
+                    class ratios differ from the full model's, and a fold too
+                    small to be subsampled applies no correction at all. Such
+                    rows carry weight one; the array is always explicit so that
+                    tuning never falls back to the full model's weights.
         """
         splits = get_tuning_splits(
             X=copy.deepcopy(X),
@@ -1335,6 +1546,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         holdout_raw_logits = []
         holdout_y_true = []
+        holdout_weights: list[np.ndarray] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
             holdout_y_true.append(y_holdout_Nh)
@@ -1351,10 +1563,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # E=num estimators, Nh=num holdout samples, C=num classes
             raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF)
             holdout_raw_logits.append(raw_logits_ENhC)
+            fold_weights = calibration_classifier.downsample_correction_weights_
+            if fold_weights is None:
+                fold_weights = np.ones(self.n_classes_)
+            holdout_weights.append(
+                np.broadcast_to(fold_weights, (len(y_holdout_Nh), self.n_classes_))
+            )
 
         holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
         holdout_y_true__all = np.concatenate(holdout_y_true, axis=0)
-        return holdout_raw_logits_all, holdout_y_true__all
+        holdout_weights_all = np.concatenate(holdout_weights, axis=0)
+        return holdout_raw_logits_all, holdout_y_true__all, holdout_weights_all
 
     def _raw_predict(
         self,
@@ -1384,15 +1603,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
+            check_input_shape_matches(X, estimator=self)
+            X = self.date_transformer_.transform(X)
+            X = self.text_transformer_.transform(X)
             X = ensure_compatible_predict_input_sklearn(X, self)
-            X = fix_dtypes(
+            X = clean_data_transform(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X = process_text_na_dataframe(
-                X=X,
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
                 passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
             )
@@ -1402,7 +1621,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X,
             model_type="classifier",
             n_train_samples=getattr(self, "n_train_samples_", None),
-            n_features=getattr(self, "n_features_in_", None),
         ):
             return self.forward(
                 X,
@@ -1507,8 +1725,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         holdout_raw_logits: np.ndarray,
         holdout_y_true: np.ndarray,
+        holdout_correction_weights: np.ndarray,
     ) -> float:
-        """Calibrate temperature based on the holdout logits and true labels."""
+        """Calibrate temperature based on the holdout logits and true labels.
+
+        `holdout_correction_weights` are the per-sample downsampling correction
+        weights of the folds that produced the logits (ones where a fold applied
+        none), so the objective scores the probabilities those folds would
+        actually have predicted rather than falling back to this model's weights.
+        """
 
         def logits_to_probabilities_fn(
             raw_logits: np.ndarray | torch.Tensor,
@@ -1519,6 +1744,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     raw_logits=raw_logits,
                     softmax_temperature=softmax_temperature,
                     average_before_softmax=self.average_before_softmax,
+                    downsample_correction_weights=holdout_correction_weights,
                     balance_probabilities=self.balance_probabilities,
                 )
                 .float()
@@ -1557,7 +1783,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
         """Scales logits by the softmax temperature."""
-        temp = getattr(self, "softmax_temperature_", self.softmax_temperature)
+        temp = resolved_softmax_temperature(self)
         if temp != 1.0:
             return logits / temp
         return logits
@@ -1584,6 +1810,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         softmax_temperature: float | None = None,
         average_before_softmax: bool | None = None,
         balance_probabilities: bool | None = None,
+        downsample_correction_weights: np.ndarray | None = None,
     ) -> torch.Tensor:
         """Convert logits to probabilities using the classifier's post-processing.
 
@@ -1594,6 +1821,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             softmax_temperature: Optional override for temperature scaling.
             average_before_softmax: Optional override for averaging order.
             balance_probabilities: Optional override for probability balancing.
+            downsample_correction_weights: Optional override for the fitted
+                `downsample_correction_weights_`, either one vector or one row
+                per sample. `None` means "use the fitted weights"; tuning always
+                passes explicit weights (ones where a fold applied no
+                correction) because its folds carry their own correction.
 
         Returns:
             Probabilities with shape (n_samples, n_classes).
@@ -1604,9 +1836,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else torch.from_numpy(np.asarray(raw_logits))
         )
         used_temperature = (
-            softmax_temperature
-            if softmax_temperature is not None
-            else getattr(self, "softmax_temperature_", self.softmax_temperature)
+            resolved_softmax_temperature(self)
+            if softmax_temperature is None
+            else softmax_temperature
         )
         use_average_before_softmax = (
             self.average_before_softmax
@@ -1642,6 +1874,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Expected logits with 2 or more dims, got {raw_logits.ndim}"
             )
 
+        # Restore the training prior first, so balancing (if requested) acts on
+        # probabilities that express the training prior rather than the context's.
+        correction_weights = (
+            getattr(self, "downsample_correction_weights_", None)
+            if downsample_correction_weights is None
+            else downsample_correction_weights
+        )
+        if correction_weights is not None:
+
+            def apply_correction(probas: torch.Tensor) -> torch.Tensor:
+                return apply_class_weights(probas, correction_weights)
+
+            steps.append(apply_correction)
         if use_balance:
             steps.append(self._apply_balancing)
 
@@ -1847,7 +2092,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     @classmethod
     def load_from_fit_state(
-        cls, path: Path | str, *, device: str | torch.device = "cpu"
+        cls, path: Path | str, *, device: DevicesSpecification = "auto"
     ) -> TabPFNClassifier:
         """Restore a fitted clf, light wrapper around load_fitted_tabpfn_model."""
         est = load_fitted_tabpfn_model(path, device=device)

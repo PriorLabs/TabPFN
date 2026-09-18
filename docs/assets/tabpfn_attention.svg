@@ -10,7 +10,7 @@
 
   <rect x="0" y="0" width="1095" height="330" fill="#ffffff"/>
   <text x="20" y="32" font-size="20" font-weight="700" fill="#101010">b</text>
-  <text x="548" y="30" text-anchor="middle" font-size="15" font-weight="600" fill="#101075">TabPFN-3 architecture: a distribution embedder, then row-wise and cross-row attention, read out as per-row tokens</text>
+  <text x="548" y="30" text-anchor="middle" font-size="15" font-weight="600" fill="#101075">TabPFN-3.5 architecture: a distribution embedder, then row-wise and cross-row attention, read out as per-row tokens</text>
 
   <!-- panel -->
   <rect x="24" y="48" width="1047" height="272" rx="14" fill="#e8e8f2"/>

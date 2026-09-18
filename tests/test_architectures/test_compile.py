@@ -14,6 +14,7 @@ stays fast.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from pathlib import Path
@@ -23,8 +24,12 @@ import torch
 from torch.torch_version import TorchVersion
 
 import tabpfn
-from tabpfn.architectures import tabpfn_v3
-from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.architectures import tabpfn_v3, tabpfn_v3_5
+from tabpfn.architectures.interface import (
+    Architecture,
+    ArchitectureModule,
+    PerformanceOptions,
+)
 
 # This test reads Dynamo's graph-break log, whose wording has changed over
 # torch releases (verified on 2.12 and 2.13). Older builds phrase it
@@ -58,23 +63,40 @@ _TORCH_OWNED = ("sdpa_kernel",)
 _TABPFN_ROOT = str(Path(tabpfn.__file__).parent)
 
 
-def _tiny_model() -> tabpfn_v3.TabPFNV3:
-    config = tabpfn_v3.TabPFNV3Config(
-        max_num_classes=10,
-        num_buckets=5,
-        embed_dim=48,
-        nlayers=1,
-        icl_num_heads=3,
-        dist_embed_num_heads=3,
-        feat_agg_num_heads=3,
+# Every architecture that honours `enable_torch_compile`.
+_ARCHITECTURES = [tabpfn_v3, tabpfn_v3_5]
+
+
+def _tiny_model(architecture: ArchitectureModule) -> Architecture:
+    config, _ = architecture.parse_config(
+        {
+            "max_num_classes": 10,
+            "num_buckets": 5,
+            "embed_dim": 48,
+            "nlayers": 1,
+            "icl_num_heads": 3,
+            "dist_embed_num_heads": 3,
+            "feat_agg_num_heads": 3,
+            # Both architectures then run their ICL attention at head_dim 64, in
+            # one call per layer over train and test rows together.
+            "feat_agg_num_cls_tokens": 4,
+            "icl_num_kv_heads_test": None,
+        }
     )
-    model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    model = architecture.get_architecture(config, cache_trainset_representation=False)
     model.to(torch.float32)
     return model
 
 
+def _forward_kwargs(model: Architecture) -> dict[str, str]:
+    """v3.5 takes the task per call; v3 is built for one task."""
+    if "task_type" in inspect.signature(model.forward).parameters:
+        return {"task_type": "multiclass"}
+    return {}
+
+
 def _compiled_forward_graph_breaks(
-    model: tabpfn_v3.TabPFNV3,
+    model: Architecture,
     x: torch.Tensor,
     y: torch.Tensor,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,7 +126,10 @@ def _compiled_forward_graph_breaks(
         torch._dynamo.utils.counters.clear()
         with torch.no_grad():
             out = model(
-                x, y, performance_options=PerformanceOptions(enable_torch_compile=True)
+                x,
+                y,
+                performance_options=PerformanceOptions(enable_torch_compile=True),
+                **_forward_kwargs(model),
             )
     finally:
         logging.getLogger("torch._dynamo").removeHandler(handler)
@@ -114,7 +139,9 @@ def _compiled_forward_graph_breaks(
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("architecture", _ARCHITECTURES, ids=lambda m: m.__name__)
 def test__enable_torch_compile__no_graph_break_in_tabpfn_code(
+    architecture: ArchitectureModule,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Compiled regions must not break on tabpfn's own code.
@@ -124,12 +151,12 @@ def test__enable_torch_compile__no_graph_break_in_tabpfn_code(
     compiled stage. The output stays correct, so only the break log shows
     it.
     """
-    model = _tiny_model()
+    model = _tiny_model(architecture)
     torch.manual_seed(0)
     x = torch.randn(30, 2, 5, dtype=torch.float32) * 0.1
     y = torch.randint(0, 10, [15, 2], dtype=torch.float32)
 
-    out_eager = model(x, y)
+    out_eager = model(x, y, **_forward_kwargs(model))
     out_compiled, records = _compiled_forward_graph_breaks(model, x, y, monkeypatch)
 
     torch.testing.assert_close(out_compiled, out_eager, atol=1e-5, rtol=1e-5)

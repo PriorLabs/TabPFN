@@ -9,7 +9,7 @@ import dataclasses
 import warnings
 from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 from typing_extensions import Self
 
 import numpy as np
@@ -23,16 +23,14 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import KFold, StratifiedKFold
 
+from tabpfn.architectures.shared.bar_distribution import (
+    FullSupportBarDistribution,
+)
+from tabpfn.downsample_correction import temper_and_correct_logits
 from tabpfn.regression_metrics import (
     ranked_probability_score_loss_from_bar_logits,
 )
 from tabpfn.utils import infer_random_state
-
-if TYPE_CHECKING:
-    from tabpfn.architectures.shared.bar_distribution import (
-        FullSupportBarDistribution,
-    )
-
 
 MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING = 500
 
@@ -304,6 +302,9 @@ def find_optimal_classification_thresholds(
 ) -> np.ndarray:
     """Finds the optimal thresholds for each class in a one-vs-rest (OvR) fashion.
 
+    Classes with no positive (or no negative) rows in the holdout carry no signal
+    to tune on and are assigned a neutral threshold instead of a searched one.
+
     Args:
         metric_name: The name of the metric to optimize.
         y_true: The true labels of shape [n_samples].
@@ -313,22 +314,41 @@ def find_optimal_classification_thresholds(
     Returns:
         The optimal thresholds of shape [n_classes].
     """
-    optimal_thresholds = []
+    tuned_by_class: dict[int, float] = {}
 
     # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
     for i in range(n_classes):
-        y_true_ovr = (y_true == i).astype(int)
-        y_pred_probas_ovr = y_pred_probas[:, i]
-        best_thresh = find_optimal_classification_threshold_single_class(
+        is_class_i = y_true == i
+        if not is_class_i.any() or is_class_i.all():
+            continue
+
+        tuned_by_class[i] = find_optimal_classification_threshold_single_class(
             metric_name=metric_name,
-            y_true=y_true_ovr,
-            y_pred_probas=y_pred_probas_ovr,
+            y_true=is_class_i.astype(int),
+            y_pred_probas=y_pred_probas[:, i],
         )
 
-        optimal_thresholds.append(best_thresh)
+    n_untuned = n_classes - len(tuned_by_class)
+    if n_untuned:
+        warnings.warn(
+            f"{n_untuned} of {n_classes} classes have no rows in the tuning holdout, "
+            "so their decision thresholds could not be tuned and a neutral value is "
+            "used instead. Set `tune_decision_thresholds=False` to skip threshold "
+            "tuning entirely.",
+            UserWarning,
+            stacklevel=2,
+        )
 
-    return np.array(optimal_thresholds)
+    # Thresholds act as a divisive reweight, so only their ratios matter and the
+    # neutral fill is the geometric mean rather than the arithmetic one.
+    neutral = (
+        float(np.exp(np.mean(np.log(list(tuned_by_class.values())))))
+        if tuned_by_class
+        else 1.0
+    )
+
+    return np.array([tuned_by_class.get(i, neutral) for i in range(n_classes)])
 
 
 def find_optimal_classification_threshold_single_class(
@@ -384,6 +404,14 @@ def select_robust_optimal_threshold(
     """
     thresholds = np.array([t for t, _ in thresholds_and_losses], dtype=float)
     losses = np.array([f for _, f in thresholds_and_losses], dtype=float)
+
+    finite = np.isfinite(losses)
+    if not finite.any():
+        # argmin over all-nan losses would return index 0, the most aggressive
+        # threshold in the grid.
+        return float(np.median(thresholds))
+    losses = np.where(finite, losses, np.inf)
+
     best_loss = float(np.min(losses))
     close_mask = losses <= (best_loss + plateau_delta)
 
@@ -451,8 +479,16 @@ def find_optimal_temperature(
     return best_temperature
 
 
+RegressionHoldoutFold = (
+    tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]
+    | tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor, torch.Tensor | None]
+)
+"""`(logits, raw_space_bardist, y_true)` with an optional fourth entry holding the
+fold's per-bar downsampling correction log weights."""
+
+
 def find_regression_optimal_temperature(
-    holdout_folds: list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]],
+    holdout_folds: list[RegressionHoldoutFold],
     metric_name: RegressorEvalMetrics,
     current_default_temperature: float,
 ) -> float:
@@ -468,11 +504,14 @@ def find_regression_optimal_temperature(
     own borders.
 
     Args:
-        holdout_folds: One `(logits, raw_space_bardist, y_true)` triple per fold,
-            where `logits` has shape [n_holdout, n_buckets] and `y_true` shape
-            [n_holdout]. Each triple must be internally consistent: the targets in
-            the units of that bar distribution's borders, and all three on the same
-            device.
+        holdout_folds: One `(logits, raw_space_bardist, y_true[, log_weights])`
+            tuple per fold, where `logits` has shape [n_holdout, n_buckets] and
+            carries neither temperature nor correction, and `y_true` has shape
+            [n_holdout]. The optional `log_weights` is the fold's per-bar
+            downsampling correction, added after the temperature exactly as
+            `TabPFNRegressor` does at predict time. Each tuple must be internally
+            consistent: the targets in the units of that bar distribution's
+            borders, and everything on the same device.
         metric_name: The metric to minimize.
         current_default_temperature: The temperature to fall back to when the sweep
             has nothing usable to choose from.
@@ -484,14 +523,19 @@ def find_regression_optimal_temperature(
     # buffer on every call, so sweep on copies and leave the callers' bar
     # distributions clean.
     folds = [
-        (logits, copy.deepcopy(raw_space_bardist), y_true)
-        for logits, raw_space_bardist, y_true in holdout_folds
-        if logits.shape[0] > 0
+        (
+            fold[0],
+            copy.deepcopy(fold[1]),
+            fold[2],
+            fold[3] if len(fold) > 3 else None,
+        )
+        for fold in holdout_folds
+        if fold[0].shape[0] > 0
     ]
     if not folds:
         return current_default_temperature
 
-    n_holdout_total = sum(logits.shape[0] for logits, _, _ in folds)
+    n_holdout_total = sum(logits.shape[0] for logits, *_ in folds)
     temperatures = get_tuning_temperatures()
     best_loss = float("inf")
     best_temperature = current_default_temperature
@@ -506,11 +550,15 @@ def find_regression_optimal_temperature(
                         compute_regression_metric_to_minimize(
                             metric_name=metric_name,
                             raw_space_bardist=raw_space_bardist,
-                            logits=logits / temperature,
+                            logits=temper_and_correct_logits(
+                                logits,
+                                temperature=float(temperature),
+                                log_weights=log_weights,
+                            ),
                             y_true=y_true,
                         ).mean()
                     )
-                    for logits, raw_space_bardist, y_true in folds
+                    for logits, raw_space_bardist, y_true, log_weights in folds
                 )
                 / n_holdout_total
             )

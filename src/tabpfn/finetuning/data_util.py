@@ -7,7 +7,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from typing_extensions import override
 
 import numpy as np
@@ -79,6 +79,36 @@ class RegressorBatch:
     znorm_space_bardist: FullSupportBarDistribution
     X_query_raw: torch.Tensor
     y_query_raw: torch.Tensor
+
+
+Batch = TypeVar("Batch", ClassifierBatch, RegressorBatch)
+BatchShapeSignature = tuple[tuple[int, ...], ...]
+
+
+def _batch_shape_signature(
+    item: ClassifierBatch | RegressorBatch,
+) -> BatchShapeSignature:
+    """Return all model-input shapes, in estimator order."""
+    if not (len(item.X_context) == len(item.X_query) == len(item.y_context)):
+        raise RuntimeError("Internal error: inconsistent ensemble lengths.")
+    return (
+        *(
+            shape
+            for xc, xq, yc in zip(
+                item.X_context, item.X_query, item.y_context, strict=True
+            )
+            for shape in (tuple(xc.shape), tuple(xq.shape), tuple(yc.shape))
+        ),
+        tuple(item.y_query.shape),
+    )
+
+
+def _group_batches_by_shape(items: list[Batch]) -> list[list[tuple[int, Batch]]]:
+    """Group compatibly shaped items, preserving first-seen and input order."""
+    groups: dict[BatchShapeSignature, list[tuple[int, Batch]]] = {}
+    for index, item in enumerate(items):
+        groups.setdefault(_batch_shape_signature(item), []).append((index, item))
+    return list(groups.values())
 
 
 @dataclass
@@ -622,7 +652,7 @@ def meta_dataset_collator(
         ``batch_size > 1`` stacks several datasets along the model's batch
         dimension (used by batched inference). Tensors are padded to a common
         shape, so callers that need exact, per-dataset-equivalent results must
-        pass same-shaped datasets (padded context/query rows are not masked).
+        prove the post-preprocessing shapes match before calling this collator.
         For ``RegressorBatch`` the bar distributions are taken from the first
         item only; batched regressor decoding applies each dataset's own bar
         distribution downstream, after the fused forward.
@@ -630,9 +660,8 @@ def meta_dataset_collator(
     # batch_size > 1 stacks multiple independent datasets along the model's batch
     # dimension, enabling a single fused forward over all of them (the transformer
     # batch dim is independent). Tensors are padded to a common shape; when the
-    # datasets share a shape (the common case) no padding occurs and results are
-    # exact. Ragged datasets are padded with ``padding_val`` (see pad_tensors);
-    # masking of padded context positions is left to the model/preprocessing.
+    # datasets share post-preprocessing shapes no padding occurs. Raw shapes alone
+    # are insufficient because fitted transforms can remove or add columns.
     first_item = batch[0]
     num_estimators = len(first_item.X_context)
 
@@ -665,6 +694,15 @@ def meta_dataset_collator(
         X_query_raw=_collate_tensor_field(batch, "X_query_raw", padding_val),
         y_query_raw=_collate_tensor_field(batch, "y_query_raw", padding_val),
     )
+
+
+def _collate_same_shape_for_batched_inference(items: list[Batch]) -> Batch:
+    """Collate inference items only when padding is a no-op."""
+    if not items:
+        raise RuntimeError("Internal error: cannot collate an empty inference group.")
+    if len({_batch_shape_signature(item) for item in items}) != 1:
+        raise RuntimeError("Internal error: inference group has heterogeneous shapes.")
+    return meta_dataset_collator(items)  # type: ignore[return-value]
 
 
 def shuffle_and_chunk_data(

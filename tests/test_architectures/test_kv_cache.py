@@ -13,13 +13,13 @@ import pytest
 import torch
 
 from tabpfn import TabPFNClassifier
+from tabpfn.architectures import tabpfn_v3, tabpfn_v3_5
 from tabpfn.architectures.kv_cache import (
     FP8_KV_DTYPE,
     KVCacheEntry,
     _dequantize_tensor,
     _quantize_tensor,
 )
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config, get_cache_size
 from tabpfn.inference import _resolve_kv_cache_precision
 
 
@@ -130,13 +130,25 @@ def test_resolve_rejects_fp8_on_mps() -> None:
         )
 
 
-def test_get_cache_size_accepts_fp8() -> None:
-    config = TabPFNV3Config()
+@pytest.mark.parametrize(
+    ("get_cache_size", "config", "extra_kwargs"),
+    [
+        (tabpfn_v3.get_cache_size, tabpfn_v3.TabPFNV3Config(), {}),
+        # v3.5 is multitask, so the cache contents depend on the task.
+        (
+            tabpfn_v3_5.get_cache_size,
+            tabpfn_v3_5.TabPFNV3p5Config(),
+            {"task_type": "multiclass"},
+        ),
+    ],
+)
+def test_get_cache_size_accepts_fp8(get_cache_size, config, extra_kwargs) -> None:
     kwargs = {
         "n_train": 1000,
         "n_features": 20,
         "model_config": config,
         "base_dtype": torch.float32,
+        **extra_kwargs,
     }
     # int8 and fp8 are both one byte per element plus scales.
     assert get_cache_size(kv_cache_precision="fp8", **kwargs) == get_cache_size(

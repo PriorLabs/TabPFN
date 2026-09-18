@@ -13,6 +13,7 @@ from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 import numpy as np
+import torch
 
 from tabpfn.constants import (
     AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES,
@@ -27,6 +28,7 @@ from tabpfn.preprocessing.configs import (
     EnsembleConfig,
     FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
+    SampleSubsamplingMethod,
 )
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
@@ -39,7 +41,6 @@ from tabpfn.preprocessing.transform import fit_preprocessing
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
-    import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
@@ -98,9 +99,10 @@ class TabPFNEnsemblePreprocessor:
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
         subsample_samples: int | float | list[np.ndarray] | None = None,
+        sample_subsampling_method: SampleSubsamplingMethod = SampleSubsamplingMethod.AUTO,  # noqa: E501
         importance_top_k_count: int | float | Literal["auto"] = "auto",
         X_train: np.ndarray | None = None,
-        y_train: np.ndarray | None = None,
+        y_train: np.ndarray | torch.Tensor | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
     ) -> None:
         """Init.
@@ -124,6 +126,12 @@ class TabPFNEnsemblePreprocessor:
                 subsample that many samples. If float, subsample that fraction of
                 samples. If a list of index arrays, use those indices directly. If
                 ``None``, no row subsampling is done.
+            sample_subsampling_method: How rows are drawn per estimator when
+                ``subsample_samples`` is an int or float. One of "auto", "balanced",
+                "stratified", or "majority_downsample". "auto" resolves to
+                "stratified" for classifiers and "balanced" for regressors. The
+                target-aware methods require ``y_train``; "stratified" additionally
+                requires a classifier task.
             importance_top_k_count: Number of top-important features always included
                 per estimator when feature_subsampling_method is an importance-based
                 method. If float in (0, 1], resolved as ceil(value * n_total_features).
@@ -131,12 +139,12 @@ class TabPFNEnsemblePreprocessor:
                 otherwise keeps all features (no importance filtering).
             X_train: Training features used to compute feature importance. Required
                 when feature_subsampling_method is "feature_importance".
-            y_train: Training targets used to compute feature importance or stratified
-                row subsampling. Required when feature_subsampling_method is
-                "feature_importance".
+            y_train: Training targets used to compute feature importance or
+                target-aware row subsampling. Required when feature_subsampling_method
+                is "feature_importance" or sample_subsampling_method is target-aware.
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
-                ExtraTreesClassifier or ExtraTreesRegressor is used.
-                Only used when feature_subsampling_method is "feature_importance".
+                ExtraTreesClassifier or ExtraTreesRegressor is used and resolves
+                task-dependent sample subsampling behavior.
         """
         super().__init__()
         self.configs = configs
@@ -178,7 +186,7 @@ class TabPFNEnsemblePreprocessor:
             c.preprocess_config.max_features_per_estimator for c in self.configs
         ]
 
-        importance_feature_orders: list[np.ndarray] | None = None
+        importance_feature_order: np.ndarray | None = None
         needs_subsampling = any(
             s < n_total_features for s in max_features_per_estimator
         )
@@ -207,11 +215,11 @@ class TabPFNEnsemblePreprocessor:
             cat_indices = (
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
-            importance_feature_orders = _compute_feature_importance_order(
+            y_for_importance = _targets_to_numpy(y_train)
+            importance_feature_order = _compute_feature_importance_order(
                 X=X_train,
-                y=y_train,
+                y=y_for_importance,
                 task_type=task_type,
-                n_estimators=len(self.configs),
                 categorical_feature_indices=cat_indices,
                 rng=rng_features,
             )
@@ -224,17 +232,68 @@ class TabPFNEnsemblePreprocessor:
             rng=rng_features,
             feature_subsampling_method=feature_subsampling_method,
             constant_feature_count=constant_feature_count,
-            importance_feature_orders=importance_feature_orders,
+            importance_feature_order=importance_feature_order,
             importance_top_k_count=resolved_top_k,
         )
 
+        resolved_sample_subsampling_method = SampleSubsamplingMethod(
+            sample_subsampling_method
+        )
+        if isinstance(subsample_samples, (int, float)):
+            resolved_sample_subsampling_method = _resolve_sample_subsampling_method(
+                resolved_sample_subsampling_method,
+                task_type=task_type,
+            )
+
+        self.sample_subsampling_method_ = resolved_sample_subsampling_method
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
             num_estimators=len(self.configs),
             n_samples=n_samples,
             rng=rng_rows,
-            y_for_stratification=y_train if task_type == "classifier" else None,
+            method=resolved_sample_subsampling_method,
+            y=y_train,
+            task_type=task_type,
         )
+
+        # Majority downsampling is a known target-dependent sampling design, so
+        # it can report the inclusion probability of every training row and of
+        # target values absent from training. The estimators use these to undo
+        # the prior shift the design introduces. Explicit index lists carry no
+        # such information.
+        self.row_sampling_distribution_: tuple[np.ndarray, float] | None = None
+        if (
+            isinstance(subsample_samples, (int, float))
+            and self.subsample_row_indices is not None
+            and resolved_sample_subsampling_method
+            == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+        ):
+            assert y_train is not None
+            _, inverse, counts = np.unique(
+                _targets_to_numpy(y_train), return_inverse=True, return_counts=True
+            )
+            if np.count_nonzero(counts == counts.max()) > 1:
+                # Match the fallback already taken by the row sampler.
+                self.sample_subsampling_method_ = _resolve_sample_subsampling_method(
+                    SampleSubsamplingMethod.AUTO, task_type=task_type
+                )
+            elif len(counts) > 1:
+                # Every estimator gets the same group counts, so the inclusion
+                # rates follow from the budget, not from realized draws.
+                target_counts = _compute_majority_downsample_group_counts(
+                    group_sizes=counts,
+                    subsample_size=len(self.subsample_row_indices[0]),
+                )
+                probabilities = (target_counts / counts)[inverse.reshape(-1)]
+                # Any unobserved target value is non-majority and would be kept.
+                self.row_sampling_distribution_ = (probabilities, 1.0)
+
+    @property
+    def downsample_shifted_prior(self) -> bool:
+        """True when majority downsampling changed the target prior of every
+        context and the estimators should correct for it.
+        """
+        return self.row_sampling_distribution_ is not None
 
     def any_estimator_uses_gpu_svd(self) -> bool:
         """True if any ensemble estimator will run SVD on the GPU.
@@ -474,12 +533,261 @@ def _subsample_rows_stratified(
     return result
 
 
+def _compute_majority_downsample_group_counts(
+    group_sizes: np.ndarray,
+    subsample_size: int,
+) -> np.ndarray:
+    """Keep every non-majority row and allocate the rest to the majority group.
+
+    The majority is the single group whose size is strictly larger than every
+    other group's size. All other groups are kept whole. The subsampling budget
+    must therefore be large enough to contain every non-majority row. Tied
+    largest groups are rejected because there is no unique majority group to
+    downsample.
+
+    Args:
+        group_sizes: 1-D integer array of per-group row counts.
+        subsample_size: Total number of rows to allocate across groups. Must be
+            ``<= group_sizes.sum()``.
+
+    Returns:
+        1-D integer array of length ``len(group_sizes)``. Every non-majority
+        count equals its group size, and the counts sum to ``subsample_size``.
+
+    Raises:
+        ValueError: If there is no unique majority group or the subsampling
+            budget cannot contain all non-majority rows plus one majority row.
+    """
+    assert 0 < subsample_size <= group_sizes.sum()
+
+    group_sizes = np.asarray(group_sizes, dtype=np.int64)
+    if subsample_size == group_sizes.sum():
+        return group_sizes.copy()
+
+    largest_size = int(group_sizes.max())
+    majority_groups = np.flatnonzero(group_sizes == largest_size)
+    if len(majority_groups) != 1:
+        raise ValueError(
+            "majority_downsample requires one unique majority target value, but "
+            f"{len(majority_groups)} target values are tied at {largest_size} rows."
+        )
+
+    majority_group = int(majority_groups[0])
+    non_majority_size = int(group_sizes.sum() - largest_size)
+    if subsample_size <= non_majority_size:
+        raise ValueError(
+            f"subsample_size ({subsample_size}) must be greater than the number "
+            f"of non-majority rows ({non_majority_size}) when using "
+            "majority_downsample. Increase SUBSAMPLE_SAMPLES so every "
+            "non-majority row and at least one majority row can be kept."
+        )
+
+    counts = group_sizes.copy()
+    counts[majority_group] = subsample_size - non_majority_size
+    return counts
+
+
+def _subsample_rows_majority_downsample(
+    subsample_size: int,
+    y: np.ndarray,
+    num_estimators: int,
+    rng: np.random.Generator,
+    *,
+    task_type: Literal["classifier", "regressor"],
+) -> list[np.ndarray] | None:
+    """Row subsampling that downsamples only the majority target value.
+
+    Rows are grouped by exact target value. Every estimator receives all rows
+    except those belonging to the single most frequent target value, then fills
+    the rest of its ``subsample_size`` budget from that majority group. A
+    balanced round-robin pool ensures every majority row appears approximately
+    the same number of times across estimators. Non-majority rows are identical
+    across estimators.
+
+    This mode is designed for datasets with one dominant target value. For
+    classification the groups are the classes. For regression this targets
+    zero-inflated or otherwise spiky targets: the repeated value is downsampled
+    while all other values are kept. When there is no unique majority value,
+    this warns and falls back to stratified sampling for classification or
+    balanced sampling for regression. Budgets too small to keep all
+    non-majority rows plus at least one majority row are rejected.
+
+    Args:
+        subsample_size: Number of rows to subsample for each estimator.
+        y: Target values.
+        num_estimators: Number of estimators to generate subsample indices for.
+        rng: Random number generator.
+        task_type: Determines the fallback method when there is no unique
+            majority target value.
+
+    Returns:
+        List of row-index arrays (one per estimator), or ``None`` when no
+        subsampling is needed.
+    """
+    n_rows = len(y)
+    if subsample_size >= n_rows:
+        return None
+
+    _, inverse = np.unique(y, return_inverse=True)
+    inverse = inverse.reshape(-1)
+    group_sizes = np.bincount(inverse)
+    largest_size = int(group_sizes.max())
+    majority_groups = np.flatnonzero(group_sizes == largest_size)
+    if len(majority_groups) != 1:
+        fallback_method = _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.AUTO,
+            task_type=task_type,
+        )
+        warnings.warn(
+            "majority_downsample requires one unique majority target value, but "
+            f"{len(majority_groups)} target values are tied at {largest_size} rows; "
+            f"falling back to {fallback_method.value!r} row subsampling.",
+            UserWarning,
+            stacklevel=2,
+        )
+        if fallback_method == SampleSubsamplingMethod.STRATIFIED:
+            return _subsample_rows_stratified(
+                subsample_size=subsample_size,
+                y=y,
+                num_estimators=num_estimators,
+                rng=rng,
+            )
+        return _subsample_rows_balanced(
+            subsample_size=subsample_size,
+            n_rows=n_rows,
+            num_estimators=num_estimators,
+            rng=rng,
+        )
+
+    target_counts = _compute_majority_downsample_group_counts(
+        group_sizes=group_sizes,
+        subsample_size=subsample_size,
+    )
+
+    # Non-majority groups are identical for every estimator; only the single
+    # majority group needs the round-robin pool.
+    whole_groups = np.flatnonzero(target_counts == group_sizes)
+    whole_indices = np.flatnonzero(np.isin(inverse, whole_groups))
+    downsampled_groups = np.flatnonzero(
+        (target_counts > 0) & (target_counts < group_sizes)
+    )
+    group_indices = {int(g): np.flatnonzero(inverse == g) for g in downsampled_groups}
+
+    pools: dict[int, list[int]] = {g: [] for g in group_indices}
+    result: list[np.ndarray] = []
+    for _ in range(num_estimators):
+        estimator_indices = [whole_indices]
+        for g, rows in group_indices.items():
+            slots, pools[g] = _draw_balanced_from_pool(
+                pools[g], int(target_counts[g]), len(rows), rng
+            )
+            estimator_indices.append(rows[np.array(slots)])
+        result.append(np.sort(np.concatenate(estimator_indices).astype(np.int64)))
+
+    return result
+
+
+def _resolve_sample_subsampling_method(
+    method: SampleSubsamplingMethod,
+    *,
+    task_type: Literal["classifier", "regressor"],
+) -> SampleSubsamplingMethod:
+    """Resolve ``"auto"`` to a concrete row subsampling method.
+
+    ``"auto"`` becomes ``"stratified"`` for classifiers and ``"balanced"`` for
+    regressors. ``"stratified"`` is rejected for regressors, whose continuous
+    target has no class proportions to preserve; ``"majority_downsample"`` works
+    for both task types since it only groups rows by exact target value.
+    """
+    method = SampleSubsamplingMethod(method)
+    if method == SampleSubsamplingMethod.AUTO:
+        return (
+            SampleSubsamplingMethod.STRATIFIED
+            if task_type == "classifier"
+            else SampleSubsamplingMethod.BALANCED
+        )
+    if task_type == "regressor" and method == SampleSubsamplingMethod.STRATIFIED:
+        raise ValueError(
+            "SAMPLE_SUBSAMPLING_METHOD='stratified' requires class labels and is "
+            "only supported for classification. Use 'balanced', "
+            "'majority_downsample', or 'auto' for regression."
+        )
+    return method
+
+
+def _targets_to_numpy(y: np.ndarray | torch.Tensor) -> np.ndarray:
+    """Return the targets as a numpy array for label-only bookkeeping.
+
+    Row indices and feature importance are non-differentiable metadata, so a
+    tensor is detached here; the original tensor and its autograd graph stay
+    intact for the preprocessing and inference paths. Reduced-precision floats
+    such as bfloat16 have no numpy counterpart and are widened to float32 first.
+    """
+    if isinstance(y, np.ndarray):
+        return y
+    y = y.detach().cpu()
+    if y.is_floating_point() and y.dtype not in (
+        torch.float16,
+        torch.float32,
+        torch.float64,
+    ):
+        y = y.float()
+    return y.numpy()
+
+
+def _subsample_rows_by_method(
+    *,
+    method: SampleSubsamplingMethod,
+    subsample_size: int,
+    n_rows: int,
+    num_estimators: int,
+    rng: np.random.Generator,
+    y: np.ndarray | torch.Tensor | None,
+    task_type: Literal["classifier", "regressor"],
+) -> list[np.ndarray] | None:
+    """Dispatch to the row sampler for a concrete ``SampleSubsamplingMethod``."""
+    method = SampleSubsamplingMethod(method)
+    if method == SampleSubsamplingMethod.AUTO:
+        raise ValueError(
+            "SampleSubsamplingMethod.AUTO must be resolved via "
+            "_resolve_sample_subsampling_method before drawing row indices."
+        )
+    if method == SampleSubsamplingMethod.BALANCED:
+        return _subsample_rows_balanced(
+            subsample_size=subsample_size,
+            n_rows=n_rows,
+            num_estimators=num_estimators,
+            rng=rng,
+        )
+    if y is None:
+        raise ValueError(
+            f"Row subsampling method {method.value!r} requires the targets (y)."
+        )
+    y = _targets_to_numpy(y)
+    if method == SampleSubsamplingMethod.STRATIFIED:
+        return _subsample_rows_stratified(
+            subsample_size=subsample_size,
+            y=y,
+            num_estimators=num_estimators,
+            rng=rng,
+        )
+    return _subsample_rows_majority_downsample(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+        task_type=task_type,
+    )
+
+
 def _get_subsample_indices_for_estimators(  # noqa: C901
     subsample_samples: int | float | list[np.ndarray] | None,
     num_estimators: int,
     n_samples: int,
     rng: np.random.Generator,
-    y_for_stratification: np.ndarray | None = None,
+    method: SampleSubsamplingMethod = SampleSubsamplingMethod.BALANCED,
+    y: np.ndarray | torch.Tensor | None = None,
+    task_type: Literal["classifier", "regressor"] = "classifier",
 ) -> list[np.ndarray] | None:
     """Get the indices of the rows to subsample for each estimator.
 
@@ -491,9 +799,14 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         num_estimators: Number of estimators to generate subsample indices for.
         n_samples: Total number of rows. Only used if subsample_samples is int/float.
         rng: Random number generator.
-        y_for_stratification: Class labels. When provided, stratified subsampling is
-            used to preserve class proportions. Only applies when subsample_samples is
-            int or float.
+        method: Concrete row subsampling method ("balanced", "stratified", or
+            "majority_downsample"). ``"auto"`` must be resolved by the caller via
+            ``_resolve_sample_subsampling_method``. Only applies when
+            subsample_samples is int or float.
+        y: Targets. Required for the target-aware methods "stratified" and
+            "majority_downsample"; ignored by "balanced".
+        task_type: Determines the task-specific fallback used by
+            "majority_downsample" when no unique majority target value exists.
 
     Returns:
         List of row-index arrays (one per estimator), or ``None`` entries when no
@@ -508,18 +821,14 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
             if not (0 < subsample_samples < 1):
                 raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
             size = int(subsample_samples * n_samples) + 1
-        if y_for_stratification is not None:
-            return _subsample_rows_stratified(
-                subsample_size=size,
-                y=y_for_stratification,
-                num_estimators=num_estimators,
-                rng=rng,
-            )
-        return _subsample_rows_balanced(
+        return _subsample_rows_by_method(
+            method=method,
             subsample_size=size,
             n_rows=n_samples,
             num_estimators=num_estimators,
             rng=rng,
+            y=y,
+            task_type=task_type,
         )
 
     if isinstance(subsample_samples, list):
@@ -642,7 +951,7 @@ def _get_subsample_feature_indices(
     rng: np.random.Generator,
     feature_subsampling_method: FeatureSubsamplingMethod,
     constant_feature_count: int = 50,
-    importance_feature_orders: list[np.ndarray] | None = None,
+    importance_feature_order: np.ndarray | None = None,
     importance_top_k_count: int = 150,
 ) -> list[np.ndarray | None]:
     """Get the indices of the features to subsample for each estimator.
@@ -658,8 +967,9 @@ def _get_subsample_feature_indices(
             "balanced", "random", or "constant_and_balanced".
         constant_feature_count: Number of leading features to always include
             when using the "constant_and_balanced" method.
-        importance_feature_orders: Per-estimator feature indices sorted most->least
-            important. Produced by ``_compute_feature_importance_order``.
+        importance_feature_order: Feature indices sorted most->least important,
+            shared by every estimator. Produced by
+            ``_compute_feature_importance_order``.
         importance_top_k_count: Number of top features always included per estimator.
             Only used when feature_subsampling_method is "feature_importance".
     """
@@ -713,14 +1023,14 @@ def _get_subsample_feature_indices(
             subsample_sizes, n_total_features, rng, constant_feature_count
         )
     if feature_subsampling_method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE:
-        if importance_feature_orders is None:
+        if importance_feature_order is None:
             # top_k covers all features — importance ordering is irrelevant, fall back
             # to balanced subsampling for variety across estimators.
             return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
         return _subsample_features_importance_based(
             subsample_sizes,
             n_total_features,
-            importance_feature_orders,
+            importance_feature_order,
             importance_top_k_count,
             rng,
         )
@@ -866,36 +1176,30 @@ def _subsample_features_constant_and_balanced(
 def _subsample_features_importance_based(
     subsample_sizes: list[int],
     n_total_features: int,
-    importance_feature_orders: list[np.ndarray],
+    importance_feature_order: np.ndarray,
     top_k_count: int,
     rng: np.random.Generator,
 ) -> list[np.ndarray | None]:
-    """Always include top-K important features; randomly sample the rest.
+    """Always include top-K important features; fill the rest from a balanced pool.
 
-    Each estimator uses its own importance ordering from ``importance_feature_orders``,
-    cycling through the list when there are more estimators than orderings.
+    All estimators share one ordering, so the non-top features are dealt from a
+    single pool: each is drawn once before any is drawn twice.
 
     Args:
         subsample_sizes: Number of input features to select per estimator.
         n_total_features: Total number of features in the dataset.
-        importance_feature_orders: Per-estimator feature indices sorted most->least
-            important. Produced by ``_compute_feature_importance_order``.
+        importance_feature_order: Feature indices sorted most->least important.
+            Produced by ``_compute_feature_importance_order``.
         top_k_count: Number of top features always included per estimator.
         rng: Random number generator.
     """
     n_top = min(top_k_count, n_total_features)
-
-    n_orderings = len(importance_feature_orders)
-    # One balanced pool per unique ordering so estimators sharing the same ordering
-    # cover its remaining features evenly across the ensemble.
-    pools: dict[int, list[int]] = {i: [] for i in range(n_orderings)}
+    top_features = importance_feature_order[:n_top]
+    remaining_features = importance_feature_order[n_top:]
+    pool: list[int] = []
 
     result: list[np.ndarray | None] = []
-    for i, size in enumerate(subsample_sizes):
-        ordering_idx = i % n_orderings
-        importance_feature_order = importance_feature_orders[ordering_idx]
-        top_features = importance_feature_order[:n_top]
-        remaining_features = importance_feature_order[n_top:]
+    for size in subsample_sizes:
         if size >= n_total_features:
             result.append(None)
             continue
@@ -904,9 +1208,8 @@ def _subsample_features_importance_based(
             result.append(np.sort(top_features[:size]))
             continue
         # Always include all top features, fill remaining budget via balanced pool.
-        remaining_budget = size - n_top
-        slots, pools[ordering_idx] = _draw_balanced_from_pool(
-            pools[ordering_idx], remaining_budget, len(remaining_features), rng
+        slots, pool = _draw_balanced_from_pool(
+            pool, size - n_top, len(remaining_features), rng
         )
         sampled = remaining_features[np.array(slots)]
         result.append(np.sort(np.concatenate([top_features, sampled])))
@@ -925,42 +1228,34 @@ def _get_lightgbm_model_cls(task_type: Literal["classifier", "regressor"]) -> ty
     )
 
 
-def _collect_importance_orderings(
+def _fit_importance_ordering(
     X: np.ndarray,
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
-    n_estimators: int,
     max_samples: int,
     fit_ordering_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Run ``fit_ordering_fn`` and return one ordering per estimator.
+) -> np.ndarray:
+    """Fit one feature-importance ordering, on at most ``max_samples`` rows.
 
-    For datasets that fit within ``max_samples`` a single call is made and its
-    result is repeated.  For larger datasets ``n_subsamples`` independent
-    subsamples of size ``max_samples`` are drawn and cycled to fill
-    ``n_estimators``.
+    The subsample is stratified for classification.
     """
     n_samples = len(X)
 
-    if n_samples <= max_samples:
-        ordering = fit_ordering_fn(X, y)
-        return [ordering] * n_estimators
+    if n_samples > max_samples:
+        from sklearn.model_selection import train_test_split  # noqa: PLC0415
 
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
-    stratify = y if task_type == "classifier" else None
-    orderings = []
-    for _ in range(n_subsamples):
         idx, _ = train_test_split(
             np.arange(n_samples),
             train_size=max_samples,
-            stratify=stratify,
+            stratify=y if task_type == "classifier" else None,
             random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
         )
-        orderings.append(fit_ordering_fn(X[idx], y[idx]))
-    return [orderings[i % n_subsamples] for i in range(n_estimators)]
+        X, y = X[idx], y[idx]
+
+    # The importance model bins each feature from the values it is handed,
+    # but `clean_data` no longer casts: not a no-op
+    return fit_ordering_fn(np.asarray(X, dtype=np.float64), y)
 
 
 def _compute_feature_importance_order(
@@ -968,33 +1263,26 @@ def _compute_feature_importance_order(
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
     *,
-    n_estimators: int,
     max_samples: int = FEATURE_IMPORTANCE_MAX_SAMPLES,
     n_tree_estimators: int = 50,
     categorical_feature_indices: list[int] | None = None,
     rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Rank features by LightGBM gain importance, returning one ordering per estimator.
-
-    The returned list always has length ``n_estimators``.  When fewer distinct
-    orderings are computed than there are estimators the list is filled by
-    cycling through the available orderings.
+) -> np.ndarray:
+    """Rank features by LightGBM gain importance.
 
     Args:
         X: Training features, shape (n_samples, n_features).
         y: Training targets, shape (n_samples,).
         task_type: ``"classifier"`` or ``"regressor"`` (matches TabPFN estimator_type).
-        n_estimators: Number of TabPFN ensemble estimators.  The returned list
-            has exactly this length.
-        max_samples: Row budget per importance model fit.
+        max_samples: Row budget for the importance model fit.
         n_tree_estimators: Number of trees in LightGBM models.
         categorical_feature_indices: Column indices of categorical features
             passed natively to LightGBM.
         rng: Random number generator.
 
     Returns:
-        List of length ``n_estimators``, each element an array of feature indices
-        sorted from most to least important.
+        Array of feature indices sorted from most to least important, shared by
+        every estimator.
     """
     model_cls = _get_lightgbm_model_cls(task_type)
     cat_feature: list[int] | str = categorical_feature_indices or "auto"
@@ -1011,9 +1299,7 @@ def _compute_feature_importance_order(
         model.fit(X_fit, y_fit, categorical_feature=cat_feature)
         return np.argsort(model.feature_importances_)[::-1].copy()
 
-    return _collect_importance_orderings(
-        X, y, task_type, n_estimators, max_samples, _fit_ordering, rng
-    )
+    return _fit_importance_ordering(X, y, task_type, max_samples, _fit_ordering, rng)
 
 
 def generate_classification_ensemble_configs(  # noqa: PLR0913
@@ -1218,9 +1504,11 @@ features may never be sampled unless the user raises n_estimators explicitly.
 
 
 DEFAULT_N_ESTIMATORS = 8
-"""The n_estimators value used when the user leaves ``n_estimators="auto"``.
+"""The n_estimators value ``"auto"`` resolves to.
 
-This is the base value that feature-coverage scaling may then raise.
+``"auto"`` can come from the user or from ``InferenceConfig.N_ESTIMATORS``, whose
+default it is. This is the base value that feature-coverage scaling may then raise;
+an explicit count from either source is used as given.
 """
 
 
@@ -1249,16 +1537,16 @@ def scale_n_estimators_for_feature_coverage(
 
     ``auto_scale_n_estimators`` (the deprecated constructor argument of the same
     name) is redundant now that scaling is opt-out by passing an explicit
-    ``n_estimators``: ``False`` merely resolves ``"auto"`` to
-    ``DEFAULT_N_ESTIMATORS``, exactly what passing that integer does. Passing
-    ``False`` emits a ``FutureWarning``; the argument is removed in v9.
+    ``n_estimators``: it only affects ``"auto"``, which ``False`` resolves to
+    ``DEFAULT_N_ESTIMATORS`` without scaling, exactly what passing that integer
+    does. Passing ``False`` emits a ``FutureWarning``; the argument is removed in
+    v9.
     """
     if not auto_scale_n_estimators:
         warnings.warn(
-            "auto_scale_n_estimators is deprecated and will be removed in v9. "
-            f"auto_scale_n_estimators=False is equivalent to passing "
-            f"n_estimators={DEFAULT_N_ESTIMATORS}, which also disables "
-            f"feature-coverage scaling; pass that instead.",
+            "auto_scale_n_estimators is deprecated and will be removed in v9. It "
+            'only affects n_estimators="auto", where False skips feature-coverage '
+            "scaling; pass an explicit n_estimators instead, which also skips it.",
             FutureWarning,
             stacklevel=2,
         )
@@ -1268,16 +1556,19 @@ def scale_n_estimators_for_feature_coverage(
         else 0
     )
     if n_estimators != "auto":
-        # A value the user chose explicitly is never overridden, only warned about.
+        # A count that was named explicitly -- by the user, or by the checkpoint it
+        # was resolved from -- is never overridden, only warned about. The warning
+        # names no source, since it cannot tell them apart and the remedy is the
+        # same either way: an explicit `n_estimators` wins over a checkpoint's.
         n_covered = n_estimators * min_max_features
         if 0 < n_covered < n_total_features:
             warnings.warn(
-                f"n_estimators={n_estimators} covers at most {n_covered} of "
+                f"Running {n_estimators} estimators covers at most {n_covered} of "
                 f"{n_total_features} features (max_features_per_estimator="
                 f"{min_max_features}); the remaining features are never sampled by "
                 f"any ensemble member. Pass n_estimators >= "
-                f"{math.ceil(n_total_features / min_max_features)}, or "
-                f'n_estimators="auto" to let TabPFN pick a covering value.',
+                f"{math.ceil(n_total_features / min_max_features)} to cover all "
+                f"features.",
                 UserWarning,
                 stacklevel=2,
             )

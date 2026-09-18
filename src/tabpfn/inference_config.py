@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Literal
 
@@ -18,6 +20,21 @@ from tabpfn.preprocessing import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
+
+DEFAULT_SOFTMAX_TEMPERATURE = 0.9
+"""The softmax temperature of every checkpoint released before the temperature became
+part of the inference config. Also the value used when the temperature cannot be
+resolved from a checkpoint at all. Do not change this, see
+`InferenceConfig.SOFTMAX_TEMPERATURE`."""
+
+OVERRIDABLE_FIELDS: dict[str, tuple[str, str]] = {
+    # field -> (how to name several of them, the estimator argument that sets one)
+    "SOFTMAX_TEMPERATURE": ("softmax temperatures", "softmax_temperature"),
+    "N_ESTIMATORS": ("numbers of estimators", "n_estimators"),
+}
+"""Fields a user can set from the estimator interface, and which the checkpoints of
+one ensemble may therefore disagree on -- the user can break the tie. Every other
+field has to match across an ensemble."""
 
 
 # By default Pydantic dataclasses will ignore unrecognised config items, extra="forbid"
@@ -70,16 +87,82 @@ class InferenceConfig:
 
     MIN_CARDINALITY_FOR_TEXT: int = 30
     """Number of distinct values above which a string column is read as text
-    rather than as a category. A separate decision from
+    rather than as a category. Only an undeclared column is subject to it: one
+    listed in `categorical_features_indices`, or holding pandas' `category`
+    dtype, is a category at any cardinality. A separate decision from
     `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
     that one describes when a *number* is few enough to be a category, this one
     describes when a *string* is varied enough to be text rather than a category,
     and there is no reason the two should move together.
 
-    Set equal to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` for now, so decoupling the
-    two into a separate field does not itself change any default behavior. A
-    follow-up that adds an actual text-encoding capability is expected to raise
-    this default independently."""
+    Text is expanded into numeric features with `TRANSFORM_TEXT`; off, it is
+    ordinal-encoded as a high-cardinality category and `fit` warns about it."""
+
+    SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
+    """The temperature applied to the model's logits at predict time. Lower values
+    make the predictions more confident, `1.0` is a no-op.
+
+    The default is the value that shipped as the `softmax_temperature` argument of
+    `TabPFNClassifier`/`TabPFNRegressor` before this became a config field, so
+    checkpoints that predate the field (which is all of them up to and including the
+    ones released with v8.5.0) keep their original behavior. Newer checkpoints are
+    expected to store their own value and must do so explicitly.
+
+    Setting this here overrides the checkpoint for every model in the ensemble, as
+    does `TabPFNClassifier(softmax_temperature=...)`; naming a temperature both ways
+    at once is rejected. With neither, the value comes from the checkpoint, and an
+    ensemble whose checkpoints declare different temperatures is rejected too."""
+
+    N_ESTIMATORS: int | Literal["auto"] = "auto"
+    """How many estimators to run when the user leaves `n_estimators="auto"`.
+
+    An estimator is one forward pass over a differently preprocessed view of the
+    data; more of them costs proportionally more compute.
+
+    This means exactly what the `n_estimators` argument of the estimators means, and
+    is used in its place when the user names no count:
+        - If an int, that many estimators run, and feature-coverage scaling never
+          raises it -- a checkpoint that asks for a count gets that count, the same
+          guarantee a user passing one gets.
+        - If `"auto"` (the default), `DEFAULT_N_ESTIMATORS` estimators run, raised
+          on wide tables so every feature is seen by some estimator (see
+          `scale_n_estimators_for_feature_coverage`).
+
+    The default leaves the decision where it was before this field existed, so
+    checkpoints that predate it keep their original behavior. Newer checkpoints are
+    expected to store a count of their own.
+
+    Setting this here overrides the checkpoint, as does
+    `TabPFNClassifier(n_estimators=...)`; naming a count both ways at once is
+    rejected. With neither, the value comes from the checkpoint, and an ensemble
+    whose checkpoints declare different counts is rejected too."""
+
+    TRANSFORM_DATES: bool = False
+    """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
+    or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`.
+    Off, such a column is refused with an error naming it: cast or expand it
+    yourself first. Only a real datetime dtype counts: a string column that merely
+    looks like a date (e.g. "2020-01-01") is read as a plain category or text
+    either way.
+
+    On, the same columns have to hold datetimes at predict, in a DataFrame, and
+    none of them may be listed in `categorical_features_indices`; each of these is
+    refused with an error saying so rather than guessed at. The fine-tuning
+    estimators do not run this conversion, whatever `inference_config` they are
+    handed, so a datetime column has to be converted before fine-tuning."""
+
+    TRANSFORM_TEXT: bool = False
+    """Whether a text column, a pandas `string` or pyarrow string column with more
+    than `MIN_CARDINALITY_FOR_TEXT` distinct values, is expanded into
+    `TEXT_N_COMPONENTS` numeric features via `skrub.StringEncoder` (tf-idf over
+    character n-grams, truncated SVD). Off, such a column is ordinal-encoded as a
+    high-cardinality category and `fit` warns about it. An `object` column is
+    never expanded. Not run by the fine-tuning estimators."""
+
+    TEXT_N_COMPONENTS: int = 30
+    """Features a text column is expanded into with `TRANSFORM_TEXT`: the leading
+    components of a truncated SVD over its tf-idf matrix. Fewer when the column
+    has fewer character n-grams than that."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
@@ -137,6 +220,45 @@ class InferenceConfig:
         - If a list arrays of indices, the indices to subsample for each estimator.
             If the length of the outer list is less than the number of estimators, the
             indices are repeated for the remaining estimators.
+    """
+
+    SAMPLE_SUBSAMPLING_METHOD: Literal[
+        "auto",
+        "balanced",
+        "stratified",
+        "majority_downsample",
+    ] = "auto"
+    """How rows are drawn for each estimator when SUBSAMPLE_SAMPLES is an int or
+    float. Ignored when SUBSAMPLE_SAMPLES is None or a list of explicit indices.
+        - "balanced": Round-robin sampling from a shared shuffled pool of all rows so
+          each row appears approximately equally often across estimators. Ignores the
+          class labels.
+        - "stratified": Preserves the class proportions of the training data in every
+          subsample while guaranteeing at least one row per class. Classification only.
+        - "majority_downsample": Groups rows by exact target value, keeps every row
+          outside the single most frequent group, and fills the remaining budget from
+          that majority group. This mode is designed for datasets with one dominant
+          target value. For binary classification this keeps the whole minority class
+          and fills up with majority rows. For regression it targets
+          zero-inflated or spiky targets: the repeated value is downsampled while all
+          other values are kept. SUBSAMPLE_SAMPLES must exceed the number of
+          non-majority rows so at least one majority row remains. If there is no unique
+          most frequent target value, a warning is emitted and the method falls back
+          to "stratified" for classification or "balanced" for regression.
+          Downsampling the majority shifts the target prior that the model sees,
+          so the estimators correct for it automatically: predicted class
+          probabilities are multiplied by the training-to-context class ratio and
+          renormalized, and the regression bar distribution is reweighted by the
+          same ratio per bar, both derived from the sampler's known inclusion
+          probabilities. For binary classification the correction is monotone
+          and preserves the ranking of the positive class; for multiclass it can
+          change the predicted class. It assumes the model adopts the context
+          prior fully, which holds only approximately for regression: on the
+          zero-inflated targets we tested, the corrected level was still off by up
+          to a factor of two, though much closer than without the correction.
+          Batched prediction is not supported with this method because the
+          correction is fitted per dataset.
+        - "auto": "stratified" for classification and "balanced" for regression.
     """
 
     ENABLE_GPU_PREPROCESSING: bool = False
@@ -257,18 +379,42 @@ class InferenceConfig:
                 If a dictionary, then the keys must match attributes of
                     `InferenceConfig` and will be used to override these attributes.
                 If an `InferenceConfig` object, then the whole config is overridden with
-                    the values from the user config.
+                    the values from the user config. Deprecated.
                 If None, then a copy of this config is returned with no fields changed.
         """
         if user_config is None:
             return deepcopy(self)
         if isinstance(user_config, InferenceConfig):
+            warnings.warn(
+                "Passing an `InferenceConfig` object as `inference_config` is "
+                "deprecated and will be removed in a future version. It replaces "
+                "the checkpoint's config as a whole, so any field not set on it "
+                "takes a class default rather than the value the checkpoint "
+                "declares, which can silently degrade predictions. Pass a dict "
+                "naming only the settings to change instead, e.g. "
+                '`inference_config={"POLYNOMIAL_FEATURES": "all"}`, which leaves '
+                "every other field at the checkpoint's value. To keep replacing the "
+                "whole config, pass `dataclasses.asdict(config)`.",
+                FutureWarning,
+                stacklevel=2,
+            )
             return deepcopy(user_config)
         if isinstance(user_config, dict):
             return dataclasses.replace(self, **user_config)
         raise ValueError(
             f"{user_config=}\nUnknown user config provided, see config above."
         )
+
+    def equals_ignoring_overridable_fields(self, other: InferenceConfig) -> bool:
+        """Whether this config and `other` agree on every non-overridable field.
+
+        A mismatch in one of `OVERRIDABLE_FIELDS` between the checkpoints of one
+        ensemble gets its own error (see
+        `raise_if_checkpoints_disagree_on_overridable_fields`), since the user can
+        resolve it by naming a value; any other mismatch is unfixable.
+        """
+        mine = {field: getattr(self, field) for field in OVERRIDABLE_FIELDS}
+        return dataclasses.replace(other, **mine) == self
 
     def get_resolved_outlier_removal_std(
         self,
@@ -313,12 +459,51 @@ class InferenceConfig:
         )
 
 
+def raise_if_checkpoints_disagree_on_overridable_fields(
+    inference_configs: Sequence[InferenceConfig],
+    *,
+    overrides: Mapping[str, float | int | None],
+) -> None:
+    """Reject an ensemble whose checkpoints disagree on an overridable field.
+
+    One value of each is applied to the whole ensemble, so there is nothing sensible
+    to do with two of them. The user can say which one to use, and then the
+    checkpoints no longer have to agree.
+
+    Args:
+        inference_configs: The config of each model in the ensemble.
+        overrides: What the user asked for, keyed by field name, applied to every
+            model. A field is checked only where the user asked for nothing.
+    """
+    # A field left at "auto" by every checkpoint is not a disagreement, and neither
+    # is one they all declare the same way.
+    for field, (plural, argument) in OVERRIDABLE_FIELDS.items():
+        if overrides.get(field) is not None:
+            continue
+
+        # `key=str` because a field can mix ints with the string "auto".
+        values = sorted(
+            {getattr(config, field) for config in inference_configs}, key=str
+        )
+        if len(values) > 1:
+            raise ValueError(
+                f"The given model checkpoints declare different {plural} "
+                f"({values}), and one value is applied to the whole ensemble. Pick "
+                f"the one to use for all of them and pass it explicitly, e.g. "
+                f"`TabPFNClassifier({argument}={values[0]}, ...)`."
+            )
+
+
 def cpu_sample_limit(model_version: ModelVersion) -> int:
     """Max sample count allowed for CPU inference by default, per model version."""
-    return 5000 if model_version == ModelVersion.V3 else 1000
+    pre_v3 = (ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6)
+    return 1000 if model_version in pre_v3 else 5000
 
 
 def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    # SOFTMAX_TEMPERATURE is deliberately not listed here: these models predate the
+    # field, so they take the class default, which is the temperature they have
+    # always been run with.
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
@@ -344,6 +529,7 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
 
 
 def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    # See the note in `_get_v2_config` about SOFTMAX_TEMPERATURE.
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,

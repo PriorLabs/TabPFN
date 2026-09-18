@@ -57,6 +57,8 @@ model_sources = [
     ModelSource.get_regressor_v2(),
     ModelSource.get_regressor_v2_5(),
     ModelSource.get_regressor_v3(),
+    ModelSource.get_v3_5(),
+    ModelSource.get_v3_5_fast(),
 ]
 fit_modes = ["low_memory", "fit_preprocessors"]
 
@@ -298,7 +300,14 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     "model_version",
-    [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6, ModelVersion.V3],
+    [
+        ModelVersion.V2,
+        ModelVersion.V2_5,
+        ModelVersion.V2_6,
+        ModelVersion.V3,
+        ModelVersion.V3_5,
+        ModelVersion.V3_5_FAST,
+    ],
 )
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
@@ -333,12 +342,15 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=2)
 
 
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V3, ModelVersion.V3_5, ModelVersion.V3_5_FAST]
+)
 @pytest.mark.parametrize("device", get_pytest_devices())
-def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
-    X_y: tuple[np.ndarray, np.ndarray], device: str
+def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3_family(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
     kwargs = {
-        "version": ModelVersion.V3,
+        "version": model_version,
         "n_estimators": 2,
         "inference_precision": torch.float32,
         "random_state": 0,
@@ -980,7 +992,7 @@ def test__create_default_for_version__v2__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v2-" in estimator.model_path
@@ -991,7 +1003,7 @@ def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v2.5-" in estimator.model_path
@@ -1002,7 +1014,7 @@ def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v2.6-" in estimator.model_path
@@ -1013,10 +1025,38 @@ def test__create_default_for_version__v3__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v3-" in estimator.model_path
+
+
+def test__create_default_for_version__v3_5__uses_correct_defaults() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5)
+
+    assert isinstance(estimator, TabPFNRegressor)
+    assert estimator.n_estimators == "auto"
+    assert estimator.softmax_temperature == "auto"
+    assert isinstance(estimator.model_path, str)
+    # One multitask checkpoint backs both estimators, so the estimator type is not
+    # part of the file name.
+    assert "-v3.5-" in estimator.model_path
+    assert "fast" not in estimator.model_path
+
+
+def test__create_default_for_version__v3_5_fast__uses_correct_defaults() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V3_5_FAST)
+
+    assert isinstance(estimator, TabPFNRegressor)
+    assert estimator.n_estimators == "auto"
+    assert estimator.softmax_temperature == "auto"
+    assert isinstance(estimator.model_path, str)
+    assert "-v3.5-fast-" in estimator.model_path
+
+
+def test__create_default_for_version__unknown_version__raises() -> None:
+    with pytest.raises(ValueError, match="Unknown version"):
+        TabPFNRegressor.create_default_for_version("v99")  # type: ignore[arg-type]
 
 
 def test__create_default_for_version__passes_through_overrides() -> None:
@@ -1025,7 +1065,7 @@ def test__create_default_for_version__passes_through_overrides() -> None:
     )
 
     assert estimator.n_estimators == 16
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -1614,12 +1654,16 @@ def test__predict_batched__folds_estimators_one_at_a_time(
     Collecting the fused outputs first would keep every estimator's
     (n_test, n_datasets, n_buckets) tensor alive at once.
     """
-    data = [_mk_reg_dataset(s) for s in range(3)]
-    X_list = [d[0] for d in data]
-    y_list = [d[1] for d in data]
-    X_tests = [d[0][:5] for d in data]
+    rng = np.random.default_rng(0)
+    constant = rng.normal(size=(60, 12)).astype(np.float32)
+    constant[:, :5] = 0
+    dense = rng.normal(size=(60, 12)).astype(np.float32)
+    X_list = [constant, dense, constant.copy()]
+    y_list = [X[:, 5] - X[:, 6] for X in X_list]
+    X_tests = [X[:5] for X in X_list]
 
     n_folded = 0
+    group_sizes: list[int] = []
     translate = TabPFNRegressor._translate_batched_logits
 
     def counting_translate(self: TabPFNRegressor, **kwargs: typing.Any) -> torch.Tensor:
@@ -1634,8 +1678,11 @@ def test__predict_batched__folds_estimators_one_at_a_time(
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> typing.Iterator[typing.Any]:
+        folded_before_group = n_folded
+        group_size = self.X_trains[0].shape[0]
+        group_sizes.append(group_size)
         for estimator, item in enumerate(iter_outputs(self, *args, **kwargs)):
-            assert n_folded == estimator * len(X_list), (
+            assert n_folded == folded_before_group + estimator * group_size, (
                 "outputs are being materialized instead of folded in as they arrive"
             )
             yield item
@@ -1651,6 +1698,7 @@ def test__predict_batched__folds_estimators_one_at_a_time(
         n_estimators=3, device="cpu", random_state=42, inference_precision=torch.float32
     )
     reg.predict_batched(X_list, y_list, X_tests)
+    assert group_sizes == [2, 1]
     assert n_folded == 3 * len(X_list)
 
 
@@ -1721,13 +1769,17 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
         device="cpu",
         model_path=_create_dummy_regressor_model_specs(),
     )
+    # The tuning regressors take their categorical indices from this attribute,
+    # which `fit` sets before it reaches this method.
+    regressor.categorical_features_indices_ = None
 
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2
     )
 
     assert len(folds) == 2
-    for logits, raw_space_bardist, y_holdout in folds:
+    for logits, raw_space_bardist, y_holdout, log_weights in folds:
+        assert log_weights is None
         n_holdout = len(X) // 2
         assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
         assert y_holdout.shape == (n_holdout,)
@@ -1762,6 +1814,9 @@ def test__compute_holdout_validation_data__skips_constant_training_targets() -> 
         device="cpu",
         model_path=_create_dummy_regressor_model_specs(),
     )
+    # The tuning regressors take their categorical indices from this attribute,
+    # which `fit` sets before it reaches this method.
+    regressor.categorical_features_indices_ = None
 
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2

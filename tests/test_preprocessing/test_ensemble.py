@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import sys
+import time
 import warnings
+from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import torch
 from sklearn.preprocessing import PowerTransformer
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -18,18 +21,23 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.configs import (
     FeatureSubsamplingMethod,
     PreprocessorConfig,
+    SampleSubsamplingMethod,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     DEFAULT_N_ESTIMATORS,
     TabPFNEnsemblePreprocessor,
     _compute_feature_importance_order,
+    _compute_majority_downsample_group_counts,
     _draw_balanced_from_pool,
+    _fit_importance_ordering,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
     _resolve_feature_subsampling_method,
     _resolve_importance_top_k,
+    _resolve_sample_subsampling_method,
     _subsample_features_importance_based,
+    _subsample_rows_majority_downsample,
     _subsample_rows_stratified,
     scale_n_estimators_for_feature_coverage,
 )
@@ -675,7 +683,8 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         num_estimators=num_estimators,
         n_samples=n_samples,
         rng=rng,
-        y_for_stratification=y,
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
     )
 
     assert result is not None
@@ -693,7 +702,8 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         num_estimators=num_estimators,
         n_samples=n_samples,
         rng=np.random.default_rng(4),
-        y_for_stratification=y,
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
     )
     assert result_float is not None
     expected_size = int(0.4 * n_samples) + 1  # 41
@@ -707,6 +717,496 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
 # --- Feature importance subsampling tests ---
 
 
+def test__compute_majority_downsample_group_counts__binary_keeps_minority_whole():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([900, 100]), subsample_size=300
+    )
+    np.testing.assert_array_equal(counts, [200, 100])
+    assert counts.sum() == 300
+
+
+def test__compute_majority_downsample_group_counts__keeps_all_non_majority_groups():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([500, 10, 300, 40]), subsample_size=400
+    )
+    np.testing.assert_array_equal(counts, [50, 10, 300, 40])
+    assert counts.sum() == 400
+
+
+def test__compute_majority_downsample_group_counts__minority_exceeds_budget():
+    with pytest.raises(ValueError, match="greater than the number of non-majority"):
+        _compute_majority_downsample_group_counts(
+            group_sizes=np.array([600, 400]), subsample_size=100
+        )
+
+
+def test__compute_majority_downsample_group_counts__minority_nearly_fills_budget():
+    """The minority is kept whole as long as one row is left for the majority."""
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([900, 99]), subsample_size=100
+    )
+    np.testing.assert_array_equal(counts, [1, 99])
+
+
+@pytest.mark.parametrize(
+    "group_sizes",
+    [
+        np.array([10, 10]),
+        np.array([10, 2, 10]),
+        np.ones(1000, dtype=int),
+    ],
+)
+def test__compute_majority_downsample_group_counts__rejects_tied_majority(
+    group_sizes: np.ndarray,
+):
+    with pytest.raises(ValueError, match="one unique majority target value"):
+        _compute_majority_downsample_group_counts(
+            group_sizes=group_sizes,
+            subsample_size=min(10, int(group_sizes.sum()) - 1),
+        )
+
+
+def test__compute_majority_downsample_group_counts__single_group():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([100]), subsample_size=30
+    )
+    np.testing.assert_array_equal(counts, [30])
+
+
+def test__compute_majority_downsample_group_counts__full_budget_needs_no_majority():
+    counts = _compute_majority_downsample_group_counts(
+        group_sizes=np.array([10, 10]), subsample_size=20
+    )
+    np.testing.assert_array_equal(counts, [10, 10])
+
+
+def test__compute_majority_downsample_group_counts__never_exceeds_group_size():
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        minority_sizes = rng.integers(1, 50, size=rng.integers(1, 20))
+        majority_size = int(minority_sizes.max() + rng.integers(1, 50))
+        sizes = np.append(minority_sizes, majority_size)
+        rng.shuffle(sizes)
+        non_majority_size = int(sizes.sum() - majority_size)
+        budget = int(rng.integers(non_majority_size + 1, sizes.sum() + 1))
+        counts = _compute_majority_downsample_group_counts(sizes, budget)
+        assert counts.sum() == budget
+        assert (counts <= sizes).all()
+        assert (counts >= 0).all()
+        majority_group = int(np.argmax(sizes))
+        np.testing.assert_array_equal(
+            np.delete(counts, majority_group), np.delete(sizes, majority_group)
+        )
+
+
+def test__subsample_rows_majority_downsample__zero_inflated_regression():
+    """Zeros are downsampled while every distinct nonzero target is kept."""
+    rng = np.random.default_rng(0)
+    n_zeros, n_nonzero = 900, 100
+    y = np.concatenate([np.zeros(n_zeros), rng.exponential(size=n_nonzero) + 0.1])
+    rng.shuffle(y)
+    nonzero_rows = set(np.flatnonzero(y != 0))
+    subsample_size = 250
+
+    result = _subsample_rows_majority_downsample(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=4,
+        rng=rng,
+        task_type="regressor",
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == subsample_size
+        assert len(np.unique(indices)) == subsample_size
+        assert set(indices[y[indices] != 0]) == nonzero_rows
+        assert (y[indices] == 0).sum() == subsample_size - n_nonzero
+
+
+def test__subsample_rows_majority_downsample__many_distinct_values_is_fast():
+    """Bookkeeping must not loop over every distinct target value per estimator."""
+    rng = np.random.default_rng(0)
+    y = np.concatenate([np.zeros(200_000), rng.normal(size=200_000)])
+    start = time.perf_counter()
+    result = _subsample_rows_majority_downsample(
+        subsample_size=250_000,
+        y=y,
+        num_estimators=8,
+        rng=rng,
+        task_type="regressor",
+    )
+    elapsed = time.perf_counter() - start
+    assert result is not None
+    assert all(len(idx) == 250_000 for idx in result)
+    assert elapsed < 10, f"took {elapsed:.1f}s"
+
+
+def test__subsample_rows_majority_downsample__keeps_all_minority_rows():
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 950 + [1] * 50)
+    rng.shuffle(y)
+    minority_rows = set(np.where(y == 1)[0])
+    subsample_size = 200
+    num_estimators = 8
+
+    result = _subsample_rows_majority_downsample(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+        task_type="classifier",
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    for indices in result:
+        assert len(indices) == subsample_size
+        assert len(np.unique(indices)) == subsample_size, "no duplicate rows"
+        assert set(indices[y[indices] == 1]) == minority_rows
+        assert (y[indices] == 0).sum() == subsample_size - len(minority_rows)
+
+
+def test__subsample_rows_majority_downsample__majority_balanced_coverage():
+    """Majority rows are drawn round-robin so coverage is even across estimators."""
+    rng = np.random.default_rng(1)
+    y = np.array([0] * 100 + [1] * 10)
+    # 4 estimators x 40 majority slots = 160 draws over 100 majority rows:
+    # every row is drawn once in the first pass, 60 of them twice.
+    result = _subsample_rows_majority_downsample(
+        subsample_size=50,
+        y=y,
+        num_estimators=4,
+        rng=rng,
+        task_type="classifier",
+    )
+    assert result is not None
+    majority_counts = np.bincount(
+        np.concatenate([idx[y[idx] == 0] for idx in result]), minlength=110
+    )[:100]
+    assert set(majority_counts.tolist()) == {1, 2}
+    assert majority_counts.sum() == 160
+
+
+def test__subsample_rows_majority_downsample__returns_none_when_no_subsampling_needed():
+    y = np.array([0, 0, 1])
+    assert (
+        _subsample_rows_majority_downsample(
+            subsample_size=3,
+            y=y,
+            num_estimators=2,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+        is None
+    )
+
+
+def test__subsample_rows_majority_downsample__string_labels():
+    rng = np.random.default_rng(3)
+    y = np.array(["cat"] * 90 + ["dog"] * 10)
+    result = _subsample_rows_majority_downsample(
+        subsample_size=30,
+        y=y,
+        num_estimators=3,
+        rng=rng,
+        task_type="classifier",
+    )
+    assert result is not None
+    for indices in result:
+        assert (y[indices] == "dog").sum() == 10
+        assert (y[indices] == "cat").sum() == 20
+
+
+def test__subsample_rows_majority_downsample__balanced_fallback_for_regression():
+    y = np.arange(20)
+    with pytest.warns(UserWarning, match="falling back to 'balanced'"):
+        result = _subsample_rows_majority_downsample(
+            subsample_size=5,
+            y=y,
+            num_estimators=4,
+            rng=np.random.default_rng(0),
+            task_type="regressor",
+        )
+
+    assert result is not None
+    occurrence_counts = np.bincount(np.concatenate(result), minlength=len(y))
+    np.testing.assert_array_equal(occurrence_counts, np.ones(len(y), dtype=int))
+
+
+def test__subsample_rows_majority_downsample__stratified_fallback_for_classifier():
+    y = np.array([0] * 10 + [1] * 10)
+    with pytest.warns(UserWarning, match="falling back to 'stratified'"):
+        result = _subsample_rows_majority_downsample(
+            subsample_size=10,
+            y=y,
+            num_estimators=3,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+
+    assert result is not None
+    for indices in result:
+        assert (y[indices] == 0).sum() == 5
+        assert (y[indices] == 1).sum() == 5
+
+
+@pytest.mark.parametrize("subsample_size", [9, 10])
+def test__subsample_rows_majority_downsample__rejects_insufficient_budget(
+    subsample_size: int,
+):
+    y = np.array([0] * 10 + [1] * 6 + [2] * 4)
+    with pytest.raises(ValueError, match="greater than the number of non-majority"):
+        _subsample_rows_majority_downsample(
+            subsample_size=subsample_size,
+            y=y,
+            num_estimators=3,
+            rng=np.random.default_rng(0),
+            task_type="classifier",
+        )
+
+
+def test__resolve_sample_subsampling_method__auto():
+    assert (
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.AUTO, task_type="classifier"
+        )
+        == SampleSubsamplingMethod.STRATIFIED
+    )
+    assert (
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.AUTO, task_type="regressor"
+        )
+        == SampleSubsamplingMethod.BALANCED
+    )
+
+
+def test__resolve_sample_subsampling_method__stratified_rejected_for_regressor():
+    with pytest.raises(ValueError, match="only supported for classification"):
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.STRATIFIED, task_type="regressor"
+        )
+
+
+def test__resolve_sample_subsampling_method__majority_downsample_allowed_for_regressor():  # noqa: E501
+    assert (
+        _resolve_sample_subsampling_method(
+            SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE, task_type="regressor"
+        )
+        == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+    )
+
+
+def test__resolve_sample_subsampling_method__accepts_strings():
+    resolved = _resolve_sample_subsampling_method(
+        "majority_downsample",  # type: ignore[arg-type]
+        task_type="classifier",
+    )
+    assert resolved == SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE
+
+
+def test__get_subsample_indices_for_estimators__majority_downsample_dispatch():
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 900 + [1] * 100)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=300,
+        num_estimators=4,
+        n_samples=len(y),
+        rng=rng,
+        method=SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE,
+        y=y,
+    )
+    assert result is not None
+    for indices in result:
+        assert (y[indices] == 1).sum() == 100
+        assert (y[indices] == 0).sum() == 200
+
+
+def test__get_subsample_indices_for_estimators__class_aware_requires_y():
+    with pytest.raises(ValueError, match="requires the targets"):
+        _get_subsample_indices_for_estimators(
+            subsample_samples=10,
+            num_estimators=2,
+            n_samples=100,
+            rng=np.random.default_rng(0),
+            method=SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE,
+        )
+
+
+def test__get_subsample_indices_for_estimators__auto_must_be_resolved():
+    with pytest.raises(ValueError, match="must be resolved"):
+        _get_subsample_indices_for_estimators(
+            subsample_samples=10,
+            num_estimators=2,
+            n_samples=100,
+            rng=np.random.default_rng(0),
+            method=SampleSubsamplingMethod.AUTO,
+        )
+
+
+def test__get_subsample_indices_for_estimators__balanced_ignores_y():
+    """Explicit 'balanced' ignores the labels even when they are provided."""
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 999 + [1])
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=100,
+        num_estimators=3,
+        n_samples=len(y),
+        rng=rng,
+        method=SampleSubsamplingMethod.BALANCED,
+        y=y,
+    )
+    assert result is not None
+    # Round-robin over a shuffled pool: 3 x 100 = 300 slots over 1000 rows, so
+    # the single minority row cannot appear in every estimator.
+    assert sum(1 in set(y[idx]) for idx in result) <= 1
+
+
+def test__get_subsample_indices_for_estimators__detaches_torch_targets():
+    y = torch.tensor([0.0] * 9 + [1.0], requires_grad=True)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=4,
+        num_estimators=2,
+        n_samples=len(y),
+        rng=np.random.default_rng(0),
+        method=SampleSubsamplingMethod.MAJORITY_DOWNSAMPLE,
+        y=y,
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 4
+        assert 9 in indices
+    assert y.requires_grad
+
+
+def test__get_subsample_indices_for_estimators__bfloat16_targets():
+    """bfloat16 has no numpy dtype; the labels must be widened, not crash."""
+    y = torch.tensor([0.0] * 9 + [1.0], dtype=torch.bfloat16)
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=4,
+        num_estimators=2,
+        n_samples=len(y),
+        rng=np.random.default_rng(0),
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
+    )
+
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 4
+        assert 9 in indices
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.float32, torch.bfloat16])
+def test__fit_with_differentiable_input__row_subsampling(dtype: torch.dtype):
+    """The differentiable path now stratifies under "auto", like fit() does."""
+    rng = np.random.default_rng(0)
+    n_majority, n_minority = 180, 20
+    X = torch.tensor(rng.normal(size=(n_majority + n_minority, 3)), dtype=torch.float32)
+    y_np = np.array([0] * n_majority + [1] * n_minority)
+    y = torch.tensor(y_np, dtype=dtype)
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        differentiable_input=True,
+        inference_config={"SUBSAMPLE_SAMPLES": 60},
+        random_state=0,
+    )
+    clf.fit_with_differentiable_input(X, y)
+    row_indices = clf.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    for indices in row_indices:
+        assert len(indices) == 60
+        # Stratified: the minority keeps roughly its 10% share (one slot is
+        # reserved per class, the rest allocated by largest remainder) instead
+        # of being left to chance as under the previous label-blind sampling.
+        assert (y_np[indices] == 1).sum() in (6, 7)
+
+
+@pytest.mark.parametrize("subsample_samples", [None, [np.array([0, 1])]])
+def test__sample_subsampling_method__ignored_without_numeric_subsampling(
+    subsample_samples: list[np.ndarray] | None,
+):
+    configs = generate_regression_ensemble_configs(
+        num_estimators=1,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[PreprocessorConfig("none", categorical_name="numeric")],
+        target_transforms=[None],
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=2,
+        feature_schema=_get_schema(1),
+        random_state=0,
+        n_preprocessing_jobs=1,
+        subsample_samples=subsample_samples,
+        sample_subsampling_method=SampleSubsamplingMethod.STRATIFIED,
+        task_type="regressor",
+    )
+
+    if subsample_samples is None:
+        assert preprocessor.subsample_row_indices is None
+    else:
+        assert preprocessor.subsample_row_indices is not None
+        np.testing.assert_array_equal(
+            preprocessor.subsample_row_indices[0], subsample_samples[0]
+        )
+
+
+def test__end_to_end__majority_downsample_row_subsampling():
+    """The classifier wires SAMPLE_SUBSAMPLING_METHOD through to the preprocessor."""
+    rng = np.random.default_rng(0)
+    n_majority, n_minority = 180, 20
+    X = rng.normal(size=(n_majority + n_minority, 3))
+    y = np.array([0] * n_majority + [1] * n_minority)
+    clf = TabPFNClassifier(
+        n_estimators=3,
+        inference_config={
+            "SUBSAMPLE_SAMPLES": 60,
+            "SAMPLE_SUBSAMPLING_METHOD": "majority_downsample",
+        },
+        random_state=0,
+    )
+    clf.fit(X, y)
+    row_indices = clf.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    assert len(row_indices) == 3
+    for indices in row_indices:
+        assert len(indices) == 60
+        assert (y[indices] == 1).sum() == n_minority
+        assert (y[indices] == 0).sum() == 60 - n_minority
+
+
+def test__end_to_end__majority_downsample_row_subsampling_regressor():
+    """A zero-inflated regressor keeps every nonzero target row per estimator."""
+    rng = np.random.default_rng(0)
+    n_zeros, n_nonzero = 170, 30
+    X = rng.normal(size=(n_zeros + n_nonzero, 3))
+    y = np.concatenate([np.zeros(n_zeros), rng.exponential(size=n_nonzero) + 0.1])
+    reg = TabPFNRegressor(
+        n_estimators=3,
+        inference_config={
+            "SUBSAMPLE_SAMPLES": 80,
+            "SAMPLE_SUBSAMPLING_METHOD": "majority_downsample",
+        },
+        random_state=0,
+    )
+    reg.fit(X, y)
+    row_indices = reg.ensemble_preprocessor_.subsample_row_indices
+    assert row_indices is not None
+    assert len(row_indices) == 3
+    for indices in row_indices:
+        assert len(indices) == 80
+        assert (y[indices] != 0).sum() == n_nonzero
+        assert (y[indices] == 0).sum() == 80 - n_nonzero
+
+
 def test__subsample_features_importance_based__top_k_always_present():
     """Top-K features must appear in every estimator's selection."""
     rng = np.random.default_rng(0)
@@ -718,7 +1218,7 @@ def test__subsample_features_importance_based__top_k_always_present():
     result = _subsample_features_importance_based(
         subsample_sizes=subsample_sizes,
         n_total_features=n_features,
-        importance_feature_orders=[importance_order],
+        importance_feature_order=importance_order,
         top_k_count=top_k,
         rng=rng,
     )
@@ -739,7 +1239,7 @@ def test__subsample_features_importance_based__no_subsampling_when_budget_ge_tot
     result = _subsample_features_importance_based(
         subsample_sizes=[10, 10],
         n_total_features=n_features,
-        importance_feature_orders=[importance_order],
+        importance_feature_order=importance_order,
         top_k_count=5,
         rng=rng,
     )
@@ -754,7 +1254,7 @@ def test__subsample_features_importance_based__budget_less_than_top_k():
     result = _subsample_features_importance_based(
         subsample_sizes=[3],
         n_total_features=n_features,
-        importance_feature_orders=[importance_order],
+        importance_feature_order=importance_order,
         top_k_count=10,
         rng=rng,
     )
@@ -772,7 +1272,7 @@ def test__subsample_features_importance_based__budget_equal_to_top_k():
     result = _subsample_features_importance_based(
         subsample_sizes=[top_k],
         n_total_features=n_features,
-        importance_feature_orders=[importance_order],
+        importance_feature_order=importance_order,
         top_k_count=top_k,
         rng=rng,
     )
@@ -799,7 +1299,7 @@ def test__subsample_features_importance_based__remaining_budget_balanced_across_
     result = _subsample_features_importance_based(
         subsample_sizes=[budget] * n_estimators,
         n_total_features=n_features,
-        importance_feature_orders=[importance_order],
+        importance_feature_order=importance_order,
         top_k_count=top_k,
         rng=rng,
     )
@@ -823,46 +1323,6 @@ def test__subsample_features_importance_based__remaining_budget_balanced_across_
     )
 
 
-def test__subsample_features_importance_based__two_orderings_have_independent_pools():
-    """Estimators with different orderings draw from separate balanced pools."""
-    rng = np.random.default_rng(1)
-    n_features = 20
-    top_k = 4
-    budget = 10
-    n_estimators = 30  # 15 per ordering
-
-    # Two non-overlapping orderings
-    order_a = np.arange(n_features)  # top: 0-3, remaining: 4-19
-    order_b = np.arange(n_features)[::-1].copy()  # top: 19-16, remaining: 15-0
-
-    result = _subsample_features_importance_based(
-        subsample_sizes=[budget] * n_estimators,
-        n_total_features=n_features,
-        importance_feature_orders=[order_a, order_b],
-        top_k_count=top_k,
-        rng=rng,
-    )
-
-    counts_a = dict.fromkeys(range(top_k, n_features), 0)  # remaining for order_a
-    counts_b = dict.fromkeys(range(n_features - top_k), 0)  # remaining for order_b
-
-    for i, indices in enumerate(result):
-        assert indices is not None
-        assert len(indices) == budget
-        if i % 2 == 0:  # uses order_a
-            for idx in indices:
-                if idx in counts_a:
-                    counts_a[idx] += 1
-        else:  # uses order_b
-            for idx in indices:
-                if idx in counts_b:
-                    counts_b[idx] += 1
-
-    # Each pool should have covered all its remaining features
-    assert all(c > 0 for c in counts_a.values())
-    assert all(c > 0 for c in counts_b.values())
-
-
 def test__get_subsample_feature_indices__feature_importance_method():
     """GINI_FEATURE_IMPORTANCE method routes correctly and includes top-K."""
     pipeline = MagicMock()
@@ -881,7 +1341,7 @@ def test__get_subsample_feature_indices__feature_importance_method():
         max_features_per_estimator=[20, 20, 20],
         rng=rng,
         feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
-        importance_feature_orders=[importance_order],
+        importance_feature_order=importance_order,
         importance_top_k_count=top_k,
     )
 
@@ -906,7 +1366,7 @@ def test__get_subsample_feature_indices__feature_importance_none_order_falls_bac
         max_features_per_estimator=[20, 20, 20],
         rng=np.random.default_rng(0),
         feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
-        importance_feature_orders=None,
+        importance_feature_order=None,
     )
     # Should return valid index arrays (balanced fallback), not raise
     assert len(result) == 3
@@ -1129,24 +1589,18 @@ def test_scale_n_estimators_for_feature_coverage__auto_scaling_enabled_does_not_
 
 @skip_on_macos
 def test___compute_feature_importance_order__classification():
-    """_compute_feature_importance_order returns one valid feature ranking per tree."""
+    """Small datasets yield a single valid feature ranking."""
     rng = np.random.default_rng(0)
     n_samples, n_features = 100, 10
     X = rng.standard_normal((n_samples, n_features))
     # Make feature 0 highly predictive
     y = (X[:, 0] > 0).astype(int)
 
-    n_estimators = 4
-    orders = _compute_feature_importance_order(
-        X=X, y=y, task_type="classifier", n_estimators=n_estimators, rng=rng
-    )
+    order = _compute_feature_importance_order(X=X, y=y, task_type="classifier", rng=rng)
 
-    assert len(orders) == n_estimators
-    for order in orders:
-        assert order.shape == (n_features,)
-        assert set(order) == set(range(n_features)), "All feature indices must appear"
-    # Feature 0 should rank first (most important) in the majority of orderings
-    assert sum(order[0] == 0 for order in orders) > len(orders) // 2
+    assert order.shape == (n_features,)
+    assert set(order) == set(range(n_features)), "All feature indices must appear"
+    assert order[0] == 0
 
 
 @skip_on_macos
@@ -1157,16 +1611,11 @@ def test___compute_feature_importance_order__regression():
     X = rng.standard_normal((n_samples, n_features))
     y = X[:, 2] * 3.0 + rng.standard_normal(n_samples) * 0.1
 
-    n_estimators = 4
-    orders = _compute_feature_importance_order(
-        X=X, y=y, task_type="regressor", n_estimators=n_estimators, rng=rng
-    )
+    order = _compute_feature_importance_order(X=X, y=y, task_type="regressor", rng=rng)
 
-    assert len(orders) == n_estimators
-    for order in orders:
-        assert order.shape == (n_features,)
-        assert set(order) == set(range(n_features))
-    assert sum(order[0] == 2 for order in orders) > len(orders) // 2
+    assert order.shape == (n_features,)
+    assert set(order) == set(range(n_features))
+    assert order[0] == 2
 
 
 @skip_on_macos
@@ -1177,19 +1626,83 @@ def test___compute_feature_importance_order__subsamples_large_datasets():
     X = rng.standard_normal((n_samples, n_features))
     y = rng.integers(0, 2, n_samples)
 
-    n_estimators = 4
-    orders = _compute_feature_importance_order(
+    order = _compute_feature_importance_order(
         X=X,
         y=y,
         task_type="classifier",
-        n_estimators=n_estimators,
         max_samples=50,
         rng=rng,
     )
-    assert len(orders) == n_estimators
-    for order in orders:
-        assert order.shape == (n_features,)
-        assert set(order) == set(range(n_features))
+    assert order.shape == (n_features,)
+    assert set(order) == set(range(n_features))
+
+
+def _spy_fit_ordering(
+    rows_seen: list[int],
+) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+    """fit_ordering_fn that records how many rows each fit was given."""
+
+    def fit(X_fit: np.ndarray, _y: np.ndarray) -> np.ndarray:
+        rows_seen.append(len(X_fit))
+        return np.arange(X_fit.shape[1])
+
+    return fit
+
+
+def test___fit_importance_ordering__small_data_uses_every_row():
+    rows_seen: list[int] = []
+    order = _fit_importance_ordering(
+        X=np.zeros((100, 6)),
+        y=np.zeros(100),
+        task_type="regressor",
+        max_samples=200,
+        fit_ordering_fn=_spy_fit_ordering(rows_seen),
+        rng=np.random.default_rng(0),
+    )
+
+    assert rows_seen == [100]
+    assert order.shape == (6,)
+
+
+def test___fit_importance_ordering__large_data_fits_once_on_max_samples():
+    """Above max_samples the rows are subsampled, but only one fit is run."""
+    rows_seen: list[int] = []
+    order = _fit_importance_ordering(
+        X=np.zeros((500, 6)),
+        y=np.zeros(500),
+        task_type="regressor",
+        max_samples=100,
+        fit_ordering_fn=_spy_fit_ordering(rows_seen),
+        rng=np.random.default_rng(0),
+    )
+
+    assert rows_seen == [100]
+    assert order.shape == (6,)
+
+
+@pytest.mark.parametrize("n_samples", [50, 500])
+def test__subsample_features_importance_based__covers_all_features(n_samples):
+    """Every feature reaches some estimator, on both sides of ``max_samples``."""
+    n_features, top_k, size, n_estimators = 12, 4, 8, 2
+
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        order = _fit_importance_ordering(
+            X=np.zeros((n_samples, n_features)),
+            y=np.zeros(n_samples),
+            task_type="regressor",
+            max_samples=100,
+            fit_ordering_fn=lambda _X, _y: np.arange(n_features),
+            rng=rng,
+        )
+        subsampled = _subsample_features_importance_based(
+            [size] * n_estimators, n_features, order, top_k, rng
+        )
+
+        # Combined budget covers all features: 2 * (8 - 4) top-up draws == the
+        # 8 non-top features, so a shared pool guarantees full coverage.
+        covered = set(np.concatenate(subsampled))
+        assert covered == set(range(n_features))
 
 
 def test__end_to_end__feature_importance_skipped_when_no_subsampling_needed():
@@ -1348,78 +1861,6 @@ def test__end_to_end__feature_importance_subsampling():
         assert len(member.feature_indices) <= max_features
 
 
-def test__subsample_features_importance_based__different_orderings_yield_different_indices():  # noqa: E501
-    """When multiple distinct orderings are given, different estimators get different top-K."""  # noqa: E501
-    rng = np.random.default_rng(0)
-    n_features = 20
-    top_k = 5
-    budget = 10
-
-    # Two opposite orderings: first says features 0-4 are top, second says 15-19 are top
-    order_a = np.arange(n_features)  # top features: 0,1,2,3,4
-    order_b = np.arange(n_features)[::-1].copy()  # top features: 19,18,17,16,15
-
-    result = _subsample_features_importance_based(
-        subsample_sizes=[budget, budget],
-        n_total_features=n_features,
-        importance_feature_orders=[order_a, order_b],
-        top_k_count=top_k,
-        rng=rng,
-    )
-
-    assert result[0] is not None
-    assert result[1] is not None
-    top_k_a = set(order_a[:top_k])  # {0,1,2,3,4}
-    top_k_b = set(order_b[:top_k])  # {15,16,17,18,19}
-    # Estimator 0 must include all of order_a's top-K
-    assert top_k_a.issubset(set(result[0]))
-    # Estimator 1 must include all of order_b's top-K
-    assert top_k_b.issubset(set(result[1]))
-    # The two selections must differ (no overlap in guaranteed-included features)
-    assert top_k_a.isdisjoint(top_k_b), (
-        "Top-K sets must be disjoint for opposite orderings"
-    )
-    assert set(result[0]) != set(result[1]), (
-        "Estimators should have different feature sets"
-    )
-
-
-@skip_on_macos
-def test___compute_feature_importance_order__gini_large_dataset_yields_diverse_orderings():  # noqa: E501
-    """With data > max_samples, independent subsamples produce diverse orderings."""
-    rng = np.random.default_rng(42)
-    small_max_samples = 500
-    n_samples = (
-        small_max_samples * 6
-    )  # clearly larger → multiple independent subsamples
-    n_features = 10
-    # Pure noise so each subsample fit produces a different ranking
-    X = rng.standard_normal((n_samples, n_features))
-    y = rng.integers(0, 2, n_samples)
-
-    n_estimators = 6
-    orders = _compute_feature_importance_order(
-        X=X,
-        y=y,
-        task_type="classifier",
-        n_estimators=n_estimators,
-        max_samples=small_max_samples,
-        rng=rng,
-    )
-
-    assert len(orders) == n_estimators
-    for order in orders:
-        assert order.shape == (n_features,)
-        assert set(order) == set(range(n_features))
-
-    # With multiple independent subsamples on noisy data, not all orderings should
-    # be identical
-    unique_first_features = {order[0] for order in orders}
-    assert len(unique_first_features) > 1, (
-        "Independent subsamples on noise should produce diverse feature rankings"
-    )
-
-
 @skip_on_macos
 def test___compute_feature_importance_order__lightgbm():
     """LightGBM importance ranks the most predictive feature first."""
@@ -1428,30 +1869,25 @@ def test___compute_feature_importance_order__lightgbm():
     X = rng.standard_normal((n_samples, n_features))
     y = (X[:, 5] > 0).astype(int)
 
-    orderings = _compute_feature_importance_order(
+    order = _compute_feature_importance_order(
         X=X,
         y=y,
         task_type="classifier",
-        n_estimators=3,
         rng=rng,
     )
 
-    assert len(orderings) == 3
-    for order in orderings:
-        assert len(order) == n_features
-        assert order[0] == 5
+    assert len(order) == n_features
+    assert order[0] == 5
 
     # With categorical indices — no crash.
-    orderings_cat = _compute_feature_importance_order(
+    order_cat = _compute_feature_importance_order(
         X=np.abs(X),  # non-negative for LightGBM categorical handling
         y=y,
         task_type="classifier",
-        n_estimators=2,
         categorical_feature_indices=[0, 1],
         rng=rng,
     )
-    assert len(orderings_cat) == 2
-    assert len(orderings_cat[0]) == n_features
+    assert len(order_cat) == n_features
 
 
 @skip_on_macos
@@ -1466,18 +1902,15 @@ def test___compute_feature_importance_order__handles_nan():
     nan_mask = rng.random((n_samples, n_features)) < 0.1
     X[nan_mask] = np.nan
 
-    orderings = _compute_feature_importance_order(
+    order = _compute_feature_importance_order(
         X=X,
         y=y,
         task_type="classifier",
-        n_estimators=2,
         rng=rng,
     )
 
-    assert len(orderings) == 2
-    for order in orderings:
-        assert len(order) > 0
-        assert not np.isnan(order).any()
+    assert len(order) > 0
+    assert not np.isnan(order).any()
 
 
 def test__generate_regression_ensemble_configs__target_transforms_not_shared():

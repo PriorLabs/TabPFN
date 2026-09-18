@@ -32,16 +32,24 @@ if TYPE_CHECKING:
     )
     from tabpfn.preprocessing.torch import FeatureSchema
 
+# An array's dtype is told apart by numpy's one-letter dtype kind:
 # https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
 
+# `?` bool, `b` signed byte, `B` unsigned byte, `i` signed integer, `u` unsigned
+# integer, `f` float, `m` timedelta.
 NUMERIC_DTYPE_KINDS = "?bBiufm"
 # The subset of the above that numpy casts to float64 the same way pandas does, so
 # a frame need not be built to convert it. Timedeltas ("m") are excluded: pandas
 # converts those through its own units rather than numpy's raw integers.
 FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
-OBJECT_DTYPE_KINDS = "OV"
-STRING_DTYPE_KINDS = "SaU"
-UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
+# `O` object, `V` void (structured records), `U` fixed-width unicode strings, `T`
+# variable-width unicode strings (numpy 2's `StringDType`): pandas reads the cells to
+# work out each column's dtype.
+OBJECT_OR_STRING_DTYPE_KINDS = "OVUT"
+# `S` fixed-width byte strings and `a`, its legacy alias: refused.
+BYTES_DTYPE_KINDS = "Sa"
+# `c` complex, `M` datetime64. Not needed, just for completeness.
+UNSUPPORTED_DTYPE_KINDS = "cM"
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
@@ -98,6 +106,66 @@ def _cast_columns(
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
+def _is_plain_numeric_array(X: np.ndarray | pd.DataFrame) -> bool:
+    """Whether `X` is a numpy array of a dtype that casts straight to float64.
+
+    Such an array carries no dtype to infer, no category to map and no string
+    cell to NA-handle, so cleaning it is a single cast (`_cast_to_float64_table`)
+    provided nothing is encoded either.
+    """
+    return isinstance(X, np.ndarray) and X.dtype.kind in FAST_CONVERTIBLE_DTYPE_KINDS
+
+
+def _encoder_selects_nothing(
+    ord_encoder: OrderPreservingColumnTransformer | None,
+) -> bool:
+    """Whether a *fitted* encoder would leave every column alone.
+
+    Asked of the encoder rather than of the incoming frame's categorical indices,
+    because the two can disagree: a column detected as text is encoded at fit but
+    never appears in `indices_for(FeatureModality.CATEGORICAL)`, and a column that
+    was string at fit can arrive numeric at predict. Only the encoder knows what
+    it was fitted to touch.
+    """
+    return ord_encoder is None or not ord_encoder.selected_columns()
+
+
+def clean_data_transform(
+    X: np.ndarray | pd.DataFrame,
+    *,
+    cat_indices: Sequence[int | str] | None,
+    ord_encoder: OrderPreservingColumnTransformer | None,
+    passthrough_inf: bool = False,
+) -> np.ndarray:
+    """Clean data being predicted on, the way `clean_data` cleaned the training data.
+
+    The predict-time half of `clean_data`: the same dtype fixing and ordinal
+    encoding, driven by the encoder `clean_data` fitted rather than fitting one,
+    and taking the same single-cast shortcut when there is nothing to encode.
+
+    Args:
+        X: The data to clean.
+        cat_indices: Indices of the columns the encoder was fitted on.
+        ord_encoder: The encoder `clean_data` returned at fit time.
+        passthrough_inf: If True, +/-inf values are carried through the ordinal
+            encoding stage unchanged instead of crashing it.
+
+    Returns:
+        The cleaned data as a float64 array.
+    """
+    if _is_plain_numeric_array(X) and _encoder_selects_nothing(ord_encoder):
+        # `passthrough_inf` makes no difference here: it records the +/-inf cells,
+        # NaNs them so the encoder does not choke, and writes them back at the same
+        # positions afterwards -- an exact round trip when nothing is encoded.
+        return X
+
+    return process_text_na_dataframe(
+        X=fix_dtypes(X=X, cat_indices=cat_indices),
+        ord_encoder=ord_encoder,
+        passthrough_inf=passthrough_inf,
+    )
+
+
 def clean_data(
     X: np.ndarray,
     feature_schema: FeatureSchema,
@@ -122,30 +190,15 @@ def clean_data(
     # Ensure categories are ordinally encoded
     ord_encoder = get_ordinal_encoder()
 
-    if (
-        not cat_indices
-        and isinstance(X, np.ndarray)
-        and X.dtype.kind in FAST_CONVERTIBLE_DTYPE_KINDS
-    ):
-        # Nothing to encode and no dtype to infer, so the two steps below come out
-        # as a single cast: `fix_dtypes` would wrap `X` in a float64 frame that
-        # `process_text_na_dataframe` then copies straight back out, holding two
-        # full-size float64 buffers to produce one. Convert once, into the array
-        # that is returned.
-        #
-        # `passthrough_inf` makes no difference here: it records the +/-inf cells,
-        # NaNs them so the encoder does not choke, and writes them back at the same
-        # positions afterwards -- an exact round trip when nothing is encoded.
+    if not cat_indices and _is_plain_numeric_array(X):
+        # A numeric array holds no string cell, so with no categorical column
+        # declared there is nothing for the encoder to select.
         #
         # The encoder is still fit, since the caller keeps it for predict, but on a
         # single row: with no column selected it learns nothing from the values,
         # only the column bookkeeping.
         ord_encoder.fit(fix_dtypes(X=X[:1], cat_indices=cat_indices))
-        return (
-            np.array(X, dtype=np.float64, order="F", copy=True),
-            ord_encoder,
-            feature_schema,
-        )
+        return X, ord_encoder, feature_schema
 
     # Will convert inferred categorical indices to category dtype,
     # to be picked up by the ord_encoder, as well
@@ -174,12 +227,16 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
 
     ``category``/``string``/``object`` columns are left untouched.
     """
-    cols = [
-        col
-        for col, dtype in X.dtypes.items()
+    dtypes = X.dtypes
+    # Decided once per distinct dtype rather than once per column: a wide frame has
+    # thousands of columns and a handful of dtypes.
+    dtypes_to_cast = {
+        dtype
+        for dtype in dtypes.unique()
         if pd.api.types.is_bool_dtype(dtype)
         or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
-    ]
+    }
+    cols = [col for col, dtype in dtypes.items() if dtype in dtypes_to_cast]
     return _cast_columns(X, cols, "float64")
 
 
@@ -196,14 +253,14 @@ def fix_dtypes(  # noqa: D103
             # It's a numeric type, just wrap the array in pandas with the correct dtype
             X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
             convert_dtype = False
-        elif X.dtype.kind in OBJECT_DTYPE_KINDS:
-            # If numpy and object dtype, we rely on pandas to handle introspection
-            # of columns and rows to determine the dtypes.
+        elif X.dtype.kind in OBJECT_OR_STRING_DTYPE_KINDS:
+            # For an object or string array we rely on pandas to introspect the
+            # cells and determine each column's dtype.
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
-        elif X.dtype.kind in STRING_DTYPE_KINDS:
+        elif X.dtype.kind in BYTES_DTYPE_KINDS:
             raise ValueError(
-                f"String dtypes are not supported. Got dtype: {X.dtype}",
+                f"Byte string dtypes are not supported. Got dtype: {X.dtype}",
             )
         else:
             raise ValueError(f"Invalid dtype for X: {X.dtype}")
