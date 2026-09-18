@@ -21,6 +21,7 @@ import pytest
 import torch
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import FunctionTransformer
 from torch.utils.data import DataLoader
 
 from tabpfn.architectures.shared.bar_distribution import BarDistribution
@@ -34,6 +35,7 @@ from tabpfn.finetuning.finetuned_base import EvalResult
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
     _compute_regression_loss,
+    _targets_in_estimator_space,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
@@ -310,6 +312,18 @@ def test__regressor_checkpoint_contains_mse_metric(
     assert "mse" in best_checkpoint
     assert "roc_auc" not in best_checkpoint
     assert "log_loss" not in best_checkpoint
+
+
+def test__targets_in_estimator_space__applies_the_estimator_target_transform() -> None:
+    """Members with a target transform are scored on transformed targets."""
+    y = torch.tensor([0.5, -1.0, 2.0])
+
+    plain = _targets_in_estimator_space(y, mock.Mock(target_transform=None))
+    assert plain is y
+
+    negate = FunctionTransformer(lambda x: -x)
+    transformed = _targets_in_estimator_space(y, mock.Mock(target_transform=negate))
+    torch.testing.assert_close(transformed, -y)
 
 
 def test__compute_regression_loss__correct_mse_and_mae_with_nan_targets() -> None:
