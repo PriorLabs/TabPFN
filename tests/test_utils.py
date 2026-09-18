@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -10,7 +11,9 @@ import pytest
 import torch
 from torch.torch_version import TorchVersion
 
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.utils import (
+    _cdf,
     _cpu_supports_fast_bf16,
     _repair_borders,
     _translate_probs_across_borders_unchunked,
@@ -19,6 +22,26 @@ from tabpfn.utils import (
     infer_devices,
     translate_probs_across_borders,
 )
+
+
+def _spiky_source(
+    num_buckets: int, *, floor: float = 1e-12
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """A spiky source distribution whose smallest bucket still holds `floor`.
+
+    Narrow spikes are what a retrieval-style head produces. The floor puts every
+    bucket's mass far above float64's resolution near a CDF of 1 (~1e-16) and far
+    below float32's (~6e-8), so a bucket coming out as exactly zero can only be
+    the differencing losing it, never the source genuinely having none.
+    """
+    borders = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    mids = (borders[1:] + borders[:-1]) / 2
+    generator = torch.Generator().manual_seed(0)
+    centers = torch.rand(40, generator=generator, dtype=torch.float64) * 6 - 3
+    density = sum(torch.exp(-0.5 * ((mids - c) / 0.02) ** 2) for c in centers)
+    probs = density / density.sum()
+    probs = probs * (1 - num_buckets * floor) + floor
+    return borders, (probs / probs.sum()).log()[None, :]
 
 
 def test__infer_devices__auto__cuda_and_mps_not_available__selects_cpu(
@@ -272,6 +295,336 @@ def test__translate_probs_across_borders__forces_chunking(
     assert call_counter["n"] == total_rows  # chunk_size == 1 row here
     assert out_chunked.shape == out_unchunked.shape
     assert torch.equal(out_chunked, out_unchunked)
+
+
+def test__translate_probs_across_borders__upcast_prevents_lost_bucket_mass() -> None:
+    """Small destination buckets must not round to zero (PRI-361, mechanism 1).
+
+    A bucket's mass is the difference of two cumulative sums, so its resolution
+    is that of the CDF near 1 -- ~6e-8 in float32. Anything below that lands on
+    exactly zero, `regressor.py` takes `.log()` of it, and the bar
+    distribution's NLL for a target in that bucket is `inf`. The destination
+    grid here is nested inside the source, so no bucket is out of range and
+    every one of them genuinely holds at least ~1e-12.
+    """
+    num_buckets = 5000
+    frm, logits = _spiky_source(num_buckets)
+    to = torch.linspace(-3.9, 3.9, num_buckets + 1, dtype=torch.float64)
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert int((out == 0).sum()) == 0
+    assert out.sum(-1).item() == pytest.approx(1.0, abs=1e-12)
+
+
+def test__translate_probs_across_borders__float32_differencing_is_the_culprit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the upcast as the thing doing the work in the test above.
+
+    Without it the very same inputs lose hundreds of buckets, so this guards
+    against the upcast being quietly dropped and the test above still passing
+    for some unrelated reason.
+    """
+    num_buckets = 5000
+    frm, logits = _spiky_source(num_buckets)
+    to = torch.linspace(-3.9, 3.9, num_buckets + 1, dtype=torch.float64)
+
+    monkeypatch.setattr("tabpfn.utils._TRANSLATE_COMPUTE_DTYPE", torch.float32)
+    out = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert int((out == 0).sum()) > 100
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test__translate_probs_across_borders__identity_remap_is_the_identity(
+    dtype: torch.dtype,
+) -> None:
+    """`to == frm` must return the input probabilities in the caller's dtype.
+
+    The outer buckets are half-normal tails whose mass extends past the
+    outermost border, and folding that mass back into the outermost destination
+    buckets is what keeps this identity (and the sum to 1) intact.
+    """
+    torch.manual_seed(0)
+    logits = torch.randn(64, 300, dtype=dtype)
+    borders = torch.linspace(-3.0, 3.0, 301, dtype=dtype)
+
+    out = translate_probs_across_borders(logits, frm=borders, to=borders)
+
+    assert out.dtype == dtype
+    torch.testing.assert_close(out, logits.softmax(-1))
+
+
+def test__cdf__outer_buckets_are_half_normal_tails() -> None:
+    """`_cdf` must read the outer buckets the way `forward` does (PRI-361, mech 2).
+
+    `FullSupportBarDistribution` puts a half-normal on each outer bucket, so
+    half of that bucket's mass lies beyond the outermost border. Pinning the CDF
+    to 0 and 1 at the outermost borders instead drops those two half-tails at
+    any precision.
+    """
+    num_buckets = 500
+    borders = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    p_outer = 0.05
+    probs = torch.full(
+        (num_buckets,), (1.0 - 2 * p_outer) / (num_buckets - 2), dtype=torch.float64
+    )
+    probs[0] = probs[-1] = p_outer
+    logits = probs.log()[None, :]
+
+    at_borders = _cdf(logits, borders=borders, ys=borders[[0, -1]].clone())
+    # Exactly half of each outer bucket's mass sits outside the grid.
+    assert at_borders[0, 0].item() == pytest.approx(p_outer / 2, rel=1e-12)
+    assert (1.0 - at_borders[0, 1]).item() == pytest.approx(p_outer / 2, rel=1e-12)
+
+    # Well outside the grid the CDF is small but strictly positive, not zero.
+    far = torch.tensor([-4.05, 4.05], dtype=torch.float64)
+    outside = _cdf(logits, borders=borders, ys=far)
+    assert outside[0, 0].item() > 0.0
+    assert outside[0, 1].item() < 1.0
+
+    # And it agrees with the half-normal those tails are defined by.
+    sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(
+        borders[1] - borders[0],
+    ).scale
+    expected = p_outer * torch.erfc(
+        (borders[1] - far[0]) / (sigma * math.sqrt(2.0)),
+    )
+    assert outside[0, 0].item() == pytest.approx(expected.item(), rel=1e-12)
+
+
+def test__cdf__tails_leave_interior_borders_untouched() -> None:
+    """Reading the outer buckets as tails must not move any interior border.
+
+    A tail redistributes mass *within* its outer bucket as well as past the
+    border, but `CDF(borders[1]) == probs[0]` either way, so every interior
+    bucket keeps exactly the mass it had.
+    """
+    num_buckets = 500
+    borders, logits = _spiky_source(num_buckets)
+    ks = [1, 2, 50, 250, num_buckets - 2, num_buckets - 1]
+
+    got = _cdf(logits, borders=borders, ys=borders[ks].clone())
+    expected = torch.cumsum(logits.softmax(-1)[0], 0)[[k - 1 for k in ks]]
+
+    # The tolerance is set by the reference, not by `_cdf`: `cumsum` accumulates
+    # one rounding per bucket, so `num_buckets * eps` is the floor. A tail
+    # actually leaking into the interior would move a border by O(p_outer).
+    torch.testing.assert_close(got[0], expected, rtol=0.0, atol=1e-13)
+
+
+def test__translate_probs_across_borders__fills_buckets_outside_source_range() -> None:
+    """Destination buckets past the source grid must receive the tail mass.
+
+    This is the case where a member's y-transform gives a narrower grid than the
+    pooled `znorm_space_bardist_` grid, so `to` extends past `frm`. Before the
+    tails those buckets were exactly zero at any precision, and the mass was
+    misplaced into the single destination bucket straddling the border.
+    """
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.5, 4.5, num_buckets + 1, dtype=torch.float64)
+    p_outer = 0.05
+    probs = torch.full(
+        (num_buckets,), (1.0 - 2 * p_outer) / (num_buckets - 2), dtype=torch.float64
+    )
+    probs[0] = probs[-1] = p_outer
+    logits = probs.log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+
+    # The buckets immediately below `frm[0]` carry the lower half-tail. The
+    # far ones are not asserted on: a half-normal scaled to the bucket width
+    # decays fast enough that their true mass underflows float64 legitimately.
+    below = (to[1:] <= frm[0]).nonzero().flatten()
+    assert len(below) > 0
+    assert (out[below[-3:]] > 0).all()
+
+    # Mass placed strictly below `frm[0]` must match the analytic tail, which
+    # is everything the source's half-normal puts below the destination border
+    # closest to `frm[0]` from the outside.
+    sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(
+        frm[1] - frm[0],
+    ).scale
+    edge = to[int(below[-1]) + 1]
+    expected = p_outer * torch.erfc((frm[1] - edge) / (sigma * math.sqrt(2.0)))
+    assert out[below].sum().item() == pytest.approx(expected.item(), rel=1e-9)
+
+    # The remap still normalises: nothing is created or destroyed overall.
+    assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
+
+
+def test__translate_probs_across_borders__survival_fills_upper_tail() -> None:
+    """Upper-tail buckets must not cancel against a CDF that has rounded to 1.
+
+    Differencing the CDF recovers the bulk, but out in the upper tail the
+    float64 CDF saturates at exactly 1.0 and the difference is 0 regardless of
+    precision. The survival function out there is `p * SF(y)`, a small number
+    with nothing near 1 to cancel against, so the upper half is differenced
+    from that end instead.
+    """
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.15, 4.15, num_buckets + 1, dtype=torch.float64)
+    p_outer = 0.05
+    probs = torch.full(
+        (num_buckets,), (1.0 - 2 * p_outer) / (num_buckets - 2), dtype=torch.float64
+    )
+    probs[0] = probs[-1] = p_outer
+    logits = probs.log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+
+    # Buckets fully past the top of the source grid, far enough out that the
+    # CDF there is 1.0 to the last float64 bit.
+    past_top = (to[:-1] >= frm[-1]).nonzero().flatten()
+    assert len(past_top) > 5
+    assert (out[past_top] > 0).all(), "far upper-tail buckets came out as zero"
+
+    # The two tails must be treated symmetrically: an asymmetric zero pattern
+    # is what biases a model comparison.
+    past_bottom = (to[1:] <= frm[0]).nonzero().flatten()
+    assert int((out[past_bottom] == 0).sum()) == int((out[past_top] == 0).sum())
+    torch.testing.assert_close(
+        out[past_bottom].flip(0), out[past_top], rtol=1e-12, atol=0.0
+    )
+
+    # And the survival-side differencing must not disturb the total.
+    assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
+
+
+def test__translate_probs_across_borders__upper_tail_matches_analytic() -> None:
+    """The upper-tail masses must match the half-normal they come from."""
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.2, 4.2, num_buckets + 1, dtype=torch.float64)
+    p_outer = 0.05
+    probs = torch.full(
+        (num_buckets,), (1.0 - 2 * p_outer) / (num_buckets - 2), dtype=torch.float64
+    )
+    probs[0] = probs[-1] = p_outer
+    logits = probs.log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+
+    sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(
+        frm[-1] - frm[-2],
+    ).scale
+
+    def survival(distance: torch.Tensor) -> torch.Tensor:
+        return torch.erfc(distance / (sigma * math.sqrt(2.0)))
+
+    past_top = (to[:-1] >= frm[-2]).nonzero().flatten()
+    # The outermost destination bucket absorbs everything beyond `to[-1]`.
+    upper = to[1:].clone()
+    upper[-1] = torch.inf
+    expected = p_outer * (
+        survival(to[:-1][past_top] - frm[-2]) - survival(upper[past_top] - frm[-2])
+    )
+
+    torch.testing.assert_close(out[past_top], expected, rtol=1e-12, atol=0.0)
+
+
+def test__translate_probs_across_borders__interior_is_mirror_symmetric() -> None:
+    """A source and its mirror image must remap to mirror images.
+
+    Differencing the CDF is only accurate where the CDF is small: near 1 it has
+    rounded away anything below ~1e-16 of the total, so interior buckets in the
+    upper half of the grid lose masses that the same buckets in the lower half
+    keep. `to` sits strictly inside `frm` here, so no tail bucket is involved
+    and the symmetry can only be broken by the differencing itself.
+    """
+    num_buckets = 5000
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-3.9, 3.9, num_buckets + 1, dtype=torch.float64)
+    mids = (frm[1:] + frm[:-1]) / 2
+    # A narrow head off-centre, so its far side spans many decades of mass.
+    log_density = -0.5 * ((mids - 1.0) / 0.3) ** 2
+    logits = (log_density - log_density.logsumexp(0))[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+    out_mirrored = translate_probs_across_borders(logits.flip(-1), frm=frm, to=to)[0]
+
+    assert int((out == 0).sum()) == int((out_mirrored == 0).sum())
+    torch.testing.assert_close(out.flip(0), out_mirrored, rtol=1e-9, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("frm", "to"),
+    [
+        ([0.0, 10.0, 11.0, 12.0], [1.0, 2.0, 3.0]),
+        ([0.0, 1.0, 2.0, 12.0], [9.0, 10.0, 11.0]),
+    ],
+    ids=["inside_lower_tail", "inside_upper_tail"],
+)
+def test__translate_probs_across_borders__to_inside_one_source_tail_sums_to_one(
+    frm: list[float], to: list[float]
+) -> None:
+    """The output must still sum to 1 when all of `to` lies inside one tail.
+
+    The outermost destination buckets absorb everything beyond `to`. When the
+    whole destination grid sits inside a single source tail, the bucket at the
+    far end from that tail must keep absorbing the rest of the distribution
+    rather than be treated as one more sliver of the tail.
+    """
+    frm_t = torch.tensor(frm, dtype=torch.float64)
+    to_t = torch.tensor(to, dtype=torch.float64)
+    logits = torch.tensor([0.2, 0.5, 0.3], dtype=torch.float64).log()[None, :]
+
+    out = translate_probs_across_borders(logits, frm=frm_t, to=to_t)[0]
+
+    assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test__translate_probs_across_borders__mps_matches_cpu(chunked: bool) -> None:
+    """The float64 differencing must survive a device that has no float64.
+
+    MPS has none, so that path computes on the CPU. The conversions have to be
+    staged (move, then cast): a combined `.to(device=..., dtype=...)` off MPS
+    converts on the source device and silently returns all zeros rather than
+    raising, which produces a plausible-looking but completely wrong
+    distribution.
+    """
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS not available")
+
+    torch.manual_seed(0)
+    # Deliberately small: the suite shares one process-global MPS memory cap,
+    # so a test that reserves much of it makes unrelated tests flaky.
+    num_buckets = 300
+    logits = torch.randn(64, num_buckets)
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1)
+    to = torch.linspace(-4.2, 4.2, num_buckets + 1)
+    budget = {"chunk_budget_elements": num_buckets + 1} if chunked else {}
+
+    on_cpu = translate_probs_across_borders(logits, frm=frm, to=to, **budget)
+    on_mps = translate_probs_across_borders(
+        logits.to("mps"), frm=frm.to("mps"), to=to.to("mps"), **budget
+    )
+
+    assert on_mps.device.type == "mps"
+    assert on_mps.dtype == logits.dtype
+    # The whole computation happens on the CPU either way, so it is exact.
+    assert torch.equal(on_mps.cpu(), on_cpu)
+
+
+def test__translate_probs_across_borders__degenerate_outer_bucket_is_finite() -> None:
+    """A zero-width outer bucket must not turn the tail into NaN.
+
+    `_repair_borders` widens a collapsed outer bucket by a fraction of its own
+    value, which is a no-op when that border sits exactly at 0.0, so a
+    zero-width outer bucket can still reach here.
+    """
+    frm = torch.tensor([0.0, 0.0, 1.0, 2.0, 3.0, 3.0], dtype=torch.float64)
+    to = torch.linspace(-1.0, 4.0, 6, dtype=torch.float64)
+    logits = torch.zeros(4, 5, dtype=torch.float64)
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert bool(torch.isfinite(out).all())
+    torch.testing.assert_close(out.sum(-1), torch.ones(4, dtype=torch.float64))
 
 
 @pytest.mark.parametrize(
