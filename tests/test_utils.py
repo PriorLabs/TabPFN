@@ -578,6 +578,69 @@ def test__translate_probs_across_borders__to_inside_one_source_tail_sums_to_one(
 
 
 @pytest.mark.parametrize("chunked", [False, True])
+def test__translate_probs_across_borders__log_probs_survive_the_float32_cast(
+    monkeypatch: pytest.MonkeyPatch, chunked: bool
+) -> None:
+    """`return_log_probs` must keep masses that float32 cannot represent.
+
+    float32 has no value below ~1e-45, so returning probabilities throws away
+    exactly the small buckets the float64 differencing recovered. Taking the
+    log first keeps them: log(1e-300) is -690, an ordinary float32 number.
+    """
+    num_buckets = 500
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    to = torch.linspace(-4.2, 4.2, num_buckets + 1, dtype=torch.float64)
+    # A spiky source, so the far buckets really do hold ~1e-100 and below.
+    mids = (frm[1:] + frm[:-1]) / 2
+    density = torch.exp(-0.5 * (mids / 0.05) ** 2)
+    logits = (density / density.sum()).clamp_min(1e-300).log()[None, :].float()
+    # Several rows, so that a budget of one row per chunk really chunks.
+    logits = logits.repeat(8, 1)
+    budget = {"chunk_budget_elements": num_buckets + 1} if chunked else {}
+
+    calls = {"n": 0}
+    orig = _translate_probs_across_borders_unchunked
+
+    def counting_unchunked(*args, **kwargs) -> torch.Tensor:
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tabpfn.utils._translate_probs_across_borders_unchunked", counting_unchunked
+    )
+    as_probs = translate_probs_across_borders(
+        logits, frm=frm.float(), to=to.float(), **budget
+    )
+    as_logs = translate_probs_across_borders(
+        logits, frm=frm.float(), to=to.float(), return_log_probs=True, **budget
+    )
+
+    # With the budget set to one row per chunk, every row is its own chunk;
+    # otherwise each call goes straight to the unchunked kernel.
+    assert calls["n"] == (2 * logits.shape[0] if chunked else 2)
+    if chunked:
+        assert calls["n"] > 2, "the chunked path was not exercised"
+    assert as_logs.shape == as_probs.shape
+    assert as_logs.dtype == logits.dtype
+
+    tiny = torch.finfo(torch.float32).tiny
+    # Where float32 held the probability as a normal number, the two agree.
+    # Subnormals are excluded on purpose: they carry only a few significant
+    # bits, so `log(float32(p))` there is genuinely coarser than the log taken
+    # before the cast, which is the whole reason for this option.
+    normal = as_probs > tiny
+    assert int(normal.sum()) > 0
+    torch.testing.assert_close(
+        as_logs[normal], as_probs[normal].log(), rtol=1e-6, atol=1e-5
+    )
+
+    # And the buckets float32 could not hold at all come back finite.
+    rescued = (as_probs == 0) & torch.isfinite(as_logs)
+    assert int(rescued.sum()) > 0, "no bucket was rescued, the test proves nothing"
+    assert (as_logs[rescued] < math.log(tiny)).all()
+
+
+@pytest.mark.parametrize("chunked", [False, True])
 def test__translate_probs_across_borders__mps_matches_cpu(chunked: bool) -> None:
     """The float64 differencing must survive a device that has no float64.
 
