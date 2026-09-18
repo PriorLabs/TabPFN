@@ -501,14 +501,88 @@ class FullSupportBarDistribution(BarDistribution):
 
     @staticmethod
     def halfnormal_with_p_weight_before(
-        range_max: float,
+        range_max: float | torch.Tensor,
         p: float = 0.5,
     ) -> torch.distributions.HalfNormal:
         """Build a half-normal placing ``p`` of its mass below ``range_max``."""
-        s = range_max / torch.distributions.HalfNormal(torch.tensor(1.0)).icdf(
-            torch.tensor(p),
-        )
+        range_max = torch.as_tensor(range_max)
+        unit_halfnormal = torch.distributions.HalfNormal(torch.ones_like(range_max))
+        s = range_max / unit_halfnormal.icdf(torch.full_like(range_max, p))
         return torch.distributions.HalfNormal(s)
+
+    @override
+    def cdf(self, logits: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+        """Calculate the CDF, including the two half-normal tails."""
+        if len(ys.shape) < len(logits.shape) and len(ys.shape) == 1:
+            ys = ys.repeat((*logits.shape[:-1], 1))
+        else:
+            assert ys.shape[:-1] == logits.shape[:-1], (
+                f"ys.shape: {ys.shape} logits.shape: {logits.shape}"
+            )
+
+        prob_left_of_ys = super().cdf(logits, ys)
+        probs = torch.softmax(logits, dim=-1)
+        side_normals = (
+            self.halfnormal_with_p_weight_before(self.bucket_widths[0]),
+            self.halfnormal_with_p_weight_before(self.bucket_widths[-1]),
+        )
+
+        left_tail_cdf = probs[..., 0, None] * (
+            1.0 - side_normals[0].cdf((self.borders[1] - ys).clamp_min(0.0))
+        )
+        right_tail_cdf = 1.0 - probs[..., -1, None] * (
+            1.0 - side_normals[1].cdf((ys - self.borders[-2]).clamp_min(0.0))
+        )
+
+        prob_left_of_ys = torch.where(
+            ys < self.borders[1],
+            left_tail_cdf,
+            prob_left_of_ys,
+        )
+        prob_left_of_ys = torch.where(
+            ys >= self.borders[-2],
+            right_tail_cdf,
+            prob_left_of_ys,
+        )
+        return prob_left_of_ys.clip(0.0, 1.0)
+
+    @override
+    def icdf(self, logits: torch.Tensor, left_prob: float) -> torch.Tensor:
+        """Calculate quantiles using half-normal tails in the outer buckets."""
+        probs = logits.softmax(-1)
+        cumprobs = torch.cumsum(probs, -1)
+        left_prob_tensor = torch.full(
+            (*cumprobs.shape[:-1], 1),
+            left_prob,
+            dtype=logits.dtype,
+            device=logits.device,
+        )
+        idx = torch.searchsorted(cumprobs, left_prob_tensor).squeeze(-1)
+        idx = idx.clamp(0, self.num_bars - 1)
+
+        cumprobs_before = torch.cat(
+            (torch.zeros_like(cumprobs[..., :1]), cumprobs[..., :-1]),
+            dim=-1,
+        )
+        selected_probs = probs.gather(-1, idx[..., None]).squeeze(-1)
+        conditional_prob = (
+            left_prob - cumprobs_before.gather(-1, idx[..., None]).squeeze(-1)
+        ) / selected_probs
+        conditional_prob = conditional_prob.clamp(0.0, 1.0)
+
+        values = self.borders[idx] + self.bucket_widths[idx] * conditional_prob
+        side_normals = (
+            self.halfnormal_with_p_weight_before(self.bucket_widths[0]),
+            self.halfnormal_with_p_weight_before(self.bucket_widths[-1]),
+        )
+        left_tail_values = self.borders[1] - side_normals[0].icdf(
+            1.0 - conditional_prob,
+        )
+        right_tail_values = self.borders[-2] + side_normals[1].icdf(
+            conditional_prob,
+        )
+        values = torch.where(idx == 0, left_tail_values, values)
+        return torch.where(idx == self.num_bars - 1, right_tail_values, values)
 
     @override
     def forward(
@@ -606,9 +680,32 @@ class FullSupportBarDistribution(BarDistribution):
 
         Temperature t.
         """
-        p_cdf = torch.rand(*logits.shape[:-1])
-        return torch.tensor(
-            [self.icdf(logits[i, :] / t, p) for i, p in enumerate(p_cdf.tolist())],
+        bucket_indices = torch.distributions.Categorical(logits=logits / t).sample()
+        uniform_samples = torch.rand(
+            bucket_indices.shape,
+            dtype=logits.dtype,
+            device=logits.device,
+        )
+        samples = (
+            self.borders[bucket_indices]
+            + self.bucket_widths[bucket_indices] * uniform_samples
+        )
+
+        side_normals = (
+            self.halfnormal_with_p_weight_before(self.bucket_widths[0]),
+            self.halfnormal_with_p_weight_before(self.bucket_widths[-1]),
+        )
+        left_tail_samples = self.borders[1] - side_normals[0].sample(
+            bucket_indices.shape,
+        )
+        right_tail_samples = self.borders[-2] + side_normals[1].sample(
+            bucket_indices.shape,
+        )
+        samples = torch.where(bucket_indices == 0, left_tail_samples, samples)
+        return torch.where(
+            bucket_indices == self.num_bars - 1,
+            right_tail_samples,
+            samples,
         )
 
     @override
