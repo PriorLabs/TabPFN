@@ -73,7 +73,7 @@ _FA4_MAX_BATCH_PER_CALL = 65_535
 def _load_fa4_func() -> Callable | None:
     """Lazily import ``flash_attn.cute.flash_attn_func``; ``None`` if missing."""
     try:
-        from flash_attn.cute import (  # type: ignore[import-not-found]  # noqa: PLC0415
+        from flash_attn.cute import (  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
             flash_attn_func,
         )
     except ImportError:
