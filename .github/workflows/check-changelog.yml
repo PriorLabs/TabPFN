@@ -5,6 +5,10 @@ on:
     types: [opened, synchronize, labeled, unlabeled]
   merge_group:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   check:
     name: Changelog entry
