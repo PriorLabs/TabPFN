@@ -37,7 +37,7 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        # Pinned to v4 commit SHA to mitigate moving-tag supply-chain risk.
+        # Pinned to a commit SHA to mitigate moving-tag supply-chain risk.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
