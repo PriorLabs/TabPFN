@@ -20,7 +20,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_BOT_TOKEN }} 
+          # Credentials must persist: a later step pushes the release tag.
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
