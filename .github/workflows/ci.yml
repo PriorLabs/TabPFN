@@ -65,10 +65,6 @@ jobs:
             python-version: "3.14"
             dependency-set: highest
     runs-on: ${{ matrix.os }}
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -122,6 +118,9 @@ jobs:
 
       - &download-models
         name: Download models from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync python scripts/download_all_models.py
 
       - &save-model-cache
@@ -203,10 +202,16 @@ jobs:
 
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.6 (see tabpfn.utils.infer_devices()), thus
@@ -215,12 +220,16 @@ jobs:
       - name: Run Tests (all tests, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
 
@@ -243,10 +252,6 @@ jobs:
     needs: check_python_linting
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -280,6 +285,9 @@ jobs:
       - *save-model-cache
 
       - name: Run Tests
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync pytest tests/
 
       - *save-hf-cache
@@ -300,8 +308,6 @@ jobs:
           - tabpfn-extensions
           - tabpfn-time-series
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
       # Disable xet chunk cache to prevent disk exhaustion from 40+ model downloads.
       # Xet caches each downloaded file's chunks in ~/.cache/huggingface/xet/,
       # roughly doubling the effective disk footprint on the runner.
@@ -365,6 +371,9 @@ jobs:
         # saves it.
 
       - name: Download models from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: |
           cd TabPFN
           uv run python scripts/download_all_models.py
@@ -372,6 +381,8 @@ jobs:
 
       - name: Install dependencies and run tests
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           FAST_TEST_MODE: 1 # Configures -extensions to run a smaller set of tests.
         run: |
           cd ${{ matrix.repo-name }}
@@ -400,10 +411,6 @@ jobs:
             dependency-set: highest
 
     runs-on: ubuntu-22.04-4core-gpu
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -429,6 +436,8 @@ jobs:
 
       - name: Run GPU Test Suite
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
