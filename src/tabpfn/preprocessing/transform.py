@@ -140,16 +140,14 @@ def fit_preprocessing(
         X_train: Training data.
         y_train: Training target.
         feature_schema: feature schema.
-        n_preprocessing_jobs: Number of worker processes to use.
-            If `1`, then the preprocessing is performed in the current process. This
-                avoids multiprocessing overheads, but may not be able to full saturate
-                the CPU. Note that the preprocessing itself will parallelise over
-                multiple cores, so one job is often enough.
-            If `>1`, then different estimators are dispatched to different proceses,
-                which allows more parallelism but incurs some overhead.
-            If `-1`, then creates as many workers as CPU cores. As each worker itself
-                uses multiple cores, this is likely too many.
-            It is best to select this value by benchmarking.
+        n_preprocessing_jobs: Number of worker threads to use.
+            If `1`, then the preprocessing runs in the calling thread. The transforms
+                themselves parallelise over multiple cores, so one job is often enough.
+            If `>1`, then different estimators are preprocessed on different threads.
+                Threads share the training data, so the extra cost is small and the
+                gain grows with the table size.
+            If `-1`, then creates as many threads as CPU cores. As each transform
+                itself uses multiple cores, this is likely too many.
         parallel_mode:
             Parallel mode to use.
 
@@ -190,15 +188,22 @@ def fit_preprocessing(
             f"elements, but configs has {len(configs)} elements"
         )
 
+    # Threads, not processes: the tasks share `X_train` by reference and hand their
+    # transformed tables back without pickling, and the transforms release the GIL in
+    # numpy and scikit-learn. A process pool copies the table into every worker and
+    # every result back, which costs more than the preprocessing itself.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
             n_jobs=n_preprocessing_jobs,
             return_as=return_as,
             batch_size="auto",
+            prefer="threads",
         )
     else:
-        executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
+        executor = joblib.Parallel(
+            n_jobs=n_preprocessing_jobs, batch_size="auto", prefer="threads"
+        )
 
     yield from executor(  # type: ignore[misc]
         joblib.delayed(_fit_preprocessing_one)(

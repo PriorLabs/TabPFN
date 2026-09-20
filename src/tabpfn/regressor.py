@@ -541,15 +541,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 This parameter never had any effect.
 
             n_preprocessing_jobs:
-                The number of worker processes to use for the preprocessing.
+                The number of worker threads to use for the preprocessing.
 
-                If `1`, the preprocessing will be performed in the current process,
-                parallelised across multiple CPU cores. If `>1` and `n_estimators > 1`,
-                then different estimators will be dispatched to different processes.
-
-                We strongly recommend setting this to 1, which has the lowest overhead
-                and can often fully utilise the CPU. Values >1 can help if you have lots
-                of CPU cores available, but can also be slower.
+                If `1`, the preprocessing runs in the calling thread, parallelised
+                across multiple CPU cores inside each transform. If `>1` and
+                `n_estimators > 1`, different estimators are preprocessed on different
+                threads. The threads share the training data, so values up to
+                `n_estimators` cost little and speed up the fit on large tables.
 
             inference_config:
                 For advanced users, additional advanced arguments that adjust the
