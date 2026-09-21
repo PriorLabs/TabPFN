@@ -559,6 +559,8 @@ def translate_probs_across_borders(
         # ones as tails only moves mass around inside them, so the softmax is
         # already the answer. Half of the regressor's default ensemble lands
         # here, because every other member leaves its target untransformed.
+        if return_log_probs:
+            return torch.log_softmax(logits, dim=-1)
         return torch.softmax(logits, dim=-1)
 
     batch_shape = logits.shape[:-1]

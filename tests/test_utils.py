@@ -392,6 +392,24 @@ def test__translate_probs_across_borders__identity_remap_costs_nothing(
     assert torch.equal(out, logits.softmax(-1))
 
 
+def test__translate_probs_across_borders__identity_remap_honours_log_probs() -> None:
+    """The identity short-circuit must return the log when asked for it.
+
+    The regressor pools its ensemble in log space, so returning plain
+    probabilities for the members whose grid is unchanged would mix the two
+    scales silently, without a shape or dtype error to catch it.
+    """
+    torch.manual_seed(0)
+    logits = torch.randn(8, 200)
+    borders = torch.linspace(-3.0, 3.0, 201)
+
+    out = translate_probs_across_borders(
+        logits, frm=borders, to=borders.clone(), return_log_probs=True
+    )
+
+    torch.testing.assert_close(out, logits.log_softmax(-1))
+
+
 def test__cdf__outer_buckets_are_half_normal_tails() -> None:
     """`_cdf` must read the outer buckets the way `forward` does (PRI-361, mech 2).
 
