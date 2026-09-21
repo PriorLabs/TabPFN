@@ -334,6 +334,7 @@ def create_inference_engine(  # noqa: PLR0913
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+    kv_cache_at_predict: bool = False,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -363,12 +364,19 @@ def create_inference_engine(  # noqa: PLR0913
             inference device. If False, caches are offloaded to CPU as they
             are built and moved back on demand during inference, lowering
             resident device memory at the cost of per-call transfers.
-        kv_cache_precision: Only for ``fit_mode="fit_with_cache"``. Resolved
-            against what the architecture supports. ``None`` (default) picks the
-            architecture default (``"int8"`` when it can quantize, else
-            ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
-            ``"fp8"`` stores it as 8-bit floats (same size, float rounding
-            semantics); ``"auto"`` keeps the computed dtype.
+        kv_cache_precision: For ``fit_mode="fit_with_cache"`` and
+            ``kv_cache_at_predict``. Resolved against what the architecture
+            supports. ``"int8"`` quantizes the KV cache to save memory; ``"fp8"``
+            stores it as 8-bit floats (same size, float rounding semantics);
+            ``"auto"`` keeps the computed dtype. ``None`` (default) picks the
+            architecture default for ``fit_with_cache`` (``"int8"`` when it can
+            quantize, else ``"auto"``) and ``"auto"`` for ``kv_cache_at_predict``,
+            whose cache lives for one predict only.
+        kv_cache_at_predict: For ``fit_mode="low_memory"`` and
+            ``"fit_preprocessors"``. If True, each predict builds every ensemble
+            member's KV cache from its training rows, runs the test rows through
+            it in chunks and drops it, bounding test-side memory like
+            ``fit_with_cache`` without holding caches between calls.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -380,6 +388,8 @@ def create_inference_engine(  # noqa: PLR0913
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            kv_cache_at_predict=kv_cache_at_predict,
+            kv_cache_precision=kv_cache_precision,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
@@ -392,6 +402,8 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
+            kv_cache_at_predict=kv_cache_at_predict,
+            kv_cache_precision=kv_cache_precision,
         )
     if fit_mode == "fit_with_cache":
         return InferenceEngineExplicitKVCache(
@@ -689,17 +701,19 @@ def get_embeddings(
     """
     check_is_fitted(model)
 
-    if data_source == "train" and isinstance(
+    predicts_through_kv_cache = isinstance(
         model.executor_, InferenceEngineExplicitKVCache
-    ):
+    ) or getattr(model.executor_, "kv_cache_at_predict", False)
+    if data_source == "train" and predicts_through_kv_cache:
         # The cached predict pass only ever sees the test rows: the cache holds
         # the ICL key/value pairs and the projected decoder keys, not the train
         # embeddings themselves, so there is nothing to return here.
         raise TabPFNValidationError(
             'get_embeddings(..., data_source="train") is not supported with '
-            'fit_mode="fit_with_cache", because the cached predict pass does not '
-            "run the training rows through the transformer. Refit the model with "
-            'fit_mode="fit_preprocessors" to obtain training embeddings.'
+            'fit_mode="fit_with_cache" or kv_cache_at_predict=True, because the '
+            "cached predict pass does not run the training rows through the "
+            'transformer. Refit the model with fit_mode="fit_preprocessors" and '
+            "kv_cache_at_predict=False to obtain training embeddings."
         )
 
     data_map = {"train": "train_embeddings", "test": "test_embeddings"}
