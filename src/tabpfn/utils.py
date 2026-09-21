@@ -591,7 +591,11 @@ def translate_probs_across_borders(
     if fast != _TRANSLATE_COMPUTE_DTYPE and _has_empty_bucket(
         out, log_probs=return_log_probs
     ):
-        out = _translate_probs_across_borders_chunked(
+        # Release the fast pass's output before the precise one allocates its
+        # own: assigning over `out` would keep both alive, which is 200 MB at
+        # 10000 x 5000 and puts the escalated path above where it started.
+        del out
+        return _translate_probs_across_borders_chunked(
             logits,
             frm=frm,
             to=to,
