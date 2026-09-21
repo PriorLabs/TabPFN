@@ -5,21 +5,20 @@
 FA4 ships on PyPI as the ``flash-attn-4`` package (``pip install
 "tabpfn[fa4]"`` or ``"tabpfn[fa4-cu13]"``; beta releases only) and is imported
 as ``flash_attn.cute``. See ``fa4_setup.md`` next to this file. Its kernels
-are written in CuTeDSL and cover Hopper (sm_90), Blackwell datacenter
-(sm_100/sm_110) and Blackwell consumer / DGX Spark (sm_120/sm_121).
-FA4 requires fp16/bf16 inputs; the supported head dims depend on the
-architecture (see ``_fa4_max_head_dim``), and bf16 is left to SDPA on
-Blackwell (see ``_is_bf16_slow``).
+are written in CuTeDSL and cover Hopper (sm_90) and Blackwell (sm_100), the
+two architectures this backend dispatches on. FA4 requires fp16/bf16 inputs;
+the supported head dims depend on the architecture (see
+``_fa4_max_head_dim``), and bf16 is left to SDPA on Blackwell (see
+``_is_bf16_slow``).
 
 Properties of ``flash_attn.cute`` (as of ``flash-attn-4==4.0.0b30``) that
 this module accounts for:
 
 - ``flash_attn_func`` returns a ``(out, lse)`` tuple; ``lse`` is ``None``
   unless ``return_lse=True``.
-- Split-KV exists on sm_100/110 only, with a working ``num_splits=0``
-  heuristic; sm_90 has none and sm_12x accepts ``num_splits=1`` only. On
-  those, short-Q / long-KV calls are split outside the kernel using the
-  returned LSE (``_fa4_split_kv``).
+- Split-KV exists on sm_100 only, with a working ``num_splits=0``
+  heuristic; sm_90 has none. There, short-Q / long-KV inference calls are
+  split outside the kernel using the returned LSE (``_fa4_split_kv``).
 - The kernel launches one grid entry per batch element, so ``batch > 65535``
   fails with ``cudaErrorInvalidValue``; ``fa4_attn_func`` chunks the batch.
 - ``flash_attn_func`` is not Dynamo-traceable, so under ``torch.compile``
@@ -42,27 +41,28 @@ if TYPE_CHECKING:
     from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
 # Largest head dim FA4 accepts per compute-capability major; head dims must
-# also be a multiple of 8. sm_90 takes up to 256, sm_100/110 up to 128 (plus
-# DeepSeek-specific shapes TabPFN does not use). sm_12x is not validated by
-# FA4 itself; keep it at the sm_100 range until measured.
-_FA4_MAX_HEAD_DIM: dict[int, int] = {9: 256, 10: 128, 11: 128, 12: 128}
+# also be a multiple of 8. sm_90 takes up to 256, sm_100 up to 128 (plus
+# DeepSeek-specific shapes TabPFN does not use). Only architectures this
+# backend has been measured on are listed: FA4 also has kernels for Ampere
+# (sm_80, where SDPA already dispatches FA2), sm_110 and consumer Blackwell
+# (sm_12x, an SM80-style kernel that FA4 does not validate head dims for);
+# those stay on SDPA until measured.
+_FA4_MAX_HEAD_DIM: dict[int, int] = {9: 256, 10: 128}
 _FA4_HEAD_DIM_ALIGNMENT = 8
-
-# FA4 also has kernels for Ampere (sm_80), but SDPA already dispatches FA2
-# there, so Ampere is deliberately absent from the table above.
 
 # No sequence-length gate. Measured on H100 and GB200 (TabPFN#1235), FA4 is
 # within noise of SDPA from n_train=100 up and ahead from ~3k, so there is no
 # short-sequence regime where SDPA should be preferred.
 
-# On Blackwell (compute capability 10.x+) FA4's bf16 kernels run ~20% slower
-# than SDPA's from ~10k rows up, while fp16 does not (flash-attn-4 4.0.0b30).
-# bf16 is therefore left to SDPA there, with a one-time warning so the user
-# knows why the backend is not being used. Re-measure per FA4 beta.
-_FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR = 10
+# On sm_100 FA4's bf16 kernels run ~20% slower than SDPA's from ~10k rows
+# up, while fp16 does not (measured on GB200, flash-attn-4 4.0.0b30). bf16 is
+# therefore left to SDPA there, with a one-time warning so the user knows why
+# the backend is not being used. This is a measurement, not a property of the
+# architecture: re-check it when moving to a newer FA4 beta.
+_FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJORS = frozenset({10})
 
-# ``num_splits`` passed to FA4 where it implements split-KV (sm_100/110):
-# ``0`` asks its own heuristic.
+# ``num_splits`` passed to FA4 where it implements split-KV (sm_100): ``0``
+# asks its own heuristic.
 _FA4_NUM_SPLITS_SPLIT_KV_ARCHS = 0
 
 # Split-KV done outside the kernel, for architectures where FA4 has none
@@ -71,7 +71,13 @@ _FA4_NUM_SPLITS_SPLIT_KV_ARCHS = 0
 # unsplit on H100 and 0.4 ms split 32 ways. ``_split_kv_plan`` folds KV
 # chunks into the batch dimension so one FA4 launch fills the GPU; the
 # partial outputs are combined with the per-chunk log-sum-exps FA4 returns.
-_FA4_SPLIT_KV_Q_TILE = 128  # forward m-tile for head_dim 64 on sm_90
+# The plan is tuned by measurement on H100, not derived from occupancy:
+# FA4 packs GQA query heads into its m-tiles, so by tile count an 8:1 call
+# with seq_q=256 already fills the GPU, yet splitting it 32 ways is 20%
+# faster than 8 ways and 4x faster than unsplit, because each CTA's serial
+# loop over KV is the long pole. Treat ``_FA4_SPLIT_KV_Q_TILE`` as a
+# work-item size, not the kernel's tile.
+_FA4_SPLIT_KV_Q_TILE = 128
 _FA4_SPLIT_KV_TARGET_TILES = 128  # ~one CTA per SM on H100 (132)
 _FA4_SPLIT_KV_MAX_SPLITS = 32
 _FA4_SPLIT_KV_MIN_CHUNK = 2048  # keys per chunk below which splitting costs more
@@ -116,25 +122,27 @@ def is_fa4_eligible(device: torch.device, dtype: torch.dtype, head_dim: int) -> 
     Assumes the package is installed — see :meth:`FA4Backend.is_available`.
     """
     max_head_dim = _fa4_max_head_dim(device)
-    if max_head_dim is None or dtype not in (torch.float16, torch.bfloat16):
+    if (
+        max_head_dim is None
+        or dtype not in (torch.float16, torch.bfloat16)
+        or not _FA4_HEAD_DIM_ALIGNMENT <= head_dim <= max_head_dim
+        or head_dim % _FA4_HEAD_DIM_ALIGNMENT != 0
+    ):
         return False
     if dtype is torch.bfloat16 and _is_bf16_slow(device):
-        # Not while tracing: ``warnings.warn`` is not traceable (it breaks the
-        # graph), and the registry consults backends inside compiled regions.
+        # dtype is the only reason this call is declined, so the advice to
+        # use fp16 holds. Not while tracing: ``warnings.warn`` is not
+        # traceable (it breaks the graph), and the registry consults backends
+        # inside compiled regions.
         if not torch.compiler.is_compiling():
             _warn_bf16_blackwell_once()
         return False
-    return (
-        _FA4_HEAD_DIM_ALIGNMENT <= head_dim <= max_head_dim
-        and head_dim % _FA4_HEAD_DIM_ALIGNMENT == 0
-    )
+    return True
 
 
-@functools.cache
 def _is_bf16_slow(device: torch.device) -> bool:
-    """True on architectures where FA4 bf16 loses to SDPA (Blackwell)."""
-    major = _compute_capability_major(device)
-    return major is not None and major >= _FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR
+    """True on architectures where FA4 bf16 loses to SDPA (sm_100)."""
+    return _compute_capability_major(device) in _FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJORS
 
 
 @functools.cache
@@ -150,9 +158,8 @@ def _warn_bf16_blackwell_once() -> None:
 
 
 def _num_splits_for(device: torch.device) -> int:
-    """``num_splits`` FA4 accepts on ``device``; split-KV is sm_100/110 only."""
-    major = _compute_capability_major(device)
-    if major in (10, 11):
+    """``num_splits`` FA4 accepts on ``device``; split-KV is sm_100 only."""
+    if _compute_capability_major(device) == 10:
         return _FA4_NUM_SPLITS_SPLIT_KV_ARCHS
     return 1
 
@@ -165,11 +172,19 @@ def _split_kv_plan(batch: int, seq_q: int, seq_kv: int) -> int:
     worth a launch each.
     """
     tiles = batch * -(-seq_q // _FA4_SPLIT_KV_Q_TILE)
+    if tiles == 0:  # empty query: nothing to split
+        return 1
     splits = min(
         _FA4_SPLIT_KV_MAX_SPLITS,
         _FA4_SPLIT_KV_TARGET_TILES // tiles,
         seq_kv // _FA4_SPLIT_KV_MIN_CHUNK,
     )
+    if batch > 1:
+        # A slice along the sequence of a (B, S, ...) tensor is only
+        # contiguous for B == 1, so the batch > 1 fold must divide KV
+        # exactly to stay copy-free: take the largest divisor.
+        while splits > 1 and seq_kv % splits:
+            splits -= 1
     return max(splits, 1)
 
 
@@ -197,6 +212,9 @@ def _fa4_split_kv(
         out_t, lse_t = fn(q, k[:, main:], v[:, main:], return_lse=True)
         outs.append(out_t.unsqueeze(1))
         lses.append(lse_t.unsqueeze(1))
+    # FA4 ships a fused combine for its own split-KV path, but it is not part
+    # of the public interface. This eager combine reweights fp16-rounded
+    # partial outputs in fp32; measured against SDPA it stays within 6e-5.
     out_all = torch.cat(outs, dim=1).float()  # (B, S, Q, H, D)
     lse_all = (
         torch.cat(lses, dim=1).permute(0, 1, 3, 2).unsqueeze(-1)
@@ -232,7 +250,12 @@ def fa4_attn_func(
     batch = q.shape[0]
     if num_splits is None:
         num_splits = _num_splits_for(q.device)
-        if num_splits == 1:  # no kernel split-KV here: do it outside
+        needs_grad = torch.is_grad_enabled() and (
+            q.requires_grad or k.requires_grad or v.requires_grad
+        )
+        # No kernel split-KV here: do it outside. Inference only; a backward
+        # through the eager combine is not something this path is tested for.
+        if num_splits == 1 and not needs_grad:
             splits = _split_kv_plan(batch, q.shape[1], k.shape[1])
             if splits > 1:
                 return _fa4_split_kv(fn, q, k, v, splits)
