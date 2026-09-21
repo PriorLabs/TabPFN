@@ -368,7 +368,8 @@ def create_inference_engine(  # noqa: PLR0913
             architecture default (``"int8"`` when it can quantize, else
             ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
             ``"fp8"`` stores it as 8-bit floats (same size, float rounding
-            semantics); ``"auto"`` keeps the computed dtype.
+            semantics); ``"auto"`` keeps the computed dtype, or the grid an
+            attention backend already rounded it to (``kv_grid_dtype``).
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(

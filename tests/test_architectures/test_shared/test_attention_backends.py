@@ -186,3 +186,31 @@ def test_in_tree_backends_are_registered_when_available() -> None:
     names = [b.name for b in attention_backends.registered_attention_backends()]
     for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND):
         assert (backend.name in names) is backend.is_available(), backend.name
+
+
+class _Grid:
+    def __init__(self, name: str, grid: torch.dtype | None) -> None:
+        self.name = name
+        self.kv_grid_dtype = grid
+
+
+def test_kv_grid_dtype_needs_every_call_on_the_same_grid() -> None:
+    fp8 = _Grid("a", FP8_KV_DTYPE)
+    assert attention_backends.kv_grid_dtype([fp8, fp8]) == FP8_KV_DTYPE
+    assert attention_backends.kv_grid_dtype([]) is None
+    assert attention_backends.kv_grid_dtype([fp8, None]) is None
+    assert attention_backends.kv_grid_dtype([fp8, _Grid("b", torch.int8)]) is None
+    assert attention_backends.kv_grid_dtype([_RecordingBackend()]) is None
+
+
+@pytest.mark.usefixtures("registry_sandbox")
+def test_recorded_attention_backends_sees_each_dispatched_call() -> None:
+    backend = _RecordingBackend()
+    attention_backends.register_attention_backend(backend)
+    q, k, v = _qkv()
+    with attention_backends.recorded_attention_backends() as calls:
+        scaled_dot_product_attention(q, k, v)
+        scaled_dot_product_attention(q, k, v, backend=None)
+    scaled_dot_product_attention(q, k, v)
+
+    assert calls == [backend, None]

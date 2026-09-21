@@ -54,6 +54,10 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
+from tabpfn.architectures.shared.attention_backends import (
+    kv_grid_dtype,
+    recorded_attention_backends,
+)
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
@@ -1297,18 +1301,26 @@ class ICLAttention(nn.Module):
             # Norm once here so the value cached below is already normed.
             k = self.k_norm(k)
 
+            # A backend that took the train rows' call may have left K/V on a
+            # coarser grid; the cache below reads which one off this record.
+            train_calls_recorder = (
+                recorded_attention_backends()
+                if return_kv
+                else contextlib.nullcontext([])
+            )
             if (
                 self.num_kv_heads_test is not None
                 and single_eval_pos is not None
                 and N < R
             ):
                 # Train rows: full KV heads
-                out_train = _batched_scaled_dot_product_attention(
-                    q[:, :N],
-                    k,
-                    v,
-                    softmax_scaling_layer=self.softmax_scaling_layer,
-                )
+                with train_calls_recorder as train_calls:
+                    out_train = _batched_scaled_dot_product_attention(
+                        q[:, :N],
+                        k,
+                        v,
+                        softmax_scaling_layer=self.softmax_scaling_layer,
+                    )
                 # Test rows: fewer KV heads (GQA / MQA)
                 nh_test_heads = self.num_kv_heads_test
                 out_test = _batched_scaled_dot_product_attention(
@@ -1319,12 +1331,13 @@ class ICLAttention(nn.Module):
                 )
                 out = torch.cat([out_train, out_test], dim=1)
             else:
-                out = _batched_scaled_dot_product_attention(
-                    q,
-                    k,
-                    v,
-                    softmax_scaling_layer=self.softmax_scaling_layer,
-                )
+                with train_calls_recorder as train_calls:
+                    out = _batched_scaled_dot_product_attention(
+                        q,
+                        k,
+                        v,
+                        softmax_scaling_layer=self.softmax_scaling_layer,
+                    )
 
         result = self.out_projection(out.reshape(B, R, self.head_dim * self.num_heads))
 
@@ -1345,7 +1358,15 @@ class ICLAttention(nn.Module):
                 # cache silently retains all KV heads via the slice view.
                 k_cache = k_cache[:, :, :nh_test_heads].contiguous()
                 v_cache = v_cache[:, :, :nh_test_heads].contiguous()
-            kv_entry = KVCacheEntry(key=k_cache.detach(), value=v_cache.detach())
+            kv_entry = KVCacheEntry(
+                key=k_cache.detach(),
+                value=v_cache.detach(),
+                # A backend's grid has one scale per KV head, which a per-tensor
+                # quantization reproduces only for a single cached head.
+                grid_dtype=kv_grid_dtype(train_calls)
+                if k_cache.shape[2] == 1
+                else None,
+            )
         return result, kv_entry
 
 
@@ -2303,6 +2324,7 @@ class TabPFNV3p5(Architecture):
         # quantizes the finished cache through `TabPFNV3p5Cache.quantize`. Newer
         # ones set this instead and expect the quantization per layer, here,
         # which frees each full-precision entry as the loop moves on.
+        has_kv_cache_dtype = hasattr(performance_options, "kv_cache_dtype")
         kv_cache_dtype = getattr(performance_options, "kv_cache_dtype", None)
 
         # An ambient autocast context (e.g. the TabPFN inference engine wraps
@@ -2338,8 +2360,8 @@ class TabPFNV3p5(Architecture):
                             return_kv=True,
                         )
                         kv_compute_dtype = kv_entry.key.dtype
-                        if kv_cache_dtype is not None:
-                            kv_entry = kv_entry.quantize(kv_cache_dtype)
+                        if has_kv_cache_dtype:
+                            kv_entry = kv_entry.at_storage_dtype(kv_cache_dtype)
                         kv_out[layer_idx] = kv_entry
                 else:
                     for block in self.icl_blocks:

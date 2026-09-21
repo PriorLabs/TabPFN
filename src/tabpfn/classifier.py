@@ -494,7 +494,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 else `"auto"`); `"int8"` quantizes the key-value cache to save
                 memory; `"fp8"` stores it as 8-bit floats instead (same size,
                 float rounding semantics; not supported on MPS);
-                `"auto"` keeps the computed dtype. Requesting a
+                `"auto"` keeps the computed dtype, or stores the cache on the
+                lower-precision grid an attention backend already rounded it
+                to (one that declares `kv_grid_dtype`). Requesting a
                 quantized precision on an architecture that cannot quantize
                 warns and falls back to `"auto"`.
 

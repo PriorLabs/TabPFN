@@ -874,7 +874,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     cache with per-tensor symmetric quantization to save memory, dequantizing
     on-the-fly in the attention layer; ``"fp8"`` stores it as 8-bit floats
     instead (same size, float rounding semantics); ``"auto"`` keeps the
-    computed dtype.
+    computed dtype, unless an attention backend already rounded the keys and
+    values onto a lower-precision grid (``kv_grid_dtype``), which the cache then
+    stores exactly.
 
     At predict, only X_test is preprocessed (CPU and GPU). The model is
     called with ``x_is_test_only=True``. ``y`` still carries the full
@@ -929,7 +931,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 architecture default (``"int8"`` when it can quantize, else
                 ``"auto"``); ``"int8"`` quantizes to save memory; ``"fp8"``
                 stores 8-bit floats instead; ``"auto"`` keeps the computed
-                dtype.
+                dtype, or the grid an attention backend already rounded the
+                keys and values to.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],

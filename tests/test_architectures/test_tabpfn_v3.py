@@ -19,6 +19,10 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
+from tabpfn.architectures.shared.attention_backends import (
+    register_attention_backend,
+    unregister_attention_backend,
+)
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, get_cache_size
 from tabpfn.constants import ModelVersion
 from tabpfn.utils import get_autocast_context
@@ -848,3 +852,53 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
 
     # Numbers need manual update if we bump the default architecture.
     assert total == 3_072_000 + 96 + 4 + 768_000 + inducing
+
+
+class _GridBackend:
+    """Takes the ICL train->train call and declares the grid it leaves K/V on."""
+
+    name = "test-grid"
+    kv_grid_dtype = FP8_KV_DTYPE
+
+    def is_preferred(self, spec) -> bool:
+        return spec.num_kv_heads == spec.num_heads and spec.seq_len_q == spec.seq_len_kv
+
+    def run(self, q, k, v, **_kwargs) -> torch.Tensor:
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        )
+        return out.transpose(1, 2)
+
+
+@torch.no_grad()
+def test__kv_cache__auto_precision__stores_the_grid_the_train_call_left() -> None:
+    config = tabpfn_v3.TabPFNV3Config(
+        max_num_classes=10,
+        num_buckets=5,
+        embed_dim=48,
+        nlayers=1,
+        icl_num_heads=3,
+        icl_num_kv_heads_test=1,
+        dist_embed_num_heads=3,
+        feat_agg_num_heads=3,
+    )
+    arch = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    arch.to(torch.float32)
+    x = torch.randn(30, 2, 5) * 0.1
+    y = torch.randint(0, 10, [26, 2], dtype=torch.float32)
+    backend = _GridBackend()
+    register_attention_backend(backend)
+    try:
+        _, cache = arch(
+            x,
+            y,
+            return_kv_cache=True,
+            performance_options=PerformanceOptions(kv_cache_dtype=None),
+        )
+    finally:
+        unregister_attention_backend(backend.name)
+
+    assert cache.kv
+    for entry in cache.kv.values():
+        assert isinstance(entry, QuantizedKVCacheEntry)
+        assert entry.key.dtype == FP8_KV_DTYPE

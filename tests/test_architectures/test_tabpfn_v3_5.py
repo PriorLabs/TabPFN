@@ -30,6 +30,10 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
+from tabpfn.architectures.shared.attention_backends import (
+    register_attention_backend,
+    unregister_attention_backend,
+)
 from tabpfn.architectures.tabpfn_v3_5 import (
     TabPFNV3p5,
     TabPFNV3p5Cache,
@@ -903,6 +907,84 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         torch.testing.assert_close(
             actual.value_scale, expected.value_scale, rtol=1e-6, atol=0
         )
+
+
+class _GridBackend:
+    """Takes the ICL train->train call and declares the grid it leaves K/V on."""
+
+    name = "test-grid"
+    kv_grid_dtype = FP8_KV_DTYPE
+
+    def __init__(self, *, preferred: bool = True) -> None:
+        self.preferred = preferred
+
+    def is_preferred(self, spec) -> bool:
+        return (
+            self.preferred
+            and spec.num_kv_heads == spec.num_heads
+            and spec.seq_len_q == spec.seq_len_kv
+        )
+
+    def run(self, q, k, v, **_kwargs) -> torch.Tensor:
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        )
+        return out.transpose(1, 2)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    ("preferred", "cache_dtype", "expected"),
+    [
+        (True, None, FP8_KV_DTYPE),
+        (False, None, None),
+        (True, QUANTIZED_KV_DTYPE, QUANTIZED_KV_DTYPE),
+    ],
+)
+def test__kv_cache__auto_precision__follows_the_backend_that_ran(
+    preferred: bool,
+    cache_dtype: torch.dtype | None,
+    expected: torch.dtype | None,
+) -> None:
+    """`"auto"` stores the grid the train call left K/V on; an explicit dtype wins."""
+    arch = _get_model()
+    x, y = _inputs("multiclass")
+    backend = _GridBackend(preferred=preferred)
+    register_attention_backend(backend)
+    try:
+        _, cache = arch(
+            x,
+            y,
+            task_type="multiclass",
+            return_kv_cache=True,
+            performance_options=PerformanceOptions(kv_cache_dtype=cache_dtype),
+        )
+    finally:
+        unregister_attention_backend(backend.name)
+
+    for entry in cache.kv.values():
+        if expected is None:
+            assert isinstance(entry, KVCacheEntry)
+        else:
+            assert isinstance(entry, QuantizedKVCacheEntry)
+            assert entry.key.dtype == expected
+
+
+@torch.no_grad()
+def test__kv_cache__auto_precision__several_cached_heads__keeps_computed_dtype() -> (
+    None
+):
+    """A per-head grid survives a per-tensor quantization only for one head."""
+    arch = _get_model(icl_num_kv_heads_test=2)
+    x, y = _inputs("multiclass")
+    backend = _GridBackend()
+    register_attention_backend(backend)
+    try:
+        _, cache = arch(x, y, task_type="multiclass", return_kv_cache=True)
+    finally:
+        unregister_attention_backend(backend.name)
+
+    assert all(isinstance(entry, KVCacheEntry) for entry in cache.kv.values())
 
 
 @torch.no_grad()
