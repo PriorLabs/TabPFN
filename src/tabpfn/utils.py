@@ -409,10 +409,8 @@ def _cdf_and_survival(
     survival = prob_above_bucket + prob_in_bucket * (1.0 - share_of_bucket_left)
 
     # Read the two outer buckets as their half-normal tails. The whole bucket
-    # is overwritten, not just the part outside `borders`, because the tail
-    # redistributes mass within the bucket too; `CDF(borders[1])` stays
-    # `probs[..., 0]`, so interior buckets are untouched. Masking sizes the
-    # tail transients by the `ys` in the outer buckets, not by all of `ys`.
+    # is overwritten because the tail redistributes mass inside it too, but
+    # `CDF(borders[1])` is unchanged, so interior buckets are untouched.
     if n_bars > 1:
         in_lower_tail = ys <= borders[1]
         lower_tail = probs[..., 0:1].expand_as(ys)[
