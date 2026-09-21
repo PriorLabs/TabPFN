@@ -155,12 +155,22 @@ We're building the future of tabular machine learning and would love your involv
 
 ## Citation
 
-You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and model reports for [TabPFN-2.5](https://arxiv.org/abs/2511.08667) and [TabPFN-3](https://arxiv.org/abs/2605.13986).
+You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and model reports for [TabPFN-2.5](https://arxiv.org/abs/2511.08667), [TabPFN-3](https://arxiv.org/abs/2605.13986) and [TabPFN-3.5](https://arxiv.org/abs/2609.17895).
 
 <details>
 <summary><b>BibTeX</b></summary>
 
 ```bibtex
+@misc{jaeger2026tabpfn35technicalreport,
+      title={TabPFN-3.5: Technical Report},
+      author={Benjamin Jäger and Nick Erickson and Léo Grinsztajn and Felix Birkel and Klemens Flöge and Oscar Key and Kürşat Kaya and Jonas Kübler and Adèle Frankel and Tobias Schröder and Anurag Garg and Jan Hendrik Metzen and David Salinas and Simon Bing and Kristina Collins and Tuana Çelik and Vahid Balazadeh and Lydia Sidhoum and Tomás Pereda and Brendan Roof and Andrej Tschalzev and Siyuan Guo and Philipp Singer and Lennart Purucker and Jake Robertson and Marie Salmon and Philipp Jund and Jerry Chen and Diana Kriuchkova and Arthur Cahu and Eliott Kalfon and Adrian Hayler and Georg Grab and Vitor Monteiro and Lilly Wehrhahn and Dominik Safaric and Clara Cornu and Alan Arazi and Rylee Grace and Simone Alessi and Mihir Manium and Bernhard Schölkopf and Yann LeCun and Madelon Hulsebos and Sauraj Gambhir and Noah Hollmann and Frank Hutter},
+      year={2026},
+      eprint={2609.17895},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2609.17895},
+}
+
 @misc{grinsztajn2026tabpfn3technicalreport,
       title={TabPFN-3: Technical Report}, 
       author={Léo Grinsztajn and Klemens Flöge and Oscar Key and Felix Birkel and Philipp Jund and Brendan Roof and Mihir Manium and Shi Bin Hoo and Magnus Bühler and Anurag Garg and Dominik Safaric and Jake Robertson and Benjamin Jäger and Simone Alessi and Adrian Hayler and Vladyslav Moroshan and Lennart Purucker and Philipp Singer and Alan Arazi and Julien Siems and Jan Hendrik Metzen and Georg Grab and Nick Erickson and Siyuan Guo and Eliott Kalfon and Simon Bing and David Salinas and Clara Cornu and Lilly Charlotte Wehrhahn and Diana Kriuchkova and Kursat Kaya and Lydia Sidhoum and Marie Salmon and Jerry Chen and Madelon Hulsebos and Yann LeCun and Samuel Müller and Bernhard Schölkopf and Sauraj Gambhir and Noah Hollmann and Frank Hutter},
