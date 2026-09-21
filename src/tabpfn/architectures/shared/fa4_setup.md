@@ -2,9 +2,8 @@
 
 TabPFN v3 can dispatch attention to FlashAttention-4 instead of PyTorch's
 SDPA. FA4 is the CuTeDSL rewrite of FlashAttention and ships kernels for
-Hopper (sm_90), Blackwell datacenter (sm_100/sm_110) and Blackwell consumer /
-DGX Spark (sm_120/sm_121), so one backend covers the GPUs FA3 serves and the
-ones it cannot. On Hopper, FA4 replaces the FA3 backend: measured on H100 it
+Hopper (sm_90) and Blackwell (sm_100), so one backend covers the GPUs FA3
+served and the ones it could not. On Hopper, FA4 replaces the FA3 backend: measured on H100 it
 matches or beats FA3 at every sequence length and, unlike FA3, has no
 short-sequence penalty against SDPA (see [measured speedups](#measured-speedups)).
 
@@ -14,8 +13,10 @@ The dispatcher routes a call to FA4 only when **all** of the following hold:
 
 - The `flash-attn-4` package is importable as `flash_attn.cute`.
 - The attention is on a CUDA tensor whose device has compute capability
-  9.x, 10.x, 11.x or 12.x. ROCm is rejected explicitly. Ampere (8.x) is left
-  to SDPA, which already dispatches FA2 there.
+  9.x or 10.x, the two architectures this backend has been measured on. ROCm
+  is rejected explicitly. Ampere (8.x) is left to SDPA, which already
+  dispatches FA2 there; sm_110 and consumer Blackwell (sm_12x) stay on SDPA
+  until measured.
 - The dtype is `torch.float16`, or `torch.bfloat16` on a pre-Blackwell GPU.
   On compute capability 10.x+ bf16 stays on SDPA, with a one-time warning
   (see [bf16 on Blackwell](#bf16-on-blackwell)).
@@ -129,10 +130,9 @@ Hopper. Things in `fa4_backend.py` that exist because FA4 4.0.0b30 differs
 from it:
 
 - `flash_attn.cute.flash_attn_func` returns `(out, lse)` unconditionally.
-- Split-KV is not implemented on sm_90 and sm_12x only accepts `num_splits=1`.
-  On sm_100/110, where it exists, `num_splits=0` asks FA4's own heuristic.
-  Elsewhere the backend splits outside the kernel for short-Q / long-KV calls
-  at small batch (`_split_kv_plan`, `_fa4_split_kv`): KV chunks are folded
+- Split-KV is not implemented on sm_90. On sm_100, where it exists,
+  `num_splits=0` asks FA4's own heuristic. On sm_90 the backend splits
+  outside the kernel for short-Q / long-KV inference calls at small batch (`_split_kv_plan`, `_fa4_split_kv`): KV chunks are folded
   into the batch dimension for one launch and the partial outputs combined
   with the log-sum-exps FA4 returns. This is the cached-prediction shape,
   a few test rows against a large training cache; unsplit, such a call
