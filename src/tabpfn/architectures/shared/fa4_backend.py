@@ -14,9 +14,12 @@ Blackwell (see ``_is_bf16_slow``).
 Properties of ``flash_attn.cute`` (as of ``flash-attn-4==4.0.0b30``) that
 this module accounts for:
 
-- ``flash_attn_func`` returns ``(out, lse)`` unconditionally.
+- ``flash_attn_func`` returns a ``(out, lse)`` tuple; ``lse`` is ``None``
+  unless ``return_lse=True``.
 - Split-KV exists on sm_100/110 only, with a working ``num_splits=0``
-  heuristic; sm_90 has none and sm_12x accepts ``num_splits=1`` only.
+  heuristic; sm_90 has none and sm_12x accepts ``num_splits=1`` only. On
+  those, short-Q / long-KV calls are split outside the kernel using the
+  returned LSE (``_fa4_split_kv``).
 - The kernel launches one grid entry per batch element, so ``batch > 65535``
   fails with ``cudaErrorInvalidValue``; ``fa4_attn_func`` chunks the batch.
 - ``flash_attn_func`` is not Dynamo-traceable, so under ``torch.compile``
@@ -58,10 +61,20 @@ _FA4_HEAD_DIM_ALIGNMENT = 8
 # knows why the backend is not being used. Re-measure per FA4 beta.
 _FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR = 10
 
-# ``num_splits`` passed to FA4 where split-KV exists (sm_100/110). ``0``
-# asks FA4's own heuristic. Whether that beats ``1`` on TabPFN's short-Q /
-# long-KV cross-attention is a benchmark question, not a settled one.
+# ``num_splits`` passed to FA4 where it implements split-KV (sm_100/110):
+# ``0`` asks its own heuristic.
 _FA4_NUM_SPLITS_SPLIT_KV_ARCHS = 0
+
+# Split-KV done outside the kernel, for architectures where FA4 has none
+# (sm_90 in particular). A short-Q call against a long KV at small batch
+# runs on a handful of SMs: (1, 16, 8, 64) x (1, 1M, 1, 64) takes 9.9 ms
+# unsplit on H100 and 0.4 ms split 32 ways. ``_split_kv_plan`` folds KV
+# chunks into the batch dimension so one FA4 launch fills the GPU; the
+# partial outputs are combined with the per-chunk log-sum-exps FA4 returns.
+_FA4_SPLIT_KV_Q_TILE = 128  # forward m-tile for head_dim 64 on sm_90
+_FA4_SPLIT_KV_TARGET_TILES = 128  # ~one CTA per SM on H100 (132)
+_FA4_SPLIT_KV_MAX_SPLITS = 32
+_FA4_SPLIT_KV_MIN_CHUNK = 2048  # keys per chunk below which splitting costs more
 
 # FA4 launches one grid entry per batch element; CUDA caps that dimension.
 _FA4_MAX_BATCH_PER_CALL = 65_535
@@ -144,6 +157,55 @@ def _num_splits_for(device: torch.device) -> int:
     return 1
 
 
+def _split_kv_plan(batch: int, seq_q: int, seq_kv: int) -> int:
+    """Chunks to split KV into outside the kernel; 1 means do not split.
+
+    Splits only when the unsplit launch would under-fill the GPU (few
+    ``batch x q-tile`` work items) and the chunks stay long enough to be
+    worth a launch each.
+    """
+    tiles = batch * -(-seq_q // _FA4_SPLIT_KV_Q_TILE)
+    splits = min(
+        _FA4_SPLIT_KV_MAX_SPLITS,
+        _FA4_SPLIT_KV_TARGET_TILES // tiles,
+        seq_kv // _FA4_SPLIT_KV_MIN_CHUNK,
+    )
+    return max(splits, 1)
+
+
+def _fa4_split_kv(
+    fn: Callable, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, splits: int
+) -> torch.Tensor:
+    """Attention over ``splits`` KV chunks in one launch, combined by LSE."""
+    batch, seq_q, n_heads, head_dim = q.shape
+    seq_kv, n_kv_heads = k.shape[1], k.shape[2]
+    chunk = seq_kv // splits
+    main = chunk * splits
+
+    def fold(t: torch.Tensor) -> torch.Tensor:
+        return t[:, :main].reshape(batch * splits, chunk, n_kv_heads, head_dim)
+
+    q_rep = (
+        q.unsqueeze(1)
+        .expand(batch, splits, seq_q, n_heads, head_dim)
+        .reshape(batch * splits, seq_q, n_heads, head_dim)
+    )
+    out, lse = fn(q_rep, fold(k), fold(v), return_lse=True)
+    outs = [out.view(batch, splits, seq_q, n_heads, head_dim)]
+    lses = [lse.view(batch, splits, n_heads, seq_q)]
+    if main < seq_kv:  # the remainder that did not divide evenly
+        out_t, lse_t = fn(q, k[:, main:], v[:, main:], return_lse=True)
+        outs.append(out_t.unsqueeze(1))
+        lses.append(lse_t.unsqueeze(1))
+    out_all = torch.cat(outs, dim=1).float()  # (B, S, Q, H, D)
+    lse_all = (
+        torch.cat(lses, dim=1).permute(0, 1, 3, 2).unsqueeze(-1)
+    )  # (B, S, Q, H, 1)
+    weight = torch.exp(lse_all - lse_all.max(dim=1, keepdim=True).values)
+    combined = (out_all * weight).sum(dim=1) / weight.sum(dim=1)
+    return combined.to(q.dtype)
+
+
 def fa4_attn_func(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -154,9 +216,11 @@ def fa4_attn_func(
     """Call ``flash_attn.cute.flash_attn_func`` with the v3 layout (B, S, H, D).
 
     GQA is handled natively by FA4 when ``nheads_q % nheads_k == 0``.
-    ``num_splits=None`` picks the per-architecture default; pass a value to
-    override it (benchmarks). Batches above ``_FA4_MAX_BATCH_PER_CALL`` are
-    run in chunks.
+    ``num_splits=None`` picks the per-architecture default: FA4's own
+    split-KV heuristic where it has one, otherwise split-KV outside the
+    kernel for short-Q / long-KV calls (see ``_split_kv_plan``); pass a
+    value to override (benchmarks). Batches above ``_FA4_MAX_BATCH_PER_CALL``
+    are run in chunks.
     """
     fn = _load_fa4_func()
     if fn is None:
@@ -165,10 +229,14 @@ def fa4_attn_func(
             "install it with `pip install 'tabpfn[fa4]'` "
             "(see fa4_setup.md next to this file)."
         )
+    batch = q.shape[0]
     if num_splits is None:
         num_splits = _num_splits_for(q.device)
+        if num_splits == 1:  # no kernel split-KV here: do it outside
+            splits = _split_kv_plan(batch, q.shape[1], k.shape[1])
+            if splits > 1:
+                return _fa4_split_kv(fn, q, k, v, splits)
 
-    batch = q.shape[0]
     if batch <= _FA4_MAX_BATCH_PER_CALL:
         out, _lse = fn(q, k, v, num_splits=num_splits)
         return out

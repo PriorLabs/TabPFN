@@ -97,6 +97,20 @@ head_dim-16 feature-attention stages, hence the dependence on `n_features`.
 Below ~3k rows FA4 is within noise of SDPA on both GPUs, which is why there is
 no sequence-length gate.
 
+**Cached prediction, few test rows** (H100, `fit_mode="fit_with_cache"`,
+`predict_proba` on n_test rows, n_estimators=1, median of 7):
+
+| n_train | n_test | SDPA | FA4 | FA3 (removed backend) |
+|---:|---:|---:|---:|---:|
+| 100k | 16 | 36.7 ms | 28.4 ms | 23.1 ms |
+| 100k | 256 | 38.8 ms | 27.1 ms | 23.0 ms |
+| 300k | 16 | 89.3 ms | 27.7 ms | 23.0 ms |
+| 300k | 256 | 92.2 ms | 28.2 ms | 25.1 ms |
+
+The per-predict attention here is 24 calls of `(1, n_test, 8, 64)` against
+`(1, n_train, 1, 64)`; the out-of-kernel split-KV path is what keeps FA4 near
+FA3 (unsplit, FA4 equals SDPA on these).
+
 ## bf16 on Blackwell
 
 On sm_100, FA4's bf16 forward is 18–23% slower than SDPA's from ~10k rows up
@@ -115,9 +129,14 @@ Hopper. Things in `fa4_backend.py` that exist because FA4 4.0.0b30 differs
 from it:
 
 - `flash_attn.cute.flash_attn_func` returns `(out, lse)` unconditionally.
-- Split-KV is not implemented on sm_90 and sm_12x only accepts `num_splits=1`,
-  so FA3's manual short-Q split rule is not carried over. On sm_100/110, where
-  split-KV exists, `num_splits=0` asks FA4's own heuristic.
+- Split-KV is not implemented on sm_90 and sm_12x only accepts `num_splits=1`.
+  On sm_100/110, where it exists, `num_splits=0` asks FA4's own heuristic.
+  Elsewhere the backend splits outside the kernel for short-Q / long-KV calls
+  at small batch (`_split_kv_plan`, `_fa4_split_kv`): KV chunks are folded
+  into the batch dimension for one launch and the partial outputs combined
+  with the log-sum-exps FA4 returns. This is the cached-prediction shape,
+  a few test rows against a large training cache; unsplit, such a call
+  fills only a handful of SMs.
 - The kernel launches one grid entry per batch element, so `batch > 65535`
   fails with `cudaErrorInvalidValue`. `fa4_attn_func` chunks the batch.
 
