@@ -390,19 +390,22 @@ def _cdf_and_survival(
 
     The survival function is accumulated from the top rather than taken as
     `1 - CDF`, so that each of the two is accurate where it is small.
+
+    `ys` is one grid shared by every row, so its bucket index, its share of
+    that bucket and the two tail masks stay one-dimensional and only the
+    cumulative probabilities are materialised per row.
     """
-    ys = ys.repeat((*logits.shape[:-1], 1))
     n_bars = len(borders) - 1
     y_buckets = _map_to_bucket_ix(ys, borders).clamp(0, n_bars - 1).to(logits.device)
 
     probs = torch.softmax(logits, dim=-1)
-    prob_in_bucket = probs.gather(index=y_buckets, dim=-1)
-    prob_below_bucket = (torch.cumsum(probs, dim=-1) - probs).gather(
-        index=y_buckets, dim=-1
+    prob_in_bucket = probs.index_select(-1, y_buckets)
+    prob_below_bucket = (torch.cumsum(probs, dim=-1) - probs).index_select(
+        -1, y_buckets
     )
-    prob_above_bucket = (torch.cumsum(probs.flip(-1), dim=-1).flip(-1) - probs).gather(
-        index=y_buckets, dim=-1
-    )
+    prob_above_bucket = (
+        torch.cumsum(probs.flip(-1), dim=-1).flip(-1) - probs
+    ).index_select(-1, y_buckets)
 
     bucket_widths = borders[1:] - borders[:-1]
     share_of_bucket_left = (ys - borders[y_buckets]) / bucket_widths[y_buckets]
@@ -416,23 +419,19 @@ def _cdf_and_survival(
     # `CDF(borders[1])` is unchanged, so interior buckets are untouched.
     if n_bars > 1:
         in_lower_tail = ys <= borders[1]
-        lower_tail = probs[..., 0:1].expand_as(ys)[
-            in_lower_tail
-        ] * _halfnormal_tail_survival(
+        lower_tail = probs[..., 0:1] * _halfnormal_tail_survival(
             borders[1] - ys[in_lower_tail],
             bucket_widths[0],
         )
-        cdf[in_lower_tail] = lower_tail
-        survival[in_lower_tail] = 1.0 - lower_tail
+        cdf[..., in_lower_tail] = lower_tail
+        survival[..., in_lower_tail] = 1.0 - lower_tail
         in_upper_tail = ys >= borders[-2]
-        upper_tail = probs[..., -1:].expand_as(ys)[
-            in_upper_tail
-        ] * _halfnormal_tail_survival(
+        upper_tail = probs[..., -1:] * _halfnormal_tail_survival(
             ys[in_upper_tail] - borders[-2],
             bucket_widths[-1],
         )
-        cdf[in_upper_tail] = 1.0 - upper_tail
-        survival[in_upper_tail] = upper_tail
+        cdf[..., in_upper_tail] = 1.0 - upper_tail
+        survival[..., in_upper_tail] = upper_tail
 
     return cdf.clip(0.0, 1.0), survival.clip(0.0, 1.0)
 
@@ -498,7 +497,7 @@ def _translate_probs_across_borders_unchunked(
     return mass.to(out_dtype).to(out_device)
 
 
-# `_cdf_and_survival` allocates ~10 intermediate tensors of shape
+# `_cdf_and_survival` allocates ~6 intermediate tensors of shape
 # (batch, len(to)). Targeting `chunk_size * len(to) <=
 # _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient around ~80 MB at
 # `_TRANSLATE_COMPUTE_DTYPE`'s 8 bytes/element and the total around ~1 GB,
