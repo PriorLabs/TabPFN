@@ -244,7 +244,9 @@ def test__translate_probs_across_borders__matches_unchunked(batch: int) -> None:
     num_buckets = 5000
     logits = torch.randn(batch, num_buckets)
     frm = torch.linspace(-3.0, 3.0, num_buckets + 1)
-    to = torch.linspace(-3.0, 3.0, num_buckets + 1)
+    # Distinct from `frm`, or the identity short-circuit returns before the
+    # dispatch this test is about.
+    to = torch.linspace(-3.1, 3.1, num_buckets + 1)
 
     out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
     out_public = translate_probs_across_borders(logits, frm=frm, to=to)
@@ -268,7 +270,9 @@ def test__translate_probs_across_borders__forces_chunking(
     num_buckets = shape[-1]
     logits = torch.randn(*shape)
     frm = torch.linspace(-3.0, 3.0, num_buckets + 1)
-    to = torch.linspace(-3.0, 3.0, num_buckets + 1)
+    # Distinct from `frm`, or the identity short-circuit returns before the
+    # dispatch this test is about.
+    to = torch.linspace(-3.1, 3.1, num_buckets + 1)
 
     out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
@@ -354,6 +358,38 @@ def test__translate_probs_across_borders__identity_remap_is_the_identity(
 
     assert out.dtype == dtype
     torch.testing.assert_close(out, logits.softmax(-1))
+
+
+def test__translate_probs_across_borders__identity_remap_costs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`to == frm` must not pay for the differencing at all.
+
+    Half of the regressor's default ensemble translates onto the grid it is
+    already on, because `REGRESSION_Y_PREPROCESS_TRANSFORMS` leaves every
+    other member's target untransformed, so this is the common case rather
+    than a corner of it.
+    """
+    call_counter = {"n": 0}
+    orig = _translate_probs_across_borders_unchunked
+
+    def counting_unchunked(*args, **kwargs) -> torch.Tensor:
+        call_counter["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tabpfn.utils._translate_probs_across_borders_unchunked",
+        counting_unchunked,
+    )
+    torch.manual_seed(0)
+    logits = torch.randn(64, 300)
+    borders = torch.linspace(-3.0, 3.0, 301)
+
+    # A separate tensor holding the same borders: equal values, not one object.
+    out = translate_probs_across_borders(logits, frm=borders, to=borders.clone())
+
+    assert call_counter["n"] == 0
+    assert torch.equal(out, logits.softmax(-1))
 
 
 def test__cdf__outer_buckets_are_half_normal_tails() -> None:

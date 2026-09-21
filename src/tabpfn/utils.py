@@ -542,6 +542,13 @@ def translate_probs_across_borders(
     Returns:
         The translated probabilities.
     """
+    if frm.shape == to.shape and frm.dtype == to.dtype and torch.equal(frm, to):
+        # Every destination bucket is a source bucket, and reading the outer
+        # ones as tails only moves mass around inside them, so the softmax is
+        # already the answer. Half of the regressor's default ensemble lands
+        # here, because every other member leaves its target untransformed.
+        return torch.softmax(logits, dim=-1)
+
     batch_shape = logits.shape[:-1]
     num_buckets_frm = logits.shape[-1]
     num_borders_to = to.shape[0]
