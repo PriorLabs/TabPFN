@@ -450,14 +450,25 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
 # to its log with `return_log_probs`.
 _TRANSLATE_COMPUTE_DTYPE = torch.float64
 
+# Most heads never need the upcast: float32 loses a bucket only once its mass
+# falls below the resolution of the cumulative it is differenced from, which a
+# smooth head reaches nowhere and a spiky one reaches in the bulk. So the
+# differencing runs here first and is redone at `_TRANSLATE_COMPUTE_DTYPE` only
+# when a bucket that precision could rescue came out empty.
+_TRANSLATE_FAST_DTYPE = torch.float32
 
-def _translate_compute_device(device: torch.device) -> torch.device:
-    """Where to run the float64 differencing for a tensor on `device`.
 
-    MPS has no float64, so that path computes on the CPU and moves back; every
-    other backend keeps the data where it is.
+def _translate_compute_device(
+    device: torch.device, compute_dtype: torch.dtype
+) -> torch.device:
+    """Where to run the differencing for a tensor on `device`.
+
+    MPS has no float64, so a float64 pass computes on the CPU and moves back;
+    every other combination keeps the data where it is.
     """
-    return torch.device("cpu") if device.type == "mps" else device
+    if device.type == "mps" and compute_dtype == torch.float64:
+        return torch.device("cpu")
+    return device
 
 
 def _translate_probs_across_borders_unchunked(
@@ -466,16 +477,17 @@ def _translate_probs_across_borders_unchunked(
     frm: torch.Tensor,
     to: torch.Tensor,
     return_log_probs: bool = False,
+    compute_dtype: torch.dtype = _TRANSLATE_COMPUTE_DTYPE,
 ) -> torch.Tensor:
     out_dtype = logits.dtype
     out_device = logits.device
-    device = _translate_compute_device(out_device)
+    device = _translate_compute_device(out_device, compute_dtype)
     # Move first, then cast. A combined `.to(device=..., dtype=...)` off MPS
     # converts the dtype on the source device, and MPS has no float64, so it
     # silently yields all zeros instead of raising.
-    logits = logits.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
-    frm = frm.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
-    to = to.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
+    logits = logits.to(device).to(compute_dtype)
+    frm = frm.to(device).to(compute_dtype)
+    to = to.to(device).to(compute_dtype)
 
     prob_left, prob_right = _cdf_and_survival(logits, borders=frm, ys=to)
     # Pinning the ends folds whatever lies beyond `to` into the outermost
@@ -496,8 +508,8 @@ def _translate_probs_across_borders_unchunked(
     mass = torch.where(prob_left[..., 1:] <= 0.5, from_below, from_above)
     mass = mass.clamp_min(0.0)
     if return_log_probs:
-        # At `_TRANSLATE_COMPUTE_DTYPE`: a mass of 1e-300 does not survive
-        # the cast to float32, but its log does. An empty bucket is `-inf`.
+        # In float64 a mass of 1e-300 does not survive the cast to float32,
+        # but its log does. An empty bucket is `-inf`.
         mass = mass.log()
     # Cast before moving, for the same reason and because it halves the bytes
     # crossing the bus.
@@ -563,6 +575,58 @@ def translate_probs_across_borders(
             return torch.log_softmax(logits, dim=-1)
         return torch.softmax(logits, dim=-1)
 
+    fast = _TRANSLATE_FAST_DTYPE
+    if logits.dtype == torch.float64:
+        # Never compute below the precision the caller already asked for.
+        fast = _TRANSLATE_COMPUTE_DTYPE
+
+    out = _translate_probs_across_borders_chunked(
+        logits,
+        frm=frm,
+        to=to,
+        chunk_budget_elements=chunk_budget_elements,
+        return_log_probs=return_log_probs,
+        compute_dtype=fast,
+    )
+    if fast != _TRANSLATE_COMPUTE_DTYPE and _has_empty_bucket(
+        out, log_probs=return_log_probs
+    ):
+        out = _translate_probs_across_borders_chunked(
+            logits,
+            frm=frm,
+            to=to,
+            chunk_budget_elements=chunk_budget_elements,
+            return_log_probs=return_log_probs,
+            compute_dtype=_TRANSLATE_COMPUTE_DTYPE,
+        )
+    return out
+
+
+def _has_empty_bucket(out: torch.Tensor, *, log_probs: bool) -> bool:
+    """Whether any destination bucket came out empty.
+
+    Both halves of the grid qualify, including buckets past the source's
+    outermost border: their mass follows a half-normal, which float64 tracks
+    a few hundred orders of magnitude further down than float32, and
+    `return_log_probs` keeps what it finds there.
+
+    Reads the whole output and synchronises, which costs about 6% of the
+    float32 pass it guards.
+    """
+    empty = torch.isneginf(out) if log_probs else (out == 0)
+    return bool(empty.any())
+
+
+def _translate_probs_across_borders_chunked(
+    logits: torch.Tensor,
+    *,
+    frm: torch.Tensor,
+    to: torch.Tensor,
+    chunk_budget_elements: int,
+    return_log_probs: bool,
+    compute_dtype: torch.dtype,
+) -> torch.Tensor:
+    """Run the differencing in `compute_dtype`, chunked to bound peak memory."""
     batch_shape = logits.shape[:-1]
     num_buckets_frm = logits.shape[-1]
     num_borders_to = to.shape[0]
@@ -570,7 +634,11 @@ def translate_probs_across_borders(
 
     if len(batch_shape) == 0:
         return _translate_probs_across_borders_unchunked(
-            logits, frm=frm, to=to, return_log_probs=return_log_probs
+            logits,
+            frm=frm,
+            to=to,
+            return_log_probs=return_log_probs,
+            compute_dtype=compute_dtype,
         )
 
     # Flatten batch dims so chunking is independent of which dim is large.
@@ -581,7 +649,11 @@ def translate_probs_across_borders(
     chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
     if num_rows <= chunk_size:
         return _translate_probs_across_borders_unchunked(
-            logits, frm=frm, to=to, return_log_probs=return_log_probs
+            logits,
+            frm=frm,
+            to=to,
+            return_log_probs=return_log_probs,
+            compute_dtype=compute_dtype,
         )
 
     # Preallocate output and write chunks in-place to avoid the transient
@@ -598,6 +670,7 @@ def translate_probs_across_borders(
             frm=frm,
             to=to,
             return_log_probs=return_log_probs,
+            compute_dtype=compute_dtype,
         )
     return out_flat.reshape(*batch_shape, num_buckets_to)
 

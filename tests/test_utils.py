@@ -266,6 +266,9 @@ def test__translate_probs_across_borders__forces_chunking(
     row triggers its own chunked call, and spies on the unchunked helper to
     confirm the chunked dispatch is actually used.
     """
+    # This test counts differencing passes, so pin the fast pass to the
+    # precise dtype: an escalation would double every count below.
+    monkeypatch.setattr("tabpfn.utils._TRANSLATE_FAST_DTYPE", torch.float64)
     torch.manual_seed(1)
     num_buckets = shape[-1]
     logits = torch.randn(*shape)
@@ -408,6 +411,118 @@ def test__translate_probs_across_borders__identity_remap_honours_log_probs() -> 
     )
 
     torch.testing.assert_close(out, logits.log_softmax(-1))
+
+
+def _record_compute_dtypes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[torch.dtype | None]:
+    """Record the dtype each differencing pass runs in."""
+    seen: list[torch.dtype | None] = []
+    orig = _translate_probs_across_borders_unchunked
+
+    def recording(*args, **kwargs) -> torch.Tensor:
+        seen.append(kwargs.get("compute_dtype"))
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tabpfn.utils._translate_probs_across_borders_unchunked", recording
+    )
+    return seen
+
+
+def test__translate_probs_across_borders__well_behaved_source_stays_in_float32(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source with no sub-float32 bucket must not pay for float64.
+
+    float32 differencing loses a bucket only once its mass falls below the
+    resolution of the cumulative it is differenced from, which a smooth
+    source never reaches.
+    """
+    seen = _record_compute_dtypes(monkeypatch)
+    torch.manual_seed(0)
+    logits = torch.randn(16, 400)
+    frm = torch.linspace(-4.0, 4.0, 401)
+    to = torch.linspace(-3.9, 3.9, 401)
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert seen == [torch.float32]
+    assert int((out == 0).sum()) == 0
+
+
+def test__translate_probs_across_borders__lost_bucket_escalates_to_float64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bucket float32 drops must send the whole remap back in float64.
+
+    The nested destination grid puts every bucket inside the source range, so
+    a zero can only be the differencing losing it, and float64 gets it back.
+    """
+    seen = _record_compute_dtypes(monkeypatch)
+    num_buckets = 5000
+    frm, logits = _spiky_source(num_buckets)
+    to = torch.linspace(-3.9, 3.9, num_buckets + 1, dtype=torch.float64)
+
+    out = translate_probs_across_borders(logits.float(), frm=frm.float(), to=to.float())
+
+    assert seen == [torch.float32, torch.float64]
+    assert int((out == 0).sum()) == 0
+
+
+def test__translate_probs_across_borders__far_tail_bucket_escalates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Buckets past the source's outermost border must escalate too.
+
+    Their mass follows a half-normal, which float64 tracks hundreds of orders
+    of magnitude further down than float32, and `return_log_probs` is there
+    to keep exactly that. Escalating only for buckets inside the source range
+    would quietly drop it.
+    """
+    seen = _record_compute_dtypes(monkeypatch)
+    torch.manual_seed(0)
+    logits = torch.randn(4, 400)
+    frm = torch.linspace(-3.0, 3.0, 401)
+    to = torch.linspace(-4.2, 4.2, 401)
+    inside = (to[:-1] >= frm[0]) & (to[1:] <= frm[-1])
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to, return_log_probs=True)
+
+    assert seen == [torch.float32, torch.float64]
+    # The escalation was for the tails alone: nothing inside the source range
+    # was empty at either precision.
+    assert not bool(torch.isneginf(out[..., inside]).any())
+    # Bound at import, so this call bypasses the spy installed above.
+    fast_only = _translate_probs_across_borders_unchunked(
+        logits,
+        frm=frm,
+        to=to,
+        return_log_probs=True,
+        compute_dtype=torch.float32,
+    )
+    assert int(torch.isneginf(out).sum()) < int(torch.isneginf(fast_only).sum()), (
+        "float64 must fill tail buckets that float32 flushed to zero"
+    )
+
+
+def test__translate_probs_across_borders__float64_caller_is_never_downgraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller working in float64 must not have its remap done in float32.
+
+    The fast pass is an optimisation for callers who asked for float32 back;
+    it must never cost precision someone already paid for.
+    """
+    seen = _record_compute_dtypes(monkeypatch)
+    torch.manual_seed(0)
+    logits = torch.randn(4, 400, dtype=torch.float64)
+    frm = torch.linspace(-4.0, 4.0, 401, dtype=torch.float64)
+    to = torch.linspace(-3.9, 3.9, 401, dtype=torch.float64)
+
+    translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert seen == [torch.float64]
 
 
 def test__cdf__outer_buckets_are_half_normal_tails() -> None:
@@ -641,6 +756,9 @@ def test__translate_probs_across_borders__log_probs_survive_the_float32_cast(
     exactly the small buckets the float64 differencing recovered. Taking the
     log first keeps them: log(1e-300) is -690, an ordinary float32 number.
     """
+    # This test counts differencing passes, so pin the fast pass to the
+    # precise dtype: an escalation would double every count below.
+    monkeypatch.setattr("tabpfn.utils._TRANSLATE_FAST_DTYPE", torch.float64)
     num_buckets = 500
     frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
     to = torch.linspace(-4.2, 4.2, num_buckets + 1, dtype=torch.float64)
@@ -723,8 +841,23 @@ def test__translate_probs_across_borders__mps_matches_cpu(chunked: bool) -> None
 
     assert on_mps.device.type == "mps"
     assert on_mps.dtype == logits.dtype
-    # The whole computation happens on the CPU either way, so it is exact.
-    assert torch.equal(on_mps.cpu(), on_cpu)
+    # This source needs no escalation, so the float32 pass runs natively on
+    # each device and the two agree to float32 rounding rather than exactly.
+    torch.testing.assert_close(on_mps.cpu(), on_cpu)
+
+    # A source that does escalate goes to float64, which MPS lacks, so both
+    # devices compute it on the CPU and must agree bit for bit. This is the
+    # case where a combined `.to(device=..., dtype=...)` would silently
+    # return zeros.
+    frm64, spiky = _spiky_source(num_buckets)
+    frm32, spiky = frm64.float(), spiky.float().repeat(8, 1)
+    to32 = torch.linspace(-3.9, 3.9, num_buckets + 1)
+    escalated_cpu = translate_probs_across_borders(spiky, frm=frm32, to=to32, **budget)
+    escalated_mps = translate_probs_across_borders(
+        spiky.to("mps"), frm=frm32.to("mps"), to=to32.to("mps"), **budget
+    )
+    assert int((escalated_cpu == 0).sum()) == 0
+    assert torch.equal(escalated_mps.cpu(), escalated_cpu)
 
 
 def test__translate_probs_across_borders__degenerate_outer_bucket_is_finite() -> None:
