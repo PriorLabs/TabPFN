@@ -119,6 +119,9 @@ jobs:
 
       - &save-model-cache
         name: Save model cache
+        # The cache on main is the important one, to make forks work. Thus, we don't
+        # save the cache in PRs to avoid it evicting the cache on main.
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/model_cache
