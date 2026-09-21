@@ -40,6 +40,16 @@ def _has_fa4_gpu() -> bool:
 _FA4_RUNNABLE = _has_fa4_gpu() and FA4_BACKEND.is_available()
 
 
+@pytest.fixture(autouse=True)
+def _reset_fa4_once_warning():  # noqa: ANN202
+    """The bf16 warning fires once per process; give every test a fresh one."""
+    fa4_backend._warn_bf16_blackwell_once.cache_clear()
+    try:
+        yield
+    finally:
+        fa4_backend._warn_bf16_blackwell_once.cache_clear()
+
+
 def _skip_unless_fa4(test):  # noqa: ANN202
     """Mark an FA4 GPU test: ``hopper`` and ``blackwell`` (it runs on either),
     skipped unless such a GPU and ``flash-attn-4`` are present.
@@ -137,10 +147,7 @@ def test__fa4_bf16_declined_on_blackwell_with_one_warning(
 
     The capability lookup is mocked so this runs on any host.
     """
-    fa4_backend._is_bf16_slow.cache_clear()
-    fa4_backend._warn_bf16_blackwell_once.cache_clear()
     monkeypatch.setattr(fa4_backend, "_fa4_max_head_dim", lambda _d: 128)
-
     monkeypatch.setattr(fa4_backend, "_compute_capability_major", lambda _d: 10)
     device = torch.device("cpu")
     with pytest.warns(UserWarning, match="not used for bfloat16 .* Blackwell"):
@@ -149,15 +156,13 @@ def test__fa4_bf16_declined_on_blackwell_with_one_warning(
         warnings.simplefilter("error")  # a second warning would fail the test
         assert not fa4_backend.is_fa4_eligible(device, torch.bfloat16, head_dim=64)
         assert fa4_backend.is_fa4_eligible(device, torch.float16, head_dim=64)
+        # A call FA4 could not serve in any dtype does not get the fp16 advice.
+        assert not fa4_backend.is_fa4_eligible(device, torch.bfloat16, head_dim=192)
 
-    fa4_backend._is_bf16_slow.cache_clear()
     monkeypatch.setattr(fa4_backend, "_compute_capability_major", lambda _d: 9)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert fa4_backend.is_fa4_eligible(device, torch.bfloat16, head_dim=64)
-
-    fa4_backend._is_bf16_slow.cache_clear()
-    fa4_backend._warn_bf16_blackwell_once.cache_clear()
 
 
 def test__fa4_bf16_gate_does_not_break_the_graph(
@@ -167,8 +172,6 @@ def test__fa4_bf16_gate_does_not_break_the_graph(
     Blackwell bf16 decline must be traceable: no ``warnings.warn`` while
     Dynamo is tracing (it cannot trace the builtin and would break the graph).
     """
-    fa4_backend._is_bf16_slow.cache_clear()
-    fa4_backend._warn_bf16_blackwell_once.cache_clear()
     monkeypatch.setattr(fa4_backend, "_fa4_max_head_dim", lambda _d: 128)
     monkeypatch.setattr(fa4_backend, "_compute_capability_major", lambda _d: 10)
     spec = _spec(64, 64, dtype=torch.bfloat16)
@@ -179,9 +182,6 @@ def test__fa4_bf16_gate_does_not_break_the_graph(
         warnings.filterwarnings("error", message="FlashAttention-4")
         preferred = compiled(spec)
     assert preferred is False
-
-    fa4_backend._is_bf16_slow.cache_clear()
-    fa4_backend._warn_bf16_blackwell_once.cache_clear()
 
 
 def test__fa4_eligibility_head_dim_range_per_arch() -> None:
@@ -196,7 +196,7 @@ def test__fa4_eligibility_head_dim_range_per_arch() -> None:
     assert is_fa4_eligible(device, torch.float16, head_dim=64)
     assert is_fa4_eligible(device, torch.float16, head_dim=max_hd)
     # bf16 is served on Hopper but left to SDPA on Blackwell.
-    bf16_expected = major < fa4_backend._FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJOR
+    bf16_expected = major not in fa4_backend._FA4_BF16_SLOW_COMPUTE_CAPABILITY_MAJORS
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert is_fa4_eligible(device, torch.bfloat16, head_dim=64) is bf16_expected
@@ -224,11 +224,40 @@ def test__fa4_split_kv_plan() -> None:
     assert plan(batch=1, seq_q=16, seq_kv=1_000) == 1
     assert plan(batch=1, seq_q=16, seq_kv=4_095) == 1
     assert plan(batch=1, seq_q=16, seq_kv=4_096) == 2
+    # Empty query: nothing to split, and no division by zero.
+    assert plan(batch=1, seq_q=0, seq_kv=1_000_000) == 1
+    # batch > 1 must divide KV exactly (copy-free fold): largest divisor.
+    assert plan(batch=2, seq_q=16, seq_kv=100_000) == 32
+    assert plan(batch=2, seq_q=16, seq_kv=100_001) == 11  # 100_001 = 11 * 9_091
+    assert plan(batch=2, seq_q=16, seq_kv=99_990) == 30
 
 
 # ---------------------------------------------------------------------
 # Numerical equivalence for FA4 — needs flash-attn-4 and Hopper/Blackwell
 # ---------------------------------------------------------------------
+
+
+@_skip_unless_fa4
+def test__fa4_backward_matches_sdpa() -> None:
+    """Under autograd FA4 runs its own kernel unsplit (the out-of-kernel
+    split-KV path is inference-only); its gradients must match SDPA's.
+    """
+    torch.manual_seed(0)
+    make = lambda *shape: torch.randn(
+        *shape, device="cuda", dtype=torch.float16, requires_grad=True
+    )
+    q, k, v = make(1, 256, 8, 64), make(1, 8192, 1, 64), make(1, 8192, 1, 64)
+    grad_out = torch.randn(1, 256, 8, 64, device="cuda", dtype=torch.float16)
+
+    with torch.enable_grad():
+        scaled_dot_product_attention(q, k, v, backend=None).backward(grad_out)
+        grads_sdpa = (q.grad, k.grad, v.grad)
+        q.grad = k.grad = v.grad = None
+        scaled_dot_product_attention(q, k, v, backend=FA4_BACKEND).backward(grad_out)
+        grads_fa4 = (q.grad, k.grad, v.grad)
+
+    for g_fa4, g_sdpa in zip(grads_fa4, grads_sdpa, strict=False):
+        torch.testing.assert_close(g_fa4, g_sdpa, atol=1e-2, rtol=1e-2)
 
 
 @_skip_unless_fa4
