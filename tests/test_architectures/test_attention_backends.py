@@ -208,6 +208,24 @@ def test__fa4_eligibility_head_dim_range_per_arch() -> None:
     assert is_fa4_eligible(device, torch.float16, head_dim=16)
 
 
+def test__fa4_split_kv_plan() -> None:
+    """Split-KV outside the kernel triggers only for short Q against long KV at
+    small batch, never below the chunk minimum, and never past 32 chunks.
+    """
+    plan = fa4_backend._split_kv_plan
+    # The cached-prediction shape: a few test rows, one batch, long cache.
+    assert plan(batch=1, seq_q=16, seq_kv=1_000_000) == 32
+    assert plan(batch=1, seq_q=256, seq_kv=100_000) == 32
+    assert plan(batch=1, seq_q=1024, seq_kv=100_000) == 16
+    # Enough q-tiles already: no split.
+    assert plan(batch=1, seq_q=100_000, seq_kv=100_000) == 1
+    assert plan(batch=64, seq_q=256, seq_kv=100_000) == 1
+    # KV too short to be worth chunking.
+    assert plan(batch=1, seq_q=16, seq_kv=1_000) == 1
+    assert plan(batch=1, seq_q=16, seq_kv=4_095) == 1
+    assert plan(batch=1, seq_q=16, seq_kv=4_096) == 2
+
+
 # ---------------------------------------------------------------------
 # Numerical equivalence for FA4 — needs flash-attn-4 and Hopper/Blackwell
 # ---------------------------------------------------------------------
@@ -274,16 +292,27 @@ def test__fa4_matches_sdpa_within_tolerance(
 
 @_skip_unless_fa4
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test__fa4_long_kv_cross_attention_matches_sdpa(dtype: torch.dtype) -> None:
-    """Short Q against a long KV: the shape FA3 split-KV was written for.
+@pytest.mark.parametrize(
+    ("batch", "seq_q", "seq_kv"),
+    [
+        (1, 256, 100_000),  # test rows vs train cache
+        (1, 16, 100_001),  # tiny Q; KV not a multiple of the chunk count
+        (2, 16, 50_003),  # batch > 1 with a remainder
+    ],
+)
+def test__fa4_long_kv_cross_attention_matches_sdpa(
+    batch: int, seq_q: int, seq_kv: int, dtype: torch.dtype
+) -> None:
+    """Short Q against a long KV: the cached-prediction shape.
 
-    FA4 has no split-KV on sm_90, so this runs unsplit there; it must still
-    be numerically right whichever ``num_splits`` the architecture allows.
+    On sm_90 this goes through the out-of-kernel split-KV path
+    (``_fa4_split_kv``), including its remainder handling; on sm_100 through
+    FA4's own split-KV heuristic. Either way it must match SDPA.
     """
     q, k, v = _make_qkv(
-        batch=1,
-        seq_q=256,
-        seq_kv=100_000,
+        batch=batch,
+        seq_q=seq_q,
+        seq_kv=seq_kv,
         n_heads_q=8,
         n_heads_kv=1,
         head_dim=64,
