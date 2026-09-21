@@ -363,14 +363,17 @@ def _halfnormal_tail_survival(
     """Fraction of an outer bucket's half-normal tail past `distance_from_inner_border`.
 
     1.0 at the inner border, 0.5 at one bucket width out, as in
-    `FullSupportBarDistribution`. Uses `erfc` rather than `1 - cdf`, which
-    cancels to exactly 0 a few sigma out.
+    `FullSupportBarDistribution`. Uses the complementary error function rather
+    than `1 - cdf`, which cancels to exactly 0 a few sigma out.
     """
     # Repaired borders can leave a degenerate outer bucket, whose zero scale
     # would give 0/0. Flooring the width makes it a point mass instead.
     width = outer_bucket_width.clamp_min(torch.finfo(outer_bucket_width.dtype).tiny)
     sigma = FullSupportBarDistribution.halfnormal_with_p_weight_before(width).scale
-    return torch.erfc(distance_from_inner_border / (sigma * math.sqrt(2.0)))
+    z = distance_from_inner_border / (sigma * math.sqrt(2.0))
+    # `erfc(z)` via the scaled `erfcx`, which agrees to 5e-14 relative: ROCm
+    # has no float64 `erfc` kernel and raises HIP error 209 on an MI250X.
+    return torch.special.erfcx(z) * torch.exp(-z * z)
 
 
 # TODO (eddiebergman): Can probably put this back to the Bar distribution.
