@@ -16,6 +16,7 @@ from tabpfn.utils import (
     _cdf,
     _cpu_supports_fast_bf16,
     _repair_borders,
+    _translate_compute_device,
     _translate_probs_across_borders_unchunked,
     balance_probas_by_class_counts,
     infer_autocast_inference_mode,
@@ -523,6 +524,31 @@ def test__translate_probs_across_borders__float64_caller_is_never_downgraded(
     translate_probs_across_borders(logits, frm=frm, to=to)
 
     assert seen == [torch.float64]
+
+
+def test__translate_compute_device__mps_without_erfcx__falls_back_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The float32 pass may stay on MPS only where MPS can run `erfcx`.
+
+    MPS gained it long after this package's torch floor: on torch 2.6 both
+    `erfc` and `erfcx` raise `NotImplementedError` there, which would crash
+    the tail survival in the middle of `predict` on a Mac. Every other op the
+    pass needs works on that version, so the fallback is worth keeping narrow.
+    """
+    monkeypatch.setattr("tabpfn.utils._mps_supports_erfcx", lambda: False)
+    assert _translate_compute_device(
+        torch.device("mps"), torch.float32
+    ) == torch.device("cpu")
+
+    monkeypatch.setattr("tabpfn.utils._mps_supports_erfcx", lambda: True)
+    assert _translate_compute_device(
+        torch.device("mps"), torch.float32
+    ) == torch.device("mps")
+    # float64 leaves MPS whatever `erfcx` does: the device has no float64.
+    assert _translate_compute_device(
+        torch.device("mps"), torch.float64
+    ) == torch.device("cpu")
 
 
 def test__cdf__outer_buckets_are_half_normal_tails() -> None:

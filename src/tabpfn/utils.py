@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import math
 import os
 import warnings
@@ -458,15 +459,34 @@ _TRANSLATE_COMPUTE_DTYPE = torch.float64
 _TRANSLATE_FAST_DTYPE = torch.float32
 
 
+@functools.lru_cache(maxsize=1)
+def _mps_supports_erfcx() -> bool:
+    """Whether this torch can evaluate `erfcx` on MPS.
+
+    MPS gained it long after the torch this package still supports: on 2.6 it
+    raises `NotImplementedError`, and so does `erfc`. Every other operation
+    the differencing needs runs there, so this asks about the one gap rather
+    than about a version.
+    """
+    try:
+        torch.special.erfcx(torch.zeros(1, device="mps"))
+    except (NotImplementedError, RuntimeError):
+        return False
+    return True
+
+
 def _translate_compute_device(
     device: torch.device, compute_dtype: torch.dtype
 ) -> torch.device:
     """Where to run the differencing for a tensor on `device`.
 
-    MPS has no float64, so a float64 pass computes on the CPU and moves back;
-    every other combination keeps the data where it is.
+    MPS has no float64, so a float64 pass computes on the CPU and moves back,
+    and so does a float32 one on a torch whose MPS lacks `erfcx`. Every other
+    combination keeps the data where it is.
     """
-    if device.type == "mps" and compute_dtype == torch.float64:
+    if device.type == "mps" and (
+        compute_dtype == torch.float64 or not _mps_supports_erfcx()
+    ):
         return torch.device("cpu")
     return device
 
