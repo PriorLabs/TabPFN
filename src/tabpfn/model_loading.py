@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_ident
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 from urllib.error import URLError
 
@@ -1081,21 +1081,41 @@ def _skip_parameter_init() -> Iterator[None]:
     of a second per build on a full-size checkpoint, paid at every `fit`. For the
     duration of the block the `torch.nn.init` functions return their tensor untouched;
     they are restored afterwards. A model built inside it must be loaded before use.
+
+    The patch is process-wide, so two guards keep it from leaking: only the thread
+    that entered the block sees the no-ops (other threads fall through to the real
+    functions), and a reference to a no-op that is called after the block has ended
+    raises instead of silently skipping the initialisation.
     """
     originals = {
         name: getattr(torch.nn.init, name) for name in _PARAMETER_INIT_FUNCTIONS
     }
+    owner_thread = get_ident()
+    active = True
 
-    def leave_uninitialised(
-        tensor: torch.Tensor, *_args: Any, **_kwargs: Any
-    ) -> torch.Tensor:
-        return tensor
+    def make_stub(name: str, original: Callable[..., torch.Tensor]) -> Callable:
+        @functools.wraps(original)
+        def leave_uninitialised(
+            tensor: torch.Tensor, *args: Any, **kwargs: Any
+        ) -> torch.Tensor:
+            if not active:
+                raise RuntimeError(
+                    f"torch.nn.init.{name} was looked up while tabpfn was building a "
+                    "model and called after that build finished. Look the function "
+                    "up on torch.nn.init at call time instead of keeping a reference."
+                )
+            if get_ident() != owner_thread:
+                return original(tensor, *args, **kwargs)
+            return tensor
 
-    for name in originals:
-        setattr(torch.nn.init, name, leave_uninitialised)
+        return leave_uninitialised
+
+    for name, original in originals.items():
+        setattr(torch.nn.init, name, make_stub(name, original))
     try:
         yield
     finally:
+        active = False
         for name, original in originals.items():
             setattr(torch.nn.init, name, original)
 
