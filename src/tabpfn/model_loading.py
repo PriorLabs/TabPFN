@@ -1077,10 +1077,10 @@ def _skip_parameter_init() -> Iterator[None]:
 
     Every parameter and persistent buffer of a model built here is overwritten by the
     strict `load_state_dict` that follows, so the initialisation is wasted work: the
-    layers' `reset_parameters` draw random weights that are discarded, about a quarter
-    of a second per build on a full-size checkpoint, paid at every `fit`. For the
-    duration of the block the `torch.nn.init` functions return their tensor untouched;
-    they are restored afterwards. A model built inside it must be loaded before use.
+    layers' `reset_parameters` draw random weights that are discarded, and that
+    dominates the build time paid at every `fit`. For the duration of the block the
+    `torch.nn.init` functions return their tensor untouched; they are restored
+    afterwards. A model built inside it must be loaded before use.
 
     The patch is process-wide, so two guards keep it from leaking: only the thread
     that entered the block sees the no-ops (other threads fall through to the real
