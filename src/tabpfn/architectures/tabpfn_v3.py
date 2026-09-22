@@ -2582,9 +2582,6 @@ def _spline_based_regression_borders(num_buckets: int) -> torch.Tensor:
 
     Note: Borders are num_buckets + 1!
     Border reference points are derived from tabpfn-v2.5-regressor-v2.5_default.ckpt.
-    For visual comparison of the original buckets vs approx, see
-    https://www.notion.so/priorlabs/Regression-bucket-approx-3125be1f3b4980f0924bc7bcb6b72bbd
-
 
     Returns:
         An array of shape (num_buckets + 1,) containing the bucket borders.
