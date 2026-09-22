@@ -20,8 +20,8 @@ def gqa_is_supported() -> bool:
     if not torch.cuda.is_available():
         return False
 
-    # torch.__version__ supports string comparison.
-    has_enable_gqa = torch.__version__ >= "2.5"
+    from packaging.version import parse as parse_version
+    has_enable_gqa = parse_version(torch.__version__) >= parse_version("2.5")
     if not has_enable_gqa:
         return False
 
