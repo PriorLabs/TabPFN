@@ -79,10 +79,8 @@ jobs:
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
-          # setup-uv v10 stopped pruning the uv cache before saving, so caches grow
-          # without bound. Prune again, and only save on main so PR runs cannot
-          # flood the repo's shared Actions cache quota; PRs still restore from main.
-          prune-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies
@@ -271,10 +269,8 @@ jobs:
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
-          # setup-uv v10 stopped pruning the uv cache before saving, so caches grow
-          # without bound. Prune again, and only save on main so PR runs cannot
-          # flood the repo's shared Actions cache quota; PRs still restore from main.
-          prune-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies
@@ -345,10 +341,8 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          # setup-uv v10 stopped pruning the uv cache before saving, so caches grow
-          # without bound. Prune again, and only save on main so PR runs cannot
-          # flood the repo's shared Actions cache quota; PRs still restore from main.
-          prune-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       # `tabpfn-time-series[benchmarking]` pulls autogluon-timeseries, which
@@ -441,10 +435,8 @@ jobs:
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
-          # setup-uv v10 stopped pruning the uv cache before saving, so caches grow
-          # without bound. Prune again, and only save on main so PR runs cannot
-          # flood the repo's shared Actions cache quota; PRs still restore from main.
-          prune-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies

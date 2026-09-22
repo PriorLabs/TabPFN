@@ -42,10 +42,8 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: examples/notebooks/*.ipynb
-          # setup-uv v10 stopped pruning the uv cache before saving, so caches grow
-          # without bound. Prune again, and only save on main so PR runs cannot
-          # flood the repo's shared Actions cache quota; PRs still restore from main.
-          prune-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install pytest
