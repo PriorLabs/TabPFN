@@ -691,6 +691,77 @@ def merge_nested_inference_config_params(
     return merged
 
 
+def _config_values_equal(first: typing.Any, second: typing.Any) -> bool:
+    """Best-effort equality for inference-config values.
+
+    Falls back to `False` for exotic value types whose `==` does not return
+    a plain bool, so conflict detection never crashes on user input.
+    """
+    if first is second:
+        return True
+    try:
+        return bool(first == second)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def fold_nested_inference_config_params(
+    current: dict | InferenceConfig | None,
+    params: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
+    """Fold `inference_config__FIELD` pieces back into `inference_config`.
+
+    sklearn requires the `set_params(**est.get_params())` round-trip to work,
+    and `get_params(deep=True)` emits both the whole `inference_config` dict
+    and its nested pieces. When both are given and every piece agrees with the
+    whole dict, the whole dict is kept as is. A piece that adds a field the
+    whole dict lacks, or disagrees with it, is still rejected as ambiguous
+    (mirroring the double-specification error in `_resolve_overrides`).
+
+    Args:
+        current: The estimator's current `inference_config` value.
+        params: Parameters as passed to `set_params`.
+
+    Returns:
+        Parameters with nested pieces folded into `inference_config`.
+
+    Raises:
+        ValueError: If the whole dict and the nested pieces disagree, the
+            whole value has an unexpected type, or a nested field name is
+            not an `InferenceConfig` field.
+    """
+    rest, nested = split_nested_inference_config_params(params)
+    if not nested:
+        return rest
+    whole = rest.get("inference_config")
+    if whole is not None:
+        if isinstance(whole, InferenceConfig):
+            lookup: dict[str, typing.Any] = dataclasses.asdict(whole)
+        elif isinstance(whole, dict):
+            lookup = whole
+        else:
+            raise ValueError(
+                "Pass `inference_config` wholesale or as "
+                "`inference_config__FIELD` pieces, not both in one call."
+            )
+        conflicts = sorted(
+            key
+            for key, value in nested.items()
+            if key not in lookup or not _config_values_equal(lookup[key], value)
+        )
+        if conflicts:
+            raise ValueError(
+                "Pass `inference_config` wholesale or as "
+                "`inference_config__FIELD` pieces, not both in one call. "
+                f"Conflicting or extra field(s): {conflicts}."
+            )
+        return rest
+    rest["inference_config"] = merge_nested_inference_config_params(
+        rest.get("inference_config", current), nested
+    )
+    return rest
+
+
 def resolved_n_estimators(
     estimator: TabPFNClassifier | TabPFNRegressor,
 ) -> int | Literal["auto"]:
