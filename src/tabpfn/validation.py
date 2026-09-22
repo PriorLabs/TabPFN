@@ -216,11 +216,11 @@ def validate_dataset_size(
 ) -> None:
     """Validate the dataset size."""
     if len(X) != len(y):
-        raise ValueError(
+        raise TabPFNValidationError(
             f"Number of samples in X ({len(X)}) and y ({len(y)}) do not match.",
         )
     if len(X.shape) != 2:
-        raise ValueError(
+        raise TabPFNValidationError(
             f"The input data X is not a 2D array. Got shape: {X.shape}",
         )
     num_samples, num_features = X.shape
