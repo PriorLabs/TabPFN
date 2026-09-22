@@ -1119,6 +1119,11 @@ def _skip_parameter_init() -> Iterator[None]:
     block see the no-ops: other threads fall through to the real functions. A
     reference to a no-op that is called once no block is active raises instead of
     silently skipping the initialisation.
+
+    Building on the meta device would avoid the patch, but the tensor arithmetic
+    our constructors run at build time has no meta kernels and falls back to the
+    decomposition path, which imports `torch._dynamo` and adds seconds of cold
+    start to every process that never compiles anything.
     """
     global _INIT_PATCH_ORIGINALS  # noqa: PLW0603
     thread = get_ident()
