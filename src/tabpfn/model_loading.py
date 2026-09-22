@@ -17,6 +17,7 @@ import urllib.request
 import warnings
 import zipfile
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
@@ -43,7 +44,7 @@ from tabpfn.inference_config import (
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from sklearn.base import BaseEstimator
 
@@ -1053,6 +1054,52 @@ def load_model(
     return result
 
 
+#: The `torch.nn.init` functions that `_skip_parameter_init` turns into no-ops.
+_PARAMETER_INIT_FUNCTIONS = (
+    "uniform_",
+    "normal_",
+    "trunc_normal_",
+    "constant_",
+    "ones_",
+    "zeros_",
+    "eye_",
+    "orthogonal_",
+    "xavier_uniform_",
+    "xavier_normal_",
+    "kaiming_uniform_",
+    "kaiming_normal_",
+)
+
+
+@contextmanager
+def _skip_parameter_init() -> Iterator[None]:
+    """Build a model without torch's random parameter initialisation.
+
+    Every parameter and persistent buffer of a model built here is overwritten by the
+    strict `load_state_dict` that follows, so the initialisation is wasted work: the
+    layers' `reset_parameters` draw random weights that are discarded, about a quarter
+    of a second per build on a full-size checkpoint, paid at every `fit`. For the
+    duration of the block the `torch.nn.init` functions return their tensor untouched;
+    they are restored afterwards. A model built inside it must be loaded before use.
+    """
+    originals = {
+        name: getattr(torch.nn.init, name) for name in _PARAMETER_INIT_FUNCTIONS
+    }
+
+    def leave_uninitialised(
+        tensor: torch.Tensor, *_args: Any, **_kwargs: Any
+    ) -> torch.Tensor:
+        return tensor
+
+    for name in originals:
+        setattr(torch.nn.init, name, leave_uninitialised)
+    try:
+        yield
+    finally:
+        for name, original in originals.items():
+            setattr(torch.nn.init, name, original)
+
+
 def _build_model(
     resolved: str,
     identity: tuple[int, int],
@@ -1081,10 +1128,11 @@ def _build_model(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
-    model = architecture.get_architecture(
-        model_config,
-        cache_trainset_representation=cache_trainset_representation,
-    )
+    with _skip_parameter_init():
+        model = architecture.get_architecture(
+            model_config,
+            cache_trainset_representation=cache_trainset_representation,
+        )
 
     # A checkpoint may carry criterion state for a task it is not being loaded for
     # (save_tabpfn_model writes it for regressors), so it is always kept out of the
