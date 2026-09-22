@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 import numpy as np
 import numpy.typing as npt
 import torch
+from torch.torch_version import TorchVersion
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import (
@@ -200,7 +201,7 @@ def _is_torch_mps_supported() -> bool:
 
     We require PyTorch >= 2.6 for MPS to support all used operations.
     """
-    return torch.__version__ >= "2.6"
+    return torch.__version__ >= TorchVersion("2.6")
 
 
 def is_autocast_available(device_type: str) -> bool:
