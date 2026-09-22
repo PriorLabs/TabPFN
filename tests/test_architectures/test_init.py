@@ -29,8 +29,6 @@ class _FakeArchitectureModule(ArchitectureModule):
     def get_architecture(
         self,
         config: ArchitectureConfig,
-        *,
-        cache_trainset_representation: bool,
     ) -> Architecture:
         raise NotImplementedError
 

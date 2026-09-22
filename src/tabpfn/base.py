@@ -111,7 +111,7 @@ def initialize_tabpfn_model(
     | list[RegressorModelSpecs]
     | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    *,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
 ) -> tuple[
@@ -129,7 +129,6 @@ def initialize_tabpfn_model(
             provided, the model is loaded from the object.
 
         which: Which TabPFN model to load.
-        fit_mode: Determines caching behavior.
         softmax_temperature_override: The temperature the caller will apply to every
             model, or None if they did not ask for one. Only used to decide whether
             checkpoints are allowed to disagree on their temperature; the override
@@ -212,7 +211,6 @@ def initialize_tabpfn_model(
                     model_path=model_path,  # pyright: ignore[reportArgumentType]
                     # The classifier's bar distribution is not used
                     check_bar_distribution_criterion=False,
-                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     estimator_type="classifier",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
@@ -227,7 +225,6 @@ def initialize_tabpfn_model(
                     model_path=model_path,  # pyright: ignore[reportArgumentType]
                     # The regressor's bar distribution is required
                     check_bar_distribution_criterion=True,
-                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     estimator_type="regressor",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
@@ -521,7 +518,6 @@ def initialize_model_variables_helper(
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
-            fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
             softmax_temperature_override=overrides["SOFTMAX_TEMPERATURE"],
             n_estimators_override=overrides["N_ESTIMATORS"],
         )

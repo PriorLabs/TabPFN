@@ -44,42 +44,19 @@ def test_cache_hit_reuses_built_model(ckpt: Path, monkeypatch: pytest.MonkeyPatc
     calls = _patch_build(monkeypatch)
     monkeypatch.setenv("TABPFN_MODEL_CACHE_SIZE", "4")
 
-    first = model_loading.load_model(
-        path=ckpt, estimator_type="classifier", cache_trainset_representation=False
-    )
-    second = model_loading.load_model(
-        path=ckpt, estimator_type="classifier", cache_trainset_representation=False
-    )
+    first = model_loading.load_model(path=ckpt, estimator_type="classifier")
+    second = model_loading.load_model(path=ckpt, estimator_type="classifier")
 
     assert first is second  # same built model handed back
     assert calls["n"] == 1  # built once, not twice
-
-
-def test_mutating_build_is_never_cached(ckpt: Path, monkeypatch: pytest.MonkeyPatch):
-    calls = _patch_build(monkeypatch)
-    monkeypatch.setenv("TABPFN_MODEL_CACHE_SIZE", "4")
-
-    # cache_trainset_representation=True mutates the model during fit, so it is
-    # rebuilt every time rather than served from the shared cache.
-    model_loading.load_model(
-        path=ckpt, estimator_type="classifier", cache_trainset_representation=True
-    )
-    model_loading.load_model(
-        path=ckpt, estimator_type="classifier", cache_trainset_representation=True
-    )
-    assert calls["n"] == 2
 
 
 def test_cache_disabled_by_default(ckpt: Path, monkeypatch: pytest.MonkeyPatch):
     calls = _patch_build(monkeypatch)
     monkeypatch.delenv("TABPFN_MODEL_CACHE_SIZE", raising=False)  # default 0 = off
 
-    model_loading.load_model(
-        path=ckpt, estimator_type="classifier", cache_trainset_representation=False
-    )
-    model_loading.load_model(
-        path=ckpt, estimator_type="classifier", cache_trainset_representation=False
-    )
+    model_loading.load_model(path=ckpt, estimator_type="classifier")
+    model_loading.load_model(path=ckpt, estimator_type="classifier")
     assert calls["n"] == 2  # no caching; prior behaviour preserved
 
 
@@ -91,30 +68,22 @@ def test_lru_eviction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     b = tmp_path / "b.ckpt"
     b.write_bytes(b"b")
 
-    model_loading.load_model(
-        path=a, estimator_type="classifier", cache_trainset_representation=False
-    )
-    model_loading.load_model(
-        path=b, estimator_type="classifier", cache_trainset_representation=False
-    )  # evicts a
-    model_loading.load_model(
-        path=a, estimator_type="classifier", cache_trainset_representation=False
-    )  # rebuilds a
+    model_loading.load_model(path=a, estimator_type="classifier")
+    model_loading.load_model(path=b, estimator_type="classifier")  # evicts a
+    model_loading.load_model(path=a, estimator_type="classifier")  # rebuilds a
     assert calls["n"] == 3
 
 
 def test_load_model_signature_is_tracked_by_the_cache():
     """Tripwire: the cache correctness depends on `load_model`'s exact inputs.
 
-    It keys on (path, file-identity) and caches only when
-    ``cache_trainset_representation`` is False. So a *new build-affecting*
-    parameter must be added to the cache key (else a hit returns a stale model),
-    and a *new mutation flag* must extend the gate (else a mutated model gets
-    shared). If this assertion fails, revisit `_BUILT_MODEL_CACHE` / `load_model`
-    before updating the expected set.
+    It keys on (path, file-identity, estimator type), so a *new build-affecting*
+    parameter must be added to the cache key, else a hit returns a stale model.
+    If this assertion fails, revisit `_BUILT_MODEL_CACHE` / `load_model` before
+    updating the expected set.
     """
     params = set(inspect.signature(model_loading.load_model).parameters)
-    assert params == {"path", "estimator_type", "cache_trainset_representation"}, (
+    assert params == {"path", "estimator_type"}, (
         f"load_model parameters changed to {sorted(params)}; the built-model "
-        "cache key and/or its cache_trainset_representation gate must be updated."
+        "cache key must be updated."
     )

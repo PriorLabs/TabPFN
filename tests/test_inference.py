@@ -994,7 +994,6 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             features_per_group=2,
             seed=0,
         ),
-        cache_trainset_representation=False,
     )
     with pytest.warns(UserWarning, match="not supported"):
         resolved = _resolve_kv_cache_precision(

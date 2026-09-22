@@ -71,7 +71,7 @@ def _config(config_overrides: dict[str, object]) -> TabPFNV3p5Config:
 def _get_model(**config_overrides: object) -> TabPFNV3p5:
     """A small v3.5 model in eval mode, with no all-zero parameters."""
     config = _config(config_overrides)
-    arch = tabpfn_v3_5.get_architecture(config, cache_trainset_representation=False)
+    arch = tabpfn_v3_5.get_architecture(config)
     # Several modules zero-init their residual out-projections; a fully-zero
     # projection masks its sublayer and would hide a bug in it.
     gen = torch.Generator().manual_seed(0)
