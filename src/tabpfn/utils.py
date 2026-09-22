@@ -371,7 +371,7 @@ def _halfnormal_tail_survival(
 
 
 class _RemapWeights(NamedTuple):
-    """Row-independent weights of one border translation, see `_remap_weights`."""
+    """The weights of one grid pair, see `_remap_weights`."""
 
     source: torch.Tensor
     destination: torch.Tensor
@@ -384,21 +384,22 @@ class _RemapWeights(NamedTuple):
 def _remap_weights(
     frm: torch.Tensor, to: torch.Tensor, *, dtype: torch.dtype
 ) -> _RemapWeights:
-    """Weights that translate bucket masses over `frm` onto the buckets of `to`.
+    """Weights that translate bucket masses from the `frm` grid to the `to` grid.
 
-    Destination bucket `j` receives `weight[k] * probs[source[k]]` for every
-    pair `k` with `destination[k] == j`, plus `lower_tail[j] * probs[0]` and
+    Destination bucket `j` gets `weight[k] * probs[source[k]]` for each pair `k`
+    with `destination[k] == j`. It also gets `lower_tail[j] * probs[0]` and
     `upper_tail[j] * probs[-1]`. The pairs are sorted by destination, and
-    `pairs_per_destination` counts them per destination bucket. An interior
-    source bucket is a uniform bar, so a pair's weight is the overlap of the two
-    buckets as a share of the source bucket. The two outer source buckets are
-    the half-normal tails of `FullSupportBarDistribution`, over their whole
-    width and past the grid. The outermost destination buckets absorb
-    everything beyond `to`.
+    `pairs_per_destination[j]` is the number of pairs of bucket `j`.
 
-    The weights are computed in float64 on the CPU from the grids alone. Every
-    one of them is positive, so applying them is a sum of positive terms: no
-    cancellation, in any dtype.
+    An interior source bucket is a uniform bar. Its weight for a destination
+    bucket is the share of the source bucket that the two buckets overlap. The
+    two outer source buckets are half-normal tails, as in
+    `FullSupportBarDistribution`. A tail covers its bucket and the space beyond
+    the grid. The first and last destination buckets take all the mass beyond
+    `to`.
+
+    Every weight is positive. The weights depend on the grids alone, so they
+    are computed once, in float64 on the CPU.
     """
     num_buckets_frm = frm.shape[0] - 1
     if num_buckets_frm < 3:
@@ -407,9 +408,9 @@ def _remap_weights(
     to = to.detach().to("cpu").to(torch.float64)
     num_buckets_to = to.shape[0] - 1
 
-    # Cut the line at every border of either grid: each piece lies in exactly
-    # one source and one destination bucket. The pieces in the two outer source
-    # buckets are left to the tails below.
+    # Cut the axis at every border of both grids. Each piece lies in one source
+    # bucket and one destination bucket. The tails below handle the pieces in
+    # the two outer source buckets.
     edges = torch.unique(torch.cat([frm[1:-1], to]))
     mids = (edges[:-1] + edges[1:]) / 2
     source = torch.searchsorted(frm, mids) - 1
@@ -448,15 +449,14 @@ def _remap_weights(
 
 
 def _grid_key(borders: torch.Tensor) -> bytes:
-    # Move first, then cast. A combined `.to(device=..., dtype=...)` off MPS
-    # converts the dtype on the source device, and MPS has no float64, so it
-    # silently yields all zeros instead of raising.
+    # Move to the CPU first, then cast. A combined `.to(device, dtype)` casts on
+    # MPS, which has no float64 and returns zeros instead of an error.
     return borders.detach().to("cpu").to(torch.float64).numpy().tobytes()
 
 
-# A fitted regressor translates every estimator onto the same grids at each
-# `predict`, and building the weights costs about a millisecond of CPU time
-# that the GPU would otherwise wait for. 32 entries hold about 7 MB.
+# A fitted regressor uses the same grids at every `predict`. Building the
+# weights takes about 1 ms on the CPU, and the GPU waits for it. 32 entries
+# take about 7 MB.
 @functools.lru_cache(maxsize=32)
 def _cached_remap_weights(
     frm: bytes, to: bytes, dtype: torch.dtype, device: torch.device
@@ -470,13 +470,12 @@ def _cached_remap_weights(
 
 
 def _apply_remap_weights(logits: torch.Tensor, weights: _RemapWeights) -> torch.Tensor:
-    """Translate one batch of `(rows, num_buckets_frm)` logits, see `_remap_weights`."""
+    """Translate `(rows, num_buckets_frm)` logits, see `_remap_weights`."""
     probs = torch.softmax(logits, dim=-1)
     out = probs[:, :1] * weights.lower_tail + probs[:, -1:] * weights.upper_tail
     if probs.device.type == "cuda":
-        # `index_add_` sums with atomics on CUDA, in an order that changes from
-        # run to run. A segmented sum over the pairs of each destination bucket
-        # is bitwise reproducible and costs about the same there.
+        # On CUDA, `index_add_` sums with atomics, so the order changes between
+        # runs. A segmented sum gives the same bits every run at the same cost.
         contributions = probs.T.index_select(0, weights.source).mul_(
             weights.weight[:, None]
         )
@@ -492,10 +491,10 @@ def _apply_remap_weights(logits: torch.Tensor, weights: _RemapWeights) -> torch.
     return out
 
 
-# `_apply_remap_weights` allocates one `(rows, pairs)` transient in the caller's
-# dtype, where `pairs` is at most `len(frm) + len(to)`. Chunking to
-# `chunk_size * pairs <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps it near 40 MB in
-# float32, so this step's contribution to peak memory is constant in `n_test`.
+# `_apply_remap_weights` allocates one `(rows, pairs)` tensor in the caller's
+# dtype, and `pairs` is at most `len(frm) + len(to)`. Chunks of
+# `chunk_size * pairs <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keep it near 40 MB in
+# float32, whatever `n_test` is.
 _TRANSLATE_CHUNK_BUDGET_ELEMENTS = 10_000_000
 
 
@@ -506,32 +505,29 @@ def translate_probs_across_borders(
     to: torch.Tensor,
     chunk_budget_elements: int = _TRANSLATE_CHUNK_BUDGET_ELEMENTS,
 ) -> torch.Tensor:
-    """Translate the probabilities across the borders.
+    """Translate the probabilities from the `frm` grid to the `to` grid.
 
-    Each destination bucket's mass is the sum of its overlaps with the source
-    buckets, weighted by the source probabilities, so no bucket is lost to
-    cancellation however small it is. Destination buckets outside ``frm`` are
-    fed by the source's half-normal tails, as ``FullSupportBarDistribution.forward``
-    reads them. The result is in ``logits``' dtype.
+    A destination bucket's mass is a sum of positive terms: its overlap with
+    each source bucket, times that bucket's probability, plus a slice of each
+    half-normal tail. Positive terms do not cancel, so no bucket is lost,
+    however small it is. The tails fill the destination buckets outside `frm`,
+    as `FullSupportBarDistribution.forward` reads them. The result has the
+    dtype of `logits`.
 
-    For large batches the computation is chunked so that the peak memory
-    footprint of the intermediate ``(batch, pairs)`` tensor allocated inside
-    ``_apply_remap_weights`` stays bounded. All batch dimensions are flattened
-    before chunking, so the memory cap holds regardless of which batch dimension
-    is large (e.g. `(n_estimators, n_test, num_buckets)`). The output is
-    numerically identical to the unchunked version.
+    Large batches run in chunks, so the `(rows, pairs)` tensor inside
+    `_apply_remap_weights` stays small. All batch dimensions are flattened
+    first, so the cap holds whichever dimension is large. Chunking does not
+    change the result.
 
     Args:
-        logits: The logits defining the distribution to translate. The last
-            dimension indexes buckets from ``frm``; all leading dimensions
-            are treated as independent batch rows. Typical shapes are
-            ``(num_rows, num_buckets)`` (used by ``TabPFNRegressor.predict``)
-            or ``(n_estimators, num_rows, num_buckets)``.
+        logits: The logits of the distributions to translate. The last
+            dimension indexes the buckets of `frm`. Every other dimension is a
+            batch dimension. `TabPFNRegressor.predict` passes
+            `(num_rows, num_buckets)`.
         frm: The borders to translate from.
         to: The borders to translate to.
-        chunk_budget_elements: Maximum number of elements of the ``(rows, pairs)``
-            transient per chunk. Lower values reduce peak memory at a small time
-            cost; primarily useful for testing.
+        chunk_budget_elements: The largest `(rows, pairs)` tensor one chunk may
+            allocate. Lower it to trade time for memory, mostly in tests.
 
     Returns:
         The translated probabilities.
