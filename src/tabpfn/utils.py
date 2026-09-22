@@ -5,11 +5,12 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import math
 import os
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -349,13 +350,6 @@ def infer_random_state(
     return static_seed, np_rng
 
 
-def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
-    ix = torch.searchsorted(sorted_sequence=borders, input=y) - 1
-    ix[y == borders[0]] = 0
-    ix[y == borders[-1]] = len(borders) - 2
-    return ix
-
-
 def _halfnormal_tail_survival(
     distance_from_inner_border: torch.Tensor,
     outer_bucket_width: torch.Tensor,
@@ -376,132 +370,132 @@ def _halfnormal_tail_survival(
     return torch.special.erfcx(z) * torch.exp(-z * z)
 
 
-# TODO (eddiebergman): Can probably put this back to the Bar distribution.
-# However we don't really need the full BarDistribution class and this was
-# put here to make that a bit more obvious in terms of what was going on.
-def _cdf_and_survival(
-    logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """CDF and survival function of the bar distribution over `borders`, at `ys`.
+class _RemapWeights(NamedTuple):
+    """Row-independent weights of one border translation, see `_remap_weights`."""
 
-    Interior buckets are uniform bars and the outer two are half-normal tails,
-    as in `FullSupportBarDistribution.forward`, so `ys` outside `borders` get a
-    small non-zero CDF rather than a hard 0 or 1.
+    source: torch.Tensor
+    destination: torch.Tensor
+    pairs_per_destination: torch.Tensor
+    weight: torch.Tensor
+    lower_tail: torch.Tensor
+    upper_tail: torch.Tensor
 
-    The survival function is accumulated from the top rather than taken as
-    `1 - CDF`, so that each of the two is accurate where it is small.
 
-    `ys` is one grid shared by every row, so its bucket index, its share of
-    that bucket and the two tail masks stay one-dimensional and only the
-    cumulative probabilities are materialised per row.
+def _remap_weights(
+    frm: torch.Tensor, to: torch.Tensor, *, dtype: torch.dtype
+) -> _RemapWeights:
+    """Weights that translate bucket masses over `frm` onto the buckets of `to`.
+
+    Destination bucket `j` receives `weight[k] * probs[source[k]]` for every
+    pair `k` with `destination[k] == j`, plus `lower_tail[j] * probs[0]` and
+    `upper_tail[j] * probs[-1]`. The pairs are sorted by destination, and
+    `pairs_per_destination` counts them per destination bucket. An interior
+    source bucket is a uniform bar, so a pair's weight is the overlap of the two
+    buckets as a share of the source bucket. The two outer source buckets are
+    the half-normal tails of `FullSupportBarDistribution`, over their whole
+    width and past the grid. The outermost destination buckets absorb
+    everything beyond `to`.
+
+    The weights are computed in float64 on the CPU from the grids alone. Every
+    one of them is positive, so applying them is a sum of positive terms: no
+    cancellation, in any dtype.
     """
-    n_bars = len(borders) - 1
-    y_buckets = _map_to_bucket_ix(ys, borders).clamp(0, n_bars - 1).to(logits.device)
+    num_buckets_frm = frm.shape[0] - 1
+    if num_buckets_frm < 3:
+        raise ValueError("`frm` needs an interior bucket between its two tails.")
+    frm = frm.detach().to("cpu").to(torch.float64)
+    to = to.detach().to("cpu").to(torch.float64)
+    num_buckets_to = to.shape[0] - 1
 
-    probs = torch.softmax(logits, dim=-1)
-    prob_in_bucket = probs.index_select(-1, y_buckets)
-    prob_below_bucket = (torch.cumsum(probs, dim=-1) - probs).index_select(
-        -1, y_buckets
+    # Cut the line at every border of either grid: each piece lies in exactly
+    # one source and one destination bucket. The pieces in the two outer source
+    # buckets are left to the tails below.
+    edges = torch.unique(torch.cat([frm[1:-1], to]))
+    mids = (edges[:-1] + edges[1:]) / 2
+    source = torch.searchsorted(frm, mids) - 1
+    destination = (torch.searchsorted(to, mids) - 1).clamp(0, num_buckets_to - 1)
+    interior = (source >= 1) & (source <= num_buckets_frm - 2)
+    source, destination = source[interior], destination[interior]
+    weight = (edges[1:] - edges[:-1])[interior] / (frm[source + 1] - frm[source])
+
+    lower = to[:-1].clone()
+    upper = to[1:].clone()
+    lower[0] = -math.inf
+    upper[-1] = math.inf
+    inner_low, inner_high = frm[1], frm[-2]
+    width_low, width_high = frm[1] - frm[0], frm[-1] - frm[-2]
+
+    def lower_survival(y: torch.Tensor) -> torch.Tensor:
+        return _halfnormal_tail_survival(
+            inner_low - torch.minimum(y, inner_low), width_low
+        )
+
+    def upper_survival(y: torch.Tensor) -> torch.Tensor:
+        return _halfnormal_tail_survival(
+            torch.maximum(y, inner_high) - inner_high, width_high
+        )
+
+    lower_tail = lower_survival(upper) - lower_survival(lower)
+    upper_tail = upper_survival(lower) - upper_survival(upper)
+    return _RemapWeights(
+        source,
+        destination,
+        torch.bincount(destination, minlength=num_buckets_to),
+        weight.to(dtype),
+        lower_tail.clamp_min(0.0).to(dtype),
+        upper_tail.clamp_min(0.0).to(dtype),
     )
-    prob_above_bucket = (
-        torch.cumsum(probs.flip(-1), dim=-1).flip(-1) - probs
-    ).index_select(-1, y_buckets)
-
-    bucket_widths = borders[1:] - borders[:-1]
-    share_of_bucket_left = (ys - borders[y_buckets]) / bucket_widths[y_buckets]
-    share_of_bucket_left = share_of_bucket_left.clamp(0.0, 1.0)
-
-    cdf = prob_below_bucket + prob_in_bucket * share_of_bucket_left
-    survival = prob_above_bucket + prob_in_bucket * (1.0 - share_of_bucket_left)
-
-    # Read the two outer buckets as their half-normal tails. The whole bucket
-    # is overwritten because the tail redistributes mass inside it too, but
-    # `CDF(borders[1])` is unchanged, so interior buckets are untouched.
-    if n_bars > 1:
-        in_lower_tail = ys <= borders[1]
-        lower_tail = probs[..., 0:1] * _halfnormal_tail_survival(
-            borders[1] - ys[in_lower_tail],
-            bucket_widths[0],
-        )
-        cdf[..., in_lower_tail] = lower_tail
-        survival[..., in_lower_tail] = 1.0 - lower_tail
-        in_upper_tail = ys >= borders[-2]
-        upper_tail = probs[..., -1:] * _halfnormal_tail_survival(
-            ys[in_upper_tail] - borders[-2],
-            bucket_widths[-1],
-        )
-        cdf[..., in_upper_tail] = 1.0 - upper_tail
-        survival[..., in_upper_tail] = upper_tail
-
-    return cdf.clip(0.0, 1.0), survival.clip(0.0, 1.0)
 
 
-def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
-    """CDF of the bar distribution given by `logits` over `borders`, at `ys`.
-
-    See `_cdf_and_survival`.
-    """
-    return _cdf_and_survival(logits, borders, ys)[0]
-
-
-# A bucket's mass is the difference of two cumulative values of order 1, so in
-# float32 anything below ~3e-8 rounds to exactly 0 and its NLL to inf; float64
-# puts that floor at ~1e-16. The result is cast back to the caller's dtype.
-_TRANSLATE_COMPUTE_DTYPE = torch.float64
-
-
-def _translate_compute_device(device: torch.device) -> torch.device:
-    """Where to run the float64 differencing for a tensor on `device`.
-
-    MPS has no float64, so that path computes on the CPU and moves back; every
-    other backend keeps the data where it is.
-    """
-    return torch.device("cpu") if device.type == "mps" else device
-
-
-def _translate_probs_across_borders_unchunked(
-    logits: torch.Tensor,
-    *,
-    frm: torch.Tensor,
-    to: torch.Tensor,
-) -> torch.Tensor:
-    out_dtype = logits.dtype
-    out_device = logits.device
-    device = _translate_compute_device(out_device)
+def _grid_key(borders: torch.Tensor) -> bytes:
     # Move first, then cast. A combined `.to(device=..., dtype=...)` off MPS
     # converts the dtype on the source device, and MPS has no float64, so it
     # silently yields all zeros instead of raising.
-    logits = logits.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
-    frm = frm.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
-    to = to.to(device).to(_TRANSLATE_COMPUTE_DTYPE)
-
-    prob_left, prob_right = _cdf_and_survival(logits, borders=frm, ys=to)
-    # Pinning the ends folds whatever lies beyond `to` into the outermost
-    # destination buckets, where the destination distribution's own tails
-    # carry it. This keeps the output summing to 1 and an identity remap
-    # returning its input.
-    prob_left[..., 0] = 0.0
-    prob_left[..., -1] = 1.0
-    prob_right[..., 0] = 1.0
-    prob_right[..., -1] = 0.0
-    # A cumulative probability is accurate where it is small: near 1 it has
-    # rounded away anything below ~1e-16 of the total, and in the upper tail
-    # it is exactly 1.0. So each bucket is differenced from whichever end of
-    # the distribution it is nearer to, which also treats the two halves of
-    # the grid alike.
-    from_below = prob_left[..., 1:] - prob_left[..., :-1]
-    from_above = prob_right[..., :-1] - prob_right[..., 1:]
-    mass = torch.where(prob_left[..., 1:] <= 0.5, from_below, from_above)
-    mass = mass.clamp_min(0.0)
-    # Cast before moving: it halves the bytes crossing the bus.
-    return mass.to(out_dtype).to(out_device)
+    return borders.detach().to("cpu").to(torch.float64).numpy().tobytes()
 
 
-# `_cdf_and_survival` allocates ~6 intermediate tensors of shape
-# (batch, len(to)). Targeting `chunk_size * len(to) <=
-# _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient around ~80 MB at
-# `_TRANSLATE_COMPUTE_DTYPE`'s 8 bytes/element and the total around ~1 GB,
-# holding translate_probs's contribution to peak memory constant in n_test.
+# A fitted regressor translates every estimator onto the same grids at each
+# `predict`, and building the weights costs about a millisecond of CPU time
+# that the GPU would otherwise wait for. 32 entries hold about 7 MB.
+@functools.lru_cache(maxsize=32)
+def _cached_remap_weights(
+    frm: bytes, to: bytes, dtype: torch.dtype, device: torch.device
+) -> _RemapWeights:
+    weights = _remap_weights(
+        torch.tensor(np.frombuffer(frm, dtype=np.float64)),
+        torch.tensor(np.frombuffer(to, dtype=np.float64)),
+        dtype=dtype,
+    )
+    return _RemapWeights(*(t.to(device) for t in weights))
+
+
+def _apply_remap_weights(logits: torch.Tensor, weights: _RemapWeights) -> torch.Tensor:
+    """Translate one batch of `(rows, num_buckets_frm)` logits, see `_remap_weights`."""
+    probs = torch.softmax(logits, dim=-1)
+    out = probs[:, :1] * weights.lower_tail + probs[:, -1:] * weights.upper_tail
+    if probs.device.type == "cuda":
+        # `index_add_` sums with atomics on CUDA, in an order that changes from
+        # run to run. A segmented sum over the pairs of each destination bucket
+        # is bitwise reproducible and costs about the same there.
+        contributions = probs.T.index_select(0, weights.source).mul_(
+            weights.weight[:, None]
+        )
+        out += torch.segment_reduce(
+            contributions, "sum", lengths=weights.pairs_per_destination, axis=0
+        ).T
+    else:
+        out.index_add_(
+            1,
+            weights.destination,
+            probs.index_select(1, weights.source).mul_(weights.weight),
+        )
+    return out
+
+
+# `_apply_remap_weights` allocates one `(rows, pairs)` transient in the caller's
+# dtype, where `pairs` is at most `len(frm) + len(to)`. Chunking to
+# `chunk_size * pairs <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps it near 40 MB in
+# float32, so this step's contribution to peak memory is constant in `n_test`.
 _TRANSLATE_CHUNK_BUDGET_ELEMENTS = 10_000_000
 
 
@@ -514,17 +508,18 @@ def translate_probs_across_borders(
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
-    The differencing runs in float64 and the result is cast back to the
-    caller's dtype, and destination buckets outside ``frm`` are fed by the
-    source's half-normal tails, as ``FullSupportBarDistribution.forward``
-    reads them.
+    Each destination bucket's mass is the sum of its overlaps with the source
+    buckets, weighted by the source probabilities, so no bucket is lost to
+    cancellation however small it is. Destination buckets outside ``frm`` are
+    fed by the source's half-normal tails, as ``FullSupportBarDistribution.forward``
+    reads them. The result is in ``logits``' dtype.
 
     For large batches the computation is chunked so that the peak memory
-    footprint of the intermediate ``(batch, len(to))`` tensors allocated
-    inside ``_cdf_and_survival`` stays bounded. All batch dimensions are
-    flattened before chunking, so the memory cap holds regardless of which batch
-    dimension is large (e.g. `(n_estimators, n_test, num_buckets)`). The
-    output is numerically identical to the unchunked version.
+    footprint of the intermediate ``(batch, pairs)`` tensor allocated inside
+    ``_apply_remap_weights`` stays bounded. All batch dimensions are flattened
+    before chunking, so the memory cap holds regardless of which batch dimension
+    is large (e.g. `(n_estimators, n_test, num_buckets)`). The output is
+    numerically identical to the unchunked version.
 
     Args:
         logits: The logits defining the distribution to translate. The last
@@ -534,10 +529,9 @@ def translate_probs_across_borders(
             or ``(n_estimators, num_rows, num_buckets)``.
         frm: The borders to translate from.
         to: The borders to translate to.
-        chunk_budget_elements: Maximum number of ``logits[..., -1]`` elements
-            processed per chunk. Defaults to a value that keeps each
-            ``_cdf_and_survival`` transient near ~80 MB. Lower values reduce
-            peak memory at a small time cost; primarily useful for testing.
+        chunk_budget_elements: Maximum number of elements of the ``(rows, pairs)``
+            transient per chunk. Lower values reduce peak memory at a small time
+            cost; primarily useful for testing.
 
     Returns:
         The translated probabilities.
@@ -549,35 +543,31 @@ def translate_probs_across_borders(
         # here, because every other member leaves its target untransformed.
         return torch.softmax(logits, dim=-1)
 
+    weights = _cached_remap_weights(
+        _grid_key(frm), _grid_key(to), logits.dtype, logits.device
+    )
     batch_shape = logits.shape[:-1]
-    num_buckets_frm = logits.shape[-1]
-    num_borders_to = to.shape[0]
-    num_buckets_to = num_borders_to - 1
-
-    if len(batch_shape) == 0:
-        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+    num_buckets_to = to.shape[0] - 1
 
     # Flatten batch dims so chunking is independent of which dim is large.
-    logits_flat = logits.reshape(-1, num_buckets_frm)
+    logits_flat = logits.reshape(-1, logits.shape[-1])
     num_rows = logits_flat.shape[0]
-    # The dominant intermediates inside `_cdf_and_survival` are of shape
-    # `(batch, num_borders_to)`, so budget against borders, not buckets.
-    chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
+    chunk_size = max(1, chunk_budget_elements // max(weights.source.shape[0], 1))
     if num_rows <= chunk_size:
-        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
-
-    # Preallocate output and write chunks in-place to avoid the transient
-    # `torch.cat` would create (which would double peak memory).
-    out_flat = torch.empty(
-        num_rows,
-        num_buckets_to,
-        dtype=logits.dtype,
-        device=logits.device,
-    )
-    for i in range(0, num_rows, chunk_size):
-        out_flat[i : i + chunk_size] = _translate_probs_across_borders_unchunked(
-            logits_flat[i : i + chunk_size], frm=frm, to=to
+        out_flat = _apply_remap_weights(logits_flat, weights)
+    else:
+        # Preallocate output and write chunks in-place to avoid the transient
+        # `torch.cat` would create (which would double peak memory).
+        out_flat = torch.empty(
+            num_rows,
+            num_buckets_to,
+            dtype=logits.dtype,
+            device=logits.device,
         )
+        for i in range(0, num_rows, chunk_size):
+            out_flat[i : i + chunk_size] = _apply_remap_weights(
+                logits_flat[i : i + chunk_size], weights
+            )
     return out_flat.reshape(*batch_shape, num_buckets_to)
 
 
