@@ -697,10 +697,8 @@ def load_model_criterion_config(
             Whether to check if the criterion
             is a FullSupportBarDistribution, which is the expected criterion
             for models trained for regression.
-        devices:
-            Where the caller will place the loaded models; part of the cache key.
-        force_inference_dtype:
-            The dtype the caller will cast them to; part of the cache key.
+        devices: Where the caller will place the models; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast them to; likewise.
         estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
@@ -978,15 +976,10 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
 
 # Bounded LRU of *built* models, keyed by (path, file identity, estimator type,
 # devices, forced dtype). Off unless ``TABPFN_MODEL_CACHE_SIZE`` is a positive
-# integer; 2 holds a classifier and a regressor. Entries are shared by reference
-# and left in ``eval()`` mode, for repeated sequential fit/predict.
-#
-# Sharing is what a caller who enables it takes on: two estimators served one
-# entry hold the same module, so moving or training either reaches the other.
+# integer. Entries are shared by reference: moving or training one reaches all.
 _DEFAULT_BUILT_MODEL_CACHE_SIZE = 0
 
-# The devices the module is moved to and the dtype it is cast to are applied in
-# place by whoever is handed it, so both belong in the key.
+# Device and dtype are applied to the module in place, so both belong in the key.
 _Devices = tuple[str, ...] | None
 _ForceInferenceDType = str | None
 _BuiltModelCacheKey = tuple[
@@ -1055,10 +1048,8 @@ def load_model(
         path: Path to the checkpoint
         estimator_type: The task the estimator is being built for. A checkpoint
             with both heads backs either task, so this selects the criterion.
-        devices: Where the caller will place the returned model; part of the
-            cache key. Pass None only if it will not be moved.
-        force_inference_dtype: The dtype the caller will cast it to, or None;
-            part of the cache key.
+        devices: Where the caller will place the model; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast it to; likewise.
     """
     resolved = str(path.resolve())
     identity = Checkpoint(resolved).identity()

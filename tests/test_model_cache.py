@@ -193,12 +193,7 @@ def test_lru_eviction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_load_model_signature_is_tracked_by_the_cache():
-    """Tripwire: cache correctness depends on `load_model`'s exact inputs.
-
-    A parameter that affects the build, or that describes something the caller
-    applies to the model it is handed, belongs in the key — otherwise a hit
-    returns a model that does not match the request.
-    """
+    """A new `load_model` parameter must be added to the cache key."""
     params = set(inspect.signature(model_loading.load_model).parameters)
     assert params == {
         "path",

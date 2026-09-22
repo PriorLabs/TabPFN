@@ -52,10 +52,7 @@ class BarDistribution(nn.Module):
         self.to(borders.device)
 
     def has_equal_borders(self, other: BarDistribution) -> bool:
-        """Check if two BarDistributions have equal borders.
-
-        The two may sit on different devices.
-        """
+        """Check if two BarDistributions have equal borders, on any devices."""
         return torch.equal(self.borders.cpu(), other.borders.cpu())  # pyright: ignore[reportArgumentType]
 
     @property

@@ -136,10 +136,8 @@ def initialize_tabpfn_model(
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
         n_estimators_override: Likewise for the number of estimators.
-        devices: The devices the caller will place the loaded models on, used to
-            key the built-model cache. None when the caller will not move them.
-        force_inference_dtype: The dtype the caller will cast the loaded models
-            to, also part of the built-model cache key.
+        devices: Where the caller will place the models; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast them to; likewise.
 
     Returns:
         a list of models,
