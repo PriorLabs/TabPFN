@@ -197,7 +197,8 @@ def _is_torch_mps_supported() -> bool:
 
     We require PyTorch >= 2.6 for MPS to support all used operations.
     """
-    return torch.__version__ >= "2.6"
+    from packaging.version import parse as parse_version
+    return parse_version(torch.__version__) >= parse_version("2.6")
 
 
 def is_autocast_available(device_type: str) -> bool:
