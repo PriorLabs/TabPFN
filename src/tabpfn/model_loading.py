@@ -51,6 +51,8 @@ if TYPE_CHECKING:
     from tabpfn import TabPFNClassifier, TabPFNRegressor
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import ModelPath
     from tabpfn.utils import DevicesSpecification
@@ -635,6 +637,8 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
@@ -653,6 +657,8 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     FullSupportBarDistribution,
@@ -670,6 +676,8 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -689,6 +697,8 @@ def load_model_criterion_config(
             Whether to check if the criterion
             is a FullSupportBarDistribution, which is the expected criterion
             for models trained for regression.
+        devices: Where the caller will place the models; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast them to; likewise.
         estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
@@ -751,6 +761,8 @@ def load_model_criterion_config(
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             estimator_type=estimator_type,
+            devices=devices,
+            force_inference_dtype=force_inference_dtype,
         )
         if check_bar_distribution_criterion and not isinstance(
             criterion,
@@ -962,23 +974,48 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     return Checkpoint(path).load()
 
 
-# Bounded, opt-in cache of *built* models (architecture + loaded weights),
-# keyed by (resolved path, file identity, estimator type). Enabled by setting
-# the env var ``TABPFN_MODEL_CACHE_SIZE`` to a positive integer (an LRU of that
-# size; default 0 disables it, preserving prior behaviour). The cached model is
-# shared by reference and left in ``eval()`` mode — intended for repeated
-# sequential fit/predict (cross-validation, per-group models, or servers that
-# manage their own concurrency). RES-2422 tracks the follow-up that externalises
-# per-fit state so a single backbone can be shared across threads too.
-_BUILT_MODEL_CACHE: OrderedDict[tuple[str, tuple[int, int]], tuple] = OrderedDict()
+# Bounded LRU of *built* models, keyed by (path, file identity, estimator type,
+# devices, forced dtype). Off unless ``TABPFN_MODEL_CACHE_SIZE`` is a positive
+# integer. Entries are shared by reference: moving or training one reaches all.
+_DEFAULT_BUILT_MODEL_CACHE_SIZE = 0
+
+# Device and dtype are applied to the module in place, so both belong in the key.
+_Devices = tuple[str, ...] | None
+_ForceInferenceDType = str | None
+_BuiltModelCacheKey = tuple[
+    str,
+    tuple[int, int],
+    Literal["regressor", "classifier"],
+    _Devices,
+    _ForceInferenceDType,
+]
+_BUILT_MODEL_CACHE: OrderedDict[_BuiltModelCacheKey, tuple] = OrderedDict()
 _BUILT_MODEL_CACHE_LOCK = Lock()
 
 
 def _get_built_model_cache_size() -> int:
+    raw = os.environ.get("TABPFN_MODEL_CACHE_SIZE")
+    if raw is None:
+        return _DEFAULT_BUILT_MODEL_CACHE_SIZE
     try:
-        return max(0, int(os.environ.get("TABPFN_MODEL_CACHE_SIZE", "0")))
+        return max(0, int(raw))
     except ValueError:
-        return 0
+        logger.warning(
+            "Ignoring non-integer TABPFN_MODEL_CACHE_SIZE=%r; the built-model "
+            "cache stays off.",
+            raw,
+        )
+        return _DEFAULT_BUILT_MODEL_CACHE_SIZE
+
+
+def _devices_cache_key(devices: Sequence[torch.device] | None) -> _Devices:
+    """Hashable form of the devices; ``None`` gets its own entry."""
+    return None if devices is None else tuple(str(torch.device(d)) for d in devices)
+
+
+def _dtype_cache_key(force_inference_dtype: torch.dtype | None) -> _ForceInferenceDType:
+    """Hashable form of the forced dtype."""
+    return None if force_inference_dtype is None else str(force_inference_dtype)
 
 
 def clear_built_model_cache() -> None:
@@ -991,6 +1028,8 @@ def load_model(
     *,
     path: Path,
     estimator_type: Literal["regressor", "classifier"],
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -1000,8 +1039,8 @@ def load_model(
     """Loads a model from a given path. Only for inference.
 
     The raw checkpoint is cached in memory so repeated calls with the same path
-    skip disk I/O. When ``TABPFN_MODEL_CACHE_SIZE`` is a positive integer the
-    *built* model (architecture + loaded weights) is also cached, as an LRU of
+    skip disk I/O. When ``TABPFN_MODEL_CACHE_SIZE`` is set to a positive integer
+    the *built* model (architecture + loaded weights) is also cached, as an LRU of
     that size, so repeated calls skip reconstruction and ``load_state_dict``
     entirely. Both caches invalidate when the file changes (mtime + size).
 
@@ -1009,14 +1048,21 @@ def load_model(
         path: Path to the checkpoint
         estimator_type: The task the estimator is being built for. A checkpoint
             with both heads backs either task, so this selects the criterion.
+        devices: Where the caller will place the model; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast it to; likewise.
     """
     resolved = str(path.resolve())
     identity = Checkpoint(resolved).identity()
 
     use_cache = _get_built_model_cache_size() > 0
-    # `estimator_type` belongs in the key: the criterion differs per task, so a
-    # checkpoint built for one task must not be served for the other.
-    key = (resolved, identity, estimator_type)
+    # `estimator_type` is in the key because the criterion differs per task.
+    key: _BuiltModelCacheKey = (
+        resolved,
+        identity,
+        estimator_type,
+        _devices_cache_key(devices),
+        _dtype_cache_key(force_inference_dtype),
+    )
     if use_cache:
         with _BUILT_MODEL_CACHE_LOCK:
             cached = _BUILT_MODEL_CACHE.get(key)
