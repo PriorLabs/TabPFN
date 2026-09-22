@@ -16,7 +16,7 @@ import tempfile
 import urllib.request
 import warnings
 import zipfile
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -1070,6 +1070,38 @@ _PARAMETER_INIT_FUNCTIONS = (
     "kaiming_normal_",
 )
 
+# State of the process-wide `torch.nn.init` patch, guarded by the lock: the real
+# functions while the patch is installed (None otherwise) and, per thread, how many
+# `_skip_parameter_init` blocks it is currently inside.
+_INIT_PATCH_LOCK = Lock()
+_INIT_PATCH_ORIGINALS: dict[str, Callable[..., torch.Tensor]] | None = None
+_INIT_PATCH_OWNERS: Counter[int] = Counter()
+
+
+def _make_init_stub(name: str) -> Callable[..., torch.Tensor]:
+    def leave_uninitialised(
+        tensor: torch.Tensor, *args: Any, **kwargs: Any
+    ) -> torch.Tensor:
+        with _INIT_PATCH_LOCK:
+            originals = _INIT_PATCH_ORIGINALS
+            is_owner = _INIT_PATCH_OWNERS[get_ident()] > 0
+        if originals is None:
+            raise RuntimeError(
+                f"torch.nn.init.{name} was looked up while tabpfn was building a "
+                "model and called after that build finished. Look the function "
+                "up on torch.nn.init at call time instead of keeping a reference."
+            )
+        if not is_owner:
+            return originals[name](tensor, *args, **kwargs)
+        return tensor
+
+    leave_uninitialised.__name__ = name
+    leave_uninitialised.__qualname__ = name
+    return leave_uninitialised
+
+
+_INIT_STUBS = {name: _make_init_stub(name) for name in _PARAMETER_INIT_FUNCTIONS}
+
 
 @contextmanager
 def _skip_parameter_init() -> Iterator[None]:
@@ -1082,42 +1114,33 @@ def _skip_parameter_init() -> Iterator[None]:
     `torch.nn.init` functions return their tensor untouched; they are restored
     afterwards. A model built inside it must be loaded before use.
 
-    The patch is process-wide, so two guards keep it from leaking: only the thread
-    that entered the block sees the no-ops (other threads fall through to the real
-    functions), and a reference to a no-op that is called after the block has ended
-    raises instead of silently skipping the initialisation.
+    The patch is process-wide, so it is installed once by the first block to enter
+    and removed by the last one to leave, and only the threads currently inside a
+    block see the no-ops: other threads fall through to the real functions. A
+    reference to a no-op that is called once no block is active raises instead of
+    silently skipping the initialisation.
     """
-    originals = {
-        name: getattr(torch.nn.init, name) for name in _PARAMETER_INIT_FUNCTIONS
-    }
-    owner_thread = get_ident()
-    active = True
-
-    def make_stub(name: str, original: Callable[..., torch.Tensor]) -> Callable:
-        @functools.wraps(original)
-        def leave_uninitialised(
-            tensor: torch.Tensor, *args: Any, **kwargs: Any
-        ) -> torch.Tensor:
-            if not active:
-                raise RuntimeError(
-                    f"torch.nn.init.{name} was looked up while tabpfn was building a "
-                    "model and called after that build finished. Look the function "
-                    "up on torch.nn.init at call time instead of keeping a reference."
-                )
-            if get_ident() != owner_thread:
-                return original(tensor, *args, **kwargs)
-            return tensor
-
-        return leave_uninitialised
-
-    for name, original in originals.items():
-        setattr(torch.nn.init, name, make_stub(name, original))
+    global _INIT_PATCH_ORIGINALS  # noqa: PLW0603
+    thread = get_ident()
+    with _INIT_PATCH_LOCK:
+        if _INIT_PATCH_ORIGINALS is None:
+            _INIT_PATCH_ORIGINALS = {
+                name: getattr(torch.nn.init, name) for name in _PARAMETER_INIT_FUNCTIONS
+            }
+            for name, stub in _INIT_STUBS.items():
+                setattr(torch.nn.init, name, stub)
+        _INIT_PATCH_OWNERS[thread] += 1
     try:
         yield
     finally:
-        active = False
-        for name, original in originals.items():
-            setattr(torch.nn.init, name, original)
+        with _INIT_PATCH_LOCK:
+            _INIT_PATCH_OWNERS[thread] -= 1
+            if _INIT_PATCH_OWNERS[thread] == 0:
+                del _INIT_PATCH_OWNERS[thread]
+            if not _INIT_PATCH_OWNERS and _INIT_PATCH_ORIGINALS is not None:
+                for name, original in _INIT_PATCH_ORIGINALS.items():
+                    setattr(torch.nn.init, name, original)
+                _INIT_PATCH_ORIGINALS = None
 
 
 def _build_model(

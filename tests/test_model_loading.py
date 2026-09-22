@@ -950,3 +950,52 @@ def test__tabpfn_v3_5__regression_borders_follow_the_head_buffer() -> None:
     model.to(torch.float64)
     assert model.regression_borders is model.heads.regression_borders
     assert model.regression_borders.dtype == torch.float64
+
+
+def test__skip_parameter_init__overlapping_blocks_on_two_threads_restore_torch() -> (
+    None
+):
+    """The last block to leave restores the real functions, on whichever thread."""
+    first_inside = threading.Event()
+    second_inside = threading.Event()
+    first_left = threading.Event()
+    zeros_inside_second: list[torch.Tensor] = []
+
+    def first() -> None:
+        with model_loading._skip_parameter_init():
+            first_inside.set()
+            second_inside.wait(timeout=10)
+        first_left.set()
+
+    def second() -> None:
+        first_inside.wait(timeout=10)
+        with model_loading._skip_parameter_init():
+            second_inside.set()
+            first_left.wait(timeout=10)
+            tensor = torch.ones(3)
+            torch.nn.init.zeros_(tensor)  # still inside a block on this thread
+            zeros_inside_second.append(tensor)
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert torch.equal(zeros_inside_second[0], torch.ones(3))
+    tensor = torch.ones(3)
+    torch.nn.init.zeros_(tensor)
+    assert torch.equal(tensor, torch.zeros(3))
+    assert torch.nn.init.zeros_ is not model_loading._INIT_STUBS["zeros_"]
+
+
+def test__skip_parameter_init__nested_blocks_on_one_thread() -> None:
+    """Leaving an inner block keeps the outer one's patch in place."""
+    with model_loading._skip_parameter_init():
+        with model_loading._skip_parameter_init():
+            pass
+        tensor = torch.ones(3)
+        torch.nn.init.zeros_(tensor)
+        assert torch.equal(tensor, torch.ones(3))
+    torch.nn.init.zeros_(tensor)
+    assert torch.equal(tensor, torch.zeros(3))
