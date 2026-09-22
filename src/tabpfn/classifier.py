@@ -38,15 +38,14 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     expand_dates_and_text,
+    fold_nested_inference_config_params,
     get_embeddings,
     get_nested_inference_config_params,
     initialize_model_variables_helper,
-    merge_nested_inference_config_params,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
-    split_nested_inference_config_params,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -729,23 +728,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         `inference_config` override dict, so single inference settings can be
         tuned (e.g. via `GridSearchCV`) without replacing the whole dict.
         Passing both `inference_config={...}` and nested pieces in one call
-        is rejected as ambiguous.
+        is accepted when the pieces agree with the whole dict (which is what
+        `get_params(deep=True)` produces, so the sklearn
+        `set_params(**get_params())` round-trip works); genuinely conflicting
+        dual specification is rejected as ambiguous.
 
         Returns:
             The estimator instance.
         """
-        rest, nested = split_nested_inference_config_params(params)
-        if nested:
-            if rest.get("inference_config") is not None:
-                raise ValueError(
-                    "Pass `inference_config` wholesale or as "
-                    "`inference_config__FIELD` pieces, not both in one call."
-                )
-            base = rest.get("inference_config", self.inference_config)
-            rest["inference_config"] = merge_nested_inference_config_params(
-                base, nested
-            )
-        return super().set_params(**rest)
+        return super().set_params(
+            **fold_nested_inference_config_params(self.inference_config, params)
+        )
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
