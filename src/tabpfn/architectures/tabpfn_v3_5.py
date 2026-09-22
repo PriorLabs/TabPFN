@@ -3220,7 +3220,7 @@ def _in_context_ecdf(x_BRiC: torch.Tensor, ecdf_context: torch.Tensor) -> torch.
     two counts the bucket's ends bracket — an interval that is empty when the
     buckets hold every distinct train value, so the estimate is then exact too.
     Inputs must be finite: torch sorts NaN last, so a NaN query would come out at
-    rank 1.0.
+    the top train value's rank.
     """
     num_rows, columns = x_BRiC.shape[1], x_BRiC.shape[2]
     at_most_BCK = ecdf_context[2]
