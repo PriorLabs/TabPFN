@@ -604,6 +604,93 @@ def _resolve_overrides(
     return overrides
 
 
+INFERENCE_CONFIG_PARAM_PREFIX = "inference_config__"
+"""Prefix for sklearn-style nested inference-config parameters (see issue #322)."""
+
+
+def _inference_config_field_names() -> set[str]:
+    """Names of all valid `InferenceConfig` fields."""
+    return {field.name for field in dataclasses.fields(InferenceConfig)}
+
+
+def get_nested_inference_config_params(
+    inference_config: dict | InferenceConfig | None,
+) -> dict[str, typing.Any]:
+    """Flatten `inference_config` into sklearn-style nested params.
+
+    Args:
+        inference_config: The estimator's current `inference_config` value.
+
+    Returns:
+        Mapping of `inference_config__FIELD` to value for each explicitly set
+        field. Empty when `inference_config` is None.
+    """
+    if isinstance(inference_config, InferenceConfig):
+        base: dict[str, typing.Any] = dataclasses.asdict(inference_config)
+    elif isinstance(inference_config, dict):
+        base = inference_config
+    else:
+        return {}
+    return {f"{INFERENCE_CONFIG_PARAM_PREFIX}{k}": v for k, v in base.items()}
+
+
+def split_nested_inference_config_params(
+    params: dict[str, typing.Any],
+) -> tuple[dict[str, typing.Any], dict[str, typing.Any]]:
+    """Split `inference_config__FIELD` entries out of sklearn params.
+
+    Args:
+        params: Parameters as passed to `set_params`.
+
+    Returns:
+        A tuple (rest, nested) where rest holds the top-level params and
+        nested maps bare `InferenceConfig` field names to values.
+    """
+    rest: dict[str, typing.Any] = {}
+    nested: dict[str, typing.Any] = {}
+    for key, value in params.items():
+        if key.startswith(INFERENCE_CONFIG_PARAM_PREFIX):
+            nested[key[len(INFERENCE_CONFIG_PARAM_PREFIX) :]] = value
+        else:
+            rest[key] = value
+    return rest, nested
+
+
+def merge_nested_inference_config_params(
+    base: dict | InferenceConfig | None,
+    nested: dict[str, typing.Any],
+) -> dict[str, typing.Any]:
+    """Merge nested `inference_config__FIELD` values into an override dict.
+
+    Args:
+        base: The current `inference_config` value (dict, deprecated
+            `InferenceConfig` object, or None).
+        nested: Bare field names to values parsed from nested params.
+
+    Returns:
+        A new dict combining the base overrides with the nested values.
+
+    Raises:
+        ValueError: If a nested field name is not an `InferenceConfig` field.
+    """
+    valid = _inference_config_field_names()
+    unknown = sorted(set(nested) - valid)
+    if unknown:
+        raise ValueError(
+            f"Unknown inference_config field(s): {unknown}. "
+            f"Valid fields include: {sorted(valid)[:8]}... "
+            "See `tabpfn.inference_config.InferenceConfig` for the full list."
+        )
+    if isinstance(base, InferenceConfig):
+        merged: dict[str, typing.Any] = dataclasses.asdict(base)
+    elif isinstance(base, dict):
+        merged = dict(base)
+    else:
+        merged = {}
+    merged.update(nested)
+    return merged
+
+
 def resolved_n_estimators(
     estimator: TabPFNClassifier | TabPFNRegressor,
 ) -> int | Literal["auto"]:

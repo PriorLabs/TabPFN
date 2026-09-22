@@ -47,11 +47,14 @@ from tabpfn.base import (
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
+    get_nested_inference_config_params,
     initialize_model_variables_helper,
+    merge_nested_inference_config_params,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
+    split_nested_inference_config_params,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -776,6 +779,49 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if not hasattr(self, "inference_config_"):
             self._initialize_model_variables()
         return copy.deepcopy(self.inference_config_)
+
+    def get_params(
+        self,
+        deep: bool = True,  # noqa: FBT001, FBT002
+    ) -> dict[str, Any]:
+        """Get parameters, exposing nested `inference_config__FIELD` params.
+
+        Args:
+            deep: If True, include an `inference_config__FIELD` entry for
+                each explicitly set inference-config override.
+
+        Returns:
+            Parameter mapping including nested inference-config overrides.
+        """
+        params = super().get_params(deep=deep)
+        if deep:
+            params.update(get_nested_inference_config_params(self.inference_config))
+        return params
+
+    def set_params(self, **params: Any) -> Self:
+        """Set parameters, accepting nested `inference_config__FIELD` params.
+
+        Each `inference_config__FIELD=value` entry is merged into the
+        `inference_config` override dict, so single inference settings can be
+        tuned (e.g. via `GridSearchCV`) without replacing the whole dict.
+        Passing both `inference_config={...}` and nested pieces in one call
+        is rejected as ambiguous.
+
+        Returns:
+            The estimator instance.
+        """
+        rest, nested = split_nested_inference_config_params(params)
+        if nested:
+            if rest.get("inference_config") is not None:
+                raise ValueError(
+                    "Pass `inference_config` wholesale or as "
+                    "`inference_config__FIELD` pieces, not both in one call."
+                )
+            base = rest.get("inference_config", self.inference_config)
+            rest["inference_config"] = merge_nested_inference_config_params(
+                base, nested
+            )
+        return super().set_params(**rest)
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
