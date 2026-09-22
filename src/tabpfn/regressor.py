@@ -813,9 +813,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Shared between the standard fit path and the differentiable-input
         path. The two paths differ only in ``n_preprocessing_jobs``
         (forced to 1 in the differentiable path so the autograd graph on
-        ``X`` survives joblib's process-boundary pickling) and
-        ``inference_mode`` (False under differentiable input so backprop
-        works through the executor).
+        ``X`` is built in the calling thread) and ``inference_mode``
+        (False under differentiable input so backprop works through the
+        executor).
         """
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
@@ -1242,8 +1242,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self._rebuild_raw_space_bardist()
 
         # Force sequential preprocessing: with differentiable input X carries
-        # an autograd graph that does not survive joblib's process-boundary
-        # pickling. Sequential execution preserves the graph in-process.
+        # an autograd graph, which is built in the calling thread.
         self._build_ensemble_preprocessor_and_executor(
             X=X,
             y=y,
@@ -1964,10 +1963,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     y_context=y_context,
                     y_query=torch.zeros(n_test),
                     cat_indices=cat_indices,
-                    # Must come from the members, not ``worker.ensemble_configs_``:
-                    # with n_preprocessing_jobs > 1 ``target_transform`` is fitted in
-                    # a worker process, so only the member's copy carries the fitted
-                    # transform the border mapping needs.
+                    # From the members, not ``worker.ensemble_configs_``: the members
+                    # hold the ``target_transform`` that preprocessing fitted, which
+                    # the border mapping needs.
                     configs=[m.config for m in members],
                     raw_space_bardist=worker.raw_space_bardist_,
                     znorm_space_bardist=worker.znorm_space_bardist_,
