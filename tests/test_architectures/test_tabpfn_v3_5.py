@@ -507,8 +507,7 @@ def test__in_context_ecdf__buckets_cover_every_value__matches_exact_midranks(
     assert torch.equal(ranks, _exact_midranks(x_BRiC, x_BRiC.shape[1]))
 
 
-def test__in_context_ecdf__values_outside_the_train_range__get_the_extremes_midrank(
-) -> None:
+def test__in_context_ecdf__out_of_range_values__get_the_extremes_midrank() -> None:
     """A tied extreme, not 0 or 1, bounds the rank of an out-of-range value.
 
     Without the bound, the rank gap between the top train value and anything
