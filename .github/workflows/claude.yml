@@ -37,8 +37,8 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        # Pinned to v4 commit SHA to mitigate moving-tag supply-chain risk.
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Pinned to a commit SHA to mitigate moving-tag supply-chain risk.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -48,7 +48,7 @@ jobs:
         # Pinned to v1 commit SHA to mitigate moving-tag supply-chain risk.
         # When updating, resolve the new tag's underlying commit via
         #   gh api /repos/anthropics/claude-code-action/git/refs/tags/<tag>
-        uses: anthropics/claude-code-action@51db78a4b844e144f8d02425cb280435c04a3474  # v1
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 

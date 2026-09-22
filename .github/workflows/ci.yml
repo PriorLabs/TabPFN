@@ -6,6 +6,9 @@ on:
   merge_group:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: pr-${{ github.ref }}
   cancel-in-progress: true
@@ -20,7 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
         with:
           version-file: pyproject.toml
@@ -60,12 +65,10 @@ jobs:
             python-version: "3.14"
             dependency-set: highest
     runs-on: ${{ matrix.os }}
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -73,9 +76,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies
         run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
@@ -115,6 +121,9 @@ jobs:
 
       - &download-models
         name: Download models from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync python scripts/download_all_models.py
 
       - &save-model-cache
@@ -199,10 +208,16 @@ jobs:
 
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.6 (see tabpfn.utils.infer_devices()), thus
@@ -211,12 +226,16 @@ jobs:
       - name: Run Tests (all tests, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
 
@@ -239,12 +258,10 @@ jobs:
     needs: check_python_linting
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.14
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -252,9 +269,12 @@ jobs:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies
         run: uv sync --group ci --resolution highest
@@ -274,6 +294,9 @@ jobs:
       - *save-model-cache
 
       - name: Run Tests
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: uv run --no-sync pytest tests/
 
       - *save-hf-cache
@@ -294,8 +317,6 @@ jobs:
           - tabpfn-extensions
           - tabpfn-time-series
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
       # Disable xet chunk cache to prevent disk exhaustion from 40+ model downloads.
       # Xet caches each downloaded file's chunks in ~/.cache/huggingface/xet/,
       # roughly doubling the effective disk footprint on the runner.
@@ -303,13 +324,15 @@ jobs:
 
     steps:
       - name: Checkout TabPFN at current ref
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           path: TabPFN
 
       - name: Checkout ${{ matrix.repo-name }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: PriorLabs/${{ matrix.repo-name }}
           path: ${{ matrix.repo-name }}
 
@@ -319,7 +342,12 @@ jobs:
           python-version: "3.13"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       # `tabpfn-time-series[benchmarking]` pulls autogluon-timeseries, which
       # transitively pulls torch + the full CUDA wheel stack (cuBLAS, cuDNN,
@@ -332,7 +360,7 @@ jobs:
       # because its install footprint comfortably fits.
       - name: Free runner disk space
         if: matrix.repo-name == 'tabpfn-time-series'
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
         with:
           tool-cache: false
           android: true
@@ -357,6 +385,9 @@ jobs:
         # saves it.
 
       - name: Download models from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
         run: |
           cd TabPFN
           uv run python scripts/download_all_models.py
@@ -364,6 +395,8 @@ jobs:
 
       - name: Install dependencies and run tests
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           FAST_TEST_MODE: 1 # Configures -extensions to run a smaller set of tests.
         run: |
           cd ${{ matrix.repo-name }}
@@ -392,12 +425,10 @@ jobs:
             dependency-set: highest
 
     runs-on: ubuntu-22.04-4core-gpu
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -405,9 +436,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
+          # Only save the uv cache on main so PR runs cannot flood the repo's shared
+          # Actions cache quota; every run still restores the cache main produced.
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies
         run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
@@ -419,6 +453,8 @@ jobs:
 
       - name: Run GPU Test Suite
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"

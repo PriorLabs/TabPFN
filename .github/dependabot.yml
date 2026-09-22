@@ -17,3 +17,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    # Match the pip quarantine above: only propose releases that have been public
+    # for a while, so a compromised release is likely caught before we adopt it.
+    cooldown:
+      default-days: 8
