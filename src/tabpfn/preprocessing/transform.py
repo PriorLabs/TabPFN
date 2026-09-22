@@ -141,13 +141,10 @@ def fit_preprocessing(
         y_train: Training target.
         feature_schema: feature schema.
         n_preprocessing_jobs: Number of worker threads to use.
-            If `1`, then the preprocessing runs in the calling thread. The transforms
-                themselves parallelise over multiple cores, so one job is often enough.
-            If `>1`, then different estimators are preprocessed on different threads.
-                Threads share the training data, so the extra cost is small and the
-                gain grows with the table size.
-            If `-1`, then creates as many threads as CPU cores. As each transform
-                itself uses multiple cores, this is likely too many.
+            If `1`, then the preprocessing runs in the calling thread.
+            If `>1`, then the estimators are preprocessed on that many threads.
+            If `-1`, then one thread per CPU core.
+            Threads beyond the number of estimators are unused.
         parallel_mode:
             Parallel mode to use.
 
@@ -188,10 +185,9 @@ def fit_preprocessing(
             f"elements, but configs has {len(configs)} elements"
         )
 
-    # Threads, not processes: the tasks share `X_train` by reference and hand their
-    # transformed tables back without pickling, and the transforms release the GIL in
-    # numpy and scikit-learn. A process pool copies the table into every worker and
-    # every result back, which costs more than the preprocessing itself.
+    # Threads: the tasks read `X_train` in place and return their tables without
+    # pickling, and the transforms release the GIL. A process pool would copy the
+    # table into every worker and every result back.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
