@@ -871,7 +871,7 @@ class _GridBackend:
 
 
 @torch.no_grad()
-def test__kv_cache__auto_precision__stores_the_grid_the_train_call_left() -> None:
+def test__kv_cache__adaptive__stores_the_grid_the_train_call_left() -> None:
     config = tabpfn_v3.TabPFNV3Config(
         max_num_classes=10,
         num_buckets=5,
@@ -893,7 +893,9 @@ def test__kv_cache__auto_precision__stores_the_grid_the_train_call_left() -> Non
             x,
             y,
             return_kv_cache=True,
-            performance_options=PerformanceOptions(kv_cache_dtype=None),
+            performance_options=PerformanceOptions(
+                kv_cache_dtype=torch.int8, kv_cache_follows_attention_grid=True
+            ),
         )
     finally:
         unregister_attention_backend(backend.name)

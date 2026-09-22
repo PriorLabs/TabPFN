@@ -93,7 +93,7 @@ class AttentionBackend(Protocol):
 
     A backend that leaves the ``k``/``v`` it was handed rounded onto a
     lower-precision grid -- one scale per KV head -- declares that grid's dtype
-    as ``kv_grid_dtype``. A KV cache built with ``kv_cache_precision="auto"``
+    as ``kv_grid_dtype``. A KV cache built with ``kv_cache_precision="adaptive"``
     is then stored at that dtype, so it holds exactly the values the call
     attended over; see :func:`kv_grid_dtype`.
 

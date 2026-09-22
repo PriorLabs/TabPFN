@@ -116,6 +116,11 @@ class PerformanceOptions:
     cache before converting it to its storage dtype.
     """
 
+    kv_cache_follows_attention_grid: bool = False
+    """Store a KV-cache layer at the grid its attention backend left the keys and
+    values on (``kv_grid_dtype``), when there is one, instead of ``kv_cache_dtype``.
+    """
+
 
 class ArchitectureModule(Protocol):
     """Interface that modules containing model architectures should implement."""

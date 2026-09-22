@@ -26,6 +26,8 @@ FP8_KV_DTYPE: torch.dtype = torch.float8_e4m3fn
 KV_CACHE_PRECISION_DTYPES: dict[str, torch.dtype] = {
     "int8": QUANTIZED_KV_DTYPE,
     "fp8": FP8_KV_DTYPE,
+    # The dtype when no attention backend left the keys and values on its grid.
+    "adaptive": QUANTIZED_KV_DTYPE,
 }
 
 # Low, high, max-magnitude value for each integer dtype.
@@ -108,16 +110,17 @@ class KVCacheEntry:
         )
 
     def at_storage_dtype(
-        self, dtype: torch.dtype | None
+        self, dtype: torch.dtype | None, *, follow_grid: bool = False
     ) -> KVCacheEntry | QuantizedKVCacheEntry:
         """This entry as the cache stores it.
 
         Args:
-            dtype: The requested storage dtype, or ``None`` for
-                ``kv_cache_precision="auto"``: the grid the values already lie
-                on (``grid_dtype``), else the computed dtype.
+            dtype: The storage dtype, or ``None`` to keep the computed dtype.
+            follow_grid: Store at ``grid_dtype`` instead, when it is set
+                (``kv_cache_precision="adaptive"``).
         """
-        dtype = dtype if dtype is not None else self.grid_dtype
+        if follow_grid and self.grid_dtype is not None:
+            dtype = self.grid_dtype
         return self if dtype is None else self.quantize(dtype)
 
     def quantize(

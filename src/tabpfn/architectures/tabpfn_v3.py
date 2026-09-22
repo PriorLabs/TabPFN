@@ -274,7 +274,7 @@ def get_cache_size(
     n_features: int,
     model_config: TabPFNV3Config,
     base_dtype: torch.dtype | Literal["autocast"],
-    kv_cache_precision: Literal["auto", "int8", "fp8"] = "int8",
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] = "int8",
 ) -> int:
     """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
 
@@ -318,20 +318,21 @@ def get_cache_size(
             ``"autocast"`` (GPU autocast path -- KV and ``decoder_keys`` are
             sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
             fp32, since autocast keeps those ops in fp32).
-        kv_cache_precision: If ``"int8"`` (default) or ``"fp8"``, the KV cache
-            is sized at one byte per element plus scales; if ``"auto"``, K/V
-            are sized at the compute dtype with no scales.
+        kv_cache_precision: If ``"int8"`` (default), ``"fp8"`` or
+            ``"adaptive"``, the KV cache is sized at one byte per element plus
+            scales; if ``"auto"``, K/V are sized at the compute dtype with no
+            scales.
 
     Returns:
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
         total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
     """
-    if kv_cache_precision not in ("auto", "int8", "fp8"):
+    if kv_cache_precision not in ("auto", "int8", "fp8", "adaptive"):
         raise ValueError(
             f"Invalid kv_cache_precision: {kv_cache_precision}. "
-            "Must be one of 'auto', 'int8' or 'fp8'."
+            "Must be one of 'auto', 'int8', 'fp8' or 'adaptive'."
         )
-    quantize_kv_cache = kv_cache_precision in ("int8", "fp8")
+    quantize_kv_cache = kv_cache_precision in ("int8", "fp8", "adaptive")
 
     # Set the stored dtype of each cached component up front. On the forced-
     # precision path the model and inputs are cast to ``dtype``, so every
@@ -1951,7 +1952,8 @@ class TabPFNV3(Architecture):
                     assert kv_entry.key is not None
                     kv_compute_dtype = kv_entry.key.dtype
                     kv_entry = kv_entry.at_storage_dtype(
-                        performance_options.kv_cache_dtype
+                        performance_options.kv_cache_dtype,
+                        follow_grid=performance_options.kv_cache_follows_attention_grid,
                     )
                     kv_out[layer_idx] = kv_entry
             else:
@@ -2066,7 +2068,7 @@ class TabPFNV3(Architecture):
 
     @override
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
-        return ("auto", "int8", "fp8")
+        return ("auto", "int8", "fp8", "adaptive")
 
     def _prepare_y(
         self,

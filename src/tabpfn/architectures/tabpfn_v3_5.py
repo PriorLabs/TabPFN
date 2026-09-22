@@ -322,7 +322,7 @@ def get_cache_size(
     model_config: TabPFNV3p5Config,
     task_type: TaskType,
     base_dtype: torch.dtype | Literal["autocast"],
-    kv_cache_precision: Literal["auto", "int8", "fp8"] = "int8",
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] = "int8",
 ) -> int:
     """Cached memory in bytes for a single TabPFN v3.5 estimator at batch size 1.
 
@@ -363,8 +363,8 @@ def get_cache_size(
             many-class decoder keys are counted.
         base_dtype: A `torch.dtype` for the forced-precision path, or
             `"autocast"` for the GPU autocast path.
-        kv_cache_precision: If `"int8"` (default) or `"fp8"`, the KV cache is
-            sized at one byte per element plus per-tensor scales at the KV
+        kv_cache_precision: If `"int8"` (default), `"fp8"` or `"adaptive"`, the
+            KV cache is sized at one byte per element plus per-tensor scales at the KV
             compute dtype, mirroring the engine's `maybe_quantize_kv_cache`; if
             `"auto"`, the K/V are sized at the compute dtype with no scales.
 
@@ -372,12 +372,12 @@ def get_cache_size(
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
         total (each estimator holds its own cache).
     """
-    if kv_cache_precision not in ("auto", "int8", "fp8"):
+    if kv_cache_precision not in ("auto", "int8", "fp8", "adaptive"):
         raise ValueError(
             f"Invalid kv_cache_precision: {kv_cache_precision}. "
-            "Must be one of 'auto', 'int8' or 'fp8'."
+            "Must be one of 'auto', 'int8', 'fp8' or 'adaptive'."
         )
-    quantize_kv_cache = kv_cache_precision in ("int8", "fp8")
+    quantize_kv_cache = kv_cache_precision in ("int8", "fp8", "adaptive")
 
     if base_dtype == "autocast":
         kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else torch.float16
@@ -2324,7 +2324,6 @@ class TabPFNV3p5(Architecture):
         # quantizes the finished cache through `TabPFNV3p5Cache.quantize`. Newer
         # ones set this instead and expect the quantization per layer, here,
         # which frees each full-precision entry as the loop moves on.
-        has_kv_cache_dtype = hasattr(performance_options, "kv_cache_dtype")
         kv_cache_dtype = getattr(performance_options, "kv_cache_dtype", None)
 
         # An ambient autocast context (e.g. the TabPFN inference engine wraps
@@ -2360,8 +2359,14 @@ class TabPFNV3p5(Architecture):
                             return_kv=True,
                         )
                         kv_compute_dtype = kv_entry.key.dtype
-                        if has_kv_cache_dtype:
-                            kv_entry = kv_entry.at_storage_dtype(kv_cache_dtype)
+                        kv_entry = kv_entry.at_storage_dtype(
+                            kv_cache_dtype,
+                            follow_grid=getattr(
+                                performance_options,
+                                "kv_cache_follows_attention_grid",
+                                False,
+                            ),
+                        )
                         kv_out[layer_idx] = kv_entry
                 else:
                     for block in self.icl_blocks:
@@ -2490,7 +2495,7 @@ class TabPFNV3p5(Architecture):
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
         # `TabPFNV3p5Cache.quantize` handles both dtypes. Without this override the
         # base returns ("auto",) and the engine never quantizes.
-        return ("auto", "int8", "fp8")
+        return ("auto", "int8", "fp8", "adaptive")
 
     def _prepare_y(
         self,

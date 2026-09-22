@@ -824,11 +824,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
 
 def _resolve_kv_cache_precision(
-    kv_cache_precision: Literal["auto", "int8", "fp8"] | None,
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None,
     *,
     architecture: Architecture,
     device: torch.device,
-) -> Literal["auto", "int8", "fp8"]:
+) -> Literal["auto", "int8", "fp8", "adaptive"]:
     """Resolve the KV cache dtype against ``architecture`` and ``device``.
 
     Raises:
@@ -874,9 +874,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     cache with per-tensor symmetric quantization to save memory, dequantizing
     on-the-fly in the attention layer; ``"fp8"`` stores it as 8-bit floats
     instead (same size, float rounding semantics); ``"auto"`` keeps the
-    computed dtype, unless an attention backend already rounded the keys and
-    values onto a lower-precision grid (``kv_grid_dtype``), which the cache then
-    stores exactly.
+    computed dtype; ``"adaptive"`` stores each layer on the grid an attention
+    backend already rounded its keys and values to (``kv_grid_dtype``), and as
+    ``"int8"`` where no backend did.
 
     At predict, only X_test is preprocessed (CPU and GPU). The model is
     called with ``x_is_test_only=True``. ``y`` still carries the full
@@ -897,7 +897,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         keep_cache_on_device: bool = True,
-        kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+        kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -931,8 +931,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 architecture default (``"int8"`` when it can quantize, else
                 ``"auto"``); ``"int8"`` quantizes to save memory; ``"fp8"``
                 stores 8-bit floats instead; ``"auto"`` keeps the computed
-                dtype, or the grid an attention backend already rounded the
-                keys and values to.
+                dtype; ``"adaptive"`` follows the grid an attention backend
+                left the keys and values on, else ``"int8"``.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -1075,6 +1075,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 if kv_cache_precision != "auto"
                 else None
             ),
+            kv_cache_follows_attention_grid=kv_cache_precision == "adaptive",
         )
 
         kwargs = {}

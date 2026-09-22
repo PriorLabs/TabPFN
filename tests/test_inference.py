@@ -982,6 +982,72 @@ def test__kv_cache__embeddings_test_only_and_chunk_safe(
     assert test_emb.shape[-2] == n_test
 
 
+class _TestModelRecordingCacheOptions(_TestModelWithKVCache):
+    """Records the performance options its cache builds receive."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cache_build_options: list[PerformanceOptions | None] = []
+
+    @override
+    def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
+        return ("auto", "int8", "fp8", "adaptive")
+
+    @override
+    def forward(self, x, y, **kwargs) -> Tensor | tuple[Tensor, TabPFNV3Cache]:
+        if kwargs.get("return_kv_cache"):
+            self.cache_build_options.append(kwargs.get("performance_options"))
+        return super().forward(x, y, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("precision", "dtype", "follows_grid"),
+    [
+        ("adaptive", torch.int8, True),
+        ("int8", torch.int8, False),
+        ("auto", None, False),
+    ],
+)
+def test__explicit_kv_cache__precision__reaches_the_cache_build(
+    precision: str,
+    dtype: torch.dtype | None,
+    follows_grid: bool,
+) -> None:
+    """The "adaptive" option stores int8 unless a backend's grid applies."""
+    rng = default_rng(seed=0)
+    n_train, n_features, n_classes = 50, 4, 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
+            n_configs=1, n_classes=n_classes, num_models=1
+        ),
+        n_samples=X_train.shape[0],
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=rng,
+        n_preprocessing_jobs=1,
+    )
+    model = _TestModelRecordingCacheOptions()
+    InferenceEngineExplicitKVCache(
+        X_train,
+        y_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[model],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=True,
+        autocast=False,
+        task_type="multiclass",
+        kv_cache_precision=precision,  # type: ignore[arg-type]
+    )
+
+    (options,) = model.cache_build_options
+    assert options is not None
+    assert options.kv_cache_dtype == dtype
+    assert options.kv_cache_follows_attention_grid is follows_grid
+
+
 def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
     """int8 on a v2 architecture (which cannot quantize) warns and uses 'auto'."""
     arch = tabpfn_v2.get_architecture(
