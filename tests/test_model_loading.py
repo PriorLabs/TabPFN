@@ -858,3 +858,144 @@ def test__load_ckpt_without_softmax_temperature__uses_legacy_default(
     )
 
     assert inference_config.SOFTMAX_TEMPERATURE == DEFAULT_SOFTMAX_TEMPERATURE == 0.9
+
+
+@pytest.mark.parametrize("architecture_name", ["tabpfn_v2", "tabpfn_v3", "tabpfn_v3_5"])
+def test__load_model__skips_the_random_init_and_matches_the_checkpoint(
+    tmp_path: Path, architecture_name: str
+) -> None:
+    """A model built without parameter initialisation matches the checkpoint exactly."""
+    inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+    if architecture_name == "tabpfn_v2":
+        config = _get_minimal_v2_config()
+        source = tabpfn_v2.get_architecture(config, cache_trainset_representation=False)
+        checkpoint = {"state_dict": source.state_dict(), "config": asdict(config)}
+    elif architecture_name == "tabpfn_v3":
+        checkpoint = _build_small_v3_checkpoint(inference_config, max_num_classes=10)
+        source = tabpfn_v3.get_architecture(
+            TabPFNV3Config(**checkpoint["config"]), cache_trainset_representation=False
+        )
+        source.load_state_dict(checkpoint["state_dict"])
+    else:
+        checkpoint = _build_small_v3_5_checkpoint(inference_config, max_num_classes=10)
+        source = tabpfn_v3_5.get_architecture(
+            TabPFNV3p5Config(**checkpoint["config"]),
+            cache_trainset_representation=False,
+        )
+        source.load_state_dict(checkpoint["state_dict"])
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded, *_ = model_loading.load_model(
+        path=checkpoint_path,
+        estimator_type="classifier",
+        cache_trainset_representation=False,
+    )
+    source_params = dict(source.named_parameters())
+    loaded_params = dict(loaded.named_parameters())
+    assert loaded_params.keys() == source_params.keys()
+    for name, parameter in source_params.items():
+        torch.testing.assert_close(loaded_params[name], parameter, rtol=0, atol=0)
+    source_buffers = dict(source.named_buffers())
+    loaded_buffers = dict(loaded.named_buffers())
+    assert loaded_buffers.keys() == source_buffers.keys()
+    for name, buffer in source_buffers.items():
+        torch.testing.assert_close(loaded_buffers[name], buffer, rtol=0, atol=0)
+
+
+def test__skip_parameter_init__is_scoped_to_the_block() -> None:
+    """Inside the block the init functions leave tensors alone; outside they work."""
+    tensor = torch.ones(3)
+    with model_loading._skip_parameter_init():
+        torch.nn.init.zeros_(tensor)
+        assert torch.equal(tensor, torch.ones(3))
+        layer = nn.Linear(
+            2, 2
+        )  # built inside: allocated, not initialised, still usable
+        assert layer.weight.shape == (2, 2)
+    torch.nn.init.zeros_(tensor)
+    assert torch.equal(tensor, torch.zeros(3))
+
+
+def test__skip_parameter_init__leaked_reference_raises_after_the_block() -> None:
+    """A no-op captured inside the block fails loudly once the block has ended."""
+    with model_loading._skip_parameter_init():
+        leaked_zeros_ = torch.nn.init.zeros_
+    tensor = torch.ones(3)
+    with pytest.raises(RuntimeError, match="called after that build finished"):
+        leaked_zeros_(tensor)
+    assert torch.equal(tensor, torch.ones(3))
+    assert torch.nn.init.zeros_ is not leaked_zeros_
+
+
+def test__skip_parameter_init__other_threads_keep_the_real_init() -> None:
+    """Only the thread that entered the block skips the initialisation."""
+    with model_loading._skip_parameter_init():
+        own_tensor = torch.ones(3)
+        torch.nn.init.zeros_(own_tensor)
+        other_tensor = torch.ones(3)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(torch.nn.init.zeros_, other_tensor).result()
+    assert torch.equal(own_tensor, torch.ones(3))
+    assert torch.equal(other_tensor, torch.zeros(3))
+
+
+def test__tabpfn_v3_5__regression_borders_follow_the_head_buffer() -> None:
+    """The borders alias tracks the head's buffer through `to`, not a stale tensor."""
+    inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+    checkpoint = _build_small_v3_5_checkpoint(inference_config, max_num_classes=10)
+    model = tabpfn_v3_5.get_architecture(
+        TabPFNV3p5Config(**checkpoint["config"]), cache_trainset_representation=False
+    )
+    model.to(torch.float64)
+    assert model.regression_borders is model.heads.regression_borders
+    assert model.regression_borders.dtype == torch.float64
+
+
+def test__skip_parameter_init__overlapping_blocks_on_two_threads_restore_torch() -> (
+    None
+):
+    """The last block to leave restores the real functions, on whichever thread."""
+    first_inside = threading.Event()
+    second_inside = threading.Event()
+    first_left = threading.Event()
+    zeros_inside_second: list[torch.Tensor] = []
+
+    def first() -> None:
+        with model_loading._skip_parameter_init():
+            first_inside.set()
+            second_inside.wait(timeout=10)
+        first_left.set()
+
+    def second() -> None:
+        first_inside.wait(timeout=10)
+        with model_loading._skip_parameter_init():
+            second_inside.set()
+            first_left.wait(timeout=10)
+            tensor = torch.ones(3)
+            torch.nn.init.zeros_(tensor)  # still inside a block on this thread
+            zeros_inside_second.append(tensor)
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert torch.equal(zeros_inside_second[0], torch.ones(3))
+    tensor = torch.ones(3)
+    torch.nn.init.zeros_(tensor)
+    assert torch.equal(tensor, torch.zeros(3))
+    assert torch.nn.init.zeros_ is not model_loading._INIT_STUBS["zeros_"]
+
+
+def test__skip_parameter_init__nested_blocks_on_one_thread() -> None:
+    """Leaving an inner block keeps the outer one's patch in place."""
+    with model_loading._skip_parameter_init():
+        with model_loading._skip_parameter_init():
+            pass
+        tensor = torch.ones(3)
+        torch.nn.init.zeros_(tensor)
+        assert torch.equal(tensor, torch.ones(3))
+    torch.nn.init.zeros_(tensor)
+    assert torch.equal(tensor, torch.zeros(3))

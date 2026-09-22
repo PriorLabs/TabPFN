@@ -16,12 +16,13 @@ import tempfile
 import urllib.request
 import warnings
 import zipfile
-from collections import OrderedDict
+from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_ident
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 from urllib.error import URLError
 
@@ -43,7 +44,7 @@ from tabpfn.inference_config import (
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from sklearn.base import BaseEstimator
 
@@ -1053,6 +1054,100 @@ def load_model(
     return result
 
 
+#: The `torch.nn.init` functions that `_skip_parameter_init` turns into no-ops.
+_PARAMETER_INIT_FUNCTIONS = (
+    "uniform_",
+    "normal_",
+    "trunc_normal_",
+    "constant_",
+    "ones_",
+    "zeros_",
+    "eye_",
+    "orthogonal_",
+    "xavier_uniform_",
+    "xavier_normal_",
+    "kaiming_uniform_",
+    "kaiming_normal_",
+)
+
+# State of the process-wide `torch.nn.init` patch, guarded by the lock: the real
+# functions while the patch is installed (None otherwise) and, per thread, how many
+# `_skip_parameter_init` blocks it is currently inside.
+_INIT_PATCH_LOCK = Lock()
+_INIT_PATCH_ORIGINALS: dict[str, Callable[..., torch.Tensor]] | None = None
+_INIT_PATCH_OWNERS: Counter[int] = Counter()
+
+
+def _make_init_stub(name: str) -> Callable[..., torch.Tensor]:
+    def leave_uninitialised(
+        tensor: torch.Tensor, *args: Any, **kwargs: Any
+    ) -> torch.Tensor:
+        with _INIT_PATCH_LOCK:
+            originals = _INIT_PATCH_ORIGINALS
+            is_owner = _INIT_PATCH_OWNERS[get_ident()] > 0
+        if originals is None:
+            raise RuntimeError(
+                f"torch.nn.init.{name} was looked up while tabpfn was building a "
+                "model and called after that build finished. Look the function "
+                "up on torch.nn.init at call time instead of keeping a reference."
+            )
+        if not is_owner:
+            return originals[name](tensor, *args, **kwargs)
+        return tensor
+
+    leave_uninitialised.__name__ = name
+    leave_uninitialised.__qualname__ = name
+    return leave_uninitialised
+
+
+_INIT_STUBS = {name: _make_init_stub(name) for name in _PARAMETER_INIT_FUNCTIONS}
+
+
+@contextmanager
+def _skip_parameter_init() -> Iterator[None]:
+    """Build a model without torch's random parameter initialisation.
+
+    Every parameter and persistent buffer of a model built here is overwritten by the
+    strict `load_state_dict` that follows, so the initialisation is wasted work: the
+    layers' `reset_parameters` draw random weights that are discarded, and that
+    dominates the build time paid at every `fit`. For the duration of the block the
+    `torch.nn.init` functions return their tensor untouched; they are restored
+    afterwards. A model built inside it must be loaded before use.
+
+    The patch is process-wide, so it is installed once by the first block to enter
+    and removed by the last one to leave, and only the threads currently inside a
+    block see the no-ops: other threads fall through to the real functions. A
+    reference to a no-op that is called once no block is active raises instead of
+    silently skipping the initialisation.
+
+    Building on the meta device would avoid the patch, but the tensor arithmetic
+    our constructors run at build time has no meta kernels and falls back to the
+    decomposition path, which imports `torch._dynamo` and adds seconds of cold
+    start to every process that never compiles anything.
+    """
+    global _INIT_PATCH_ORIGINALS  # noqa: PLW0603
+    thread = get_ident()
+    with _INIT_PATCH_LOCK:
+        if _INIT_PATCH_ORIGINALS is None:
+            _INIT_PATCH_ORIGINALS = {
+                name: getattr(torch.nn.init, name) for name in _PARAMETER_INIT_FUNCTIONS
+            }
+            for name, stub in _INIT_STUBS.items():
+                setattr(torch.nn.init, name, stub)
+        _INIT_PATCH_OWNERS[thread] += 1
+    try:
+        yield
+    finally:
+        with _INIT_PATCH_LOCK:
+            _INIT_PATCH_OWNERS[thread] -= 1
+            if _INIT_PATCH_OWNERS[thread] == 0:
+                del _INIT_PATCH_OWNERS[thread]
+            if not _INIT_PATCH_OWNERS and _INIT_PATCH_ORIGINALS is not None:
+                for name, original in _INIT_PATCH_ORIGINALS.items():
+                    setattr(torch.nn.init, name, original)
+                _INIT_PATCH_ORIGINALS = None
+
+
 def _build_model(
     resolved: str,
     identity: tuple[int, int],
@@ -1081,10 +1176,11 @@ def _build_model(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
-    model = architecture.get_architecture(
-        model_config,
-        cache_trainset_representation=cache_trainset_representation,
-    )
+    with _skip_parameter_init():
+        model = architecture.get_architecture(
+            model_config,
+            cache_trainset_representation=cache_trainset_representation,
+        )
 
     # A checkpoint may carry criterion state for a task it is not being loaded for
     # (save_tabpfn_model writes it for regressors), so it is always kept out of the

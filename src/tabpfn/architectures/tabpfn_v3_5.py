@@ -2179,14 +2179,17 @@ class TabPFNV3p5(Architecture):
             device=device,
             dtype=dtype,
         )
-        # Expose for API compatibility.
-        self.regression_borders = self.heads.regression_borders
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self._icl_bf16 = False
         self.emsize = config.embed_dim
         self.inference_row_chunk_size = config.inference_row_chunk_size
         self.inference_col_chunk_size = config.inference_col_chunk_size
+
+    @property
+    def regression_borders(self) -> torch.Tensor:
+        """The regression head's bucket borders, exposed for API compatibility."""
+        return self.heads.regression_borders
 
     def enable_icl_bf16(self) -> None:
         """Switch the ICL blocks and output norm to bfloat16 inference."""
