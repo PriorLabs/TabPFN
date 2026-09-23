@@ -465,13 +465,21 @@ def transform_borders_one(
     borders: np.ndarray,
     target_transform: TransformerMixin | Pipeline,
     *,
+    znorm_mean: float,
+    znorm_std: float,
     repair_nan_borders_after_transform: bool,
 ) -> tuple[npt.NDArray[np.bool_] | None, bool, np.ndarray]:
     """Transforms the borders used for the bar distribution for regression.
 
+    The inverse returns raw target units; map them into the shared standardized
+    frame before applying sanity limits and aggregating predictions.
+
     Args:
         borders: The borders to transform.
         target_transform: The target transformer to use.
+        znorm_mean: Mean of the training target, defining the frame the borders
+            are returned in.
+        znorm_std: Standard deviation of the training target.
         repair_nan_borders_after_transform:
             Whether to repair any borders that are NaN after the transformation.
 
@@ -482,7 +490,12 @@ def transform_borders_one(
         descending_borders: Whether the borders are descending after transformation
         borders_t: The transformed borders themselves.
     """
-    borders_t = target_transform.inverse_transform(borders.reshape(-1, 1)).squeeze()  # type: ignore
+    # Use float64 for the cancelling inverse/frame operations, then restore
+    # the input dtype for aggregation.
+    borders_t = target_transform.inverse_transform(  # type: ignore
+        borders.reshape(-1, 1).astype(np.float64)
+    ).squeeze()
+    borders_t = ((borders_t - znorm_mean) / znorm_std).astype(borders.dtype)
 
     logit_cancel_mask: npt.NDArray[np.bool_] | None = None
     if repair_nan_borders_after_transform:
