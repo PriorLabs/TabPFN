@@ -90,14 +90,15 @@ def _model_expectes_task_type_arg(model: Architecture) -> bool:
     return "task_type" in signature(model.forward).parameters
 
 
-def _members_per_forward(rows_per_member: int) -> int:
-    """How many members of ``rows_per_member`` rows share one forward pass.
+def _members_per_forward(rows_per_member: int, columns_per_member: int) -> int:
+    """How many members of the given prepared shape share one forward pass.
 
-    Bounded by ``settings.tabpfn.max_batched_member_rows``, the rows one forward may
-    carry summed over its members; zero runs every member alone.
+    Bounded by ``settings.tabpfn.max_batched_member_cells``, the cells (rows times
+    columns) one forward may carry summed over its members; zero runs every member
+    alone.
     """
-    budget = settings.tabpfn.max_batched_member_rows
-    return max(1, budget // max(rows_per_member, 1))
+    budget = settings.tabpfn.max_batched_member_cells
+    return max(1, budget // max(rows_per_member * columns_per_member, 1))
 
 
 def _member_key(
@@ -532,7 +533,15 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         # time; each chunk is grouped by model and prepared shape. The members are
         # spread over the devices first; only the rest share a forward.
         num_members = len(self.ensemble_preprocessor.configs)
-        chunk_size = _members_per_forward(self.X_train.shape[0] + X.shape[0])
+        # The members' prepared width is not known before they are preprocessed;
+        # the feature cap of the ensemble config bounds it.
+        columns = min(
+            self.X_train.shape[1],
+            self.ensemble_preprocessor.configs[
+                0
+            ].preprocess_config.max_features_per_estimator,
+        )
+        chunk_size = _members_per_forward(self.X_train.shape[0] + X.shape[0], columns)
         chunk_size = max(1, min(chunk_size, -(-num_members // len(devices))))
         groups: list[list[int]] = []
         seen = 0
@@ -747,7 +756,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     This saves some time on each predict call, at the cost of increasing the amount
     of memory in RAM. The main functionality performed at `predict()` time is the
     forward pass through the model, run for as many ensemble members at once as
-    the row budget allows (see ``settings.tabpfn.max_batched_member_rows``).
+    the cell budget allows (see ``settings.tabpfn.max_batched_member_cells``).
     """
 
     def __init__(
@@ -842,7 +851,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         groups = _member_groups(
             [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
             lambda _key, _count: _members_per_forward(
-                members[0].X_train.shape[0] + X.shape[0]
+                members[0].X_train.shape[0] + X.shape[0], members[0].X_train.shape[1]
             ),
             num_devices=len(devices),
         )
@@ -1063,12 +1072,12 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
 
         # Members sharing a model and a prepared shape build one cache together,
-        # with the members along the batch dimension. The row budget bounds the
+        # with the members along the batch dimension. The cell budget bounds the
         # group, and the members are spread over the devices first.
         members = self.ensemble_members
         groups = _member_groups(
             [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
-            lambda _key, _count: _members_per_forward(members[0].X_train.shape[0]),
+            lambda _key, _count: _members_per_forward(*members[0].X_train.shape),
             num_devices=len(devices),
         )
         build_functions = (
@@ -1349,16 +1358,16 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                     **kwargs,
                 )
 
-        # Test rows per forward: the cached-inference limit and the row budget,
+        # Test rows per forward: the cached-inference limit and the cell budget,
         # both shared by the members of the batch.
-        n_test, batch = X.shape[0], X.shape[1]
+        n_test, batch, columns = X.shape
         chunk = n_test
         max_rows = settings.tabpfn.max_batched_test_rows
         if max_rows > 0:
             chunk = min(chunk, max(1, max_rows // batch))
-        budget = settings.tabpfn.max_batched_member_rows
+        budget = settings.tabpfn.max_batched_member_cells
         if budget > 0 and batch > 1:
-            chunk = min(chunk, max(1, budget // batch))
+            chunk = min(chunk, max(1, budget // (batch * columns)))
         if chunk >= n_test:
             return run(X)
         return _concat_test_chunks(

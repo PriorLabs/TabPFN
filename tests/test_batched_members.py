@@ -30,6 +30,8 @@ from tabpfn.preprocessing.torch import FeatureSchema
 from tabpfn.settings import settings
 
 N_TRAIN, N_TEST, N_FEATURES, N_CLASSES, N_MEMBERS = 40, 7, 4, 3, 5
+# The features plus the fingerprint feature the test preprocessor appends.
+N_PREPARED_COLUMNS = N_FEATURES + 1
 CPU = torch.device("cpu")
 ENGINES = ["on_demand", "cache_preprocessing", "explicit_kv_cache"]
 
@@ -120,7 +122,7 @@ def test__iter_outputs__batched_matches_sequential_in_member_order(
     model = _model()
     batched = _predict(_engine(kind, model))
 
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 0)
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 0)
     sequential = _predict(_engine(kind, model))
 
     assert len(batched) == len(sequential) == N_MEMBERS
@@ -145,7 +147,9 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
     reference = _predict(_engine(kind, model))
     cached = kind == "explicit_kv_cache"
     rows = N_TEST if cached else N_TRAIN + N_TEST
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 2 * rows)
+    monkeypatch.setattr(
+        settings.tabpfn, "max_batched_member_cells", 2 * rows * N_PREPARED_COLUMNS
+    )
     engine = _engine(kind, model)  # the KV-cache build at fit is not counted
     calls: list[tuple[int, int]] = []
     original = type(model).forward
@@ -175,6 +179,7 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
 def test__explicit_kv_cache__one_cache_holds_all_members() -> None:
     engine = _engine("explicit_kv_cache", _model())
     assert isinstance(engine, InferenceEngineExplicitKVCache)
+    assert engine.ensemble_members[0].X_train.shape[1] == N_PREPARED_COLUMNS
     assert engine.cache_groups == [list(range(N_MEMBERS))]
     (cache,) = engine.kv_caches
     assert cache.train_shape == (N_MEMBERS, N_TRAIN)
@@ -227,14 +232,15 @@ def test__member_groups__spreads_over_devices_before_batching() -> None:
     ]
 
 
-def test__members_per_forward__follows_the_row_budget(
+def test__members_per_forward__follows_the_cell_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 1000)
-    assert _members_per_forward(rows_per_member=100) == 10
-    assert _members_per_forward(rows_per_member=2000) == 1
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 0)
-    assert _members_per_forward(rows_per_member=1) == 1
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 10_000)
+    assert _members_per_forward(rows_per_member=100, columns_per_member=10) == 10
+    assert _members_per_forward(rows_per_member=100, columns_per_member=20) == 5
+    assert _members_per_forward(rows_per_member=2000, columns_per_member=10) == 1
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 0)
+    assert _members_per_forward(rows_per_member=1, columns_per_member=1) == 1
 
 
 def test__batch_member_inputs__lays_members_along_the_batch_dimension() -> None:
