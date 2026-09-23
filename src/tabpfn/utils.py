@@ -418,6 +418,17 @@ def _remap_weights(
     interior = (source >= 1) & (source <= num_buckets_frm - 2)
     source, destination = source[interior], destination[interior]
     weight = (edges[1:] - edges[:-1])[interior] / (frm[source + 1] - frm[source])
+    # A zero-width source bucket gets no piece. It is a point mass, and it goes
+    # whole to the destination bucket that contains its point.
+    point = (frm[1:-2] == frm[2:-1]).nonzero().flatten() + 1
+    point_destination = torch.searchsorted(to, frm[point], right=True) - 1
+    source = torch.cat([source, point])
+    destination = torch.cat(
+        [destination, point_destination.clamp(0, num_buckets_to - 1)]
+    )
+    weight = torch.cat([weight, torch.ones_like(frm[point])])
+    order = torch.argsort(destination, stable=True)
+    source, destination, weight = source[order], destination[order], weight[order]
 
     lower = to[:-1].clone()
     upper = to[1:].clone()
@@ -491,10 +502,11 @@ def _apply_remap_weights(logits: torch.Tensor, weights: _RemapWeights) -> torch.
     return out
 
 
-# `_apply_remap_weights` allocates one `(rows, pairs)` tensor in the caller's
-# dtype, and `pairs` is at most `len(frm) + len(to)`. Chunks of
-# `chunk_size * pairs <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keep it near 40 MB in
-# float32, whatever `n_test` is.
+# `_apply_remap_weights` allocates a few tensors of `(rows, pairs)` or
+# `(rows, num_buckets_to)` elements in the caller's dtype, and `pairs` is at
+# most `len(frm) + len(to)`. Chunks of `chunk_size * pairs <=
+# _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keep each near 40 MB in float32, whatever
+# `n_test` is.
 _TRANSLATE_CHUNK_BUDGET_ELEMENTS = 10_000_000
 
 

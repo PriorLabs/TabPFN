@@ -664,6 +664,33 @@ def test__translate_probs_across_borders__cuda_is_bitwise_reproducible() -> None
         )
 
 
+def test__translate_probs_across_borders__zero_width_source_bucket_keeps_its_mass() -> (
+    None
+):
+    """A zero-width source bucket is a point mass, and it must land in one bucket.
+
+    Repaired borders collapse a run of NaN borders onto one value, and a target
+    transform whose inverse clips can do the same. Nothing overlaps such a
+    bucket, so it has to be placed by its point.
+    """
+    num_buckets = 100
+    frm = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    frm[60:100] = frm[60].clone()
+    frm[100] = frm[60] * 2
+    to = torch.linspace(-4.0, 4.0, num_buckets + 1, dtype=torch.float64)
+    logits = torch.zeros(1, num_buckets, dtype=torch.float64)
+
+    out = translate_probs_across_borders(logits, frm=frm, to=to)[0]
+
+    assert out.sum().item() == pytest.approx(1.0, abs=1e-12)
+    # Below the collapse the grids agree, so those buckets keep their mass.
+    torch.testing.assert_close(out[:60], torch.full((60,), 1 / num_buckets).double())
+    # The 39 collapsed buckets sit on `frm[60]`, which is `to[60]`, so their
+    # mass goes to the destination bucket that starts there, on top of the
+    # slice of the upper tail that bucket also covers.
+    assert out[60].item() > 39 / num_buckets
+
+
 def test__translate_probs_across_borders__degenerate_outer_bucket_is_finite() -> None:
     """A zero-width outer bucket must not turn the tail into NaN.
 
