@@ -832,6 +832,23 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
 
+@pytest.mark.parametrize("offset", [1e8, 1e10, -1e10])
+def test_predictions_shift_with_a_target_offset_far_above_its_spread(
+    X_y: tuple[np.ndarray, np.ndarray], offset: float
+) -> None:
+    X, y = X_y
+    reference = TabPFNRegressor(n_estimators=2, random_state=42).fit(X, y)
+    shifted = TabPFNRegressor(n_estimators=2, random_state=42).fit(X, y + offset)
+
+    expected = reference.predict(X, output_type="main")
+    actual = shifted.predict(X, output_type="main")
+    atol = 1e-3 * np.std(y)
+    for key in ("mean", "median", "mode"):
+        np.testing.assert_allclose(actual[key] - offset, expected[key], atol=atol)
+    for got, want in zip(actual["quantiles"], expected["quantiles"], strict=True):
+        np.testing.assert_allclose(got - offset, want, atol=atol)
+
+
 @pytest.mark.parametrize("constant_value", [0.0, 1.0, -1.0, 1e-5, -1e-5, 1e5, -1e5])
 def test_constant_target(
     X_y: tuple[np.ndarray, np.ndarray], constant_value: float

@@ -796,9 +796,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ``y_train_std_`` must already be set as Python floats.
         """
         borders = self.znorm_space_bardist_.borders.detach()
+        # float64 keeps the borders distinct when the target's mean dwarfs its std.
         self.raw_space_bardist_ = FullSupportBarDistribution(
-            borders * self.y_train_std_ + self.y_train_mean_,
-        ).float()
+            borders.double() * self.y_train_std_ + self.y_train_mean_,
+        )
 
     def _build_ensemble_preprocessor_and_executor(
         self,
@@ -2361,7 +2362,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         estimator_to_device(self, device)
         if hasattr(self, "znorm_space_bardist_"):
             self.znorm_space_bardist_.to(self.devices_[0])
-        if hasattr(self, "raw_space_bardist_"):
+        # `raw_space_bardist_` is float64, which MPS lacks, so it stays on the
+        # CPU there; `_logits_to_output` moves what it needs to the logits.
+        if hasattr(self, "raw_space_bardist_") and self.devices_[0].type != "mps":
             self.raw_space_bardist_.to(self.devices_[0])
 
 
@@ -2372,9 +2375,24 @@ def _logits_to_output(
     criterion: FullSupportBarDistribution,
     quantiles: list[float],
 ) -> np.ndarray | list[np.ndarray]:
-    """Converts raw model logits to the desired prediction format."""
+    """Converts raw model logits to the desired prediction format.
+
+    Decodes on the criterion's borders shifted by a float64 offset and adds the
+    offset back in float64, so the float32 decode only has to resolve the
+    target's spread, not its magnitude.
+    """
+    offset = criterion.borders[criterion.borders.shape[0] // 2].item()
+    criterion = FullSupportBarDistribution(
+        (criterion.borders.double() - offset).to(
+            device=logits.device, dtype=logits.dtype
+        )
+    )
+
     if output_type == "quantiles":
-        return [criterion.icdf(logits, q).cpu().detach().numpy() for q in quantiles]
+        return [
+            criterion.icdf(logits, q).cpu().detach().numpy().astype(np.float64) + offset
+            for q in quantiles
+        ]
 
     # TODO: support
     #   "pi": criterion.pi(logits, np.max(self.y)),
@@ -2388,7 +2406,7 @@ def _logits_to_output(
     else:
         raise ValueError(f"Invalid output type: {output_type}")
 
-    return output.cpu().detach().numpy()
+    return output.cpu().detach().numpy().astype(np.float64) + offset
 
 
 def _validate_eval_metric(
