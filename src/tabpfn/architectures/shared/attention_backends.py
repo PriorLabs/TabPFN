@@ -17,14 +17,18 @@ the ordinary SDPA path runs.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging
 import threading
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import torch
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
+
     from tabpfn.architectures.kv_cache import QuantizedKVCacheEntry
 
 
@@ -86,6 +90,12 @@ class AttentionBackend(Protocol):
     Implementations should name only the keyword arguments they consume and
     absorb the rest with ``**kwargs``: informational context may grow over
     time, and an open signature keeps existing backends compatible.
+
+    A backend that leaves the ``k``/``v`` it was handed rounded onto a
+    lower-precision grid -- one scale per KV head -- declares that grid's dtype
+    as ``kv_grid_dtype``. A KV cache built with ``kv_cache_precision="adaptive"``
+    is then stored at that dtype, so it holds exactly the values the call
+    attended over; see :func:`kv_grid_dtype`.
 
     ``is_preferred`` sees only the :class:`AttentionSpec`, never the tensors,
     and must be cheap: it runs for every attention call. A backend that can
@@ -222,6 +232,50 @@ def find_attention_backend(
     if not torch.compiler.is_compiling() and _logger.isEnabledFor(logging.DEBUG):
         _log_selection(spec, backend)
     return backend
+
+
+_recorder: ContextVar[list[AttentionBackend | None] | None] = ContextVar(
+    "tabpfn_attention_backend_recorder", default=None
+)
+
+
+@contextlib.contextmanager
+def recorded_attention_backends() -> Iterator[list[AttentionBackend | None]]:
+    """Record the backend each attention call in this context ran on.
+
+    Yields a list that receives one entry per call dispatched through the SDPA
+    wrapper: the backend that took it, or ``None`` for the standard path.
+    """
+    calls: list[AttentionBackend | None] = []
+    token = _recorder.set(calls)
+    try:
+        yield calls
+    finally:
+        _recorder.reset(token)
+
+
+def record_attention_backend(backend: AttentionBackend | None) -> None:
+    """Note that a call ran on *backend*, if a recorder is active."""
+    if torch.compiler.is_compiling():
+        return
+    calls = _recorder.get()
+    if calls is not None:
+        calls.append(backend)
+
+
+def kv_grid_dtype(
+    backends: Sequence[AttentionBackend | None],
+) -> torch.dtype | None:
+    """The grid every recorded call left its keys and values on, if one exists.
+
+    ``None`` unless at least one call ran and every call ran on a backend
+    declaring the same ``kv_grid_dtype``: a call on the standard path leaves
+    its keys and values at the computed dtype.
+    """
+    grids = {getattr(backend, "kv_grid_dtype", None) for backend in backends}
+    if len(grids) != 1:
+        return None
+    return grids.pop()
 
 
 def _log_selection(spec: AttentionSpec, backend: AttentionBackend | None) -> None:

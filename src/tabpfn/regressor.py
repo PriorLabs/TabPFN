@@ -306,7 +306,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
         keep_cache_on_device: bool = True,
-        kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+        kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -514,7 +514,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 else `"auto"`); `"int8"` quantizes the key-value cache to save
                 memory; `"fp8"` stores it as 8-bit floats instead (same size,
                 float rounding semantics; not supported on MPS);
-                `"auto"` keeps the computed dtype. Requesting a
+                `"auto"` keeps the computed dtype; `"adaptive"` stores the cache
+                on the grid an attention backend already rounded the keys and
+                values to (one that declares `kv_grid_dtype` and took the call),
+                and as `"int8"` otherwise. Requesting a
                 quantized precision on an architecture that cannot quantize
                 warns and falls back to `"auto"`.
 

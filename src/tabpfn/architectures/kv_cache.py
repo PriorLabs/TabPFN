@@ -26,6 +26,8 @@ FP8_KV_DTYPE: torch.dtype = torch.float8_e4m3fn
 KV_CACHE_PRECISION_DTYPES: dict[str, torch.dtype] = {
     "int8": QUANTIZED_KV_DTYPE,
     "fp8": FP8_KV_DTYPE,
+    # The dtype when no attention backend left the keys and values on its grid.
+    "adaptive": QUANTIZED_KV_DTYPE,
 }
 
 # Low, high, max-magnitude value for each integer dtype.
@@ -84,10 +86,14 @@ class KVCacheEntry:
     Attributes:
         key: Cached key projections, shape ``(B, N_train, num_kv_heads, head_dim)``.
         value: Cached value projections, shape ``(B, N_train, num_kv_heads, head_dim)``.
+        grid_dtype: The lower-precision dtype whose grid ``key`` and ``value``
+            already lie on, when the attention call that produced them rounded
+            them there. Storing the entry at this dtype loses nothing.
     """
 
     key: Tensor | None = None
     value: Tensor | None = None
+    grid_dtype: torch.dtype | None = None
 
     def is_valid(self) -> bool:
         """Check if this cache entry contains valid data."""
@@ -97,7 +103,25 @@ class KVCacheEntry:
         """Move this entry to the given device. Returns a new KVCacheEntry."""
         if not self.is_valid():
             return KVCacheEntry()
-        return KVCacheEntry(key=self.key.to(device), value=self.value.to(device))
+        return KVCacheEntry(
+            key=self.key.to(device),
+            value=self.value.to(device),
+            grid_dtype=self.grid_dtype,
+        )
+
+    def at_storage_dtype(
+        self, dtype: torch.dtype | None, *, follow_grid: bool = False
+    ) -> KVCacheEntry | QuantizedKVCacheEntry:
+        """This entry as the cache stores it.
+
+        Args:
+            dtype: The storage dtype, or ``None`` to keep the computed dtype.
+            follow_grid: Store at ``grid_dtype`` instead, when it is set
+                (``kv_cache_precision="adaptive"``).
+        """
+        if follow_grid and self.grid_dtype is not None:
+            dtype = self.grid_dtype
+        return self if dtype is None else self.quantize(dtype)
 
     def quantize(
         self, dtype: torch.dtype = QUANTIZED_KV_DTYPE

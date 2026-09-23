@@ -30,6 +30,10 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
+from tabpfn.architectures.shared.attention_backends import (
+    register_attention_backend,
+    unregister_attention_backend,
+)
 from tabpfn.architectures.tabpfn_v3_5 import (
     TabPFNV3p5,
     TabPFNV3p5Cache,
@@ -188,7 +192,12 @@ def test__parse_config__training_only_keys__reported_as_unused() -> None:
 
 def test__get_supported_kv_cache_precisions__advertises_the_quantized_dtypes() -> None:
     """The engine resolves to "auto" unless the architecture lists its dtypes."""
-    assert _get_model().get_supported_kv_cache_precisions() == ("auto", "int8", "fp8")
+    assert _get_model().get_supported_kv_cache_precisions() == (
+        "auto",
+        "int8",
+        "fp8",
+        "adaptive",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -903,6 +912,93 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         torch.testing.assert_close(
             actual.value_scale, expected.value_scale, rtol=1e-6, atol=0
         )
+
+
+class _GridBackend:
+    """Takes the ICL train->train call and declares the grid it leaves K/V on."""
+
+    name = "test-grid"
+    kv_grid_dtype = FP8_KV_DTYPE
+
+    def __init__(self, *, preferred: bool = True) -> None:
+        self.preferred = preferred
+
+    def is_preferred(self, spec) -> bool:
+        return (
+            self.preferred
+            and spec.num_kv_heads == spec.num_heads
+            and spec.seq_len_q == spec.seq_len_kv
+        )
+
+    def run(self, q, k, v, **_kwargs) -> torch.Tensor:
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        )
+        return out.transpose(1, 2)
+
+
+_AUTO = PerformanceOptions(kv_cache_dtype=None)
+_INT8 = PerformanceOptions(kv_cache_dtype=QUANTIZED_KV_DTYPE)
+_ADAPTIVE = PerformanceOptions(
+    kv_cache_dtype=QUANTIZED_KV_DTYPE, kv_cache_follows_attention_grid=True
+)
+
+
+def _cache_with_grid_backend(
+    options: PerformanceOptions, *, preferred: bool = True, **config: object
+) -> TabPFNV3p5Cache:
+    arch = _get_model(**config)
+    x, y = _inputs("multiclass")
+    backend = _GridBackend(preferred=preferred)
+    register_attention_backend(backend)
+    try:
+        _, cache = arch(
+            x,
+            y,
+            task_type="multiclass",
+            return_kv_cache=True,
+            performance_options=options,
+        )
+    finally:
+        unregister_attention_backend(backend.name)
+    return cache
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    ("options", "preferred", "expected"),
+    [
+        (_ADAPTIVE, True, FP8_KV_DTYPE),
+        (_ADAPTIVE, False, QUANTIZED_KV_DTYPE),
+        (_INT8, True, QUANTIZED_KV_DTYPE),
+        (_AUTO, True, None),
+    ],
+    ids=["adaptive-backend-ran", "adaptive-backend-declined", "int8", "auto"],
+)
+def test__kv_cache__storage_dtype__follows_the_backend_only_when_adaptive(
+    options: PerformanceOptions,
+    preferred: bool,
+    expected: torch.dtype | None,
+) -> None:
+    """Only "adaptive" reads the grid the train call left K/V on."""
+    cache = _cache_with_grid_backend(options, preferred=preferred)
+
+    for entry in cache.kv.values():
+        if expected is None:
+            assert isinstance(entry, KVCacheEntry)
+        else:
+            assert isinstance(entry, QuantizedKVCacheEntry)
+            assert entry.key.dtype == expected
+
+
+@torch.no_grad()
+def test__kv_cache__adaptive__several_cached_heads__falls_back_to_int8() -> None:
+    """A per-head grid survives a per-tensor quantization only for one head."""
+    cache = _cache_with_grid_backend(_ADAPTIVE, icl_num_kv_heads_test=2)
+
+    for entry in cache.kv.values():
+        assert isinstance(entry, QuantizedKVCacheEntry)
+        assert entry.key.dtype == QUANTIZED_KV_DTYPE
 
 
 @torch.no_grad()

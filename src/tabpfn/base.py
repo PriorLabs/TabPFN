@@ -338,7 +338,7 @@ def create_inference_engine(  # noqa: PLR0913
     task_type: str,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
-    kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -373,7 +373,9 @@ def create_inference_engine(  # noqa: PLR0913
             architecture default (``"int8"`` when it can quantize, else
             ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
             ``"fp8"`` stores it as 8-bit floats (same size, float rounding
-            semantics); ``"auto"`` keeps the computed dtype.
+            semantics); ``"auto"`` keeps the computed dtype; ``"adaptive"``
+            stores the grid an attention backend already rounded the keys and
+            values to (``kv_grid_dtype``), else ``"int8"``.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
