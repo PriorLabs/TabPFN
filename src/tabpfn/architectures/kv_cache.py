@@ -45,12 +45,15 @@ _FLOAT_QUANTIZATION_DTYPES = (torch.float8_e4m3fn,)
 
 
 def _quantize_tensor(
-    t: Tensor, dtype: torch.dtype = torch.int8
+    t: Tensor, dtype: torch.dtype = torch.int8, *, per_batch_element: bool = False
 ) -> tuple[Tensor, Tensor]:
-    """Per-tensor symmetric quantization to the given *dtype*.
+    """Symmetric quantization to the given *dtype*.
 
     Returns ``(quantized, scale)`` where ``scale = absmax / max_val`` and
-    ``quantized ~= t / scale``, so ``float = quantized * scale``.
+    ``quantized ~= t / scale``, so ``float = quantized * scale``. The scale is a
+    scalar over the whole tensor, or, with ``per_batch_element`` and a leading
+    dimension above one, one scalar per leading index shaped ``(B, 1, ..., 1)`` so
+    that every batch element keeps its own range, as it would quantized alone.
     """
     if dtype in _QUANTIZATION_RANGES:
         lo, hi, max_val = _QUANTIZATION_RANGES[dtype]
@@ -62,7 +65,10 @@ def _quantize_tensor(
             f"Unsupported quantization dtype {dtype}. Supported: "
             f"{list(_QUANTIZATION_RANGES) + list(_FLOAT_QUANTIZATION_DTYPES)}"
         )
-    absmax = t.abs().amax()
+    if per_batch_element and t.dim() > 1 and t.shape[0] > 1:
+        absmax = t.abs().amax(dim=tuple(range(1, t.dim())), keepdim=True)
+    else:
+        absmax = t.abs().amax()
     scale = absmax / float(max_val)
     # Avoid division by zero for all-zero tensors; floor at scale.dtype's
     # smallest positive normal so the clamp is representable in any dtype.
@@ -132,8 +138,8 @@ class KVCacheEntry:
             dtype: Target quantization dtype (default `QUANTIZED_KV_DTYPE`).
         """
         assert self.is_valid()
-        k_q, k_s = _quantize_tensor(self.key, dtype)
-        v_q, v_s = _quantize_tensor(self.value, dtype)
+        k_q, k_s = _quantize_tensor(self.key, dtype, per_batch_element=True)
+        v_q, v_s = _quantize_tensor(self.value, dtype, per_batch_element=True)
         return QuantizedKVCacheEntry(key=k_q, value=v_q, key_scale=k_s, value_scale=v_s)
 
 
@@ -151,8 +157,9 @@ class QuantizedKVCacheEntry:
         key: Quantized key projections, shape ``(B, N_train, num_kv_heads, head_dim)``.
         value: Quantized value projections, shape ``(B, N_train, num_kv_heads,
         head_dim)``.
-        key_scale: Scalar scale factor for keys.
-        value_scale: Scalar scale factor for values.
+        key_scale: Scale factor for keys: a scalar, or ``(B, 1, 1, 1)`` when the
+            entry holds several batch elements, each with its own scale.
+        value_scale: Scale factor for values, shaped like ``key_scale``.
     """
 
     key: Tensor | None = None

@@ -180,3 +180,23 @@ def test_classifier_fp8_cache_end_to_end_on_cpu() -> None:
     proba = clf.predict_proba(X[40:])
     assert np.all(np.isfinite(proba))
     assert proba.shape == (20, 2)
+
+
+def test__quantize__batched_entry_keeps_each_batch_element_its_own_scale() -> None:
+    """A batched entry quantizes like its members quantized one by one."""
+    torch.manual_seed(0)
+    key = torch.randn(3, 16, 2, 4) * torch.tensor([1.0, 10.0, 100.0]).view(3, 1, 1, 1)
+    value = torch.randn(3, 16, 2, 4)
+    batched = KVCacheEntry(key=key, value=value).quantize(torch.int8)
+    assert batched.key_scale.shape == (3, 1, 1, 1)
+    for i in range(3):
+        single = KVCacheEntry(key=key[i : i + 1], value=value[i : i + 1]).quantize(
+            torch.int8
+        )
+        assert single.key_scale.dim() == 0
+        torch.testing.assert_close(batched.key[i : i + 1], single.key)
+        torch.testing.assert_close(batched.key_scale[i].reshape(()), single.key_scale)
+        torch.testing.assert_close(
+            batched.dequantize(torch.float32).key[i : i + 1],
+            single.dequantize(torch.float32).key,
+        )

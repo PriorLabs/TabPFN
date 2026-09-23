@@ -1697,6 +1697,8 @@ class TabPFNV3(Architecture):
     7. ICL transformer: y_encoder + standard attention (train-keys only) + decoder
     """
 
+    batches_ensemble_members = True
+
     def __init__(
         self,
         *,
