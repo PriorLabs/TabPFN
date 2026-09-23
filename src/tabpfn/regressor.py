@@ -796,10 +796,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ``y_train_std_`` must already be set as Python floats.
         """
         borders = self.znorm_space_bardist_.borders.detach()
-        # float64 keeps the borders distinct when the target's mean dwarfs its std.
+        # Validated in float64; predictions decode from the z-norm borders, so
+        # the float32 copy only serves callers that read the criterion directly.
         self.raw_space_bardist_ = FullSupportBarDistribution(
             borders.double() * self.y_train_std_ + self.y_train_mean_,
-        )
+        ).float()
 
     def _build_ensemble_preprocessor_and_executor(
         self,
@@ -1457,7 +1458,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logit_to_output = partial(
             _logits_to_output,
             logits=logits,
-            criterion=self.raw_space_bardist_,
+            znorm_space_bardist=self.znorm_space_bardist_,
+            y_mean=self.y_train_mean_,
+            y_std=self.y_train_std_,
             quantiles=quantiles,
         )
         if output_type in ["full", "main"]:
@@ -1902,6 +1905,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         results: list[RegressionResultType | None] = [None] * len(X_train_list)
         items: list[RegressorBatch] = []
         item_indices: list[int] = []
+        item_y_scales: list[tuple[float, float]] = []
         znorm_borders: torch.Tensor | None = None
 
         for idx, (X, y, X_test) in enumerate(
@@ -1980,6 +1984,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 )
             )
             item_indices.append(idx)
+            item_y_scales.append((worker.y_train_mean_, worker.y_train_std_))
 
         if items:
             worker.fit_mode = "batched"
@@ -2035,10 +2040,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     # retaining every dataset's tensor through the whole decode loop.
                     accumulated[lane] = None
                     item = items[position]
+                    y_mean, y_std = item_y_scales[position]
                     results[item_indices[position]] = worker._decode_batched_dataset(
                         accumulated_logits=logits,
                         n_estimators=n_estimators,
                         raw_space_bardist=item.raw_space_bardist,
+                        znorm_space_bardist=item.znorm_space_bardist,
+                        y_mean=y_mean,
+                        y_std=y_std,
                         output_type=output_type,
                         quantiles=quantiles,
                     )
@@ -2091,6 +2100,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         accumulated_logits: torch.Tensor,
         n_estimators: int,
         raw_space_bardist: FullSupportBarDistribution,
+        znorm_space_bardist: FullSupportBarDistribution,
+        y_mean: float,
+        y_std: float,
         output_type: OutputType,
         quantiles: list[float],
     ) -> RegressionResultType:
@@ -2098,7 +2110,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Shares :meth:`_reduce_accumulated_logits` with :meth:`predict`, so the
         two paths average identically, and decodes with this dataset's own
-        raw-space bar distribution as the criterion.
+        target mean and std; `raw_space_bardist` is the returned criterion.
         """
         assert n_estimators > 0
         # `predict_batched` rejects `tuning_config`, so the temperature applied
@@ -2109,7 +2121,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logit_to_output = partial(
             _logits_to_output,
             logits=logits,
-            criterion=raw_space_bardist,
+            znorm_space_bardist=znorm_space_bardist,
+            y_mean=y_mean,
+            y_std=y_std,
             quantiles=quantiles,
         )
         if output_type in _OUTPUT_TYPES_COMPOSITE:
@@ -2362,9 +2376,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         estimator_to_device(self, device)
         if hasattr(self, "znorm_space_bardist_"):
             self.znorm_space_bardist_.to(self.devices_[0])
-        # `raw_space_bardist_` is float64, which MPS lacks, so it stays on the
-        # CPU there; `_logits_to_output` moves what it needs to the logits.
-        if hasattr(self, "raw_space_bardist_") and self.devices_[0].type != "mps":
+        if hasattr(self, "raw_space_bardist_"):
             self.raw_space_bardist_.to(self.devices_[0])
 
 
@@ -2372,25 +2384,26 @@ def _logits_to_output(
     *,
     output_type: str,
     logits: torch.Tensor,
-    criterion: FullSupportBarDistribution,
+    znorm_space_bardist: FullSupportBarDistribution,
+    y_mean: float,
+    y_std: float,
     quantiles: list[float],
 ) -> np.ndarray | list[np.ndarray]:
     """Converts raw model logits to the desired prediction format.
 
-    Decodes on the criterion's borders shifted by a float64 offset and adds the
-    offset back in float64, so the float32 decode only has to resolve the
+    Decodes on the z-normalised borders scaled by `y_std` and adds `y_mean`
+    back in float64, so the decode in the logits' dtype only has to resolve the
     target's spread, not its magnitude.
     """
-    offset = criterion.borders[criterion.borders.shape[0] // 2].item()
     criterion = FullSupportBarDistribution(
-        (criterion.borders.double() - offset).to(
+        (znorm_space_bardist.borders.double() * y_std).to(
             device=logits.device, dtype=logits.dtype
         )
     )
 
     if output_type == "quantiles":
         return [
-            criterion.icdf(logits, q).cpu().detach().numpy().astype(np.float64) + offset
+            criterion.icdf(logits, q).cpu().detach().numpy().astype(np.float64) + y_mean
             for q in quantiles
         ]
 
@@ -2406,7 +2419,7 @@ def _logits_to_output(
     else:
         raise ValueError(f"Invalid output type: {output_type}")
 
-    return output.cpu().detach().numpy().astype(np.float64) + offset
+    return output.cpu().detach().numpy().astype(np.float64) + y_mean
 
 
 def _validate_eval_metric(

@@ -457,7 +457,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             raw_space_bardist_ = FullSupportBarDistribution(
                 znorm_space_bardist_.borders.double() * train_std
                 + train_mean  # Inverse normalization back to raw space
-            )
+            ).float()
             y_train = y_train_standardized
         else:
             y_train = y_train_raw
