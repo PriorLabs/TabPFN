@@ -882,7 +882,7 @@ def test__kv_cache__adaptive__stores_the_grid_the_train_call_left() -> None:
         dist_embed_num_heads=3,
         feat_agg_num_heads=3,
     )
-    arch = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
+    arch = tabpfn_v3.get_architecture(config)
     arch.to(torch.float32)
     x = torch.randn(30, 2, 5) * 0.1
     y = torch.randint(0, 10, [26, 2], dtype=torch.float32)
