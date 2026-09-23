@@ -798,9 +798,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         borders = self.znorm_space_bardist_.borders.detach()
         # Validated in float64; predictions decode from the z-norm borders, so
         # the float32 copy only serves callers that read the criterion directly.
-        self.raw_space_bardist_ = FullSupportBarDistribution(
-            borders.double() * self.y_train_std_ + self.y_train_mean_,
-        ).float()
+        self.raw_space_bardist_ = (
+            FullSupportBarDistribution(
+                borders.cpu().double() * self.y_train_std_ + self.y_train_mean_,
+            )
+            .float()
+            .to(borders.device)
+        )
 
     def _build_ensemble_preprocessor_and_executor(
         self,
@@ -2396,9 +2400,7 @@ def _logits_to_output(
     target's spread, not its magnitude.
     """
     criterion = FullSupportBarDistribution(
-        (znorm_space_bardist.borders.double() * y_std).to(
-            device=logits.device, dtype=logits.dtype
-        )
+        znorm_space_bardist.borders.to(device=logits.device, dtype=logits.dtype) * y_std
     )
 
     if output_type == "quantiles":
