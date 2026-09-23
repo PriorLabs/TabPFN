@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 def _targets_in_estimator_space(
     y_Q: torch.Tensor, config: RegressorEnsembleConfig
 ) -> torch.Tensor:
-    """Map z-scored targets into the space the estimator predicts in.
+    """Map raw targets into the space the estimator predicts in.
 
     Members with a target transform (the default ensemble's "safepower") saw
     transformed context targets, so their loss must use transformed targets too.
@@ -48,7 +48,7 @@ def _targets_in_estimator_space(
     if config.target_transform is None:
         return y_Q
     y_np = config.target_transform.transform(y_Q.cpu().numpy().reshape(-1, 1))
-    return torch.as_tensor(y_np.ravel(), dtype=y_Q.dtype, device=y_Q.device)
+    return torch.as_tensor(y_np.ravel(), device=y_Q.device)
 
 
 def _compute_regression_loss(  # noqa: C901
@@ -368,10 +368,13 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
     @override
     def _setup_batch(self, batch: RegressorBatch) -> None:  # type: ignore[override]
-        """Set up bar distribution for this batch."""
+        """Set up bar distribution and target frame for this batch."""
         self.finetuned_estimator_.raw_space_bardist_ = batch.raw_space_bardist
         self.finetuned_estimator_.bardist_ = batch.znorm_space_bardist
         self._bardist_loss = batch.znorm_space_bardist
+        # Preprocessed fitting needs the batch's target frame for border mapping.
+        self.finetuned_estimator_.y_train_mean_ = batch.y_train_mean
+        self.finetuned_estimator_.y_train_std_ = batch.y_train_std
 
     @override
     def _forward_with_loss(self, batch: RegressorBatch) -> torch.Tensor:  # type: ignore[override]
@@ -406,8 +409,11 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         logits_BQL = logits_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
 
         targets_BQ = torch.stack(
-            [_targets_in_estimator_space(y_query_batch[0], c[0]) for c in batch.configs]
-        ).to(self.device)
+            [
+                _targets_in_estimator_space(batch.y_query_raw[0], c[0])
+                for c in batch.configs
+            ]
+        ).to(device=self.device, dtype=y_query_batch.dtype)
 
         return _compute_regression_loss(
             logits_BQL=logits_BQL,
