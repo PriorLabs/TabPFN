@@ -180,7 +180,7 @@ class TabPFNV3p5Config(ArchitectureConfig):
 
     # ---- Memory-efficient inference ----
     inference_row_chunk_size: int = 2048
-    """Max rows per Stage 0-2 chunk during inference."""
+    """Max rows per Stage 0-2 chunk during inference, summed over the batch."""
 
     inference_col_chunk_size: int = 4
     """Max output groups per chunk for inducing hidden state computation."""
@@ -2800,7 +2800,9 @@ class TabPFNV3p5(Architecture):
         """
         num_train = y.shape[0]
         if performance_options.use_chunkwise_inference and not self.training:
-            row_chunk_size = self.inference_row_chunk_size
+            # The chunk holds this many rows summed over the batch, so a batch of
+            # ensemble members costs the memory of a single one.
+            row_chunk_size = max(1, self.inference_row_chunk_size // x_RiBC.shape[1])
             col_chunk_size = self.inference_col_chunk_size
         else:
             row_chunk_size = None
@@ -2941,7 +2943,8 @@ class TabPFNV3p5(Architecture):
                 _logger.warning(
                     "OOM: halving row_chunk_size to %d", effective_chunk_size
                 )
-                self.inference_row_chunk_size = effective_chunk_size
+                # Stored summed over the batch, as it is configured.
+                self.inference_row_chunk_size = effective_chunk_size * x_RiBC.shape[1]
 
         if use_chunks:
             inducing_hidden = precomputed_hidden
