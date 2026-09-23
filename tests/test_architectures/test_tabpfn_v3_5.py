@@ -63,6 +63,7 @@ _SMALL_CONFIG: dict[str, object] = {
     "dist_embed_num_inducing_points": 8,
     # Small enough that the chunked inference path splits the test inputs.
     "inference_row_chunk_size": 8,
+    "inference_chunk_columns": NUM_FEATURES,
     "inference_col_chunk_size": 2,
 }
 
@@ -690,7 +691,7 @@ def test__kv_cache__x_is_test_only_without_cache__raises() -> None:
 
 @torch.no_grad()
 def test__kv_cache__row_chunked_matches_unchunked() -> None:
-    """Cached forward with a small inference_row_chunk_size must match unchunked."""
+    """Cached forward with a small inference_chunk_cells must match unchunked."""
     arch = _get_model()
     x, y = _inputs("regression")
     perf = PerformanceOptions(use_chunkwise_inference=False)
@@ -701,7 +702,7 @@ def test__kv_cache__row_chunked_matches_unchunked() -> None:
     )
 
     # Force multi-chunk test-row processing: 4 test rows / 3 per chunk = 2 chunks.
-    arch.inference_row_chunk_size = 3
+    arch.inference_chunk_cells = 3 * NUM_FEATURES
     out_cached_chunked = arch(
         x, y, task_type="regression", performance_options=perf, kv_cache=cache
     )

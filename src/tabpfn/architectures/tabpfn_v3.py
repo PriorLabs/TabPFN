@@ -162,7 +162,14 @@ class TabPFNV3Config(ArchitectureConfig):
 
     # ---- Memory-efficient inference ----
     inference_row_chunk_size: int = 2048
-    """Max rows per Stage 0-2 chunk during inference, summed over the batch."""
+    """Rows per Stage 0-2 chunk during inference at ``inference_chunk_columns`` columns.
+
+    The chunk is bounded by cells: their product is the cells one chunk holds, summed
+    over the batch, so narrower inputs get proportionally more rows per chunk.
+    """
+
+    inference_chunk_columns: int = 768
+    """The input width ``inference_row_chunk_size`` refers to."""
 
     inference_col_chunk_size: int = 4
     """Max output groups per chunk for inducing hidden state computation."""
@@ -1830,7 +1837,9 @@ class TabPFNV3(Architecture):
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self.emsize = config.embed_dim
-        self.inference_row_chunk_size = config.inference_row_chunk_size
+        self.inference_chunk_cells = (
+            config.inference_row_chunk_size * config.inference_chunk_columns
+        )
         self.inference_col_chunk_size = config.inference_col_chunk_size
 
     @property
@@ -2281,9 +2290,11 @@ class TabPFNV3(Architecture):
         """
         num_train = y.shape[0]
         if performance_options.use_chunkwise_inference and not self.training:
-            # The chunk holds this many rows summed over the batch, so a batch of
-            # ensemble members costs the memory of a single one.
-            row_chunk_size = max(1, self.inference_row_chunk_size // x_RiBC.shape[1])
+            # A chunk holds a fixed number of cells summed over the batch, so a batch
+            # of ensemble members costs the memory of a single one and narrow inputs
+            # take more rows per chunk.
+            _, batch, columns = x_RiBC.shape
+            row_chunk_size = max(1, self.inference_chunk_cells // (batch * columns))
             col_chunk_size = self.inference_col_chunk_size
         else:
             row_chunk_size = None
@@ -2393,8 +2404,8 @@ class TabPFNV3(Architecture):
                 _logger.warning(
                     "OOM: halving row_chunk_size to %d", effective_chunk_size
                 )
-                # Stored summed over the batch, as it is configured.
-                self.inference_row_chunk_size = effective_chunk_size * x_RiBC.shape[1]
+                # Stored as cells summed over the batch, as it is configured.
+                self.inference_chunk_cells = effective_chunk_size * batch * columns
 
         if use_chunks:
             inducing_hidden = precomputed_hidden
