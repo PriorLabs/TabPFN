@@ -90,6 +90,30 @@ def test_full_support_icdf_clamps_conditional_probability_roundoff():
     assert torch.isposinf(dist.icdf(logits, 1.0))
 
 
+@pytest.mark.parametrize("batch_shape", [(), (2, 3)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
+def test_full_support_icdf_endpoints(batch_shape, dtype, device):
+    if device == "mps" and dtype == torch.float64:
+        pytest.skip("MPS does not support float64 tensors")
+
+    dist, _ = _make_full_support_distribution(dtype=dtype, device=device)
+    # Roundoff can leave the last conditional probability below 1.
+    logits = torch.tensor(
+        [0.56665051, 0.79350841, 0.59883946], dtype=dtype, device=device
+    ).expand(*batch_shape, 3)
+
+    lower = dist.icdf(logits, 0.0)
+    upper = dist.icdf(logits, 1.0)
+
+    assert torch.isneginf(lower).all()
+    assert torch.isposinf(upper).all()
+    for values in (lower, upper):
+        assert values.shape == batch_shape
+        assert values.dtype == logits.dtype
+        assert values.device == logits.device
+
+
 def test_full_support_inherited_quantiles_and_border_translation():
     dist, logits = _make_full_support_distribution()
     batch_logits = logits.expand(2, -1)

@@ -549,6 +549,12 @@ class FullSupportBarDistribution(BarDistribution):
     @override
     def icdf(self, logits: torch.Tensor, left_prob: float) -> torch.Tensor:
         """Calculate quantiles using half-normal tails in the outer buckets."""
+        # Do not let cumulative-probability roundoff make the endpoints finite.
+        if left_prob == 0.0:
+            return logits.new_full(logits.shape[:-1], float("-inf"))
+        if left_prob == 1.0:
+            return logits.new_full(logits.shape[:-1], float("inf"))
+
         probs = logits.softmax(-1)
         cumprobs = torch.cumsum(probs, -1)
         left_prob_tensor = torch.full(
