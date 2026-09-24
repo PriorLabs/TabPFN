@@ -78,6 +78,12 @@ regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V3)
 
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
 
+### In-memory models
+
+Use `ModelSpecs` with either estimator to evaluate an existing neural network
+without saving a checkpoint. See [in-memory models and migration guidance](docs/in-memory-models.md)
+for automatic regression distributions and legacy finetuning support.
+
 ## TabPFN Ecosystem
 
 Choose the right TabPFN implementation for your needs:

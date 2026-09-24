@@ -9,6 +9,7 @@ import pathlib
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
+from typing_extensions import deprecated
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ from sklearn.base import (
 )
 
 # --- TabPFN imports ---
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
     DEFAULT_DTYPE_BYTE_SIZE,
@@ -59,57 +61,70 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
-    from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.constants import MemorySavingMode
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
 
-class BaseModelSpecs:
-    """Base class for model specifications."""
+@dataclasses.dataclass
+class ModelSpecs:
+    """An in-memory model and the metadata needed by either TabPFN estimator.
 
-    def __init__(
-        self,
-        model: Architecture,
-        architecture_config: ArchitectureConfig,
-        inference_config: InferenceConfig,
-    ):
-        self.model = model
-        self.architecture_config = architecture_config
-        self.inference_config = inference_config
+    Pass this object (or a list of objects) as ``model_path``. The estimator
+    selects the task, so the same specs can back both tasks of a multitask model.
+    The model is used by reference, not copied; create an isolated evaluation
+    model before wrapping live training weights.
 
+    Args:
+        model: The neural network used for inference.
+        architecture_config: The configuration associated with the model.
+        inference_config: Preprocessing and ensembling settings.
+        norm_criterion: Optional regression distribution in normalized target
+            space. When omitted, regression initialization constructs it from
+            ``model.regression_borders`` (available from v3 onward). Required for
+            older models without those borders, including v2/v2.5 finetuning;
+            preserve the estimator's ``znorm_space_bardist_`` in that case.
+            An explicit distribution takes precedence over embedded borders.
+            Classification ignores this field. This is not the training objective
+            or the fitted distribution in raw target units.
+    """
 
-class ClassifierModelSpecs(BaseModelSpecs):
-    """Model specs for classifiers."""
-
-    norm_criterion = None
-
-
-class RegressorModelSpecs(BaseModelSpecs):
-    """Model specs for regressors."""
-
-    def __init__(
-        self,
-        model: Architecture,
-        architecture_config: ArchitectureConfig,
-        inference_config: InferenceConfig,
-        norm_criterion: FullSupportBarDistribution,
-    ):
-        super().__init__(model, architecture_config, inference_config)
-        self.norm_criterion = norm_criterion
+    model: Architecture
+    architecture_config: ArchitectureConfig
+    inference_config: InferenceConfig
+    norm_criterion: FullSupportBarDistribution | None = None
 
 
-ModelSpecs = RegressorModelSpecs | ClassifierModelSpecs
+# Preserve the former base-class import and isinstance checks.
+BaseModelSpecs = ModelSpecs
+
+
+@deprecated("ClassifierModelSpecs is deprecated; use ModelSpecs instead.")
+class ClassifierModelSpecs(ModelSpecs):
+    """Deprecated compatibility wrapper for :class:`ModelSpecs`."""
+
+
+@deprecated("RegressorModelSpecs is deprecated; use ModelSpecs instead.")
+class RegressorModelSpecs(ModelSpecs):
+    """Deprecated compatibility wrapper for :class:`ModelSpecs`."""
+
+
+def _regression_distribution_from_specs(spec: ModelSpecs) -> FullSupportBarDistribution:
+    if spec.norm_criterion is not None:
+        return spec.norm_criterion
+    borders = getattr(spec.model, "regression_borders", None)
+    if borders is None:
+        raise ValueError(
+            "Regression ModelSpecs requires norm_criterion when the model has no "
+            "regression_borders. For legacy models, pass the distribution returned "
+            "by the loader or the fitted estimator's znorm_space_bardist_."
+        )
+    return FullSupportBarDistribution(borders.detach().clone(), ignore_nan_targets=True)
 
 
 def initialize_tabpfn_model(
-    model_path: ModelPath
-    | list[ModelPath]
-    | RegressorModelSpecs
-    | ClassifierModelSpecs
-    | list[RegressorModelSpecs]
-    | list[ClassifierModelSpecs],
+    model_path: ModelPath | list[ModelPath] | ModelSpecs | list[ModelSpecs],
     which: Literal["classifier", "regressor"],
     *,
     softmax_temperature_override: float | None = None,
@@ -127,8 +142,9 @@ def initialize_tabpfn_model(
     Args:
         model_path: Path or directive ("auto") to load the pre-trained model from.
             If a list of paths is provided, the models are applied across different
-            estimators. If a RegressorModelSpecs or ClassifierModelSpecs object is
-            provided, the model is loaded from the object.
+            estimators. A ModelSpecs object or list of objects uses in-memory models
+            without loading a checkpoint. Regression distributions are derived
+            from embedded borders unless explicitly supplied in the specs.
 
         which: Which TabPFN model to load.
         softmax_temperature_override: The temperature the caller will apply to every
@@ -145,50 +161,34 @@ def initialize_tabpfn_model(
         if regression, the bar distribution, otherwise None,
         the inference config
     """
-    if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
-        return (
-            [model_path.model],
-            [model_path.architecture_config],
-            model_path.norm_criterion,
-            model_path.inference_config,
-        )
-
-    if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
-        return (
-            [model_path.model],
-            [model_path.architecture_config],
-            None,
-            model_path.inference_config,
-        )
+    if isinstance(model_path, ModelSpecs):
+        model_path = [model_path]
 
     if (
         isinstance(model_path, list)
-        and len(model_path) > 0
-        and all(isinstance(spec, RegressorModelSpecs) for spec in model_path)
+        and model_path
+        and all(isinstance(spec, ModelSpecs) for spec in model_path)
     ):
+        specs = typing.cast("list[ModelSpecs]", model_path)
         _assert_inference_configs_equal(
-            model_path, softmax_temperature_override, n_estimators_override
+            specs, softmax_temperature_override, n_estimators_override
         )
-        return (  # pyright: ignore[reportReturnType]
-            [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            model_path[0].norm_criterion,  # pyright: ignore[reportAttributeAccessIssue]
-            model_path[0].inference_config,
-        )
-
-    if (
-        isinstance(model_path, list)
-        and len(model_path) > 0
-        and all(isinstance(spec, ClassifierModelSpecs) for spec in model_path)
-    ):
-        _assert_inference_configs_equal(
-            model_path, softmax_temperature_override, n_estimators_override
-        )
+        norm_criterion = None
+        if which == "regressor":
+            distributions = [
+                _regression_distribution_from_specs(spec) for spec in specs
+            ]
+            norm_criterion = distributions[0]
+            if any(
+                not norm_criterion.has_equal_borders(distribution)
+                for distribution in distributions[1:]
+            ):
+                raise ValueError("All regression ModelSpecs must have the same borders")
         return (
-            [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            None,
-            model_path[0].inference_config,
+            [spec.model for spec in specs],
+            [spec.architecture_config for spec in specs],
+            norm_criterion,
+            specs[0].inference_config,
         )
 
     if (
@@ -257,7 +257,7 @@ def initialize_tabpfn_model(
 
 
 def _assert_inference_configs_equal(
-    model_specs: list[ClassifierModelSpecs] | list[RegressorModelSpecs],
+    model_specs: list[ModelSpecs],
     softmax_temperature_override: float | None,
     n_estimators_override: int | None,
 ) -> None:

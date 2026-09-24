@@ -16,7 +16,7 @@ import torch
 from torch.optim import AdamW
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
+from tabpfn.base import ModelSpecs
 from tabpfn.model_loading import save_tabpfn_model
 
 if TYPE_CHECKING:
@@ -71,25 +71,17 @@ def clone_model_for_evaluation(
         new_architecture_config = copy.deepcopy(original_model.configs_[0])
         new_inference_config = copy.deepcopy(original_model.inference_config_)
 
-        model_spec_obj = None
-        if isinstance(original_model, TabPFNClassifier):
-            model_spec_obj = ClassifierModelSpecs(
-                model=new_model_state,
-                architecture_config=new_architecture_config,
-                inference_config=new_inference_config,
-            )
-        else:
-            assert isinstance(original_model, TabPFNRegressor), (
-                "Unsupported model type for evaluation preparation."
-            )
-            # Regressor also needs the distribution criterion copied
-            new_bar_dist = copy.deepcopy(original_model.znorm_space_bardist_)
-            model_spec_obj = RegressorModelSpecs(
-                model=new_model_state,
-                architecture_config=new_architecture_config,
-                inference_config=new_inference_config,
-                norm_criterion=new_bar_dist,
-            )
+        model_spec_obj = ModelSpecs(
+            model=new_model_state,
+            architecture_config=new_architecture_config,
+            inference_config=new_inference_config,
+            # Preserve the distribution for legacy models without embedded borders.
+            norm_criterion=(
+                copy.deepcopy(original_model.znorm_space_bardist_)
+                if isinstance(original_model, TabPFNRegressor)
+                else None
+            ),
+        )
 
         eval_model = model_class(model_path=model_spec_obj, **eval_init_args)  # type: ignore
 
