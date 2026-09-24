@@ -232,14 +232,18 @@ def test__member_groups__spreads_over_devices_before_batching() -> None:
     ]
 
 
-def test__members_per_forward__follows_the_cell_budget(
+def test__members_per_forward__follows_the_tighter_of_both_budgets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 10_000)
     monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 10_000)
     assert _members_per_forward(rows_per_member=100, columns_per_member=10) == 10
     assert _members_per_forward(rows_per_member=100, columns_per_member=20) == 5
     assert _members_per_forward(rows_per_member=2000, columns_per_member=10) == 1
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 0)
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 10**9)
+    assert _members_per_forward(rows_per_member=100, columns_per_member=20) == 100
+    assert _members_per_forward(rows_per_member=4000, columns_per_member=1) == 2
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 0)
     assert _members_per_forward(rows_per_member=1, columns_per_member=1) == 1
 
 
