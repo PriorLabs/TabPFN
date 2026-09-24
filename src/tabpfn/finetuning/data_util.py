@@ -523,7 +523,9 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 y_context=y_trains_preprocessed,
                 y_query=y_test_standardized,
                 cat_indices=cat_indices,
-                configs=list(conf),
+                # The members carry the fitted configs (e.g. target transforms),
+                # which differ from `conf` when preprocessing ran in worker processes.
+                configs=[m.config for m in ensemble_members],
                 raw_space_bardist=raw_space_bardist_,
                 znorm_space_bardist=znorm_space_bardist_,
                 X_query_raw=x_test_raw,
@@ -536,7 +538,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             y_context=y_trains_preprocessed,
             y_query=y_test_raw,
             cat_indices=cat_indices,
-            configs=list(conf),
+            configs=[m.config for m in ensemble_members],
         )
 
 

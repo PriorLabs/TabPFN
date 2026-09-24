@@ -101,9 +101,7 @@ def _make_classifier_specs() -> ClassifierModelSpecs:
         nlayers=2,
         num_buckets=100,
     )
-    model = tabpfn_v2_5.get_architecture(
-        config=config, cache_trainset_representation=False
-    )
+    model = tabpfn_v2_5.get_architecture(config=config)
     inference_config = InferenceConfig.get_default(
         task_type="multiclass", model_version=ModelVersion.V2_5
     )
@@ -123,9 +121,7 @@ def _make_regressor_specs(max_num_classes: int = 10) -> RegressorModelSpecs:
         nlayers=2,
         num_buckets=100,
     )
-    model = tabpfn_v2_5.get_architecture(
-        config=config, cache_trainset_representation=False
-    )
+    model = tabpfn_v2_5.get_architecture(config=config)
     borders = torch.linspace(-3, 3, config.num_buckets + 1)
     norm_criterion = FullSupportBarDistribution(borders)
     inference_config = InferenceConfig.get_default(

@@ -16,12 +16,13 @@ import tempfile
 import urllib.request
 import warnings
 import zipfile
-from collections import OrderedDict
+from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_ident
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 from urllib.error import URLError
 
@@ -43,13 +44,15 @@ from tabpfn.inference_config import (
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from sklearn.base import BaseEstimator
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import ModelPath
     from tabpfn.utils import DevicesSpecification
@@ -629,12 +632,13 @@ def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[False],
-    cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"],
     estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
@@ -648,12 +652,13 @@ def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[True],
-    cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"],
     estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     FullSupportBarDistribution,
@@ -666,12 +671,13 @@ def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
-    cache_trainset_representation: bool,
     estimator_type: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6", "v3", "v3.5", "v3.5-fast"],
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -691,8 +697,8 @@ def load_model_criterion_config(
             Whether to check if the criterion
             is a FullSupportBarDistribution, which is the expected criterion
             for models trained for regression.
-        cache_trainset_representation:
-            Whether the model should know to cache the trainset representation.
+        devices: Where the caller will place the models; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast them to; likewise.
         estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
@@ -755,7 +761,8 @@ def load_model_criterion_config(
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             estimator_type=estimator_type,
-            cache_trainset_representation=cache_trainset_representation,
+            devices=devices,
+            force_inference_dtype=force_inference_dtype,
         )
         if check_bar_distribution_criterion and not isinstance(
             criterion,
@@ -967,26 +974,48 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     return Checkpoint(path).load()
 
 
-# Bounded, opt-in cache of *built* models (architecture + loaded weights),
-# keyed by (resolved path, file identity). Enabled by setting the env var
-# ``TABPFN_MODEL_CACHE_SIZE`` to a positive integer (an LRU of that size;
-# default 0 disables it, preserving prior behaviour). Only the non-mutating
-# build is cached: with ``cache_trainset_representation`` the model accumulates
-# the train-set representation during fit, so a shared instance can't be reused
-# across fits. The cached model is shared by reference and left in ``eval()``
-# mode — intended for repeated sequential fit/predict (cross-validation,
-# per-group models, or servers that manage their own concurrency). RES-2422
-# tracks the follow-up that externalises per-fit state so a single backbone can
-# be shared across threads too.
-_BUILT_MODEL_CACHE: OrderedDict[tuple[str, tuple[int, int]], tuple] = OrderedDict()
+# Bounded LRU of *built* models, keyed by (path, file identity, estimator type,
+# devices, forced dtype). Off unless ``TABPFN_MODEL_CACHE_SIZE`` is a positive
+# integer. Entries are shared by reference: moving or training one reaches all.
+_DEFAULT_BUILT_MODEL_CACHE_SIZE = 0
+
+# Device and dtype are applied to the module in place, so both belong in the key.
+_Devices = tuple[str, ...] | None
+_ForceInferenceDType = str | None
+_BuiltModelCacheKey = tuple[
+    str,
+    tuple[int, int],
+    Literal["regressor", "classifier"],
+    _Devices,
+    _ForceInferenceDType,
+]
+_BUILT_MODEL_CACHE: OrderedDict[_BuiltModelCacheKey, tuple] = OrderedDict()
 _BUILT_MODEL_CACHE_LOCK = Lock()
 
 
 def _get_built_model_cache_size() -> int:
+    raw = os.environ.get("TABPFN_MODEL_CACHE_SIZE")
+    if raw is None:
+        return _DEFAULT_BUILT_MODEL_CACHE_SIZE
     try:
-        return max(0, int(os.environ.get("TABPFN_MODEL_CACHE_SIZE", "0")))
+        return max(0, int(raw))
     except ValueError:
-        return 0
+        logger.warning(
+            "Ignoring non-integer TABPFN_MODEL_CACHE_SIZE=%r; the built-model "
+            "cache stays off.",
+            raw,
+        )
+        return _DEFAULT_BUILT_MODEL_CACHE_SIZE
+
+
+def _devices_cache_key(devices: Sequence[torch.device] | None) -> _Devices:
+    """Hashable form of the devices; ``None`` gets its own entry."""
+    return None if devices is None else tuple(str(torch.device(d)) for d in devices)
+
+
+def _dtype_cache_key(force_inference_dtype: torch.dtype | None) -> _ForceInferenceDType:
+    """Hashable form of the forced dtype."""
+    return None if force_inference_dtype is None else str(force_inference_dtype)
 
 
 def clear_built_model_cache() -> None:
@@ -999,7 +1028,8 @@ def load_model(
     *,
     path: Path,
     estimator_type: Literal["regressor", "classifier"],
-    cache_trainset_representation: bool = True,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -1009,26 +1039,30 @@ def load_model(
     """Loads a model from a given path. Only for inference.
 
     The raw checkpoint is cached in memory so repeated calls with the same path
-    skip disk I/O. When ``TABPFN_MODEL_CACHE_SIZE`` is a positive integer the
-    *built* model (architecture + loaded weights) is also cached, as an LRU of
+    skip disk I/O. When ``TABPFN_MODEL_CACHE_SIZE`` is set to a positive integer
+    the *built* model (architecture + loaded weights) is also cached, as an LRU of
     that size, so repeated calls skip reconstruction and ``load_state_dict``
-    entirely. Only the non-mutating build (``cache_trainset_representation=False``)
-    is cached. Both caches invalidate when the file changes (mtime + size).
+    entirely. Both caches invalidate when the file changes (mtime + size).
 
     Args:
         path: Path to the checkpoint
         estimator_type: The task the estimator is being built for. A checkpoint
             with both heads backs either task, so this selects the criterion.
-        cache_trainset_representation: If True, the model will cache the
-            trainset representation. Forwarded to get_architecture.
+        devices: Where the caller will place the model; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast it to; likewise.
     """
     resolved = str(path.resolve())
     identity = Checkpoint(resolved).identity()
 
-    use_cache = _get_built_model_cache_size() > 0 and not cache_trainset_representation
-    # `estimator_type` belongs in the key: the criterion differs per task, so a
-    # checkpoint built for one task must not be served for the other.
-    key = (resolved, identity, estimator_type)
+    use_cache = _get_built_model_cache_size() > 0
+    # `estimator_type` is in the key because the criterion differs per task.
+    key: _BuiltModelCacheKey = (
+        resolved,
+        identity,
+        estimator_type,
+        _devices_cache_key(devices),
+        _dtype_cache_key(force_inference_dtype),
+    )
     if use_cache:
         with _BUILT_MODEL_CACHE_LOCK:
             cached = _BUILT_MODEL_CACHE.get(key)
@@ -1040,7 +1074,6 @@ def load_model(
         resolved,
         identity,
         estimator_type=estimator_type,
-        cache_trainset_representation=cache_trainset_representation,
     )
 
     if use_cache:
@@ -1053,12 +1086,105 @@ def load_model(
     return result
 
 
+#: The `torch.nn.init` functions that `_skip_parameter_init` turns into no-ops.
+_PARAMETER_INIT_FUNCTIONS = (
+    "uniform_",
+    "normal_",
+    "trunc_normal_",
+    "constant_",
+    "ones_",
+    "zeros_",
+    "eye_",
+    "orthogonal_",
+    "xavier_uniform_",
+    "xavier_normal_",
+    "kaiming_uniform_",
+    "kaiming_normal_",
+)
+
+# State of the process-wide `torch.nn.init` patch, guarded by the lock: the real
+# functions while the patch is installed (None otherwise) and, per thread, how many
+# `_skip_parameter_init` blocks it is currently inside.
+_INIT_PATCH_LOCK = Lock()
+_INIT_PATCH_ORIGINALS: dict[str, Callable[..., torch.Tensor]] | None = None
+_INIT_PATCH_OWNERS: Counter[int] = Counter()
+
+
+def _make_init_stub(name: str) -> Callable[..., torch.Tensor]:
+    def leave_uninitialised(
+        tensor: torch.Tensor, *args: Any, **kwargs: Any
+    ) -> torch.Tensor:
+        with _INIT_PATCH_LOCK:
+            originals = _INIT_PATCH_ORIGINALS
+            is_owner = _INIT_PATCH_OWNERS[get_ident()] > 0
+        if originals is None:
+            raise RuntimeError(
+                f"torch.nn.init.{name} was looked up while tabpfn was building a "
+                "model and called after that build finished. Look the function "
+                "up on torch.nn.init at call time instead of keeping a reference."
+            )
+        if not is_owner:
+            return originals[name](tensor, *args, **kwargs)
+        return tensor
+
+    leave_uninitialised.__name__ = name
+    leave_uninitialised.__qualname__ = name
+    return leave_uninitialised
+
+
+_INIT_STUBS = {name: _make_init_stub(name) for name in _PARAMETER_INIT_FUNCTIONS}
+
+
+@contextmanager
+def _skip_parameter_init() -> Iterator[None]:
+    """Build a model without torch's random parameter initialisation.
+
+    Every parameter and persistent buffer of a model built here is overwritten by the
+    strict `load_state_dict` that follows, so the initialisation is wasted work: the
+    layers' `reset_parameters` draw random weights that are discarded, and that
+    dominates the build time paid at every `fit`. For the duration of the block the
+    `torch.nn.init` functions return their tensor untouched; they are restored
+    afterwards. A model built inside it must be loaded before use.
+
+    The patch is process-wide, so it is installed once by the first block to enter
+    and removed by the last one to leave, and only the threads currently inside a
+    block see the no-ops: other threads fall through to the real functions. A
+    reference to a no-op that is called once no block is active raises instead of
+    silently skipping the initialisation.
+
+    Building on the meta device would avoid the patch, but the tensor arithmetic
+    our constructors run at build time has no meta kernels and falls back to the
+    decomposition path, which imports `torch._dynamo` and adds seconds of cold
+    start to every process that never compiles anything.
+    """
+    global _INIT_PATCH_ORIGINALS  # noqa: PLW0603
+    thread = get_ident()
+    with _INIT_PATCH_LOCK:
+        if _INIT_PATCH_ORIGINALS is None:
+            _INIT_PATCH_ORIGINALS = {
+                name: getattr(torch.nn.init, name) for name in _PARAMETER_INIT_FUNCTIONS
+            }
+            for name, stub in _INIT_STUBS.items():
+                setattr(torch.nn.init, name, stub)
+        _INIT_PATCH_OWNERS[thread] += 1
+    try:
+        yield
+    finally:
+        with _INIT_PATCH_LOCK:
+            _INIT_PATCH_OWNERS[thread] -= 1
+            if _INIT_PATCH_OWNERS[thread] == 0:
+                del _INIT_PATCH_OWNERS[thread]
+            if not _INIT_PATCH_OWNERS and _INIT_PATCH_ORIGINALS is not None:
+                for name, original in _INIT_PATCH_ORIGINALS.items():
+                    setattr(torch.nn.init, name, original)
+                _INIT_PATCH_ORIGINALS = None
+
+
 def _build_model(
     resolved: str,
     identity: tuple[int, int],
     *,
     estimator_type: Literal["regressor", "classifier"],
-    cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -1081,10 +1207,8 @@ def _build_model(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
-    model = architecture.get_architecture(
-        model_config,
-        cache_trainset_representation=cache_trainset_representation,
-    )
+    with _skip_parameter_init():
+        model = architecture.get_architecture(model_config)
 
     # A checkpoint may carry criterion state for a task it is not being loaded for
     # (save_tabpfn_model writes it for regressors), so it is always kept out of the

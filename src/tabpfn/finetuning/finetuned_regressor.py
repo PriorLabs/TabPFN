@@ -33,7 +33,22 @@ if TYPE_CHECKING:
     from tabpfn.constants import ModelVersion, XType, YType
     from tabpfn.finetuning.data_util import RegressorBatch
     from tabpfn.finetuning.logging import FinetuningLogger
+    from tabpfn.preprocessing import RegressorEnsembleConfig
     from tabpfn.regressor import RegressionResultType
+
+
+def _targets_in_estimator_space(
+    y_Q: torch.Tensor, config: RegressorEnsembleConfig
+) -> torch.Tensor:
+    """Map z-scored targets into the space the estimator predicts in.
+
+    Members with a target transform (the default ensemble's "safepower") saw
+    transformed context targets, so their loss must use transformed targets too.
+    """
+    if config.target_transform is None:
+        return y_Q
+    y_np = config.target_transform.transform(y_Q.cpu().numpy().reshape(-1, 1))
+    return torch.as_tensor(y_np.ravel(), dtype=y_Q.dtype, device=y_Q.device)
 
 
 def _compute_regression_loss(  # noqa: C901
@@ -390,9 +405,9 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         # permute to shape (B, E, Q, L) then reshape to (B*E, Q, L)
         logits_BQL = logits_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
 
-        targets_BQ = y_query_batch.repeat(B * self._local_n_estimators_, 1).to(
-            self.device
-        )
+        targets_BQ = torch.stack(
+            [_targets_in_estimator_space(y_query_batch[0], c[0]) for c in batch.configs]
+        ).to(self.device)
 
         return _compute_regression_loss(
             logits_BQL=logits_BQL,

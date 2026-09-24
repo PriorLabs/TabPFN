@@ -1266,11 +1266,7 @@ def _prepare_targets(y: torch.Tensor, num_rows: int, batch_size: int) -> torch.T
     )
 
 
-def get_architecture(
-    config: ArchitectureConfig,
-    *,
-    cache_trainset_representation: bool = False,
-) -> TabPFNV2:
+def get_architecture(config: ArchitectureConfig) -> TabPFNV2:
     """Construct TabPFNV2 based on the given config.
 
     This factory method implements the interface defined in
@@ -1280,16 +1276,9 @@ def get_architecture(
         config: The config returned by parse_config(). This method should use a
             runtime isinstance() check to downcast the config to this architecture's
             specific config class.
-        cache_trainset_representation: Accepted for interface compatibility but
-            ignored. This architecture uses an explicit KV cache passed through
-            forward() (``kv_cache`` / ``return_kv_cache``) rather than model-internal
-            caching, so no special construction is required.
 
     Returns: the constructed architecture
     """
     assert isinstance(config, TabPFNV2Config)
-    # The explicit KV cache is selected at call time via forward()'s kv_cache /
-    # return_kv_cache arguments, so the model does not need configuring here.
-    del cache_trainset_representation
     n_out = config.max_num_classes or config.num_buckets
     return TabPFNV2(config=config, n_out=n_out)

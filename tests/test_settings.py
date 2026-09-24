@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,27 @@ def test__ci_env_false_sets_false(monkeypatch: pytest.MonkeyPatch) -> None:
     assert testing_settings.ci is False
 
 
+@pytest.fixture
+def restore_mps_memory_fraction() -> Generator[None]:
+    """Put the process-global MPS memory cap back afterwards.
+
+    `TabPFNSettings.model_post_init` calls
+    `torch.mps.set_per_process_memory_fraction`, which is process-global and has
+    no getter to save and restore. A test that lowers the cap therefore leaks it
+    into every test that runs later in the session, and unrelated MPS
+    allocations start failing with "out of memory". Re-initialising the settings
+    with their default fraction is the only way back.
+    """
+    try:
+        yield
+    finally:
+        TabPFNSettings()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+
 @pytest.mark.skipif("mps" not in get_pytest_devices(), reason="MPS not available")
+@pytest.mark.usefixtures("restore_mps_memory_fraction")
 def test__mps_memory_limit__low_limit__causes_oom() -> None:
     """Test that a very low MPS memory limit causes OOM on large allocations."""
     TabPFNSettings(mps_memory_fraction=0.001)  # 0.1% - triggers model_post_init

@@ -25,6 +25,7 @@ Copyright (c) Prior Labs GmbH 2026.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging as _logging
 import math
@@ -50,6 +51,10 @@ from tabpfn.architectures.kv_cache import (
     KVCache,
     KVCacheEntry,
     QuantizedKVCacheEntry,
+)
+from tabpfn.architectures.shared.attention_backends import (
+    kv_grid_dtype,
+    recorded_attention_backends,
 )
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
@@ -269,7 +274,7 @@ def get_cache_size(
     n_features: int,
     model_config: TabPFNV3Config,
     base_dtype: torch.dtype | Literal["autocast"],
-    kv_cache_precision: Literal["auto", "int8", "fp8"] = "int8",
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] = "int8",
 ) -> int:
     """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
 
@@ -313,20 +318,21 @@ def get_cache_size(
             ``"autocast"`` (GPU autocast path -- KV and ``decoder_keys`` are
             sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
             fp32, since autocast keeps those ops in fp32).
-        kv_cache_precision: If ``"int8"`` (default) or ``"fp8"``, the KV cache
-            is sized at one byte per element plus scales; if ``"auto"``, K/V
-            are sized at the compute dtype with no scales.
+        kv_cache_precision: If ``"int8"`` (default), ``"fp8"`` or
+            ``"adaptive"``, the KV cache is sized at one byte per element plus
+            scales; if ``"auto"``, K/V are sized at the compute dtype with no
+            scales.
 
     Returns:
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
         total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
     """
-    if kv_cache_precision not in ("auto", "int8", "fp8"):
+    if kv_cache_precision not in ("auto", "int8", "fp8", "adaptive"):
         raise ValueError(
             f"Invalid kv_cache_precision: {kv_cache_precision}. "
-            "Must be one of 'auto', 'int8' or 'fp8'."
+            "Must be one of 'auto', 'int8', 'fp8' or 'adaptive'."
         )
-    quantize_kv_cache = kv_cache_precision in ("int8", "fp8")
+    quantize_kv_cache = kv_cache_precision in ("int8", "fp8", "adaptive")
 
     # Set the stored dtype of each cached component up front. On the forced-
     # precision path the model and inputs are cast to ``dtype``, so every
@@ -1038,18 +1044,26 @@ class ICLAttention(nn.Module):
             k = self.k_projection(x_train).view(B, N, self.num_kv_heads, self.head_dim)
             v = self.v_projection(x_train).view(B, N, self.num_kv_heads, self.head_dim)
 
+            # A backend that took the train rows' call may have left K/V on a
+            # coarser grid; the cache below reads which one off this record.
+            train_calls_recorder = (
+                recorded_attention_backends()
+                if return_kv
+                else contextlib.nullcontext([])
+            )
             if (
                 self.num_kv_heads_test is not None
                 and single_eval_pos is not None
                 and N < R
             ):
                 # Train rows: full KV heads
-                out_train = _batched_scaled_dot_product_attention(
-                    q[:, :N],
-                    k,
-                    v,
-                    softmax_scaling_layer=self.softmax_scaling_layer,
-                )
+                with train_calls_recorder as train_calls:
+                    out_train = _batched_scaled_dot_product_attention(
+                        q[:, :N],
+                        k,
+                        v,
+                        softmax_scaling_layer=self.softmax_scaling_layer,
+                    )
                 # Test rows: fewer KV heads (GQA / MQA)
                 nh_test_heads = self.num_kv_heads_test
                 out_test = _batched_scaled_dot_product_attention(
@@ -1060,12 +1074,13 @@ class ICLAttention(nn.Module):
                 )
                 out = torch.cat([out_train, out_test], dim=1)
             else:
-                out = _batched_scaled_dot_product_attention(
-                    q,
-                    k,
-                    v,
-                    softmax_scaling_layer=self.softmax_scaling_layer,
-                )
+                with train_calls_recorder as train_calls:
+                    out = _batched_scaled_dot_product_attention(
+                        q,
+                        k,
+                        v,
+                        softmax_scaling_layer=self.softmax_scaling_layer,
+                    )
 
         result = self.out_projection(out.reshape(B, R, self.head_dim * self.num_heads))
 
@@ -1081,7 +1096,15 @@ class ICLAttention(nn.Module):
                 # cache silently retains all KV heads via the slice view.
                 k_cache = k_cache[:, :, :nh_test_heads].contiguous()
                 v_cache = v_cache[:, :, :nh_test_heads].contiguous()
-            kv_entry = KVCacheEntry(key=k_cache.detach(), value=v_cache.detach())
+            kv_entry = KVCacheEntry(
+                key=k_cache.detach(),
+                value=v_cache.detach(),
+                # A backend's grid has one scale per KV head, which a per-tensor
+                # quantization reproduces only for a single cached head.
+                grid_dtype=kv_grid_dtype(train_calls)
+                if k_cache.shape[2] == 1
+                else None,
+            )
         return result, kv_entry
 
 
@@ -1928,8 +1951,10 @@ class TabPFNV3(Architecture):
                     )
                     assert kv_entry.key is not None
                     kv_compute_dtype = kv_entry.key.dtype
-                    if performance_options.kv_cache_dtype is not None:
-                        kv_entry = kv_entry.quantize(performance_options.kv_cache_dtype)
+                    kv_entry = kv_entry.at_storage_dtype(
+                        performance_options.kv_cache_dtype,
+                        follow_grid=performance_options.kv_cache_follows_attention_grid,
+                    )
                     kv_out[layer_idx] = kv_entry
             else:
                 for block in self.icl_blocks:
@@ -2043,7 +2068,7 @@ class TabPFNV3(Architecture):
 
     @override
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
-        return ("auto", "int8", "fp8")
+        return ("auto", "int8", "fp8", "adaptive")
 
     def _prepare_y(
         self,
@@ -2471,17 +2496,9 @@ def parse_config(
     return parsed_config, parsed_config.get_unused_config(config)
 
 
-def get_architecture(
-    config: ArchitectureConfig,
-    *,
-    cache_trainset_representation: bool = False,
-) -> TabPFNV3:
+def get_architecture(config: ArchitectureConfig) -> TabPFNV3:
     """Construct TabPFN v3 from the given config."""
-    del cache_trainset_representation
     assert isinstance(config, TabPFNV3Config)
-    # cache_trainset_representation is accepted for interface compatibility but
-    # is a no-op: v3 uses explicit KV cache passing via forward() parameters
-    # (kv_cache / return_kv_cache) instead of model-internal caching.
     task_type = "multiclass" if config.is_classification else "regression"
     n_out = config.max_num_classes if task_type == "multiclass" else config.num_buckets
     return TabPFNV3(
@@ -2582,9 +2599,6 @@ def _spline_based_regression_borders(num_buckets: int) -> torch.Tensor:
 
     Note: Borders are num_buckets + 1!
     Border reference points are derived from tabpfn-v2.5-regressor-v2.5_default.ckpt.
-    For visual comparison of the original buckets vs approx, see
-    https://www.notion.so/priorlabs/Regression-bucket-approx-3125be1f3b4980f0924bc7bcb6b72bbd
-
 
     Returns:
         An array of shape (num_buckets + 1,) containing the bucket borders.

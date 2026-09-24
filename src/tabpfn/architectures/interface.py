@@ -116,6 +116,11 @@ class PerformanceOptions:
     cache before converting it to its storage dtype.
     """
 
+    kv_cache_follows_attention_grid: bool = False
+    """Store a KV-cache layer at the grid its attention backend left the keys and
+    values on (``kv_grid_dtype``), when there is one, instead of ``kv_cache_dtype``.
+    """
+
 
 class ArchitectureModule(Protocol):
     """Interface that modules containing model architectures should implement."""
@@ -143,20 +148,13 @@ class ArchitectureModule(Protocol):
         """
         ...
 
-    def get_architecture(
-        self,
-        config: ArchitectureConfig,
-        *,
-        cache_trainset_representation: bool,
-    ) -> Architecture:
+    def get_architecture(self, config: ArchitectureConfig) -> Architecture:
         """Construct a new instance of the model based on the given config.
 
         Args:
             config: The config returned by parse_config(). This method should use a
                 runtime isinstance() check to downcast the config to this architecture's
                 specific config class.
-            cache_trainset_representation: If True, the model should be configured to
-                cache the training data during inference to improve speed.
 
         Returns: the constructed architecture
         """

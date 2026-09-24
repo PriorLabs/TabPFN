@@ -10,6 +10,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from tabpfn.architectures.shared.attention_backends import (
     find_attention_backend,
+    record_attention_backend,
     register_attention_backend,
 )
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
@@ -58,6 +59,7 @@ def scaled_dot_product_attention(
         backend = find_attention_backend(
             q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv
         )
+    record_attention_backend(backend)
 
     if quantized_kv is not None and not (
         backend is not None and getattr(backend, "consumes_quantized_kv", False)

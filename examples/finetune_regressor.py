@@ -39,7 +39,7 @@ logging.basicConfig(
 # Fine-tuning Configuration
 # For details and more options see FinetunedTabPFNRegressor
 #
-# These settings work well for the California Housing dataset.
+# These settings work well for the diamonds dataset (OpenML 42225, ~54k rows).
 # For other datasets, you may need to adjust these settings to get good results.
 # =============================================================================
 
@@ -47,11 +47,10 @@ logging.basicConfig(
 NUM_EPOCHS = 100
 LEARNING_RATE = 1e-5
 
-# Small meta-dataset chunks give several optimizer steps per epoch with varied
-# contexts. On a dataset this size (~18.6k rows), fine-tuning overfits within a
-# few epochs; diverse small contexts delay that, and early stopping (on the
-# validation MSE) picks the checkpoint just before it sets in.
-N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 5_000
+# Each optimizer step sees a chunk of this many rows (context + query). Several
+# chunks per epoch give varied contexts; early stopping (on the validation MSE)
+# picks the checkpoint before the model starts to overfit.
+N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 20_000
 
 # Ensemble configuration
 # number of estimators to use during finetuning
@@ -71,12 +70,16 @@ RANDOM_STATE = 0
 def main() -> None:
     is_main_process = int(os.environ.get("LOCAL_RANK", "0")) == 0
 
+    # We use the "diamonds" dataset (see https://www.openml.org/d/42225):
+    # ~54k rows, predicting the price from carat, cut, color, clarity and size.
     # Under torchrun, the main process downloads the dataset first and the
     # other ranks then read it from the warm sklearn cache — otherwise every
     # rank would download it, and not all sklearn fetchers write their cache
     # atomically.
     with main_process_first():
-        data = sklearn.datasets.fetch_california_housing(as_frame=True)
+        data = sklearn.datasets.fetch_openml(
+            data_id=42225, as_frame=True, parser="auto"
+        )
 
     X_all = data.data
     y_all = data.target

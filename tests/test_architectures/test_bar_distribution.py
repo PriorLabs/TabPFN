@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
@@ -38,6 +40,36 @@ def test_cdf_out_of_bounds():
 
     # inside bucket
     assert d.cdf(logits, torch.tensor([1.5]))[0].item() == pytest.approx(0.075)
+
+
+def test_halfnormal_with_p_weight_before_respects_dtype():
+    """The scale must be built in `range_max`'s dtype, not always float32.
+
+    A hardcoded `torch.tensor(1.0)` evaluates `icdf` in float32 and caps the
+    scale at ~1e-8 relative accuracy, which is a float32-sized error inside an
+    otherwise float64 tail computation (PRI-361). float32 callers must be
+    bit-identical to before.
+    """
+    half_normal = bar_distribution.FullSupportBarDistribution
+
+    width_32 = torch.tensor(0.016)
+    reference_32 = width_32 / torch.distributions.HalfNormal(torch.tensor(1.0)).icdf(
+        torch.tensor(0.5)
+    )
+    assert torch.equal(
+        half_normal.halfnormal_with_p_weight_before(width_32).scale, reference_32
+    )
+    # A plain Python float keeps the default dtype, so it is unaffected too.
+    assert torch.equal(
+        half_normal.halfnormal_with_p_weight_before(0.016).scale, reference_32
+    )
+
+    # In float64 the scale must place exactly half the mass below `range_max`.
+    width_64 = torch.tensor(0.016, dtype=torch.float64)
+    scale_64 = half_normal.halfnormal_with_p_weight_before(width_64).scale
+    assert scale_64.dtype == torch.float64
+    mass_below = torch.erf(width_64 / (scale_64 * math.sqrt(2.0)))
+    assert mass_below.item() == pytest.approx(0.5, abs=1e-15)
 
 
 def test_move_to_larger():

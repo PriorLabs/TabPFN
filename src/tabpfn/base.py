@@ -111,9 +111,11 @@ def initialize_tabpfn_model(
     | list[RegressorModelSpecs]
     | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    *,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     list[ArchitectureConfig],
@@ -129,12 +131,13 @@ def initialize_tabpfn_model(
             provided, the model is loaded from the object.
 
         which: Which TabPFN model to load.
-        fit_mode: Determines caching behavior.
         softmax_temperature_override: The temperature the caller will apply to every
             model, or None if they did not ask for one. Only used to decide whether
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
         n_estimators_override: Likewise for the number of estimators.
+        devices: Where the caller will place the models; part of the cache key.
+        force_inference_dtype: The dtype the caller will cast them to; likewise.
 
     Returns:
         a list of models,
@@ -212,12 +215,13 @@ def initialize_tabpfn_model(
                     model_path=model_path,  # pyright: ignore[reportArgumentType]
                     # The classifier's bar distribution is not used
                     check_bar_distribution_criterion=False,
-                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     estimator_type="classifier",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
                     n_estimators_override=n_estimators_override,
+                    devices=devices,
+                    force_inference_dtype=force_inference_dtype,
                 )
             )
             norm_criterion = None
@@ -227,12 +231,13 @@ def initialize_tabpfn_model(
                     model_path=model_path,  # pyright: ignore[reportArgumentType]
                     # The regressor's bar distribution is required
                     check_bar_distribution_criterion=True,
-                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     estimator_type="regressor",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
                     n_estimators_override=n_estimators_override,
+                    devices=devices,
+                    force_inference_dtype=force_inference_dtype,
                 )
             )
             norm_criterion = bardist
@@ -333,7 +338,7 @@ def create_inference_engine(  # noqa: PLR0913
     task_type: str,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
-    kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -368,7 +373,9 @@ def create_inference_engine(  # noqa: PLR0913
             architecture default (``"int8"`` when it can quantize, else
             ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
             ``"fp8"`` stores it as 8-bit floats (same size, float rounding
-            semantics); ``"auto"`` keeps the computed dtype.
+            semantics); ``"auto"`` keeps the computed dtype; ``"adaptive"``
+            stores the grid an attention backend already rounded the keys and
+            values to (``kv_grid_dtype``), else ``"int8"``.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -517,13 +524,18 @@ def initialize_model_variables_helper(
     # user has not named a value for it.
     overrides = _resolve_overrides(calling_instance, user_config)
 
+    devices = infer_devices(calling_instance.device)
+    _, forced_inference_dtype, _ = determine_precision(
+        calling_instance.inference_precision, devices
+    )
     models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
-            fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
             softmax_temperature_override=overrides["SOFTMAX_TEMPERATURE"],
             n_estimators_override=overrides["N_ESTIMATORS"],
+            devices=devices,
+            force_inference_dtype=forced_inference_dtype,
         )
     )
     calling_instance.models_ = models
