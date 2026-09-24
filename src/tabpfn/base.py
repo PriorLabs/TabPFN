@@ -96,6 +96,8 @@ class ModelSpecs:
 
 
 def _regression_distribution_from_specs(spec: ModelSpecs) -> FullSupportBarDistribution:
+    if getattr(spec.model, "task_type", None) == "multiclass":
+        raise ValueError("A classification-only model cannot be used for regression")
     if spec.norm_criterion is not None:
         return spec.norm_criterion
     borders = getattr(spec.model, "regression_borders", None)
@@ -105,7 +107,11 @@ def _regression_distribution_from_specs(spec: ModelSpecs) -> FullSupportBarDistr
             "regression_borders. For legacy models, pass the distribution returned "
             "by the loader or the fitted estimator's znorm_space_bardist_."
         )
-    return FullSupportBarDistribution(borders.detach().clone(), ignore_nan_targets=True)
+    # Inference may have cast the shared model to half precision. Keep target-space
+    # arithmetic in float32 so large target means do not overflow.
+    return FullSupportBarDistribution(
+        borders.detach().to(torch.float32).clone(), ignore_nan_targets=True
+    )
 
 
 def initialize_tabpfn_model(

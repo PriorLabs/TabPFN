@@ -112,7 +112,7 @@ def _make_classifier_specs() -> ModelSpecs:
     )
 
 
-def _make_regressor_specs(max_num_classes: int = 10) -> ModelSpecs:
+def _make_regressor_specs(max_num_classes: int = 0) -> ModelSpecs:
     config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,

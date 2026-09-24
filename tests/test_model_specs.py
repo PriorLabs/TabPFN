@@ -13,7 +13,7 @@ import pytest
 import torch
 
 from tabpfn import ModelSpecs, TabPFNClassifier, TabPFNRegressor
-from tabpfn.architectures import tabpfn_v2, tabpfn_v2_5, tabpfn_v3_5
+from tabpfn.architectures import tabpfn_v2, tabpfn_v2_5, tabpfn_v3, tabpfn_v3_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
@@ -170,3 +170,54 @@ def test__model_specs__legacy_finetuning_copy__preserves_predictions(
     assert copied.model_path.norm_criterion is not original.znorm_space_bardist_
     copied.fit(x, y)
     np.testing.assert_allclose(copied.predict(x[:3]), original.predict(x[:3]))
+
+
+def test__model_specs__half_precision_model__keeps_large_targets_finite(
+    multitask_specs: ModelSpecs,
+) -> None:
+    # Inference can cast the shared network in place. Reusing its specs must not
+    # leave target-space arithmetic in float16, whose maximum is only 65504.
+    multitask_specs.model.half()
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(20, 2))
+    y = 100_000 + rng.normal(size=20) * 100
+    regressor = TabPFNRegressor(
+        model_path=multitask_specs,
+        device="cpu",
+        inference_precision=torch.float32,
+        n_estimators=1,
+        random_state=0,
+    ).fit(x, y)
+    assert regressor.znorm_space_bardist_.borders.dtype == torch.float32
+    assert torch.isfinite(regressor.raw_space_bardist_.borders).all()
+    assert np.isfinite(regressor.predict(x[:3])).all()
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+@pytest.mark.parametrize("explicit_criterion", [False, True])
+def test__model_specs__classification_only_model__rejects_regression(
+    *, as_list: bool, explicit_criterion: bool
+) -> None:
+    config = tabpfn_v3.TabPFNV3Config(
+        max_num_classes=3,
+        num_buckets=10,
+        embed_dim=48,
+        nlayers=1,
+        icl_num_heads=3,
+        dist_embed_num_heads=3,
+        feat_agg_num_heads=3,
+    )
+    specs = ModelSpecs(
+        model=tabpfn_v3.get_architecture(config),
+        architecture_config=config,
+        inference_config=InferenceConfig.get_default("multiclass", ModelVersion.V2_5),
+        norm_criterion=(
+            FullSupportBarDistribution(torch.linspace(-3, 3, 11))
+            if explicit_criterion
+            else None
+        ),
+    )
+    assert specs.model.regression_borders is not None
+    with pytest.raises(ValueError, match="classification-only"):
+        initialize_tabpfn_model([specs] if as_list else specs, "regressor")
+    assert initialize_tabpfn_model(specs, "classifier")[0] == [specs.model]
