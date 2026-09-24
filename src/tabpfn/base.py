@@ -9,7 +9,6 @@ import pathlib
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
-from typing_extensions import deprecated
 
 import numpy as np
 import pandas as pd
@@ -94,20 +93,6 @@ class ModelSpecs:
     architecture_config: ArchitectureConfig
     inference_config: InferenceConfig
     norm_criterion: FullSupportBarDistribution | None = None
-
-
-# Preserve the former base-class import and isinstance checks.
-BaseModelSpecs = ModelSpecs
-
-
-@deprecated("ClassifierModelSpecs is deprecated; use ModelSpecs instead.")
-class ClassifierModelSpecs(ModelSpecs):
-    """Deprecated compatibility wrapper for :class:`ModelSpecs`."""
-
-
-@deprecated("RegressorModelSpecs is deprecated; use ModelSpecs instead.")
-class RegressorModelSpecs(ModelSpecs):
-    """Deprecated compatibility wrapper for :class:`ModelSpecs`."""
 
 
 def _regression_distribution_from_specs(spec: ModelSpecs) -> FullSupportBarDistribution:

@@ -21,7 +21,7 @@ from tabpfn.architectures.interface import (
     PerformanceOptions,
 )
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
+from tabpfn.base import ModelSpecs
 from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNValidationError
@@ -462,7 +462,7 @@ def _get_shipped_inference_config(
 
 def _get_stand_in_model_specs(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
-) -> ClassifierModelSpecs | RegressorModelSpecs:
+) -> ModelSpecs:
     """Return specs that make an estimator run on `_ConstantOutputModel`.
 
     Passing specs as `model_path` is the supported way to supply an already
@@ -470,14 +470,14 @@ def _get_stand_in_model_specs(
     shipped preprocessing and only the forward pass is a stand-in.
     """
     if issubclass(estimator_class, TabPFNClassifier):
-        return ClassifierModelSpecs(
+        return ModelSpecs(
             model=_ConstantOutputModel(STAND_IN_MAX_NUM_CLASSES),
             architecture_config=ArchitectureConfig(
                 max_num_classes=STAND_IN_MAX_NUM_CLASSES
             ),
             inference_config=_get_shipped_inference_config("classifier"),
         )
-    return RegressorModelSpecs(
+    return ModelSpecs(
         model=_ConstantOutputModel(STAND_IN_NUM_BUCKETS),
         architecture_config=ArchitectureConfig(num_buckets=STAND_IN_NUM_BUCKETS),
         inference_config=_get_shipped_inference_config("regressor"),

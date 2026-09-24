@@ -15,11 +15,7 @@ import torch
 from tabpfn import ModelSpecs, TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2, tabpfn_v2_5, tabpfn_v3_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.base import (
-    ClassifierModelSpecs,
-    RegressorModelSpecs,
-    initialize_tabpfn_model,
-)
+from tabpfn.base import initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 from tabpfn.inference_config import InferenceConfig
@@ -158,35 +154,6 @@ def test__model_specs__ensemble__validates_borders(multitask_specs: ModelSpecs) 
         initialize_tabpfn_model([multitask_specs, multitask_specs], "regressor")[2]
         is not None
     )
-
-
-@pytest.mark.parametrize("wrapper", [ClassifierModelSpecs, RegressorModelSpecs])
-def test__legacy_specs__construction__warns_and_preserves_fields(
-    legacy_specs: ModelSpecs, wrapper: type[ModelSpecs]
-) -> None:
-    with pytest.warns(DeprecationWarning, match="use ModelSpecs"):
-        specs = wrapper(
-            legacy_specs.model,
-            legacy_specs.architecture_config,
-            legacy_specs.inference_config,
-        )
-    assert isinstance(specs, ModelSpecs)
-    assert isinstance(specs, wrapper)
-    assert specs.model is legacy_specs.model
-    assert specs.norm_criterion is None
-
-
-def test__legacy_specs__regression__preserves_positional_criterion(
-    legacy_specs: ModelSpecs,
-) -> None:
-    with pytest.warns(DeprecationWarning, match="use ModelSpecs"):
-        specs = RegressorModelSpecs(
-            legacy_specs.model,
-            legacy_specs.architecture_config,
-            legacy_specs.inference_config,
-            legacy_specs.norm_criterion,
-        )
-    assert initialize_tabpfn_model(specs, "regressor")[2] is legacy_specs.norm_criterion
 
 
 def test__model_specs__legacy_finetuning_copy__preserves_predictions(

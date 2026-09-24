@@ -71,14 +71,15 @@ been transformed into the fitted dataset's target units.
 
 ## Migrating task-specific specs
 
-`ClassifierModelSpecs` and `RegressorModelSpecs` in `tabpfn.base` are deprecated
-compatibility subclasses. Existing construction, including the positional
-regression criterion argument, continues to work with a `DeprecationWarning`.
-Replace either constructor with `ModelSpecs`; its fields use the same names.
-Keep passing `norm_criterion` for models without embedded borders.
+`ClassifierModelSpecs`, `RegressorModelSpecs`, and `BaseModelSpecs` have been
+removed from `tabpfn.base`. Replace their imports and constructors with
+`ModelSpecs` (available from `tabpfn` or `tabpfn.base`). Its fields use the same
+names, and the optional fourth positional argument is still `norm_criterion`.
+Keep passing that distribution for regression models without embedded borders.
 
 Previously `ModelSpecs` was a union type alias; it is now a concrete dataclass.
-Use `isinstance(value, ModelSpecs)` to detect in-memory bundles. A newly constructed
-`ModelSpecs` is not an instance of either deprecated subclass. Code that previously
-used `isinstance(value, RegressorModelSpecs)` to select a task should instead use
-the requested estimator/task: a multitask bundle has no single task identity.
+Use `isinstance(value, ModelSpecs)` to detect in-memory bundles. Code that
+previously used `isinstance(value, RegressorModelSpecs)` to select a task must
+instead use the requested estimator/task: a multitask bundle has no single task
+identity. Serialized objects referencing the removed classes must be migrated
+before upgrading or recreated with `ModelSpecs`.
