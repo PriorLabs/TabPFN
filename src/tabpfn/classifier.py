@@ -33,7 +33,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted, clone
 from tqdm.auto import tqdm
 
 from tabpfn.base import (
-    ClassifierModelSpecs,
+    ModelSpecs,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -265,8 +265,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         | list[str]
         | list[Path]
         | Literal["auto"]
-        | ClassifierModelSpecs
-        | list[ClassifierModelSpecs] = "auto",
+        | ModelSpecs
+        | list[ModelSpecs] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -389,6 +389,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   the user-specified location if available, otherwise it will be
                   downloaded to this location. Details on available checkpoints are
                   available in the repository README.
+
+                - If a ``ModelSpecs`` object or list of them, use the in-memory
+                  models without loading checkpoints. The same specs can be used
+                  with either estimator when the model supports both tasks.
+                  Models are used by reference, not copied.
 
             device:
                 The device(s) to use for inference.

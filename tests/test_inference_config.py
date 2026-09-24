@@ -18,7 +18,7 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
+from tabpfn.base import ModelSpecs
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import (
     DEFAULT_SOFTMAX_TEMPERATURE,
@@ -92,7 +92,7 @@ def test__override_with_user_input__override_is_None__returns_copy_of_config() -
     assert new_config == config
 
 
-def _make_classifier_specs() -> ClassifierModelSpecs:
+def _make_classifier_specs() -> ModelSpecs:
     config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,
@@ -105,14 +105,14 @@ def _make_classifier_specs() -> ClassifierModelSpecs:
     inference_config = InferenceConfig.get_default(
         task_type="multiclass", model_version=ModelVersion.V2_5
     )
-    return ClassifierModelSpecs(
+    return ModelSpecs(
         model=model,
         architecture_config=config,
         inference_config=inference_config,
     )
 
 
-def _make_regressor_specs(max_num_classes: int = 10) -> RegressorModelSpecs:
+def _make_regressor_specs(max_num_classes: int = 0) -> ModelSpecs:
     config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,
@@ -127,7 +127,7 @@ def _make_regressor_specs(max_num_classes: int = 10) -> RegressorModelSpecs:
     inference_config = InferenceConfig.get_default(
         task_type="regression", model_version=ModelVersion.V2_5
     )
-    return RegressorModelSpecs(
+    return ModelSpecs(
         model=model,
         architecture_config=config,
         inference_config=inference_config,
@@ -273,7 +273,7 @@ def test__overridable_fields__name_real_fields_and_arguments() -> None:
         assert argument in inspect.signature(TabPFNRegressor).parameters
 
 
-def _classifier_specs(temperature: float | None = None) -> ClassifierModelSpecs:
+def _classifier_specs(temperature: float | None = None) -> ModelSpecs:
     specs = _make_classifier_specs()
     if temperature is not None:
         specs.inference_config = replace(
@@ -282,11 +282,9 @@ def _classifier_specs(temperature: float | None = None) -> ClassifierModelSpecs:
     return specs
 
 
-def _with_temperature(
-    specs: ClassifierModelSpecs, temperature: float
-) -> ClassifierModelSpecs:
+def _with_temperature(specs: ModelSpecs, temperature: float) -> ModelSpecs:
     """The same weights as `specs`, with a different declared temperature."""
-    return ClassifierModelSpecs(
+    return ModelSpecs(
         model=specs.model,
         architecture_config=specs.architecture_config,
         inference_config=replace(
@@ -397,7 +395,7 @@ def test__classifier_softmax_temperature__reaches_the_predictions(
     X, y = classification_data
     base = _make_classifier_specs()
 
-    def probas_for(specs: ClassifierModelSpecs, **kwargs: object) -> np.ndarray:
+    def probas_for(specs: ModelSpecs, **kwargs: object) -> np.ndarray:
         clf = TabPFNClassifier(
             model_path=specs, device="cpu", n_estimators=2, random_state=0, **kwargs
         )
@@ -480,7 +478,7 @@ def test__regressor_softmax_temperature__reaches_the_predictions() -> None:
     base = _make_regressor_specs(max_num_classes=0)
 
     def predictions_for(temperature: float, **kwargs: object) -> np.ndarray:
-        specs = RegressorModelSpecs(
+        specs = ModelSpecs(
             model=base.model,
             architecture_config=base.architecture_config,
             inference_config=replace(
@@ -507,7 +505,7 @@ def test__regressor_softmax_temperature__checkpoints_disagree__raises() -> None:
         n_samples=30, n_features=4, noise=10.0, random_state=0
     )
     base = _make_regressor_specs(max_num_classes=0)
-    other = RegressorModelSpecs(
+    other = ModelSpecs(
         model=base.model,
         architecture_config=base.architecture_config,
         inference_config=replace(base.inference_config, SOFTMAX_TEMPERATURE=1.2),
@@ -643,7 +641,7 @@ def test__inference_config__asdict_of_a_config__matches_the_object_form(
 
 def _classifier_specs_with_n_estimators(
     n_estimators: int | Literal["auto"],
-) -> ClassifierModelSpecs:
+) -> ModelSpecs:
     specs = _make_classifier_specs()
     specs.inference_config = replace(specs.inference_config, N_ESTIMATORS=n_estimators)
     return specs
@@ -878,7 +876,7 @@ def wide_classification_data() -> tuple[np.ndarray, np.ndarray]:
 
 def _narrow_estimator_specs(
     n_estimators: int | Literal["auto"],
-) -> ClassifierModelSpecs:
+) -> ModelSpecs:
     """Specs declaring `n_estimators`, seeing only 2 features per estimator."""
     specs = _classifier_specs_with_n_estimators(n_estimators)
     specs.inference_config = replace(

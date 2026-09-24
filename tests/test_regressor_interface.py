@@ -27,7 +27,7 @@ import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.base import ModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.inference_config import InferenceConfig
@@ -919,8 +919,8 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(regressor, "znorm_space_bardist_")
     assert regressor.znorm_space_bardist_ is not None
 
-    # 3) Reuse via RegressorModelSpecs
-    spec = RegressorModelSpecs(
+    # 3) Reuse via ModelSpecs
+    spec = ModelSpecs(
         model=regressor.models_[0],
         architecture_config=regressor.configs_[0],
         norm_criterion=regressor.znorm_space_bardist_,
@@ -1726,20 +1726,19 @@ def test__predict_batched__does_not_mutate_estimator() -> None:
     np.testing.assert_array_equal(before, after)
 
 
-def _create_dummy_regressor_model_specs() -> RegressorModelSpecs:
+def _create_dummy_regressor_model_specs() -> ModelSpecs:
     """A tiny in-memory model, so tuning tests need no checkpoint download."""
-    # The regression head is sized by `max_num_classes`, so it has to match
-    # `num_buckets` or the bucket logits do not fit.
+    # Zero classes selects the regression head, sized by num_buckets.
     num_buckets = 100
     minimal_config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,
-        max_num_classes=num_buckets,
+        max_num_classes=0,
         nhead=2,
         nlayers=2,
         num_buckets=num_buckets,
     )
-    return RegressorModelSpecs(
+    return ModelSpecs(
         model=tabpfn_v2_5.get_architecture(
             config=minimal_config,
         ),

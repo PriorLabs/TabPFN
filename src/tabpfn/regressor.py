@@ -41,7 +41,7 @@ from tqdm.auto import tqdm
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
-    RegressorModelSpecs,
+    ModelSpecs,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -293,8 +293,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         | list[str]
         | list[Path]
         | Literal["auto"]
-        | RegressorModelSpecs
-        | list[RegressorModelSpecs] = "auto",
+        | ModelSpecs
+        | list[ModelSpecs] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -404,6 +404,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   the user-specified location if available, otherwise it will be
                   downloaded to this location. Details on available checkpoints are
                   available in the repository README.
+
+                - If a ``ModelSpecs`` object or list of them, use the in-memory
+                  models without loading checkpoints. The same specs can be used
+                  with either estimator when the model supports both tasks.
+                  Models are used by reference, not copied.
+                  Regression distributions are constructed from
+                  ``model.regression_borders`` unless ``norm_criterion`` is
+                  supplied. Older models without embedded borders require that
+                  explicit normalized-space distribution (including legacy
+                  finetuning; use ``znorm_space_bardist_``).
 
             device:
                 The device(s) to use for inference.

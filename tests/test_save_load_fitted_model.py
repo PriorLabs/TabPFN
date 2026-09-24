@@ -16,7 +16,7 @@ from sklearn.datasets import make_classification, make_regression
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
-from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.base import ModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
 from tabpfn.model_loading import (
@@ -243,7 +243,7 @@ def test_saving_and_loading_model_with_weights(tmp_path: Path) -> None:
         save_path, "regressor"
     )
     loaded_regressor = TabPFNRegressor(
-        model_path=RegressorModelSpecs(
+        model_path=ModelSpecs(
             model=models[0],
             architecture_config=architecture_configs[0],
             norm_criterion=criterion,
