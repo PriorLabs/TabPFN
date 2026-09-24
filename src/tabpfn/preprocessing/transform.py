@@ -140,16 +140,11 @@ def fit_preprocessing(
         X_train: Training data.
         y_train: Training target.
         feature_schema: feature schema.
-        n_preprocessing_jobs: Number of worker processes to use.
-            If `1`, then the preprocessing is performed in the current process. This
-                avoids multiprocessing overheads, but may not be able to full saturate
-                the CPU. Note that the preprocessing itself will parallelise over
-                multiple cores, so one job is often enough.
-            If `>1`, then different estimators are dispatched to different proceses,
-                which allows more parallelism but incurs some overhead.
-            If `-1`, then creates as many workers as CPU cores. As each worker itself
-                uses multiple cores, this is likely too many.
-            It is best to select this value by benchmarking.
+        n_preprocessing_jobs: Number of worker threads to use.
+            If `1`, then the preprocessing runs in the calling thread.
+            If `>1`, then the estimators are preprocessed on that many threads.
+            If `-1`, then one thread per CPU core.
+            Threads beyond the number of estimators are unused.
         parallel_mode:
             Parallel mode to use.
 
@@ -190,15 +185,21 @@ def fit_preprocessing(
             f"elements, but configs has {len(configs)} elements"
         )
 
+    # Threads: the tasks read `X_train` in place and return their tables without
+    # pickling, and the transforms release the GIL. A process pool would copy the
+    # table into every worker and every result back.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
             n_jobs=n_preprocessing_jobs,
             return_as=return_as,
             batch_size="auto",
+            prefer="threads",
         )
     else:
-        executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
+        executor = joblib.Parallel(
+            n_jobs=n_preprocessing_jobs, batch_size="auto", prefer="threads"
+        )
 
     yield from executor(  # type: ignore[misc]
         joblib.delayed(_fit_preprocessing_one)(
