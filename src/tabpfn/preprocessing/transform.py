@@ -95,7 +95,8 @@ def _transform_labels_one(
 
     Args:
         config: Ensemble config.
-        y_train: The unprocessed labels.
+        y_train: Encoded class indices or regression targets. A configured
+            regression target pipeline expects targets in their original units.
 
     Return: The processed labels.
     """
