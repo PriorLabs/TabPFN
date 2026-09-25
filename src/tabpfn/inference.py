@@ -106,15 +106,20 @@ def _members_per_forward(rows_per_member: int, columns_per_member: int) -> int:
 
 
 def _member_key(
-    member: TabPFNEnsembleMember, index: int, model_caches: list[_PerDeviceModelCache]
+    member: TabPFNEnsembleMember,
+    index: int,
+    model_caches: list[_PerDeviceModelCache],
+    devices: Sequence[torch.device],
 ) -> tuple:
     """What a member must share with another to run in the same forward.
 
     Members of an architecture that does not batch ensemble members get a key of
-    their own, so they always run alone.
+    their own, so they always run alone. So do all members on MPS, where the
+    attention kernels of recent torch builds give wrong results for a batch of
+    members.
     """
     model = model_caches[member.config._model_index].get_any()
-    if not model.batches_ensemble_members:
+    if not model.batches_ensemble_members or any(d.type == "mps" for d in devices):
         return ("single", index)
     return (member.config._model_index, tuple(member.X_train.shape))
 
@@ -542,7 +547,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             nonlocal seen
             for chunk in _iter_chunks(ensemble_members_iterator, chunk_size):
                 keys = [
-                    _member_key(em, i, self.model_caches) for i, em in enumerate(chunk)
+                    _member_key(em, i, self.model_caches, devices)
+                    for i, em in enumerate(chunk)
                 ]
                 for positions in _member_groups(keys, len(chunk)):
                     members = [chunk[i] for i in positions]
@@ -842,7 +848,10 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         members = self.ensemble_members
         groups = _member_groups(
-            [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
+            [
+                _member_key(em, i, self.model_caches, devices)
+                for i, em in enumerate(members)
+            ],
             _members_per_forward(
                 members[0].X_train.shape[0] + X.shape[0], members[0].X_train.shape[1]
             ),
@@ -1070,7 +1079,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # build together in one forward is bounded inside _build_cache.
         members = self.ensemble_members
         groups = _member_groups(
-            [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
+            [
+                _member_key(em, i, self.model_caches, devices)
+                for i, em in enumerate(members)
+            ],
             len(members),
             num_devices=len(devices),
         )

@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Batch estimators. ([#1312](https://github.com/PriorLabs/TabPFN/pull/1312))
-
 ## [9.0.0] - 2026-09-15
 
 ### Breaking Changes

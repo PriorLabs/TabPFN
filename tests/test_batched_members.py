@@ -18,6 +18,7 @@ from tabpfn.inference import (
     _batch_member_inputs,
     _group_equal,
     _member_groups,
+    _member_key,
     _members_per_forward,
     _yield_in_member_order,
 )
@@ -222,6 +223,16 @@ def test__explicit_kv_cache__pickled_copy_predicts_the_same() -> None:
     copy.to([CPU], None, 4)
     for (out, _), (out_expected, _) in zip(_predict(copy), expected, strict=True):
         torch.testing.assert_close(out, out_expected, atol=1e-5, rtol=1e-5)
+
+
+def test__member_key__runs_members_alone_on_mps() -> None:
+    engine = _engine("cache_preprocessing", _model())
+    assert isinstance(engine, InferenceEngineCachePreprocessing)
+    member = engine.ensemble_members[0]
+    key = _member_key(member, 0, engine.model_caches, [CPU])
+    assert key == (0, (N_TRAIN, N_PREPARED_COLUMNS))
+    mps = [torch.device("mps")]
+    assert _member_key(member, 0, engine.model_caches, mps) == ("single", 0)
 
 
 def test__member_groups__splits_by_key_and_size() -> None:
