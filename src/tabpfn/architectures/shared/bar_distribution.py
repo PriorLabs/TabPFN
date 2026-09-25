@@ -23,9 +23,15 @@ def _common_dtype(*tensors: torch.Tensor) -> torch.dtype:
     return dtype
 
 
-def _probability_weighted_sum(p: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
-    dtype = _common_dtype(p, values)
-    return p.to(dtype) @ values.to(device=p.device, dtype=dtype)
+def _expected_value(logits: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    """Softmax-weighted sum of `values`, in the wider of the two dtypes.
+
+    The softmax runs in that dtype too: float32 probabilities sum to 1 only to
+    ~1e-7, an error that `values` far from zero multiply up.
+    """
+    dtype = _common_dtype(logits, values)
+    p = torch.softmax(logits.to(dtype), -1)
+    return p @ values.to(device=logits.device, dtype=dtype)
 
 
 # TODO: Merge functionality from BarDistribution and FullSupportBarDistribution
@@ -269,8 +275,7 @@ class BarDistribution(nn.Module):
     def mean(self, logits: torch.Tensor) -> torch.Tensor:
         """Expected value of the distribution."""
         bucket_means = self.borders[:-1] + self.bucket_widths / 2
-        p = torch.softmax(logits, -1)
-        return _probability_weighted_sum(p, bucket_means)
+        return _expected_value(logits, bucket_means)
 
     def median(self, logits: torch.Tensor) -> torch.Tensor:
         """Median of the distribution."""
@@ -390,11 +395,9 @@ class BarDistribution(nn.Module):
             - best_f * (self.borders[1:] - clamped_best_f)
         ) / bucket_diffs
 
-        p = torch.softmax(logits, -1)
-        dtype = _common_dtype(p, bucket_contributions)
-        return torch.einsum(
-            "...b,...b->...", p.to(dtype), bucket_contributions.to(dtype)
-        )
+        dtype = _common_dtype(logits, bucket_contributions)
+        p = torch.softmax(logits.to(dtype), -1)
+        return torch.einsum("...b,...b->...", p, bucket_contributions.to(dtype))
 
     def pi(
         self,
@@ -440,8 +443,7 @@ class BarDistribution(nn.Module):
             + right_borders.square()
             + left_borders * right_borders
         ) / 3.0
-        p = torch.softmax(logits, -1)
-        return _probability_weighted_sum(p, bucket_mean_of_square)
+        return _expected_value(logits, bucket_mean_of_square)
 
     def variance(self, logits: torch.Tensor) -> torch.Tensor:
         """Variance of the distribution."""
@@ -632,14 +634,13 @@ class FullSupportBarDistribution(BarDistribution):
     @override
     def mean(self, logits: torch.Tensor) -> torch.Tensor:
         bucket_means = self.borders[:-1] + self.bucket_widths / 2
-        p = torch.softmax(logits, -1)
         side_normals = (
             self.halfnormal_with_p_weight_before(self.bucket_widths[0]),
             self.halfnormal_with_p_weight_before(self.bucket_widths[-1]),
         )
         bucket_means[0] = -side_normals[0].mean + self.borders[1]
         bucket_means[-1] = side_normals[1].mean + self.borders[-2]
-        return _probability_weighted_sum(p, bucket_means)
+        return _expected_value(logits, bucket_means)
 
     @override
     def mean_of_square(self, logits: torch.Tensor) -> torch.Tensor:
@@ -667,8 +668,7 @@ class FullSupportBarDistribution(BarDistribution):
             side_normals[1].variance
             + (side_normals[1].mean + self.borders[-2]).square()
         )
-        p = torch.softmax(logits, -1)
-        return _probability_weighted_sum(p, bucket_mean_of_square)
+        return _expected_value(logits, bucket_mean_of_square)
 
     @override
     def pi(
@@ -800,11 +800,9 @@ class FullSupportBarDistribution(BarDistribution):
             torch.zeros_like(position_in_side_normals[0]),
         ) - self.ei_for_halfnormal(side_normals[0].scale, position_in_side_normals[0])
 
-        p = torch.softmax(logits, -1)
-        dtype = _common_dtype(p, bucket_contributions)
-        return torch.einsum(
-            "...b,...b->...", p.to(dtype), bucket_contributions.to(dtype)
-        )
+        dtype = _common_dtype(logits, bucket_contributions)
+        p = torch.softmax(logits.to(dtype), -1)
+        return torch.einsum("...b,...b->...", p, bucket_contributions.to(dtype))
 
 
 def get_bucket_limits(
