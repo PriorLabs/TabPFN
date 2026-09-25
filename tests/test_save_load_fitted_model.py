@@ -580,7 +580,7 @@ def test__save_fit_state__serializes_inference_config_dataclass(
         X, y = make_regression(n_samples=40, n_features=5, random_state=42)
         task_type = "regression"
 
-    config = InferenceConfig.get_default(task_type, ModelVersion.V3)
+    config = InferenceConfig.get_default(task_type, ModelVersion.V2_5)
     model = estimator_class(
         device="cpu",
         n_estimators=1,
