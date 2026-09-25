@@ -1742,3 +1742,35 @@ def test__predict_proba_batched__does_not_mutate_estimator() -> None:
     fitted.predict_proba_batched(X_list, y_list, X_tests)
     after = fitted.predict_proba(a_x[:5])
     np.testing.assert_array_equal(before, after)
+
+@pytest.mark.parametrize("polynomial_features", ["all", 3])
+def test__fit_with_differentiable_input__disables_polynomial_features(
+    polynomial_features: Literal["all"] | int,
+) -> None:
+    torch.manual_seed(0)
+    encoder = nn.Linear(4, 4)
+    X = torch.randn(20, 4)
+    y = torch.tensor([0, 1] * 10)
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_precision=torch.float32,
+        differentiable_input=True,
+        ignore_pretraining_limits=True,
+        inference_config={"POLYNOMIAL_FEATURES": polynomial_features},
+    )
+
+    model.fit_with_differentiable_input(encoder(X), y)
+    assert all(
+        config.polynomial_features == "no" for config in model.ensemble_configs_
+    )
+
+    output = model.forward(
+        encoder(torch.randn(5, 4)),
+        use_inference_mode=True,
+        return_logits=True,
+    )
+    output.sum().backward()
+    assert encoder.weight.grad is not None
+    assert torch.isfinite(encoder.weight.grad).all()
+    assert encoder.weight.grad.abs().sum() > 0
