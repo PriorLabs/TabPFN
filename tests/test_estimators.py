@@ -40,6 +40,11 @@ device_combinations = [
 ]
 
 
+def _batched_cache_moved_onto_mps(fit_mode: str, device_1: str, device_2: str) -> bool:
+    """A KV cache built for a batch of members off MPS refuses to move onto MPS."""
+    return fit_mode == "fit_with_cache" and device_2 == "mps" and device_1 != "mps"
+
+
 @pytest.mark.parametrize(("device_1", "device_2"), device_combinations)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize(
@@ -72,6 +77,10 @@ def test__to__between_fit_and_predict__does_not_crash(
     estimator = estimator_class(fit_mode=fit_mode, device=device_1, n_estimators=2)
     X_train, X_test, y_train = _get_tiny_dataset(estimator)
     estimator.fit(X_train, y_train)
+    if _batched_cache_moved_onto_mps(fit_mode, device_1, device_2):
+        with pytest.raises(RuntimeError, match="cannot be used on MPS"):
+            estimator.to(device_2)
+        return
     estimator.to(device_2)
     estimator.predict(X_test)
 
@@ -97,6 +106,10 @@ def test__to__between_fits__outputs_equal(
     X_train, X_test, y_train = _get_tiny_dataset(estimator)
     estimator.fit(X_train, y_train)
     prediction_1 = estimator.predict(X_test)
+    if _batched_cache_moved_onto_mps(fit_mode, device_1, device_2):
+        with pytest.raises(RuntimeError, match="cannot be used on MPS"):
+            estimator.to(device_2)
+        return
     estimator.to(device_2)
     estimator.fit(X_train, y_train)
     prediction_2 = estimator.predict(X_test)

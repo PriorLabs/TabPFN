@@ -29,7 +29,7 @@ import contextlib
 import dataclasses
 import logging as _logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
@@ -161,8 +161,12 @@ class TabPFNV3Config(ArchitectureConfig):
     of the cell embedder."""
 
     # ---- Memory-efficient inference ----
-    inference_row_chunk_size: int = 2048
-    """Max rows per Stage 0-2 chunk during inference."""
+    inference_chunk_cells: int = 2048 * 768
+    """Cells per Stage 0-2 chunk during inference, summed over the batch.
+
+    The former chunk of 2048 rows at the 768-column maximum. Narrower inputs and
+    smaller batches get proportionally more rows per chunk.
+    """
 
     inference_col_chunk_size: int = 4
     """Max output groups per chunk for inducing hidden state computation."""
@@ -244,6 +248,22 @@ class TabPFNV3Cache(KVCache):
             train_shape=self.train_shape,
             scaler_cache=self._dict_of_tensors_to(self.scaler_cache, device),
             inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
+        )
+
+    @override
+    @classmethod
+    def concatenate(cls, caches: Sequence[KVCache]) -> TabPFNV3Cache:
+        """One cache holding the batch elements of ``caches`` in order."""
+        assert all(isinstance(cache, TabPFNV3Cache) for cache in caches)
+        v3_caches = cast("Sequence[TabPFNV3Cache]", caches)
+        num_train = {cache.train_shape[1] for cache in v3_caches}
+        assert len(num_train) == 1, "Caches to concatenate differ in train rows."
+        return TabPFNV3Cache(
+            kv=cls._consume_and_concatenate_layers(caches),
+            decoder_keys=cls._cat([c.decoder_keys for c in v3_caches]),
+            train_shape=(sum(c.train_shape[0] for c in v3_caches), num_train.pop()),
+            scaler_cache=cls._cat([c.scaler_cache for c in v3_caches]),
+            inducing_hidden=cls._cat([c.inducing_hidden for c in v3_caches]),
         )
 
     def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3Cache:
@@ -1697,6 +1717,8 @@ class TabPFNV3(Architecture):
     7. ICL transformer: y_encoder + standard attention (train-keys only) + decoder
     """
 
+    batches_ensemble_members = True
+
     def __init__(
         self,
         *,
@@ -1828,7 +1850,7 @@ class TabPFNV3(Architecture):
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self.emsize = config.embed_dim
-        self.inference_row_chunk_size = config.inference_row_chunk_size
+        self.inference_chunk_cells = config.inference_chunk_cells
         self.inference_col_chunk_size = config.inference_col_chunk_size
 
     @property
@@ -2279,7 +2301,11 @@ class TabPFNV3(Architecture):
         """
         num_train = y.shape[0]
         if performance_options.use_chunkwise_inference and not self.training:
-            row_chunk_size = self.inference_row_chunk_size
+            # A chunk holds a fixed number of cells summed over the batch, so a batch
+            # of ensemble members costs the memory of a single one and narrow inputs
+            # take more rows per chunk.
+            _, batch, columns = x_RiBC.shape
+            row_chunk_size = max(1, self.inference_chunk_cells // (batch * columns))
             col_chunk_size = self.inference_col_chunk_size
         else:
             row_chunk_size = None
@@ -2389,7 +2415,8 @@ class TabPFNV3(Architecture):
                 _logger.warning(
                     "OOM: halving row_chunk_size to %d", effective_chunk_size
                 )
-                self.inference_row_chunk_size = effective_chunk_size
+                # Stored as cells summed over the batch, as it is configured.
+                self.inference_chunk_cells = effective_chunk_size * batch * columns
 
         if use_chunks:
             inducing_hidden = precomputed_hidden

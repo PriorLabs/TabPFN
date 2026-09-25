@@ -168,6 +168,9 @@ class Architecture(nn.Module, ABC):
     TabPFNClassifier or TabPFNRegressor to form the complete model.
     """
 
+    #: Architectures that can batch set this to True
+    batches_ensemble_members: bool = False
+
     @overload
     @abstractmethod
     def forward(
