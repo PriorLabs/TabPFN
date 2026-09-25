@@ -900,18 +900,32 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         actual = layerwise.kv[layer_idx]
         assert isinstance(expected, QuantizedKVCacheEntry)
         assert isinstance(actual, QuantizedKVCacheEntry)
-        # torch.equal lacks CPU float8 support in the lowest supported PyTorch.
-        # Comparing after an exact float32 widening works for int8 and float8.
-        assert torch.equal(actual.key.float(), expected.key.float())
-        assert torch.equal(actual.value.float(), expected.value.float())
-        # The scales are an absmax over a fresh forward pass, and BLAS on some
-        # platforms (macOS arm64) is not bitwise reproducible across runs.
+        # The layerwise cache comes from a second forward pass, and BLAS is not
+        # bitwise reproducible across passes on every platform. A last-bit
+        # difference flips a value at a rounding tie, so one quantization step
+        # is allowed; the widening to float32 is exact for int8 and float8.
+        _assert_within_one_quantization_step(actual.key, expected.key)
+        _assert_within_one_quantization_step(actual.value, expected.value)
         torch.testing.assert_close(
             actual.key_scale, expected.key_scale, rtol=1e-6, atol=0
         )
         torch.testing.assert_close(
             actual.value_scale, expected.value_scale, rtol=1e-6, atol=0
         )
+
+
+def _assert_within_one_quantization_step(
+    actual: torch.Tensor, expected: torch.Tensor
+) -> None:
+    """Quantized values equal except for rare one-step rounding flips."""
+    a, e = actual.float(), expected.float()
+    if expected.dtype == torch.int8:
+        step = torch.ones_like(e)
+    else:  # e4m3: three mantissa bits, so a step is 2 ** (exponent - 3)
+        exponent = torch.floor(torch.log2(e.abs().clamp(min=2.0**-6)))
+        step = 2.0 ** (exponent - 3)
+    assert ((a - e).abs() <= step).all()
+    assert (a == e).float().mean() > 0.99
 
 
 class _GridBackend:
