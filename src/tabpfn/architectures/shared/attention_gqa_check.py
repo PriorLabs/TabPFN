@@ -7,6 +7,7 @@ from __future__ import annotations
 import functools
 
 import torch
+from torch.torch_version import TorchVersion
 
 
 @functools.cache
@@ -20,8 +21,7 @@ def gqa_is_supported() -> bool:
     if not torch.cuda.is_available():
         return False
 
-    # torch.__version__ supports string comparison.
-    has_enable_gqa = torch.__version__ >= "2.5"
+    has_enable_gqa = torch.__version__ >= TorchVersion("2.5")
     if not has_enable_gqa:
         return False
 
