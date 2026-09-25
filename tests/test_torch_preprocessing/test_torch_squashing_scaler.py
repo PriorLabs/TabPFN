@@ -440,6 +440,7 @@ class TestBlockingEquivalence:
 
         _assert_bit_identical("input tensor", x, before)
 
+
 @pytest.mark.parametrize("outlier", [1000.0, -1000.0])
 def test__call__float16_outlier_does_not_overflow(outlier: float) -> None:
     scaler = TorchSquashingScaler()
