@@ -14,6 +14,7 @@ symmetric quantization.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import torch
@@ -129,6 +130,15 @@ class KVCacheEntry:
             dtype = self.grid_dtype
         return self if dtype is None else self.quantize(dtype)
 
+    @staticmethod
+    def concatenate(entries: Sequence[KVCacheEntry]) -> KVCacheEntry:
+        """One entry holding the batch elements of ``entries`` in order."""
+        assert all(entry.is_valid() for entry in entries)
+        return KVCacheEntry(
+            key=torch.cat([entry.key for entry in entries]),
+            value=torch.cat([entry.value for entry in entries]),
+        )
+
     def quantize(
         self, dtype: torch.dtype = QUANTIZED_KV_DTYPE
     ) -> QuantizedKVCacheEntry:
@@ -187,6 +197,31 @@ class QuantizedKVCacheEntry:
             value_scale=self.value_scale.to(device),
         )
 
+    @staticmethod
+    def concatenate(
+        entries: Sequence[QuantizedKVCacheEntry],
+    ) -> QuantizedKVCacheEntry:
+        """One entry holding the batch elements of ``entries`` in order.
+
+        A scalar scale is expanded to one per batch element first, so the result
+        always scales per batch element.
+        """
+        assert all(entry.is_valid() for entry in entries)
+
+        def per_element(scale: Tensor, batch: int) -> Tensor:
+            return scale.reshape(-1, 1, 1, 1).expand(batch, 1, 1, 1)
+
+        return QuantizedKVCacheEntry(
+            key=torch.cat([entry.key for entry in entries]),
+            value=torch.cat([entry.value for entry in entries]),
+            key_scale=torch.cat(
+                [per_element(e.key_scale, e.key.shape[0]) for e in entries]
+            ),
+            value_scale=torch.cat(
+                [per_element(e.value_scale, e.value.shape[0]) for e in entries]
+            ),
+        )
+
     def dequantize(self, dtype: torch.dtype) -> KVCacheEntry:
         """Dequantize back to a full-precision :class:`KVCacheEntry`."""
         assert self.is_valid()
@@ -228,6 +263,65 @@ class KVCache(ABC):
     ) -> dict[int, KVCacheEntry | QuantizedKVCacheEntry]:
         """Move the per-layer KV entries to the given device."""
         return {idx: entry.to(device) for idx, entry in self.kv.items()}
+
+    @classmethod
+    def concatenate(cls, caches: Sequence[KVCache]) -> KVCache:
+        """One cache holding the batch elements of ``caches`` in order.
+
+        Consumes ``caches``: their per-layer entries are released as the result is
+        assembled, so the transient memory is one layer's worth rather than a
+        second copy of the whole cache.
+        """
+        raise NotImplementedError(f"{cls.__name__} cannot concatenate caches.")
+
+    @staticmethod
+    def _kv_concatenate(
+        caches: Sequence[KVCache],
+    ) -> dict[int, KVCacheEntry | QuantizedKVCacheEntry]:
+        """Concatenate the per-layer KV entries along the batch, layer by layer.
+
+        Pops each layer from the source caches once it is copied.
+        """
+        layers = list(caches[0].kv)
+        assert all(list(cache.kv) == layers for cache in caches)
+        kv: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
+        for idx in layers:
+            entries = [cache.kv.pop(idx) for cache in caches]
+            if isinstance(entries[0], QuantizedKVCacheEntry):
+                kv[idx] = QuantizedKVCacheEntry.concatenate(entries)  # type: ignore[arg-type]
+            else:
+                kv[idx] = KVCacheEntry.concatenate(entries)  # type: ignore[arg-type]
+        return kv
+
+    @staticmethod
+    def _cat_tensors(tensors: Sequence[Tensor | None], dim: int = 0) -> Tensor | None:
+        """Concatenate along ``dim`` (passing through ``None``)."""
+        if tensors[0] is None:
+            assert all(t is None for t in tensors)
+            return None
+        return torch.cat(tensors, dim=dim)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _cat_dicts_of_tensors(
+        states: Sequence[dict[str, Tensor] | None],
+    ) -> dict[str, Tensor] | None:
+        """Concatenate each key's tensors along the batch (passing through ``None``)."""
+        if states[0] is None:
+            assert all(state is None for state in states)
+            return None
+        keys = list(states[0])
+        assert all(list(state) == keys for state in states)  # type: ignore[arg-type]
+        return {k: torch.cat([state[k] for state in states]) for k in keys}  # type: ignore[index]
+
+    @staticmethod
+    def _cat_lists_of_tensors(
+        lists: Sequence[list[Tensor] | None],
+    ) -> list[Tensor] | None:
+        """Concatenate the tensors at each position along the batch."""
+        if lists[0] is None:
+            assert all(tensors is None for tensors in lists)
+            return None
+        return [torch.cat(tensors) for tensors in zip(*lists, strict=True)]  # type: ignore[arg-type]
 
     @staticmethod
     def _dict_of_tensors_to(

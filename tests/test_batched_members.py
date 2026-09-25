@@ -122,7 +122,7 @@ def test__iter_outputs__batched_matches_sequential_in_member_order(
     model = _model()
     batched = _predict(_engine(kind, model))
 
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 0)
+    monkeypatch.setattr(type(model), "batches_ensemble_members", False)
     sequential = _predict(_engine(kind, model))
 
     assert len(batched) == len(sequential) == N_MEMBERS
@@ -140,8 +140,9 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
     """A budget of two members' rows splits the work; the outputs are unchanged.
 
     The engines that run the full forward at predict split the members into
-    forwards of at most two; the KV-cache engine batches the members its cache
-    holds and splits the test rows instead.
+    forwards of at most two. The KV-cache engine builds the cache in forwards of
+    at most two members, but the cache still holds every member, and predict
+    splits the test rows instead.
     """
     model = _model()
     reference = _predict(_engine(kind, model))
@@ -150,7 +151,6 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
     monkeypatch.setattr(
         settings.tabpfn, "max_batched_member_cells", 2 * rows * N_PREPARED_COLUMNS
     )
-    engine = _engine(kind, model)  # the KV-cache build at fit is not counted
     calls: list[tuple[int, int]] = []
     original = type(model).forward
 
@@ -161,14 +161,20 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
         return original(self, x, *args, **kwargs)
 
     monkeypatch.setattr(type(model), "forward", counting)
+    engine = _engine(kind, model)
+    build_calls, calls = calls, []
     outputs = _predict(engine)
 
     if cached:
+        assert engine.cache_groups == [list(range(N_MEMBERS))]  # type: ignore[attr-defined]
+        assert all(batch <= 2 * N_TEST // N_TRAIN + 1 for batch, _ in build_calls)
+        assert sum(batch for batch, _ in build_calls) == N_MEMBERS
         (batch,) = {batch for batch, _ in calls}
-        assert batch == len(engine.cache_groups[0])  # type: ignore[attr-defined]
+        assert batch == N_MEMBERS
         assert all(rows <= 2 * N_TEST // batch for _, rows in calls)
-        assert sum(rows for _, rows in calls) == N_TEST * len(engine.cache_groups)  # type: ignore[attr-defined]
+        assert sum(rows for _, rows in calls) == N_TEST
     else:
+        assert not build_calls
         assert all(batch <= 2 for batch, _ in calls)
         assert sum(batch for batch, _ in calls) == N_MEMBERS
     for (out, _), (expected, _) in zip(outputs, reference, strict=True):
@@ -185,6 +191,24 @@ def test__explicit_kv_cache__one_cache_holds_all_members() -> None:
     assert cache.train_shape == (N_MEMBERS, N_TRAIN)
     for entry in cache.kv.values():
         assert entry.key.shape[0] == N_MEMBERS
+
+
+@torch.no_grad()
+def test__explicit_kv_cache__built_one_member_at_a_time_matches_one_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row budget bounds the build; the concatenated cache predicts the same."""
+    model = _model()
+    expected = _predict(_engine("explicit_kv_cache", model))
+
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", N_TRAIN)
+    engine = _engine("explicit_kv_cache", model)
+    assert isinstance(engine, InferenceEngineExplicitKVCache)
+    assert engine.cache_groups == [list(range(N_MEMBERS))]
+    (cache,) = engine.kv_caches
+    assert cache.train_shape == (N_MEMBERS, N_TRAIN)
+    for (out, _), (out_expected, _) in zip(_predict(engine), expected, strict=True):
+        torch.testing.assert_close(out, out_expected, atol=1e-5, rtol=1e-5)
 
 
 @torch.no_grad()

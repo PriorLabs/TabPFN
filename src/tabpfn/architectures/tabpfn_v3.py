@@ -29,7 +29,7 @@ import contextlib
 import dataclasses
 import logging as _logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
@@ -251,6 +251,24 @@ class TabPFNV3Cache(KVCache):
             train_shape=self.train_shape,
             scaler_cache=self._dict_of_tensors_to(self.scaler_cache, device),
             inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
+        )
+
+    @override
+    @classmethod
+    def concatenate(cls, caches: Sequence[KVCache]) -> TabPFNV3Cache:
+        """One cache holding the batch elements of ``caches`` in order."""
+        assert all(isinstance(cache, TabPFNV3Cache) for cache in caches)
+        v3_caches = cast("Sequence[TabPFNV3Cache]", caches)
+        num_train = {cache.train_shape[1] for cache in v3_caches}
+        assert len(num_train) == 1, "Caches to concatenate differ in train rows."
+        return TabPFNV3Cache(
+            kv=cls._kv_concatenate(caches),
+            decoder_keys=cls._cat_tensors([c.decoder_keys for c in v3_caches]),
+            train_shape=(sum(c.train_shape[0] for c in v3_caches), num_train.pop()),
+            scaler_cache=cls._cat_dicts_of_tensors([c.scaler_cache for c in v3_caches]),
+            inducing_hidden=cls._cat_lists_of_tensors(
+                [c.inducing_hidden for c in v3_caches]
+            ),
         )
 
     def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3Cache:

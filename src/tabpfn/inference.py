@@ -1076,13 +1076,14 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
         stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
 
-        # Members sharing a model and a prepared shape build one cache together,
-        # with the members along the batch dimension. The cell budget bounds the
-        # group, and the members are spread over the devices first.
+        # Members sharing a model and a prepared shape end up in one cache, with
+        # the members along the batch dimension, so that predict runs them as one
+        # batch. The members are spread over the devices first; how many of them
+        # build together in one forward is bounded inside _build_cache.
         members = self.ensemble_members
         groups = _member_groups(
             [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
-            lambda _key, _count: _members_per_forward(*members[0].X_train.shape),
+            _constant(len(members)),
             num_devices=len(devices),
         )
         build_functions = (
@@ -1129,9 +1130,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     ) -> tuple[list[tuple[list[int], KVCache]], torch.device]:
         """Build the KV caches of a group of ensemble members on the given device.
 
-        Members whose prepared train inputs share a shape are built as one forward
-        with the members along the batch dimension, giving one cache whose batch
-        positions are theirs.
+        Members whose prepared train inputs share a shape end up in one cache with
+        the members along the batch dimension. They are built in forwards of as
+        many members as the batching budgets allow, and the resulting caches are
+        concatenated, so the budgets bound the build but not the batch the cache
+        serves at predict.
 
         Called via :func:`parallel_execute` — may run on different devices
         in parallel threads.
@@ -1191,9 +1194,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         if _model_expectes_task_type_arg(model):
             kwargs["task_type"] = self.task_type
 
-        caches: list[tuple[list[int], KVCache]] = []
-        shapes = [tuple(X.shape) for X, _, _ in prepared]
-        for positions in _member_groups(shapes, _constant(len(prepared))):
+        def build(positions: list[int]) -> KVCache:
             X, y = _batch_member_inputs(
                 [prepared[i][0] for i in positions],
                 [prepared[i][1] for i in positions],
@@ -1214,6 +1215,18 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             assert cache is not None
             if not self.keep_cache_on_device or stage_cache_on_cpu:
                 cache = cache.to("cpu")
+            return cache
+
+        caches: list[tuple[list[int], KVCache]] = []
+        shapes = [tuple(X.shape) for X, _, _ in prepared]
+        for positions in _member_groups(shapes, _constant(len(prepared))):
+            rows, _, columns = prepared[positions[0]][0].shape
+            per_forward = _members_per_forward(rows, columns)
+            parts = [
+                build(positions[start : start + per_forward])
+                for start in range(0, len(positions), per_forward)
+            ]
+            cache = parts[0] if len(parts) == 1 else type(parts[0]).concatenate(parts)
             caches.append((positions, cache))
         return caches, device
 

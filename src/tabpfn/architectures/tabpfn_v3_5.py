@@ -31,7 +31,7 @@ import contextlib
 import dataclasses
 import logging as _logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
@@ -292,6 +292,28 @@ class TabPFNV3p5Cache(KVCache):
                 self.ecdf_context.to(device) if self.ecdf_context is not None else None
             ),
             inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
+        )
+
+    @override
+    @classmethod
+    def concatenate(cls, caches: Sequence[KVCache]) -> TabPFNV3p5Cache:
+        """One cache holding the batch elements of ``caches`` in order."""
+        assert all(isinstance(cache, TabPFNV3p5Cache) for cache in caches)
+        v35_caches = cast("Sequence[TabPFNV3p5Cache]", caches)
+        num_train = {cache.train_shape[1] for cache in v35_caches}
+        assert len(num_train) == 1, "Caches to concatenate differ in train rows."
+        return TabPFNV3p5Cache(
+            kv=cls._kv_concatenate(caches),
+            decoder_keys=cls._cat_tensors([c.decoder_keys for c in v35_caches]),
+            train_shape=(sum(c.train_shape[0] for c in v35_caches), num_train.pop()),
+            scaler_cache=cls._cat_dicts_of_tensors(
+                [c.scaler_cache for c in v35_caches]
+            ),
+            # The ECDF context carries the batch on its second axis.
+            ecdf_context=cls._cat_tensors([c.ecdf_context for c in v35_caches], dim=1),
+            inducing_hidden=cls._cat_lists_of_tensors(
+                [c.inducing_hidden for c in v35_caches]
+            ),
         )
 
     def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3p5Cache:
