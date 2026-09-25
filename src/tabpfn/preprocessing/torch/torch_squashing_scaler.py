@@ -245,15 +245,26 @@ class TorchSquashingScaler:
 
         # only the output has to exist in full
         out = torch.empty_like(x)
-        nan = _scalar(float("nan"), x)
+        work_dtype = (
+            torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
+        )
+        work_center = center if work_dtype == x.dtype else center.to(work_dtype)
+        work_scale = scale if work_dtype == x.dtype else scale.to(work_dtype)
+        work_nan = torch.full(
+            (), float("nan"), dtype=work_dtype, device=x.device
+        )
         block = _block_size(x, dim=0, budget_bytes=_TRANSFORM_BLOCK_BYTES)
         for start in range(0, x.shape[0], block):
             stop = start + block
-            # rows are safe to split on because every step in
-            # `_transform_block` is elementwise
+            x_block = x[start:stop]
+            out_block = out[start:stop]
+            work_x = x_block if work_dtype == x.dtype else x_block.to(work_dtype)
+            work_out = out_block if work_dtype == x.dtype else torch.empty_like(work_x)
             self._transform_block(
-                x[start:stop], out[start:stop], center, scale, zero_mask, nan
+                work_x, work_out, work_center, work_scale, zero_mask, work_nan
             )
+            if work_dtype != x.dtype:
+                out_block.copy_(work_out)
         return out
 
     def _transform_block(
