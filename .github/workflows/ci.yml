@@ -276,6 +276,11 @@ jobs:
       - name: Run Tests
         run: uv run --no-sync pytest tests/
 
+      - name: Run core example smoke tests
+        env:
+          TABPFN_RUN_EXAMPLE_SMOKE_TESTS: "1"
+        run: uv run --no-sync pytest tests/test_examples.py -k core_examples_run -v
+
       - *save-hf-cache
 
   # -------------------------------------------------------------------
