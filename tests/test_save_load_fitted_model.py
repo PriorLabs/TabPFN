@@ -561,6 +561,7 @@ def test__save_fitted_tabpfn_model__torch_device_init_param__serializes(
     reloaded = load_fitted_tabpfn_model(path, device="cpu")
     assert len(reloaded.predict(X)) == len(X)
 
+
 @pytest.mark.parametrize("estimator_class", [TabPFNClassifier, TabPFNRegressor])
 def test__save_fit_state__serializes_inference_config_dataclass(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
