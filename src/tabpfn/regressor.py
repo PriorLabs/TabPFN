@@ -796,14 +796,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ``y_train_std_`` must already be set as Python floats.
         """
         borders = self.znorm_space_bardist_.borders.detach()
-        # Validated in float64; predictions decode from the z-norm borders, so
-        # the float32 copy only serves callers that read the criterion directly.
-        self.raw_space_bardist_ = (
+        self.raw_space_bardist_ = _place_raw_space_bardist(
             FullSupportBarDistribution(
                 borders.cpu().double() * self.y_train_std_ + self.y_train_mean_,
-            )
-            .float()
-            .to(borders.device)
+            ),
+            borders.device,
         )
 
     def _build_ensemble_preprocessor_and_executor(
@@ -2381,7 +2378,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "znorm_space_bardist_"):
             self.znorm_space_bardist_.to(self.devices_[0])
         if hasattr(self, "raw_space_bardist_"):
-            self.raw_space_bardist_.to(self.devices_[0])
+            self.raw_space_bardist_ = _place_raw_space_bardist(
+                self.raw_space_bardist_, self.devices_[0]
+            )
+
+
+def _place_raw_space_bardist(
+    bardist: FullSupportBarDistribution, device: torch.device | str
+) -> FullSupportBarDistribution:
+    """Keep the raw-space criterion in float64, except on MPS, which lacks it.
+
+    Near a large mean, float32 cannot tell the raw-space borders apart.
+    """
+    if torch.device(device).type == "mps":
+        return bardist.float().to(device)
+    return bardist.to(device)
 
 
 def _logits_to_output(
@@ -2395,19 +2406,16 @@ def _logits_to_output(
 ) -> np.ndarray | list[np.ndarray]:
     """Converts raw model logits to the desired prediction format.
 
-    Decodes on the z-normalised borders scaled by `y_std` and adds `y_mean`
-    back in float64, so the decode in the logits' dtype only has to resolve the
-    target's spread, not its magnitude.
+    Decodes in z-normalised space and undoes the normalisation in float64, so
+    the decode never has to resolve the target's magnitude.
     """
-    criterion = FullSupportBarDistribution(
-        znorm_space_bardist.borders.to(device=logits.device, dtype=logits.dtype) * y_std
-    )
+    criterion = znorm_space_bardist
+
+    def to_raw(output: torch.Tensor) -> np.ndarray:
+        return output.cpu().detach().numpy().astype(np.float64) * y_std + y_mean
 
     if output_type == "quantiles":
-        return [
-            criterion.icdf(logits, q).cpu().detach().numpy().astype(np.float64) + y_mean
-            for q in quantiles
-        ]
+        return [to_raw(criterion.icdf(logits, q)) for q in quantiles]
 
     # TODO: support
     #   "pi": criterion.pi(logits, np.max(self.y)),
@@ -2421,7 +2429,7 @@ def _logits_to_output(
     else:
         raise ValueError(f"Invalid output type: {output_type}")
 
-    return output.cpu().detach().numpy().astype(np.float64) + y_mean
+    return to_raw(output)
 
 
 def _validate_eval_metric(

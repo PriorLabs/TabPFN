@@ -849,6 +849,18 @@ def test_predictions_shift_with_a_target_offset_far_above_its_spread(
         np.testing.assert_allclose(got - offset, want, atol=atol)
 
 
+@pytest.mark.parametrize("offset", [0.0, 1e10])
+def test_full_output_criterion_mean_matches_the_predicted_mean(
+    X_y: tuple[np.ndarray, np.ndarray], offset: float
+) -> None:
+    X, y = X_y
+    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
+    full = model.fit(X, y + offset).predict(X, output_type="full")
+
+    criterion_mean = full["criterion"].mean(full["logits"]).cpu().numpy()
+    np.testing.assert_allclose(criterion_mean, full["mean"], atol=1e-3 * np.std(y))
+
+
 @pytest.mark.parametrize("constant_value", [0.0, 1.0, -1.0, 1e-5, -1e-5, 1e5, -1e5])
 def test_constant_target(
     X_y: tuple[np.ndarray, np.ndarray], constant_value: float
