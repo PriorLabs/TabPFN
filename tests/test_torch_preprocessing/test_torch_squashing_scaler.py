@@ -439,3 +439,19 @@ class TestBlockingEquivalence:
             _run_with_budgets(patch, _FORCE_BLOCKED, x, 64, 3.0)
 
         _assert_bit_identical("input tensor", x, before)
+
+
+@pytest.mark.parametrize("outlier", [1000.0, -1000.0])
+def test__call__float16_outlier_does_not_overflow(outlier: float) -> None:
+    scaler = TorchSquashingScaler()
+    x = torch.tensor(
+        [0, 1, 1, 1, 2, outlier],
+        dtype=torch.float16,
+    ).unsqueeze(-1)
+
+    out = scaler(x, num_train_rows=5)
+
+    assert out.dtype == torch.float16
+    assert torch.isfinite(out).all()
+    assert 2.5 < abs(out[-1, 0].item()) <= 3.0
+    assert out[-1, 0].item() * outlier > 0
