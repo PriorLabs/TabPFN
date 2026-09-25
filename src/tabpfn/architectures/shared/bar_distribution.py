@@ -26,8 +26,8 @@ def _common_dtype(*tensors: torch.Tensor) -> torch.dtype:
 def _expected_value(logits: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
     """Softmax-weighted sum of `values`, in the wider of the two dtypes.
 
-    The softmax runs in that dtype too: float32 probabilities sum to 1 only to
-    ~1e-7, an error that `values` far from zero multiply up.
+    The softmax runs in that dtype too, so the weights sum to 1 to that dtype's
+    precision however far `values` lie from zero.
     """
     dtype = _common_dtype(logits, values)
     p = torch.softmax(logits.to(dtype), -1)

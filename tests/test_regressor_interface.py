@@ -861,6 +861,23 @@ def test_full_output_criterion_mean_matches_the_predicted_mean(
     np.testing.assert_allclose(criterion_mean, full["mean"], atol=1e-3 * np.std(y))
 
 
+def test_raw_space_bardist_is_float64_again_after_moving_back_from_mps(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = X_y
+    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
+    model.fit(X, y + 1e10)
+    if torch.backends.mps.is_available():
+        model.to("mps")
+        assert model.raw_space_bardist_.borders.dtype == torch.float32
+    model.to("cpu")
+
+    assert model.raw_space_bardist_.borders.dtype == torch.float64
+    full = model.predict(X, output_type="full")
+    criterion_mean = full["criterion"].mean(full["logits"]).cpu().numpy()
+    np.testing.assert_allclose(criterion_mean, full["mean"], atol=1e-3 * np.std(y))
+
+
 @pytest.mark.parametrize("constant_value", [0.0, 1.0, -1.0, 1e-5, -1e-5, 1e5, -1e5])
 def test_constant_target(
     X_y: tuple[np.ndarray, np.ndarray], constant_value: float

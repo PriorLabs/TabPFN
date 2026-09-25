@@ -2378,18 +2378,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "znorm_space_bardist_"):
             self.znorm_space_bardist_.to(self.devices_[0])
         if hasattr(self, "raw_space_bardist_"):
-            self.raw_space_bardist_ = _place_raw_space_bardist(
-                self.raw_space_bardist_, self.devices_[0]
-            )
+            # Rebuilt rather than moved: a float32 copy left behind by MPS must
+            # not carry over to a device that supports float64.
+            if hasattr(self, "y_train_mean_"):
+                self._rebuild_raw_space_bardist()
+            else:
+                self.raw_space_bardist_ = _place_raw_space_bardist(
+                    self.raw_space_bardist_, self.devices_[0]
+                )
 
 
 def _place_raw_space_bardist(
     bardist: FullSupportBarDistribution, device: torch.device | str
 ) -> FullSupportBarDistribution:
-    """Keep the raw-space criterion in float64, except on MPS, which lacks it.
-
-    Near a large mean, float32 cannot tell the raw-space borders apart.
-    """
+    """Keep the raw-space criterion in float64, except on MPS, which lacks it."""
     if torch.device(device).type == "mps":
         return bardist.float().to(device)
     return bardist.to(device)
