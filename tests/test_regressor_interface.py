@@ -45,6 +45,7 @@ from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 from .utils import (
     get_pytest_devices,
+    get_pytest_devices_with_mps_marked_slow,
     is_cpu_float16_supported,
     mark_mps_configs_as_slow,
     patch_layernorm_no_affine,
@@ -830,6 +831,51 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         decimal=5,  # Allow small numerical differences
         err_msg="Predictions changed after adding constant features",
     )
+
+
+@pytest.mark.parametrize("offset", [1e8, 1e10, -1e10])
+def test_predictions_shift_with_a_target_offset_far_above_its_spread(
+    X_y: tuple[np.ndarray, np.ndarray], offset: float
+) -> None:
+    X, y = X_y
+    reference = TabPFNRegressor(n_estimators=2, random_state=42).fit(X, y)
+    shifted = TabPFNRegressor(n_estimators=2, random_state=42).fit(X, y + offset)
+
+    expected = reference.predict(X, output_type="main")
+    actual = shifted.predict(X, output_type="main")
+    atol = 1e-3 * np.std(y)
+    for key in ("mean", "median", "mode"):
+        np.testing.assert_allclose(actual[key] - offset, expected[key], atol=atol)
+    for got, want in zip(actual["quantiles"], expected["quantiles"], strict=True):
+        np.testing.assert_allclose(got - offset, want, atol=atol)
+
+
+@pytest.mark.parametrize("offset", [0.0, 1e10])
+def test_full_output_criterion_mean_matches_the_predicted_mean(
+    X_y: tuple[np.ndarray, np.ndarray], offset: float
+) -> None:
+    X, y = X_y
+    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
+    full = model.fit(X, y + offset).predict(X, output_type="full")
+
+    criterion_mean = full["criterion"].mean(full["logits"]).cpu().numpy()
+    np.testing.assert_allclose(criterion_mean, full["mean"], atol=1e-3 * np.std(y))
+
+
+@pytest.mark.parametrize("via_device", get_pytest_devices_with_mps_marked_slow())
+def test_raw_space_bardist_is_float64_after_a_round_trip_through_a_device(
+    X_y: tuple[np.ndarray, np.ndarray], via_device: str
+) -> None:
+    X, y = X_y
+    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
+    model.fit(X, y + 1e10)
+    model.to(via_device)
+    model.to("cpu")
+
+    assert model.raw_space_bardist_.borders.dtype == torch.float64
+    full = model.predict(X, output_type="full")
+    criterion_mean = full["criterion"].mean(full["logits"]).cpu().numpy()
+    np.testing.assert_allclose(criterion_mean, full["mean"], atol=1e-3 * np.std(y))
 
 
 @pytest.mark.parametrize("constant_value", [0.0, 1.0, -1.0, 1e-5, -1e-5, 1e5, -1e5])
