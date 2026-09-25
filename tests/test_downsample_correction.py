@@ -21,6 +21,8 @@ from tabpfn.downsample_correction import (
     temper_and_correct_logits,
 )
 from tabpfn.finetuning.data_util import (
+    ClassifierBatch,
+    RegressorBatch,
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
@@ -608,6 +610,7 @@ def test__classifier__fit_from_preprocessed_clears_stale_correction():
     fresh = _downsampling_classifier()
 
     batch = _finetuning_batch(stale, X, y, "classifier")
+    assert isinstance(batch, ClassifierBatch)
     cat_indices = batch.cat_indices
     outputs = []
     for clf in (stale, fresh):
@@ -630,6 +633,7 @@ def test__regressor__fit_from_preprocessed_clears_stale_correction():
     fresh = _downsampling_regressor()
 
     batch = _finetuning_batch(stale, X, y, "regressor")
+    assert isinstance(batch, RegressorBatch)
     outputs = []
     for reg in (stale, fresh):
         reg.fit_from_preprocessed(
@@ -639,9 +643,12 @@ def test__regressor__fit_from_preprocessed_clears_stale_correction():
             batch.configs,
             performance_options=PerformanceOptions(),
         )
-        # The finetuning loop hands the batch's bar distributions to the estimator.
+        # The finetuning loop hands the batch's bar distributions and target frame
+        # to the estimator.
         reg.znorm_space_bardist_ = batch.znorm_space_bardist
         reg.raw_space_bardist_ = batch.raw_space_bardist
+        reg.y_train_mean_ = batch.y_train_mean
+        reg.y_train_std_ = batch.y_train_std
         assert reg.downsample_correction_log_weights_ is None
         out = reg.forward(batch.X_query)
         outputs.append((out[0] if isinstance(out, tuple) else out).detach())

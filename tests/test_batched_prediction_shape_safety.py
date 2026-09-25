@@ -60,7 +60,12 @@ def test_classifier_heterogeneous_widths_match_serial() -> None:
 
 def test_regressor_heterogeneous_widths_match_serial() -> None:
     features = _features()
-    targets = [X[:, 5] - X[:, 6] for X in features]
+    targets = [
+        (X[:, 5] - X[:, 6]) * scale + offset
+        for X, scale, offset in zip(
+            features, [1.0, 1000.0, 1.0], [0.0, 10000.0, 0.0], strict=True
+        )
+    ]
     kwargs = {
         "n_estimators": 2,
         "device": "cpu",
@@ -82,6 +87,6 @@ def test_regressor_heterogeneous_widths_match_serial() -> None:
     for index in range(2):
         reference = TabPFNRegressor(**kwargs).fit(features[index], targets[index])
         np.testing.assert_allclose(
-            batched[index], reference.predict(features[index][:6]), atol=2e-2
+            batched[index], reference.predict(features[index][:6]), rtol=2e-3, atol=2e-2
         )
     np.testing.assert_allclose(batched[0], batched[2], atol=2e-2)
