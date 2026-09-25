@@ -18,7 +18,7 @@ import warnings
 import zipfile
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
@@ -1382,7 +1382,12 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         # 1. Save init parameters to JSON
         params = estimator.get_params(deep=False)
         params = {
-            k: (str(v) if isinstance(v, torch.dtype) else v) for k, v in params.items()
+            k: (
+                asdict(v)
+                if is_dataclass(v) and not isinstance(v, type)
+                else (str(v) if isinstance(v, torch.dtype) else v)
+            )
+            for k, v in params.items()
         }
         params["device"] = _json_safe_device(params["device"])
         params["__class_name__"] = estimator.__class__.__name__
