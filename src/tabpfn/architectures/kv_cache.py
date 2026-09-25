@@ -16,9 +16,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 import torch
 from torch import Tensor
+
+_T = TypeVar("_T")
 
 QUANTIZED_KV_DTYPE: torch.dtype = torch.int8  # default
 FP8_KV_DTYPE: torch.dtype = torch.float8_e4m3fn
@@ -275,12 +278,13 @@ class KVCache(ABC):
         raise NotImplementedError(f"{cls.__name__} cannot concatenate caches.")
 
     @staticmethod
-    def _kv_concatenate(
+    def _consume_and_concatenate_layers(
         caches: Sequence[KVCache],
     ) -> dict[int, KVCacheEntry | QuantizedKVCacheEntry]:
         """Concatenate the per-layer KV entries along the batch, layer by layer.
 
-        Pops each layer from the source caches once it is copied.
+        Pops each layer from the source caches once it is copied, so the caller
+        gives up ownership of ``caches``.
         """
         layers = list(caches[0].kv)
         assert all(list(cache.kv) == layers for cache in caches)
@@ -294,34 +298,26 @@ class KVCache(ABC):
         return kv
 
     @staticmethod
-    def _cat_tensors(tensors: Sequence[Tensor | None], dim: int = 0) -> Tensor | None:
-        """Concatenate along ``dim`` (passing through ``None``)."""
-        if tensors[0] is None:
-            assert all(t is None for t in tensors)
-            return None
-        return torch.cat(tensors, dim=dim)  # type: ignore[arg-type]
+    def _cat(items: Sequence[_T], dim: int = 0) -> _T:
+        """Concatenate tensors along ``dim``, also inside dicts and lists.
 
-    @staticmethod
-    def _cat_dicts_of_tensors(
-        states: Sequence[dict[str, Tensor] | None],
-    ) -> dict[str, Tensor] | None:
-        """Concatenate each key's tensors along the batch (passing through ``None``)."""
-        if states[0] is None:
-            assert all(state is None for state in states)
-            return None
-        keys = list(states[0])
-        assert all(list(state) == keys for state in states)  # type: ignore[arg-type]
-        return {k: torch.cat([state[k] for state in states]) for k in keys}  # type: ignore[index]
-
-    @staticmethod
-    def _cat_lists_of_tensors(
-        lists: Sequence[list[Tensor] | None],
-    ) -> list[Tensor] | None:
-        """Concatenate the tensors at each position along the batch."""
-        if lists[0] is None:
-            assert all(tensors is None for tensors in lists)
-            return None
-        return [torch.cat(tensors) for tensors in zip(*lists, strict=True)]  # type: ignore[arg-type]
+        Every item must have the same structure; ``None`` passes through when all
+        items are ``None``.
+        """
+        first = items[0]
+        if first is None:
+            assert all(item is None for item in items)
+            return first
+        if isinstance(first, dict):
+            keys = list(first)
+            assert all(list(item) == keys for item in items)  # type: ignore[arg-type]
+            return {k: KVCache._cat([item[k] for item in items], dim) for k in keys}  # type: ignore[index, return-value]
+        if isinstance(first, list):
+            return [  # type: ignore[return-value]
+                KVCache._cat(parts, dim)
+                for parts in zip(*items, strict=True)  # type: ignore[arg-type]
+            ]
+        return torch.cat(items, dim=dim)  # type: ignore[arg-type, return-value]
 
     @staticmethod
     def _dict_of_tensors_to(

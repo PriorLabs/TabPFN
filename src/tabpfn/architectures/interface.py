@@ -168,10 +168,7 @@ class Architecture(nn.Module, ABC):
     TabPFNClassifier or TabPFNRegressor to form the complete model.
     """
 
-    #: Whether ensemble members whose prepared inputs share a shape may run as one
-    #: forward with the members along the batch dimension. An architecture opts in
-    #: when its forward treats the batch elements independently, given per-element
-    #: targets and categorical indices.
+    #: Architectures that can batch set this to True
     batches_ensemble_members: bool = False
 
     @overload

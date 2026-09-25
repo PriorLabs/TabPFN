@@ -262,13 +262,11 @@ class TabPFNV3Cache(KVCache):
         num_train = {cache.train_shape[1] for cache in v3_caches}
         assert len(num_train) == 1, "Caches to concatenate differ in train rows."
         return TabPFNV3Cache(
-            kv=cls._kv_concatenate(caches),
-            decoder_keys=cls._cat_tensors([c.decoder_keys for c in v3_caches]),
+            kv=cls._consume_and_concatenate_layers(caches),
+            decoder_keys=cls._cat([c.decoder_keys for c in v3_caches]),
             train_shape=(sum(c.train_shape[0] for c in v3_caches), num_train.pop()),
-            scaler_cache=cls._cat_dicts_of_tensors([c.scaler_cache for c in v3_caches]),
-            inducing_hidden=cls._cat_lists_of_tensors(
-                [c.inducing_hidden for c in v3_caches]
-            ),
+            scaler_cache=cls._cat([c.scaler_cache for c in v3_caches]),
+            inducing_hidden=cls._cat([c.inducing_hidden for c in v3_caches]),
         )
 
     def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3Cache:
