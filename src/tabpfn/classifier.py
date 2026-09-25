@@ -728,7 +728,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: torch.Tensor,
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], torch.Tensor, torch.Tensor]:
-        """Initialize the model for differentiable input."""
+        """Initialize the model for differentiable input.\n\n        Polynomial expansion is disabled because it is implemented with\n        non-differentiable NumPy/scikit-learn preprocessing.\n        """
         validate_dataset_size(
             X=X,
             y=y,
@@ -774,7 +774,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
-            polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
+            polynomial_features="no",
             preprocessor_configs=preprocessor_configs,
             class_shift_method=None,
             n_classes=self.n_classes_,
@@ -867,7 +867,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
-            polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
+            polynomial_features="no",
             preprocessor_configs=preprocessor_configs,
             class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD,
             n_classes=self.n_classes_,
