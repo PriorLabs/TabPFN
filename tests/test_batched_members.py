@@ -16,7 +16,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     _batch_member_inputs,
-    _constant,
+    _group_equal,
     _member_groups,
     _members_per_forward,
     _yield_in_member_order,
@@ -225,31 +225,26 @@ def test__explicit_kv_cache__pickled_copy_predicts_the_same() -> None:
 
 
 def test__member_groups__splits_by_key_and_size() -> None:
-    keys = ["a", "b", "a", "a", "b", "a"]
-    assert _member_groups(keys, lambda key, _n: 2 if key == "a" else 10) == [
-        [0, 2],
-        [3, 5],
-        [1, 4],
-    ]
-    assert _member_groups(keys, _constant(0)) == [[0], [2], [3], [5], [1], [4]]
+    keys = [("a",), ("b",), ("a",), ("a",), ("b",), ("a",)]
+    assert _group_equal(keys) == [[0, 2, 3, 5], [1, 4]]
+    assert _member_groups(keys, 2) == [[0, 2], [3, 5], [1, 4]]
+    assert _member_groups(keys, 0) == [[0], [2], [3], [5], [1], [4]]
 
 
 def test__member_groups__spreads_over_devices_before_batching() -> None:
     """Every device gets a group; only the members left per device share one."""
-    keys = ["a"] * 8
-    assert _member_groups(keys, _constant(100), num_devices=2) == [
+    keys = [("a",)] * 8
+    assert _member_groups(keys, 100, num_devices=2) == [
         [0, 1, 2, 3],
         [4, 5, 6, 7],
     ]
-    assert _member_groups(keys, _constant(100), num_devices=3) == [
+    assert _member_groups(keys, 100, num_devices=3) == [
         [0, 1, 2],
         [3, 4, 5],
         [6, 7],
     ]
-    assert _member_groups(keys, _constant(100), num_devices=16) == [
-        [i] for i in range(8)
-    ]
-    assert _member_groups(keys, _constant(3), num_devices=2) == [
+    assert _member_groups(keys, 100, num_devices=16) == [[i] for i in range(8)]
+    assert _member_groups(keys, 3, num_devices=2) == [
         [0, 1, 2],
         [3, 4, 5],
         [6, 7],
@@ -289,7 +284,11 @@ def test__batch_member_inputs__lays_members_along_the_batch_dimension() -> None:
 def test__yield_in_member_order__reorders_and_streams() -> None:
     groups = [[2, 3], [0], [1]]
     outputs = iter(
-        [torch.tensor([[2.0, 3.0]]), torch.tensor([[0.0]]), torch.tensor([[1.0]])]
+        [
+            [([1], torch.tensor([[3.0]])), ([0], torch.tensor([[2.0]]))],
+            [([0], torch.tensor([[0.0]]))],
+            [([0], torch.tensor([[1.0]]))],
+        ]
     )
     result = list(_yield_in_member_order(groups, outputs, total=4))
     assert [float(r) for r in result] == [0.0, 1.0, 2.0, 3.0]

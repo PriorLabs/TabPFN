@@ -8,7 +8,7 @@ import dataclasses
 import time
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from functools import partial
 from inspect import signature
@@ -107,7 +107,7 @@ def _members_per_forward(rows_per_member: int, columns_per_member: int) -> int:
 
 def _member_key(
     member: TabPFNEnsembleMember, index: int, model_caches: list[_PerDeviceModelCache]
-) -> Hashable:
+) -> tuple:
     """What a member must share with another to run in the same forward.
 
     Members of an architecture that does not batch ensemble members get a key of
@@ -119,77 +119,65 @@ def _member_key(
     return (member.config._model_index, tuple(member.X_train.shape))
 
 
-def _member_groups(
-    keys: Sequence[Hashable],
-    members_per_group: Callable[[Hashable, int], int],
-    *,
-    num_devices: int = 1,
-) -> list[list[int]]:
-    """Member indices grouped by key, in runs of at most ``members_per_group``.
-
-    ``members_per_group`` is called with the key and the number of members sharing
-    it. The members of a key are first spread over the devices, so that every
-    device gets a group, and only the members left per device share a forward.
-    Groups follow the first member of each key, so an ensemble whose members all
-    share a key yields consecutive runs in member order.
-    """
-    by_key: dict[Hashable, list[int]] = {}
+def _group_equal(keys: Sequence[tuple]) -> list[list[int]]:
+    """Indices grouped by equal key, in order of each key's first appearance."""
+    by_key: dict[tuple, list[int]] = {}
     for index, key in enumerate(keys):
         by_key.setdefault(key, []).append(index)
+    return list(by_key.values())
+
+
+def _member_groups(
+    keys: Sequence[tuple], size: int, *, num_devices: int = 1
+) -> list[list[int]]:
+    """Member indices grouped by key, in runs of at most ``size``.
+
+    The members of a key are first spread over the devices, so that every device
+    gets a group, and only the members left per device share a forward. Groups
+    follow the first member of each key, so an ensemble whose members all share a
+    key yields consecutive runs in member order.
+    """
     groups: list[list[int]] = []
-    for key, indices in by_key.items():
+    for indices in _group_equal(keys):
         per_device = -(-len(indices) // max(num_devices, 1))
-        size = max(1, min(members_per_group(key, len(indices)), per_device))
+        run = max(1, min(size, per_device))
         groups.extend(
-            indices[start : start + size] for start in range(0, len(indices), size)
+            indices[start : start + run] for start in range(0, len(indices), run)
         )
     return groups
 
 
-def _constant(value: int) -> Callable[[Hashable, int], int]:
-    return lambda _key, _count: value
+_ModelOutput = torch.Tensor | dict[str, torch.Tensor]
+# A forward's output with the members along dimension 1, and which positions of the
+# group of members it holds.
+_MemberOutputs = list[tuple[list[int], _ModelOutput]]
 
 
-def _member_output(
-    output: torch.Tensor | dict[str, torch.Tensor], index: int
-) -> torch.Tensor | dict[str, torch.Tensor]:
+def _member_output(output: _ModelOutput, index: int) -> _ModelOutput:
     """Member ``index`` of a batched output, its batch dimension kept."""
     if isinstance(output, dict):
         return {k: v[:, index : index + 1] for k, v in output.items()}
     return output[:, index : index + 1]
 
 
-def _concat_member_outputs(
-    outputs: Sequence[torch.Tensor | dict[str, torch.Tensor]],
-) -> torch.Tensor | dict[str, torch.Tensor]:
-    """The members' outputs side by side along the batch dimension."""
-    if len(outputs) == 1:
-        return outputs[0]
-    if isinstance(outputs[0], dict):
-        return {
-            k: torch.cat([o[k] for o in outputs], dim=1)  # type: ignore[index]
-            for k in outputs[0]
-        }
-    return torch.cat(outputs, dim=1)  # type: ignore[arg-type]
-
-
 def _yield_in_member_order(
     groups: Sequence[Sequence[int]],
-    group_outputs: Iterator[torch.Tensor | dict[str, torch.Tensor]],
+    group_outputs: Iterator[_MemberOutputs],
     total: int,
-) -> Iterator[torch.Tensor | dict[str, torch.Tensor]]:
-    """Unstack grouped outputs and hand them out in member order.
+) -> Iterator[_ModelOutput]:
+    """Unstack the groups' outputs and hand them out in member order.
 
     Members are yielded as soon as every earlier member is done, so groups that
     arrive in member order stream through.
     """
-    outputs: list[torch.Tensor | dict[str, torch.Tensor] | None] = [None] * total
+    outputs: list[_ModelOutput | None] = [None] * total
     next_member = 0
     # `groups` may still be growing while the outputs are produced, so it is read
     # by position rather than zipped.
-    for group_index, output in enumerate(group_outputs):
-        for position, index in enumerate(groups[group_index]):
-            outputs[index] = _member_output(output, position)
+    for group_index, member_outputs in enumerate(group_outputs):
+        for positions, output in member_outputs:
+            for column, position in enumerate(positions):
+                outputs[groups[group_index][position]] = _member_output(output, column)
         while next_member < total and outputs[next_member] is not None:
             yield outputs[next_member]  # type: ignore[misc]
             outputs[next_member] = None
@@ -556,7 +544,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 keys = [
                     _member_key(em, i, self.model_caches) for i, em in enumerate(chunk)
                 ]
-                for positions in _member_groups(keys, _constant(len(chunk))):
+                for positions in _member_groups(keys, len(chunk)):
                     members = [chunk[i] for i in positions]
                     groups.append([seen + i for i in positions])
                     yield partial(
@@ -599,7 +587,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         save_peak_mem: bool,
         task_type: str,
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+    ) -> _MemberOutputs:
         """Run the members' forward passes on the given device, batched when possible.
 
         Note that several instances of this function may be executed in parallel in
@@ -855,7 +843,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         members = self.ensemble_members
         groups = _member_groups(
             [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
-            lambda _key, _count: _members_per_forward(
+            _members_per_forward(
                 members[0].X_train.shape[0] + X.shape[0], members[0].X_train.shape[1]
             ),
             num_devices=len(devices),
@@ -903,7 +891,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         save_peak_mem: bool,
         task_type: str,
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+    ) -> _MemberOutputs:
         """Run the members' forward passes on the given device, batched when possible.
 
         Note that several instances of this function may be executed in parallel in
@@ -1083,7 +1071,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         members = self.ensemble_members
         groups = _member_groups(
             [_member_key(em, i, self.model_caches) for i, em in enumerate(members)],
-            _constant(len(members)),
+            len(members),
             num_devices=len(devices),
         )
         build_functions = (
@@ -1217,9 +1205,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 cache = cache.to("cpu")
             return cache
 
+        # GPU preprocessing may have changed the members' widths, so the group is
+        # refined by the prepared shapes.
         caches: list[tuple[list[int], KVCache]] = []
         shapes = [tuple(X.shape) for X, _, _ in prepared]
-        for positions in _member_groups(shapes, _constant(len(prepared))):
+        for positions in _group_equal(shapes):
             rows, _, columns = prepared[positions[0]][0].shape
             per_forward = _members_per_forward(rows, columns)
             parts = [
@@ -1298,7 +1288,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         save_peak_mem: bool,
         task_type: str,
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+    ) -> _MemberOutputs:
         """Predict the test rows of the members sharing ``kv_caches[cache_index]``.
 
         The members' test rows go through the model as one batch against their
@@ -1379,10 +1369,12 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         n_test, batch, columns = X.shape
         chunk = _test_rows_per_forward(n_test, batch, columns)
         if chunk >= n_test:
-            return run(X)
-        return _concat_test_chunks(
-            [run(X[start : start + chunk]) for start in range(0, n_test, chunk)]
-        )
+            output = run(X)
+        else:
+            output = _concat_test_chunks(
+                [run(X[start : start + chunk]) for start in range(0, n_test, chunk)]
+            )
+        return [(list(range(len(members))), output)]
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
@@ -1463,12 +1455,12 @@ def _call_model_on_members(
     only_return_standard_out: bool,
     save_peak_mem: bool,
     task_type: str,
-) -> torch.Tensor | dict[str, torch.Tensor]:
+) -> _MemberOutputs:
     """Forward the members, which share a model, from their train and test rows.
 
     Members whose prepared inputs share a shape run as one forward with the members
-    along the batch dimension; the output has the members along dimension 1 in the
-    given order.
+    along the batch dimension. Returns each forward's output with the positions in
+    ``members`` it holds.
     """
     model = model_caches[members[0].config._model_index].get(device)
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
@@ -1495,9 +1487,11 @@ def _call_model_on_members(
     if _model_expectes_task_type_arg(model):
         kwargs["task_type"] = task_type
 
-    outputs: list[torch.Tensor | dict[str, torch.Tensor] | None] = [None] * len(members)
+    # GPU preprocessing may have changed the members' widths, so the group is
+    # refined by the prepared shapes.
+    outputs: _MemberOutputs = []
     shapes = [tuple(X_full.shape) for X_full, _, _ in prepared]
-    for positions in _member_groups(shapes, _constant(len(prepared))):
+    for positions in _group_equal(shapes):
         X, y = _batch_member_inputs(
             [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
         )
@@ -1513,9 +1507,8 @@ def _call_model_on_members(
                 performance_options=performance_options,
                 **kwargs,
             )
-        for position, index in enumerate(positions):
-            outputs[index] = _member_output(output, position)
-    return _concat_member_outputs(outputs)  # type: ignore[arg-type]
+        outputs.append((positions, output))
+    return outputs
 
 
 def _prepare_model_inputs(
