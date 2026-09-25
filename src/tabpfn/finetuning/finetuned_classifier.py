@@ -403,6 +403,8 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         X_val: XType | None = None,
         y_val: YType | None = None,
         output_dir: Path | None = None,
+        *,
+        resume_from_checkpoint: bool = True,
     ) -> FinetunedTabPFNClassifier:
         """Fine-tune the TabPFN model on the provided training data.
 
@@ -414,6 +416,10 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             output_dir: Directory path for saving checkpoints. If None, no
                 checkpointing is performed and progress will be lost if
                 training is interrupted.
+            resume_from_checkpoint: If True (default) and `output_dir`
+                already holds checkpoints from a previous run, resume
+                training from the latest one. Set to False to always start
+                fresh.
 
         Returns:
             The fitted instance itself.
@@ -421,7 +427,14 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         if self.eval_metric is None:
             self.eval_metric = "roc_auc"
 
-        super().fit(X, y, X_val=X_val, y_val=y_val, output_dir=output_dir)
+        super().fit(
+            X,
+            y,
+            X_val=X_val,
+            y_val=y_val,
+            output_dir=output_dir,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
         return self
 
     def predict_proba(self, X: XType, **kwargs) -> np.ndarray:
