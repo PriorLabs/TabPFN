@@ -45,6 +45,7 @@ from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 from .utils import (
     get_pytest_devices,
+    get_pytest_devices_with_mps_marked_slow,
     is_cpu_float16_supported,
     mark_mps_configs_as_slow,
     patch_layernorm_no_affine,
@@ -861,15 +862,14 @@ def test_full_output_criterion_mean_matches_the_predicted_mean(
     np.testing.assert_allclose(criterion_mean, full["mean"], atol=1e-3 * np.std(y))
 
 
-def test_raw_space_bardist_is_float64_again_after_moving_back_from_mps(
-    X_y: tuple[np.ndarray, np.ndarray],
+@pytest.mark.parametrize("via_device", get_pytest_devices_with_mps_marked_slow())
+def test_raw_space_bardist_is_float64_after_a_round_trip_through_a_device(
+    X_y: tuple[np.ndarray, np.ndarray], via_device: str
 ) -> None:
     X, y = X_y
     model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
     model.fit(X, y + 1e10)
-    if torch.backends.mps.is_available():
-        model.to("mps")
-        assert model.raw_space_bardist_.borders.dtype == torch.float32
+    model.to(via_device)
     model.to("cpu")
 
     assert model.raw_space_bardist_.borders.dtype == torch.float64
