@@ -728,7 +728,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: torch.Tensor,
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], torch.Tensor, torch.Tensor]:
-        """Initialize the model for differentiable input.\n\n        Polynomial expansion is disabled because it is implemented with\n        non-differentiable NumPy/scikit-learn preprocessing.\n        """
+        """Initialize the model for differentiable input.\n\n        Polynomial expansion is disabled because it is implemented with\n        non-differentiable NumPy/scikit-learn preprocessing.\n"""
         validate_dataset_size(
             X=X,
             y=y,
