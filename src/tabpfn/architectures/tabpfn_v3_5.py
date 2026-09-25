@@ -3194,7 +3194,11 @@ def _build_ecdf_context(
 def _ecdf_midrank_counts(
     values_BCRi: torch.Tensor, ecdf_context: torch.Tensor
 ) -> torch.Tensor:
-    """Midrank of each value against the buckets, as a train-row count."""
+    """Midrank of each value against the buckets, as a train-row count.
+
+    A value outside the train range gets the midrank of the nearest train
+    extreme, not 0 or the row count.
+    """
     edges_BCK, below_BCK, at_most_BCK = ecdf_context
     k = edges_BCK.shape[-1]
     # int32 indices halve these two transients; K is a bucket count.
@@ -3223,7 +3227,16 @@ def _ecdf_midrank_counts(
     is_edge = right > left
     exact = 0.5 * (below_hi + at_most_BCK.gather(-1, hi_idx))
     counts = torch.where(is_edge, exact, counts)
-    return torch.where((left == 0) & ~is_edge, counts.new_zeros(()), counts)
+    counts = torch.where((left == 0) & ~is_edge, counts.new_zeros(()), counts)
+
+    # Hold values outside the train range at the midrank of the train extreme.
+    # A tied extreme sits half its tie block below the count an out-of-range
+    # value would otherwise get, so the rank gap across the boundary grows with
+    # the tie count while the value gap stays one step, and the model reads the
+    # difference as distance and over-extrapolates.
+    mid_lo = 0.5 * (below_BCK[..., :1] + at_most_BCK[..., :1])
+    mid_hi = 0.5 * (below_BCK[..., -1:] + at_most_BCK[..., -1:])
+    return counts.clamp(min=mid_lo, max=mid_hi)
 
 
 def _in_context_ecdf(x_BRiC: torch.Tensor, ecdf_context: torch.Tensor) -> torch.Tensor:
@@ -3234,7 +3247,7 @@ def _in_context_ecdf(x_BRiC: torch.Tensor, ecdf_context: torch.Tensor) -> torch.
     two counts the bucket's ends bracket — an interval that is empty when the
     buckets hold every distinct train value, so the estimate is then exact too.
     Inputs must be finite: torch sorts NaN last, so a NaN query would come out at
-    rank 1.0.
+    the top train value's rank.
     """
     num_rows, columns = x_BRiC.shape[1], x_BRiC.shape[2]
     at_most_BCK = ecdf_context[2]

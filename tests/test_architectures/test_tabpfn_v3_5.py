@@ -516,6 +516,31 @@ def test__in_context_ecdf__buckets_cover_every_value__matches_exact_midranks(
     assert torch.equal(ranks, _exact_midranks(x_BRiC, x_BRiC.shape[1]))
 
 
+def test__in_context_ecdf__out_of_range_values__get_the_extremes_midrank() -> None:
+    """A tied extreme, not 0 or 1, bounds the rank of an out-of-range value.
+
+    Without the bound, the rank gap between the top train value and anything
+    above it grows with the tie block while the value gap stays one step.
+    """
+    tie = 12
+    train = torch.arange(35.0).repeat_interleave(tie)
+    num_train = train.numel()
+    queries = torch.tensor([-7.0, -1.0, 35.0, 99.0])
+    x_BRiC = torch.cat([train, queries]).reshape(1, -1, 1)
+
+    ranks = tabpfn_v3_5._in_context_ecdf(
+        x_BRiC, tabpfn_v3_5._build_ecdf_context(x_BRiC, num_train, 8192)
+    )
+    train_ranks = ranks[0, :num_train, 0]
+    below, above = ranks[0, num_train:, 0][:2], ranks[0, num_train:, 0][2:]
+
+    assert torch.allclose(below, train_ranks.min().expand(2))
+    assert torch.allclose(above, train_ranks.max().expand(2))
+    # The midranks of the end blocks, i.e. half a block inside the [0, 1] ends.
+    assert torch.allclose(below, torch.tensor(0.5 * tie / num_train))
+    assert torch.allclose(above, torch.tensor(1.0 - 0.5 * tie / num_train))
+
+
 def test__build_ecdf_context__dense_values_in_a_wide_range__keep_their_rank() -> None:
     """Edges must follow the rows, not the distinct values, once they run out.
 
