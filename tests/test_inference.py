@@ -863,11 +863,6 @@ def test__to__mps_target_device__applies_mps_linear_bug_workaround(
     )
 
     mps = torch.device("mps")
-    if fit_mode == "fit_with_cache":
-        # The two members share one cache, which cannot move onto MPS.
-        with pytest.raises(RuntimeError, match="cannot be used on MPS"):
-            engine.to([mps], force_inference_dtype=None, dtype_byte_size=4)
-        return
     engine.to([torch.device(mps)], force_inference_dtype=None, dtype_byte_size=4)
 
     assert isinstance(engine, MultiDeviceInferenceEngine)
