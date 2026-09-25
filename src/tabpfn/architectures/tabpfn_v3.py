@@ -161,15 +161,12 @@ class TabPFNV3Config(ArchitectureConfig):
     of the cell embedder."""
 
     # ---- Memory-efficient inference ----
-    inference_row_chunk_size: int = 2048
-    """Rows per Stage 0-2 chunk during inference at ``inference_chunk_columns`` columns.
+    inference_chunk_cells: int = 2048 * 768
+    """Cells per Stage 0-2 chunk during inference, summed over the batch.
 
-    The chunk is bounded by cells: their product is the cells one chunk holds, summed
-    over the batch, so narrower inputs get proportionally more rows per chunk.
+    The former chunk of 2048 rows at the 768-column maximum. Narrower inputs and
+    smaller batches get proportionally more rows per chunk.
     """
-
-    inference_chunk_columns: int = 768
-    """The input width ``inference_row_chunk_size`` refers to."""
 
     inference_col_chunk_size: int = 4
     """Max output groups per chunk for inducing hidden state computation."""
@@ -1853,9 +1850,7 @@ class TabPFNV3(Architecture):
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self.emsize = config.embed_dim
-        self.inference_chunk_cells = (
-            config.inference_row_chunk_size * config.inference_chunk_columns
-        )
+        self.inference_chunk_cells = config.inference_chunk_cells
         self.inference_col_chunk_size = config.inference_col_chunk_size
 
     @property

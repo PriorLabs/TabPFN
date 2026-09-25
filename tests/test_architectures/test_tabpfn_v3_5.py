@@ -62,8 +62,7 @@ _SMALL_CONFIG: dict[str, object] = {
     "feat_agg_num_cls_tokens": 2,
     "dist_embed_num_inducing_points": 8,
     # Small enough that the chunked inference path splits the test inputs.
-    "inference_row_chunk_size": 8,
-    "inference_chunk_columns": NUM_FEATURES,
+    "inference_chunk_cells": 8 * NUM_FEATURES,
     "inference_col_chunk_size": 2,
 }
 
@@ -153,7 +152,7 @@ def test__config__defaults__match_the_v3_5_checkpoint() -> None:
         "cell_ecdf_num_frequencies": 4,
         "cell_ecdf_num_buckets": 8192,
         "cell_embed_row_chunk_size": 2048,
-        "inference_row_chunk_size": 2048,
+        "inference_chunk_cells": 2048 * 768,
         "inference_col_chunk_size": 4,
     }
 
