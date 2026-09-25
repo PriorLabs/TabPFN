@@ -250,9 +250,7 @@ class TorchSquashingScaler:
         )
         work_center = center if work_dtype == x.dtype else center.to(work_dtype)
         work_scale = scale if work_dtype == x.dtype else scale.to(work_dtype)
-        work_nan = torch.full(
-            (), float("nan"), dtype=work_dtype, device=x.device
-        )
+        work_nan = torch.full((), float("nan"), dtype=work_dtype, device=x.device)
         block = _block_size(x, dim=0, budget_bytes=_TRANSFORM_BLOCK_BYTES)
         for start in range(0, x.shape[0], block):
             stop = start + block
