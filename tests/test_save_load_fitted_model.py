@@ -18,6 +18,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import ModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
 from tabpfn.model_loading import (
     load_fitted_tabpfn_model,
@@ -559,3 +560,38 @@ def test__save_fitted_tabpfn_model__torch_device_init_param__serializes(
 
     reloaded = load_fitted_tabpfn_model(path, device="cpu")
     assert len(reloaded.predict(X)) == len(X)
+
+
+@pytest.mark.parametrize("estimator_class", [TabPFNClassifier, TabPFNRegressor])
+def test__save_fit_state__serializes_inference_config_dataclass(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+    tmp_path: Path,
+) -> None:
+    if estimator_class is TabPFNClassifier:
+        X, y = make_classification(
+            n_samples=40,
+            n_features=5,
+            n_classes=3,
+            n_informative=3,
+            random_state=42,
+        )
+        task_type = "multiclass"
+    else:
+        X, y = make_regression(n_samples=40, n_features=5, random_state=42)
+        task_type = "regression"
+
+    config = InferenceConfig.get_default(task_type, ModelVersion.V2_5)
+    model = estimator_class(
+        device="cpu",
+        n_estimators=1,
+        inference_config=config,
+        ignore_pretraining_limits=True,
+        random_state=42,
+    )
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+    model.save_fit_state(path)
+
+    loaded = estimator_class.load_from_fit_state(path, device="cpu")
+    assert loaded.inference_config_ == model.inference_config_
+    _assert_roundtrip_predictions(model, loaded, X, cross_device=False)
