@@ -235,6 +235,13 @@ def test__member_key__runs_members_alone_on_mps() -> None:
     assert _member_key(member, 0, engine.model_caches, mps) == ("single", 0)
 
 
+def test__explicit_kv_cache__refuses_to_move_a_batched_cache_to_mps() -> None:
+    engine = _engine("explicit_kv_cache", _model())
+    assert isinstance(engine, InferenceEngineExplicitKVCache)
+    with pytest.raises(RuntimeError, match="cannot be used on MPS"):
+        engine._move_models_to_devices([torch.device("mps")])
+
+
 def test__member_groups__splits_by_key_and_size() -> None:
     keys = [("a",), ("b",), ("a",), ("a",), ("b",), ("a",)]
     assert _group_equal(keys) == [[0, 2, 3, 5], [1, 4]]

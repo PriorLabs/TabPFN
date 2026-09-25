@@ -1405,12 +1405,23 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
     @override
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
-        super()._move_models_to_devices(devices)
         # kv_caches don't exist yet during the .to() call in __init__ (it runs
-        # before the caches are built). Once they do and are kept on device,
-        # move them with the models so .to() leaves nothing on the old device;
-        # iter_outputs redistributes them across devices on the next predict.
-        if self.keep_cache_on_device and getattr(self, "kv_caches", None):
+        # before the caches are built).
+        has_caches = bool(getattr(self, "kv_caches", None))
+        # A cache holds the batch it was built with; MPS runs members alone.
+        if (
+            has_caches
+            and any(d.type == "mps" for d in devices)
+            and any(len(group) > 1 for group in self.cache_groups)
+        ):
+            raise RuntimeError(
+                "This KV cache was built for a batch of ensemble members and "
+                "cannot be used on MPS. Fit the estimator on the MPS device instead."
+            )
+        super()._move_models_to_devices(devices)
+        # Caches kept on device move with the models so .to() leaves nothing on
+        # the old device; iter_outputs redistributes them on the next predict.
+        if has_caches and self.keep_cache_on_device:
             self.kv_caches = [cache.to(devices[0]) for cache in self.kv_caches]
 
 
