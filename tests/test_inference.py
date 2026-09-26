@@ -571,6 +571,49 @@ def test__explicit_kv_cache__produces_outputs() -> None:
     assert model.cache_used_count == n_configs
 
 
+def test__explicit_kv_cache__drops_member_train_features_after_build() -> None:
+    """The caches replace each member's X_train, so the engine does not keep it.
+
+    y_train is still read on every predict, so it stays.
+    """
+    rng = default_rng(seed=0)
+    n_train = 50
+    n_features = 4
+    n_classes = 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
+
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
+            n_configs=2,
+            n_classes=n_classes,
+            num_models=1,
+        ),
+        n_samples=X_train.shape[0],
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=rng,
+        n_preprocessing_jobs=1,
+    )
+    engine = InferenceEngineExplicitKVCache(
+        X_train,
+        y_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[_TestModelWithKVCache()],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=True,
+        autocast=False,
+        task_type="multiclass",
+    )
+
+    assert all(member.X_train is None for member in engine.ensemble_members)
+    assert all(member.y_train is not None for member in engine.ensemble_members)
+    outputs = list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))
+    assert len(outputs) == len(engine.ensemble_members)
+
+
 @pytest.mark.parametrize(
     ("model_cls", "task_type"),
     [

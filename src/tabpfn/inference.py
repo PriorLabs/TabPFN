@@ -1005,6 +1005,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             self.kv_caches = [cache for cache, _device in built_caches]
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
+        # The caches replace the training features; predict only reads y_train.
+        for ensemble_member in self.ensemble_members:
+            ensemble_member.X_train = None
+
     def _build_cache(
         self,
         *,
