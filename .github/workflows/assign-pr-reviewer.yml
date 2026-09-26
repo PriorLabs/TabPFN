@@ -1,5 +1,5 @@
-# When a PR is opened from a fork or by dependabot, request a review from a randomly
-# chosen reviewer so the PR gets picked up.
+# When a PR is opened from a fork or by dependabot, request a review from a reviewer chosen
+# deterministically from the PR number, so the PR gets picked up.
 #
 # We use this workflow instead of GitHub's built-in auto-assignment system because we
 # want to avoid auto assigning reviewers to PRs from Prior Labs team members, and GitHub
@@ -41,7 +41,7 @@ jobs:
       )
     runs-on: ubuntu-slim
     steps:
-      - name: Request review from a random reviewer
+      - name: Request review from the rotation
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -62,7 +62,16 @@ jobs:
               throw new Error("pr-reviewers.txt is empty; cannot assign a reviewer.");
             }
 
-            const reviewer = reviewers[Math.floor(Math.random() * reviewers.length)];
+            // Deterministic rather than random, keyed on the PR number. Dependabot
+            // opens its PRs in a run of consecutive numbers, so consecutive numbers
+            // must not collide: n % len guarantees that, which random did not (one
+            // reviewer drew two of #368/#369 in tabpfn-extensions). It is also
+            // idempotent, so a reopen re-requests the same person rather than adding
+            // a second reviewer. Note this is a spread, not a true round robin:
+            // long-run counts are as uneven as random, because the numbers that
+            // reach this workflow are sparse. Equal counts would need stored state.
+            const reviewer =
+              reviewers[context.payload.pull_request.number % reviewers.length];
             core.info(`Requesting review from ${reviewer}`);
 
             await github.rest.pulls.requestReviewers({
