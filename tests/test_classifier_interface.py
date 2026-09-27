@@ -1750,7 +1750,12 @@ def test__fit_with_differentiable_input__disables_polynomial_features(
 ) -> None:
     torch.manual_seed(0)
     encoder = nn.Linear(4, 4)
-    X = torch.randn(20, 4)
+    X_train = encoder(torch.randn(20, 4))
+    X_query = encoder(torch.randn(5, 4))
+    # encoder(...) is non-leaf, so retain_grad() is what exposes the input-side
+    # gradient that an upstream module would actually receive.
+    X_train.retain_grad()
+    X_query.retain_grad()
     y = torch.tensor([0, 1] * 10)
     model = TabPFNClassifier(
         n_estimators=1,
@@ -1761,15 +1766,21 @@ def test__fit_with_differentiable_input__disables_polynomial_features(
         inference_config={"POLYNOMIAL_FEATURES": polynomial_features},
     )
 
-    model.fit_with_differentiable_input(encoder(X), y)
+    model.fit_with_differentiable_input(X_train, y)
     assert all(config.polynomial_features == "no" for config in model.ensemble_configs_)
 
     output = model.forward(
-        encoder(torch.randn(5, 4)),
+        X_query,
         use_inference_mode=True,
         return_logits=True,
     )
     output.sum().backward()
-    assert encoder.weight.grad is not None
-    assert torch.isfinite(encoder.weight.grad).all()
-    assert encoder.weight.grad.abs().sum() > 0
+
+    for name, tensor in [
+        ("training inputs", X_train),
+        ("query inputs", X_query),
+        ("encoder weights", encoder.weight),
+    ]:
+        assert tensor.grad is not None, f"No gradient for {name}"
+        assert torch.isfinite(tensor.grad).all(), f"Nonfinite gradient for {name}"
+        assert tensor.grad.abs().sum() > 0, f"Zero gradient for {name}"
