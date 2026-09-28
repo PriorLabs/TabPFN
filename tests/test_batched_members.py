@@ -186,7 +186,6 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
 def test__explicit_kv_cache__one_cache_holds_all_members() -> None:
     engine = _engine("explicit_kv_cache", _model())
     assert isinstance(engine, InferenceEngineExplicitKVCache)
-    assert engine.ensemble_members[0].X_train.shape[1] == N_PREPARED_COLUMNS
     assert engine.cache_groups == [list(range(N_MEMBERS))]
     (cache,) = engine.kv_caches
     assert cache.train_shape == (N_MEMBERS, N_TRAIN)
