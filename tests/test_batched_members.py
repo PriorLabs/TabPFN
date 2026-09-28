@@ -212,6 +212,22 @@ def test__explicit_kv_cache__built_one_member_at_a_time_matches_one_forward(
 
 
 @torch.no_grad()
+def test__explicit_kv_cache__zero_budget_keeps_one_cache_per_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _model()
+    expected = _predict(_engine("explicit_kv_cache", model))
+
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 0)
+    engine = _engine("explicit_kv_cache", model)
+    assert isinstance(engine, InferenceEngineExplicitKVCache)
+    assert engine.cache_groups == [[i] for i in range(N_MEMBERS)]
+    assert all(cache.train_shape == (1, N_TRAIN) for cache in engine.kv_caches)
+    for (out, _), (out_expected, _) in zip(_predict(engine), expected, strict=True):
+        torch.testing.assert_close(out, out_expected, atol=1e-5, rtol=1e-5)
+
+
+@torch.no_grad()
 def test__explicit_kv_cache__pickled_copy_predicts_the_same() -> None:
     engine = _engine("explicit_kv_cache", _model())
     assert isinstance(engine, InferenceEngineExplicitKVCache)

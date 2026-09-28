@@ -77,10 +77,10 @@ class TabPFNSettings(BaseSettings):
         "from a KV cache) sum to at most this many run as one batch. Bounds the ICL "
         "activations of the batch, which grow with rows whatever the width, and "
         "keeps batching to the short contexts where it pays; longer ones run one "
-        "member at a time. Set to 0 to run every member in its own forward pass. "
-        "A KV cache always holds all members of a device and predicts them as one "
-        "batch, chunked by test rows; the budget only bounds how many members build "
-        "their cache together.",
+        "member at a time. A KV cache holds all members of a device and predicts "
+        "them as one batch, chunked by test rows; the budget bounds how many build "
+        "their cache together. Set to 0 to run every member in its own forward "
+        "pass and its own cache.",
     )
     max_batched_member_cells: int = Field(
         default=768 * 1_000_000,
@@ -91,7 +91,7 @@ class TabPFNSettings(BaseSettings):
         "with width; the default is the widest and tallest table a single member "
         "already supports. Applies together with the row budget, with the same "
         "meaning for a KV cache. Set to 0 to run every member in its own forward "
-        "pass.",
+        "pass and its own cache.",
     )
 
     def model_post_init(self, _: Any) -> None:

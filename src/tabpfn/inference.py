@@ -105,6 +105,58 @@ def _members_per_forward(rows_per_member: int, columns_per_member: int) -> int:
     return max(1, min(by_rows, by_cells))
 
 
+def _prepare_train_inputs(
+    member: TabPFNEnsembleMember,
+    device: torch.device,
+    force_inference_dtype: torch.dtype | None,
+) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
+    """A member's train rows as ``(rows, 1, C)``, targets, and categorical indices."""
+    tensor_dtype = force_inference_dtype or torch.float32
+    X_train, y_train = member.X_train, member.y_train
+    if not isinstance(X_train, torch.Tensor):
+        X_train = torch.as_tensor(X_train, dtype=tensor_dtype, device=device)
+    else:
+        X_train = X_train.to(device)
+    X = X_train.unsqueeze(1)
+    if not isinstance(y_train, torch.Tensor):
+        y = torch.as_tensor(y_train, dtype=tensor_dtype, device=device)
+    else:
+        y = y_train.to(device)
+    X, feature_schema = _maybe_run_gpu_preprocessing(
+        X,
+        gpu_preprocessor=member.gpu_preprocessor,
+        feature_schema=member.feature_schema,
+    )
+    if force_inference_dtype is not None:
+        X = X.type(force_inference_dtype)
+        y = y.type(force_inference_dtype)
+    return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
+
+
+def _cache_builds(
+    positions: list[int], rows_per_member: int, columns_per_member: int
+) -> list[list[list[int]]]:
+    """The forwards that build each cache of equal-shape members.
+
+    Returns one list of forwards per cache; each forward lists the members it
+    builds together, as many as the budgets allow. A budget of zero gives every
+    member a cache of its own, so predict runs them one at a time as the
+    full-forward engines do.
+    """
+    if (
+        settings.tabpfn.max_batched_member_rows == 0
+        or settings.tabpfn.max_batched_member_cells == 0
+    ):
+        return [[[i]] for i in positions]
+    per_forward = _members_per_forward(rows_per_member, columns_per_member)
+    return [
+        [
+            positions[start : start + per_forward]
+            for start in range(0, len(positions), per_forward)
+        ]
+    ]
+
+
 def _member_key(
     member: TabPFNEnsembleMember,
     index: int,
@@ -1156,31 +1208,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
         if self.force_inference_dtype is not None:
             model.type(self.force_inference_dtype)
-        tensor_dtype = self.force_inference_dtype or torch.float32
 
-        prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
-        for member in members:
-            X_train, y_train = member.X_train, member.y_train
-            if not isinstance(X_train, torch.Tensor):
-                X_train = torch.as_tensor(X_train, dtype=tensor_dtype, device=device)
-            else:
-                X_train = X_train.to(device)
-            X = X_train.unsqueeze(1)
-            if not isinstance(y_train, torch.Tensor):
-                y = torch.as_tensor(y_train, dtype=tensor_dtype, device=device)
-            else:
-                y = y_train.to(device)
-            X, feature_schema = _maybe_run_gpu_preprocessing(
-                X,
-                gpu_preprocessor=member.gpu_preprocessor,
-                feature_schema=member.feature_schema,
-            )
-            if self.force_inference_dtype is not None:
-                X = X.type(self.force_inference_dtype)
-                y = y.type(self.force_inference_dtype)
-            prepared.append(
-                (X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL))
-            )
+        prepared = [
+            _prepare_train_inputs(member, device, self.force_inference_dtype)
+            for member in members
+        ]
 
         performance_options = dataclasses.replace(
             model.get_default_performance_options(),
@@ -1227,13 +1259,12 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         shapes = [tuple(X.shape) for X, _, _ in prepared]
         for positions in _group_equal(shapes):
             rows, _, columns = prepared[positions[0]][0].shape
-            per_forward = _members_per_forward(rows, columns)
-            parts = [
-                build(positions[start : start + per_forward])
-                for start in range(0, len(positions), per_forward)
-            ]
-            cache = parts[0] if len(parts) == 1 else type(parts[0]).concatenate(parts)
-            caches.append((positions, cache))
+            for forwards in _cache_builds(positions, rows, columns):
+                parts = [build(members) for members in forwards]
+                cache = (
+                    parts[0] if len(parts) == 1 else type(parts[0]).concatenate(parts)
+                )
+                caches.append(([i for members in forwards for i in members], cache))
         return caches, device
 
     @override
