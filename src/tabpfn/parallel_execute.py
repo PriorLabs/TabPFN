@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
-from multiprocessing.pool import ThreadPool
+from itertools import islice
+from multiprocessing.pool import AsyncResult, ThreadPool
 from typing import Generic, Protocol, TypeVar
 
 import torch
@@ -109,13 +111,23 @@ def _execute_with_multithreading(
     for device_index, _ in enumerate(devices):
         free_devices.put(device_index, block=False)
 
+    # Functions are taken from `functions` only as devices free up, so whatever
+    # creating one allocates (e.g. its preprocessed inputs) exists for about one
+    # function per device rather than for all of them at once.
+    functions_iter = iter(functions)
     with ThreadPool(processes=len(devices)) as pool:
-        async_results = [
-            pool.apply_async(_execute_function_in_thread, (devices, free_devices, func))
-            for func in functions
-        ]
-        for async_result in async_results:
-            sync_and_get_output = async_result.get()
+
+        def submit(func: ParallelFunction[R_co]) -> AsyncResult[Callable[[], R_co]]:
+            return pool.apply_async(
+                _execute_function_in_thread, (devices, free_devices, func)
+            )
+
+        pending = deque(submit(func) for func in islice(functions_iter, len(devices)))
+        while pending:
+            sync_and_get_output = pending.popleft().get()
+            next_func = next(functions_iter, None)
+            if next_func is not None:
+                pending.append(submit(next_func))
             yield sync_and_get_output()
 
 

@@ -69,3 +69,23 @@ def test__parallel_execute__multiple_devices__results_in_same_order_as_functions
     )
 
     assert list(results) == ["a", "b", "c"]
+
+
+def test__parallel_execute__multiple_devices__takes_functions_as_devices_free_up() -> (
+    None
+):
+    """At most one function per device is taken ahead of the consumer."""
+    devices = [torch.device("meta"), torch.device("meta")]
+    taken: list[int] = []
+
+    def functions():  # noqa: ANN202
+        for i in range(6):
+            taken.append(i)
+            yield lambda device, i=i: i  # noqa: ARG005
+
+    results = parallel_execute(devices=devices, functions=functions())
+    for consumed, result in enumerate(results):
+        assert result == consumed
+        assert len(taken) <= consumed + 1 + len(devices)
+
+    assert taken == list(range(6))
