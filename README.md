@@ -28,7 +28,7 @@ TabPFN supports Python 3.10+.
 
 > ⚡ **GPU Recommended**:
 > For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
-> On CPU, only moderate datasets are feasible (TabPFN-3 and TabPFN-3.5 allow up to 5000 samples; older versions up to 1000).
+> On CPU, only moderate datasets are feasible (TabPFN-3, TabPFN-3.5 and TabPFN-3.5-Fast allow up to 5000 samples; older versions up to 1000).
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
 **On macOS:** GPU support is automatically included for Apple Silicon Macs. For best performance, ensure you are using PyTorch 2.13 or newer (see [#949](https://github.com/PriorLabs/TabPFN/pull/949)).
@@ -310,7 +310,7 @@ TabPFN uses Pydantic settings for configuration, supporting environment variable
 
 **Model Configuration:**
 - `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
-- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU above the per-model sample limit (5000 for TabPFN-3 and TabPFN-3.5, 1000 for older versions). Set to `true` to override the CPU limitation. Note: large datasets can still be slow on CPU!
+- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU above the per-model sample limit (5000 for TabPFN-3, TabPFN-3.5 and TabPFN-3.5-Fast, 1000 for older versions). Set to `true` to override the CPU limitation. Note: large datasets can still be slow on CPU!
 - `TABPFN_MPS_MEMORY_FRACTION`: Fraction of recommended max MPS memory to allow on Apple Silicon (default: `0.7`). Used to prevent macOS system crashes; set before importing TabPFN. Values above `1.0` are not recommended.
 - `TABPFN_MAX_BATCHED_TEST_ROWS`: Maximum number of test rows fed through the model in a single forward pass during cached (`fit_mode="fit_with_cache"`) inference (default: `32768`). Larger test sets are split into independent chunks of at most this size and concatenated, bounding peak memory. Test rows are conditionally independent given the KV cache, so chunking is mathematically equivalent — results may still differ slightly due to floating-point non-associativity (see [#800](https://github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425)). Performance should be close to optimal at the default of `32768`: the hardware is already saturated at that chunk size and, since the computations are independent, larger chunks bring no speedup. Set to `0` to disable chunking.
 
