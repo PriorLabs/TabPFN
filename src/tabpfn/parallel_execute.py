@@ -111,9 +111,8 @@ def _execute_with_multithreading(
     for device_index, _ in enumerate(devices):
         free_devices.put(device_index, block=False)
 
-    # Functions are taken from `functions` only as devices free up, so whatever
-    # creating one allocates (e.g. its preprocessed inputs) exists for about one
-    # function per device rather than for all of them at once.
+    # Take a function only when a device frees up: callers create each function's
+    # inputs as it is taken, so this keeps those inputs to about one per device.
     functions_iter = iter(functions)
     with ThreadPool(processes=len(devices)) as pool:
 
