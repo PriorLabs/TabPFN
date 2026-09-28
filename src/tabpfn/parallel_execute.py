@@ -4,12 +4,10 @@
 
 from __future__ import annotations
 
+import itertools
 import queue
 import threading
-from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
-from itertools import islice
-from multiprocessing.pool import AsyncResult, ThreadPool
 from typing import Generic, Protocol, TypeVar
 
 import torch
@@ -99,7 +97,7 @@ def _execute_in_current_thread(
         yield function(device=device)
 
 
-def _execute_with_multithreading(
+def _execute_with_multithreading(  # noqa: C901
     devices: Sequence[torch.device],
     functions: Iterable[ParallelFunction[R_co]],
     *,
@@ -107,57 +105,104 @@ def _execute_with_multithreading(
 ) -> Generator[R_co]:
     if prewarm_lapack:
         _prewarm_lapack_lazy_init(devices)
-    free_devices: queue.Queue[int] = queue.Queue(maxsize=len(devices))
-    for device_index, _ in enumerate(devices):
-        free_devices.put(device_index, block=False)
 
-    # Take a function only when a device frees up: callers create each function's
-    # inputs as it is taken, so this keeps those inputs to about one per device.
+    # Callers create a function's inputs as it is taken, so functions are taken
+    # only while fewer than one per device, plus one ready to start, are
+    # unfinished. They are taken on this thread while it waits for outputs, run on
+    # one worker thread per device, finish in any order, and are returned in order.
+    work: queue.SimpleQueue[tuple[int, ParallelFunction[R_co]] | None] = (
+        queue.SimpleQueue()
+    )
+    finished: dict[int, tuple[Callable[[], R_co] | None, BaseException | None]] = {}
+    finished_changed = threading.Condition()
+
+    def run_on(device: torch.device) -> None:
+        while (item := work.get()) is not None:
+            index, function = item
+            try:
+                outcome = (_execute_function_in_thread(device, function), None)
+            except BaseException as e:  # noqa: BLE001  re-raised on the consumer
+                outcome = (None, e)
+            with finished_changed:
+                finished[index] = outcome
+                finished_changed.notify()
+
+    workers = [threading.Thread(target=run_on, args=(d,)) for d in devices]
+    for worker in workers:
+        worker.start()
+
     functions_iter = iter(functions)
-    with ThreadPool(processes=len(devices)) as pool:
+    max_unfinished = len(devices) + 1
+    n_taken = 0
+    exhausted = False
 
-        def submit(func: ParallelFunction[R_co]) -> AsyncResult[Callable[[], R_co]]:
-            return pool.apply_async(
-                _execute_function_in_thread, (devices, free_devices, func)
-            )
+    def has_room(n_returned: int) -> bool:
+        return not exhausted and n_taken - n_returned - len(finished) < max_unfinished
 
-        pending = deque(submit(func) for func in islice(functions_iter, len(devices)))
-        while pending:
-            sync_and_get_output = pending.popleft().get()
-            next_func = next(functions_iter, None)
-            if next_func is not None:
-                pending.append(submit(next_func))
+    def take_one() -> None:
+        nonlocal n_taken, exhausted
+        function = next(functions_iter, None)  # creates the function's inputs
+        if function is None:
+            exhausted = True
+        else:
+            work.put((n_taken, function))
+            n_taken += 1
+
+    def next_output(
+        n_returned: int,
+    ) -> tuple[Callable[[], R_co] | None, BaseException | None] | None:
+        """Take functions while there is room, then return output `n_returned`."""
+        while True:
+            with finished_changed:
+                finished_changed.wait_for(
+                    lambda: (
+                        has_room(n_returned)
+                        or n_returned in finished
+                        or (exhausted and n_returned >= n_taken)
+                    )
+                )
+                if not has_room(n_returned):
+                    return finished.pop(n_returned, None)
+            take_one()  # outside the lock, so workers can record their outputs
+
+    try:
+        for n_returned in itertools.count():
+            outcome = next_output(n_returned)
+            if outcome is None:
+                return
+            sync_and_get_output, error = outcome
+            if error is not None:
+                raise error
+            assert sync_and_get_output is not None
             yield sync_and_get_output()
+    finally:
+        for _ in workers:
+            work.put(None)
+        for worker in workers:
+            worker.join()
 
 
 def _execute_function_in_thread(
-    all_devices: Sequence[torch.device],
-    free_devices: queue.Queue[int],
-    function: ParallelFunction[R_co],
+    device: torch.device, function: ParallelFunction[R_co]
 ) -> Callable[[], R_co]:
-    device_index = free_devices.get(block=True)
-    try:
-        device = all_devices[device_index]
-        if device.type == "cuda":
-            with torch.cuda.device(device):
-                output = function(device=device)
+    if device.type == "cuda":
+        with torch.cuda.device(device):
+            output = function(device=device)
 
-                # The output will be consumed on a different cuda stream, which needs to
-                # wait for the computation on this stream to be complete. Thus we insert
-                # "ready" event after the model evaluation, and return a function to the
-                # consumer that waits on this event.
-                output_ready_event = torch.cuda.Event()
-                output_ready_event.record()
+            # The output will be consumed on a different cuda stream, which needs to
+            # wait for the computation on this stream to be complete. Thus we insert
+            # "ready" event after the model evaluation, and return a function to the
+            # consumer that waits on this event.
+            output_ready_event = torch.cuda.Event()
+            output_ready_event.record()
 
-                def sync_stream_and_get_output() -> R_co:
-                    output_ready_event.synchronize()
-                    return output
+            def sync_stream_and_get_output() -> R_co:
+                output_ready_event.synchronize()
+                return output
 
-                return sync_stream_and_get_output
+            return sync_stream_and_get_output
 
-        # Theoretically it is possible to parallelise over classes of device other than
-        # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
-        output = function(device=device)
-        return lambda: output
-    finally:
-        free_devices.put(device_index)
+    # Theoretically it is possible to parallelise over classes of device other than
+    # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
+    output = function(device=device)
+    return lambda: output
