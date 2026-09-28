@@ -28,6 +28,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
+    _BoundedPrefetch,
     _resolve_kv_cache_precision,
 )
 from tabpfn.preprocessing import (
@@ -569,6 +570,25 @@ def test__explicit_kv_cache__produces_outputs() -> None:
     # Predict consumed each cache once and did not rebuild any of them.
     assert model.cache_build_count == n_configs
     assert model.cache_used_count == n_configs
+
+
+@pytest.mark.parametrize("n_workers", [1, 3])
+def test__bounded_prefetch__computes_at_most_n_workers_ahead(n_workers: int) -> None:
+    """Results are returned in full, but never more than n_workers ahead of take."""
+    computed: list[int] = []
+
+    def compute(i: int) -> int:
+        computed.append(i)
+        return i * 10
+
+    prefetch = _BoundedPrefetch(compute, n=10, n_workers=n_workers)
+    try:
+        for index in range(10):
+            assert prefetch.take(index) == index * 10
+            assert max(computed) <= index + n_workers
+    finally:
+        prefetch.close()
+    assert sorted(computed) == list(range(10))
 
 
 def test__explicit_kv_cache__drops_member_train_features_after_build() -> None:

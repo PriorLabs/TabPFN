@@ -5,15 +5,17 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 import time
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -856,6 +858,39 @@ def _resolve_kv_cache_precision(
     return kv_cache_precision
 
 
+class _BoundedPrefetch(Generic[_T]):
+    """Computes ``fn(0), ..., fn(n - 1)`` on a thread pool, ahead of the caller.
+
+    At most ``n_workers`` results are computed ahead of the highest index taken
+    so far, and a result is dropped as soon as it is taken. Parallel work then
+    holds only a few results at a time, however many there are in total.
+    """
+
+    def __init__(self, fn: Callable[[int], _T], n: int, n_workers: int) -> None:
+        self._fn = fn
+        self._n = n
+        self._n_workers = n_workers
+        self._pool = ThreadPoolExecutor(n_workers) if n_workers > 1 else None
+        self._futures: dict[int, Future[_T]] = {}
+        self._next = 0
+        self._lock = threading.Lock()
+
+    def take(self, index: int) -> _T:
+        """Return ``fn(index)``. Each index may be taken once."""
+        if self._pool is None:
+            return self._fn(index)
+        with self._lock:
+            while self._next < min(self._n, index + 1 + self._n_workers):
+                self._futures[self._next] = self._pool.submit(self._fn, self._next)
+                self._next += 1
+            future = self._futures.pop(index)
+        return future.result()
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(cancel_futures=True)
+
+
 class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     """Inference engine with explicit KV cache passed through forward().
 
@@ -951,18 +986,6 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
-        # Preprocess ensemble members (CPU work)
-        fit_preprocess_start = time.perf_counter()
-        self.ensemble_members: list[TabPFNEnsembleMember] = (
-            ensemble_preprocessor.fit_transform_ensemble_members(
-                X_train=X_train,
-                y_train=y_train,
-            )
-        )
-        self._speed_metrics["fit_preprocessing_seconds"] = (
-            time.perf_counter() - fit_preprocess_start
-        )
-
         save_peak_mem_during_build = should_save_peak_mem(
             memory_saving_mode=save_peak_mem,
             X_train_shape=tuple[int, int](X_train.shape),
@@ -972,22 +995,43 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
         stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
 
-        # Build per-estimator caches in parallel across devices
+        # Members are preprocessed on up to n_preprocessing_jobs threads, at most
+        # that many ahead of the cache builds, and each build releases its
+        # member's preprocessed training features. So only a few copies are alive
+        # at once rather than one per member.
+        n_members = len(ensemble_preprocessor.configs)
+        preprocessing_seconds: list[float] = []
+
+        def preprocess(config_index: int) -> tuple[TabPFNEnsembleMember, np.ndarray]:
+            start = time.perf_counter()
+            preprocessed = ensemble_preprocessor.fit_transform_member(
+                config_index, X_train, y_train
+            )
+            preprocessing_seconds.append(time.perf_counter() - start)
+            return preprocessed
+
+        prefetched = _BoundedPrefetch(
+            preprocess,
+            n_members,
+            n_workers=min(
+                n_members,
+                joblib.effective_n_jobs(ensemble_preprocessor.n_preprocessing_jobs),
+            ),
+        )
+        waiting_seconds: list[float] = []
         build_functions = (
             partial(
-                self._build_cache,
-                X_train=ensemble_member.X_train,
-                y_train=ensemble_member.y_train,
-                feature_schema=ensemble_member.feature_schema,
-                model_index=ensemble_member.config._model_index,
-                gpu_preprocessor=ensemble_member.gpu_preprocessor,
+                self._build_member_cache,
+                config_index=config_index,
+                prefetched=prefetched,
+                waiting_seconds=waiting_seconds,
                 autocast=autocast,
                 save_peak_mem=save_peak_mem_during_build,
                 stage_cache_on_cpu=stage_caches_on_cpu,
             )
-            for ensemble_member in self.ensemble_members
+            for config_index in range(n_members)
         )
-        timed_caches = _TimedIterator(
+        timed_builds = _TimedIterator(
             parallel_execute(
                 devices,
                 build_functions,
@@ -995,19 +1039,56 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             ),
             devices,
         )
-        built_caches = list(timed_caches)
+        try:
+            built = list(timed_builds)
+        finally:
+            prefetched.close()
+        self.ensemble_members: list[TabPFNEnsembleMember] = [m for m, _, _ in built]
         if stage_caches_on_cpu:
             # Each completed cache was staged on CPU by _build_cache while the
             # remaining ensemble members were being constructed. Now that every
             # build has finished, move each cache back to its build device.
-            self.kv_caches: list = [cache.to(device) for cache, device in built_caches]
+            self.kv_caches: list = [cache.to(device) for _, cache, device in built]
         else:
-            self.kv_caches = [cache for cache, _device in built_caches]
-        self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
+            self.kv_caches = [cache for _, cache, _device in built]
+        # Preprocessing overlaps the builds, so its time is summed across threads,
+        # and time the builds spent waiting for it is left out of the forward time.
+        self._speed_metrics["fit_preprocessing_seconds"] = sum(preprocessing_seconds)
+        self._speed_metrics["fit_model_forward_seconds"] = max(
+            0.0, timed_builds.elapsed_seconds - sum(waiting_seconds)
+        )
 
-        # The caches replace the training features; predict only reads y_train.
-        for ensemble_member in self.ensemble_members:
-            ensemble_member.X_train = None
+    def _build_member_cache(
+        self,
+        *,
+        device: torch.device,
+        config_index: int,
+        prefetched: _BoundedPrefetch[tuple[TabPFNEnsembleMember, np.ndarray]],
+        waiting_seconds: list[float],
+        autocast: bool,
+        save_peak_mem: bool,
+        stage_cache_on_cpu: bool,
+    ) -> tuple[TabPFNEnsembleMember, KVCache, torch.device]:
+        """Build one member's KV cache from its preprocessed training features.
+
+        The member is returned without them: the cache replaces them, and
+        predict only reads y_train.
+        """
+        start = time.perf_counter()
+        member, X_train_preprocessed = prefetched.take(config_index)
+        waiting_seconds.append(time.perf_counter() - start)
+        cache, cache_device = self._build_cache(
+            device=device,
+            X_train=X_train_preprocessed,
+            y_train=member.y_train,
+            feature_schema=member.feature_schema,
+            model_index=member.config._model_index,
+            gpu_preprocessor=member.gpu_preprocessor,
+            autocast=autocast,
+            save_peak_mem=save_peak_mem,
+            stage_cache_on_cpu=stage_cache_on_cpu,
+        )
+        return member, cache, cache_device
 
     def _build_cache(
         self,
