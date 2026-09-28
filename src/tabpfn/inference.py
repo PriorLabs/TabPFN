@@ -9,7 +9,7 @@ import time
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
-from copy import deepcopy
+from copy import copy, deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
@@ -316,8 +316,8 @@ class InferenceEngine(ABC):
     def _create_copy_for_pickling(self) -> InferenceEngine:
         """Return a copy of the inference engine ready for pickling.
 
-        This should remove the models, which we don't want to include. in the pickled
-        file.
+        This should remove the models, which we don't want to include in the pickled
+        file. A shallow copy is safe as the copy is only pickled, never changed.
         """
         ...
 
@@ -394,7 +394,7 @@ class SingleDeviceInferenceEngine(InferenceEngine):
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
-        state_copy = deepcopy(self)
+        state_copy = copy(self)
         state_copy.models = None  # type: ignore
         return state_copy
 
@@ -432,7 +432,7 @@ class MultiDeviceInferenceEngine(InferenceEngine):
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
-        state_copy = deepcopy(self)
+        state_copy = copy(self)
         state_copy.model_caches = None  # type: ignore
         return state_copy
 
@@ -1119,6 +1119,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 )
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
+        # The caches replace the training features; predict only reads y_train.
+        for ensemble_member in self.ensemble_members:
+            ensemble_member.X_train = None
+
     def _build_cache(
         self,
         *,
@@ -1390,17 +1394,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
-        # Temporarily detach KV caches before deepcopy to avoid a memory
-        # spike from copying GPU tensors that we discard.
-        saved_kv_caches = self.kv_caches
-        self.kv_caches = []  # type: ignore
-        try:
-            state_copy = super()._create_copy_for_pickling()
-        finally:
-            self.kv_caches = saved_kv_caches
-
+        state_copy = super()._create_copy_for_pickling()
         # Attach CPU copies of KV caches for portable serialization.
-        state_copy.kv_caches = [cache.to("cpu") for cache in saved_kv_caches]
+        state_copy.kv_caches = [cache.to("cpu") for cache in self.kv_caches]
         return state_copy
 
     @override
