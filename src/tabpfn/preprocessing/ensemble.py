@@ -61,7 +61,9 @@ class TabPFNEnsembleMember:
     config: EnsembleConfig
     cpu_preprocessor: PreprocessingPipeline
     gpu_preprocessor: TorchPreprocessingPipeline | None
-    X_train: np.ndarray | torch.Tensor
+    # None once an engine has consumed it and no longer needs it, e.g. after the
+    # explicit KV cache engine has built its caches.
+    X_train: np.ndarray | torch.Tensor | None
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
     feature_indices: np.ndarray | None = None
