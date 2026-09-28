@@ -67,6 +67,8 @@ def _assert_roundtrip_predictions(
     differs, so bit-identity is unattainable. For those we only verify that the
     loaded model is functional.
     """
+    # Predicting with the original after the save also checks the save left it
+    # intact: the engine is saved through a shallow copy that shares its state.
     original_preds = original.predict(X)
     loaded_preds = loaded.predict(X)
 
@@ -144,7 +146,8 @@ def test__save_fit_state__does_not_move_live_estimator_to_cpu(
 
     ``nn.Module.to`` moves modules in place, so a naive CPU snapshot of fitted
     attributes used to relocate the estimator's bar distributions, breaking
-    subsequent predictions on non-CPU devices.
+    subsequent predictions on non-CPU devices. The engine is saved through a
+    shallow copy that shares its state, so this also covers that copy.
     """
     X, y = _make_regression_data()
     model = TabPFNRegressor(device=device, n_estimators=1)
