@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-import itertools
 import queue
 import threading
+from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Generic, Protocol, TypeVar
 
 import torch
@@ -97,7 +98,7 @@ def _execute_in_current_thread(
         yield function(device=device)
 
 
-def _execute_with_multithreading(  # noqa: C901
+def _execute_with_multithreading(
     devices: Sequence[torch.device],
     functions: Iterable[ParallelFunction[R_co]],
     *,
@@ -109,82 +110,29 @@ def _execute_with_multithreading(  # noqa: C901
     for device_index, _ in enumerate(devices):
         free_devices.put(device_index, block=False)
 
-    # Callers create a function's inputs as it is taken, so functions are taken
-    # only while fewer than one per device, plus one ready to start, are
-    # unfinished. They are taken on this thread while it waits for outputs, run on
-    # one worker thread per device, finish in any order, and are returned in order.
-    work: queue.SimpleQueue[tuple[int, ParallelFunction[R_co]] | None] = (
-        queue.SimpleQueue()
-    )
-    finished: dict[int, tuple[Callable[[], R_co] | None, BaseException | None]] = {}
-    finished_changed = threading.Condition()
-
-    def run() -> None:
-        while (item := work.get()) is not None:
-            index, function = item
-            try:
-                output = _execute_function_in_thread(devices, free_devices, function)
-                outcome = (output, None)
-            except BaseException as e:  # noqa: BLE001  re-raised on the consumer
-                outcome = (None, e)
-            with finished_changed:
-                finished[index] = outcome
-                finished_changed.notify()
-
-    # One worker per device, so each always finds a free device in the queue.
-    workers = [threading.Thread(target=run) for _ in devices]
-    for worker in workers:
-        worker.start()
-
-    functions_iter = iter(functions)
-    max_unfinished = len(devices) + 1
-    n_taken = 0
-    exhausted = False
-
-    def has_room(n_returned: int) -> bool:
-        return not exhausted and n_taken - n_returned - len(finished) < max_unfinished
-
-    def take_one() -> None:
-        nonlocal n_taken, exhausted
-        function = next(functions_iter, None)  # creates the function's inputs
-        if function is None:
-            exhausted = True
-        else:
-            work.put((n_taken, function))
-            n_taken += 1
-
-    def next_output(
-        n_returned: int,
-    ) -> tuple[Callable[[], R_co] | None, BaseException | None] | None:
-        """Take functions while there is room, then return output `n_returned`."""
-        while True:
-            with finished_changed:
-                finished_changed.wait_for(
-                    lambda: (
-                        has_room(n_returned)
-                        or n_returned in finished
-                        or (exhausted and n_returned >= n_taken)
-                    )
-                )
-                if not has_room(n_returned):
-                    return finished.pop(n_returned, None)
-            take_one()  # outside the lock, so workers can record their outputs
-
+    # Callers create a function's inputs as it is taken, so we take a function only
+    # while at most one per device is unfinished: every device stays busy and one
+    # more is ready to start. Outputs are yielded in order, even though functions
+    # finish in any order.
+    pending: deque[Future[Callable[[], R_co]]] = deque()  # taken, not yielded
+    pool = ThreadPoolExecutor(max_workers=len(devices))
     try:
-        for n_returned in itertools.count():
-            outcome = next_output(n_returned)
-            if outcome is None:
-                return
-            sync_and_get_output, error = outcome
-            if error is not None:
-                raise error
-            assert sync_and_get_output is not None
-            yield sync_and_get_output()
+        for function in functions:
+            pending.append(
+                pool.submit(
+                    _execute_function_in_thread, devices, free_devices, function
+                )
+            )
+            # Make room before the loop takes the next function.
+            while len(running := [f for f in pending if not f.done()]) > len(devices):
+                if pending[0].done():
+                    yield pending.popleft().result()()
+                else:
+                    wait(running, return_when=FIRST_COMPLETED)
+        while pending:
+            yield pending.popleft().result()()
     finally:
-        for _ in workers:
-            work.put(None)
-        for worker in workers:
-            worker.join()
+        pool.shutdown(cancel_futures=True)
 
 
 def _execute_function_in_thread(
