@@ -105,6 +105,9 @@ def _execute_with_multithreading(  # noqa: C901
 ) -> Generator[R_co]:
     if prewarm_lapack:
         _prewarm_lapack_lazy_init(devices)
+    free_devices: queue.Queue[int] = queue.Queue(maxsize=len(devices))
+    for device_index, _ in enumerate(devices):
+        free_devices.put(device_index, block=False)
 
     # Callers create a function's inputs as it is taken, so functions are taken
     # only while fewer than one per device, plus one ready to start, are
@@ -116,18 +119,20 @@ def _execute_with_multithreading(  # noqa: C901
     finished: dict[int, tuple[Callable[[], R_co] | None, BaseException | None]] = {}
     finished_changed = threading.Condition()
 
-    def run_on(device: torch.device) -> None:
+    def run() -> None:
         while (item := work.get()) is not None:
             index, function = item
             try:
-                outcome = (_execute_function_in_thread(device, function), None)
+                output = _execute_function_in_thread(devices, free_devices, function)
+                outcome = (output, None)
             except BaseException as e:  # noqa: BLE001  re-raised on the consumer
                 outcome = (None, e)
             with finished_changed:
                 finished[index] = outcome
                 finished_changed.notify()
 
-    workers = [threading.Thread(target=run_on, args=(d,)) for d in devices]
+    # One worker per device, so each always finds a free device in the queue.
+    workers = [threading.Thread(target=run) for _ in devices]
     for worker in workers:
         worker.start()
 
@@ -183,26 +188,33 @@ def _execute_with_multithreading(  # noqa: C901
 
 
 def _execute_function_in_thread(
-    device: torch.device, function: ParallelFunction[R_co]
+    all_devices: Sequence[torch.device],
+    free_devices: queue.Queue[int],
+    function: ParallelFunction[R_co],
 ) -> Callable[[], R_co]:
-    if device.type == "cuda":
-        with torch.cuda.device(device):
-            output = function(device=device)
+    device_index = free_devices.get(block=True)
+    try:
+        device = all_devices[device_index]
+        if device.type == "cuda":
+            with torch.cuda.device(device):
+                output = function(device=device)
 
-            # The output will be consumed on a different cuda stream, which needs to
-            # wait for the computation on this stream to be complete. Thus we insert
-            # "ready" event after the model evaluation, and return a function to the
-            # consumer that waits on this event.
-            output_ready_event = torch.cuda.Event()
-            output_ready_event.record()
+                # The output will be consumed on a different cuda stream, which needs to
+                # wait for the computation on this stream to be complete. Thus we insert
+                # "ready" event after the model evaluation, and return a function to the
+                # consumer that waits on this event.
+                output_ready_event = torch.cuda.Event()
+                output_ready_event.record()
 
-            def sync_stream_and_get_output() -> R_co:
-                output_ready_event.synchronize()
-                return output
+                def sync_stream_and_get_output() -> R_co:
+                    output_ready_event.synchronize()
+                    return output
 
-            return sync_stream_and_get_output
+                return sync_stream_and_get_output
 
-    # Theoretically it is possible to parallelise over classes of device other than
-    # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
-    output = function(device=device)
-    return lambda: output
+        # Theoretically it is possible to parallelise over classes of device other than
+        # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
+        output = function(device=device)
+        return lambda: output
+    finally:
+        free_devices.put(device_index)
