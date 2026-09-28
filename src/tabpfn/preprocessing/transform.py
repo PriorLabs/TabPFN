@@ -123,6 +123,7 @@ def fit_preprocessing(
     pipelines: Sequence[PreprocessingPipeline],
     subsample_feature_indices: list[np.ndarray | None] | None = None,
     subsample_row_indices: list[np.ndarray] | None = None,
+    config_indices: Sequence[int] | None = None,
 ) -> Iterator[
     tuple[
         int,
@@ -157,6 +158,7 @@ def fit_preprocessing(
             no features are subsampled.
         subsample_row_indices: Indices of rows to subsample per estimator. If not
             provided, no row subsampling is done.
+        config_indices: Only fit these configurations. If not provided, all are.
 
     Returns:
         Iterator of tuples containing the config index, ensemble configuration, the
@@ -221,4 +223,5 @@ def fit_preprocessing(
                 strict=True,
             )  # type: ignore[arg-type]
         )
+        if config_indices is None or config_index in config_indices
     )

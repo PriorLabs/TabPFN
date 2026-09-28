@@ -37,7 +37,7 @@ from tabpfn.preprocessing.torch import (
     TorchPreprocessingPipeline,
     create_gpu_preprocessing_pipeline,
 )
-from tabpfn.preprocessing.transform import _fit_preprocessing_one, fit_preprocessing
+from tabpfn.preprocessing.transform import fit_preprocessing
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -320,6 +320,7 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
         parallel_mode: Literal["block", "as-ready", "in-order"],
+        config_indices: Sequence[int] | None = None,
     ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
         preprocessed_data_iterator = fit_preprocessing(
@@ -332,23 +333,52 @@ class TabPFNEnsemblePreprocessor:
             pipelines=self.pipelines,
             subsample_feature_indices=self.subsample_feature_indices,
             subsample_row_indices=self.subsample_row_indices,
+            config_indices=config_indices,
         )
+
+        if not self.enable_gpu_preprocessing:
+            # Legacy path: create GPU pipelines upfront (before CPU
+            # preprocessing) since they only contain the outlier removal step
+            # and don't need CPU metadata.
+            gpu_preprocessors = [
+                create_gpu_preprocessing_pipeline(
+                    config=config,
+                    keep_fitted_cache=self.keep_fitted_cache,
+                )
+                for config in self.configs
+            ]
 
         for (
             config_index,
-            _config,
+            config,
             cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
             feature_schema_preprocessed,
         ) in preprocessed_data_iterator:
-            yield self._make_member(
-                config_index,
+            if self.enable_gpu_preprocessing:
+                # The CPU output schema carries scheduled_gpu_transform
+                # annotations set by ReshapeFeatureDistributionsStep,
+                # so the GPU factory can read target indices directly.
+                gpu_preprocessor = create_gpu_preprocessing_pipeline(
+                    config=config,
+                    keep_fitted_cache=self.keep_fitted_cache,
+                    enable_gpu_preprocessing=True,
+                    feature_schema=feature_schema_preprocessed,
+                    n_train_samples=X_train_preprocessed.shape[0],
+                    random_state=int(self.pipeline_seeds[config_index]),
+                )
+            else:
+                gpu_preprocessor = gpu_preprocessors[config_index]  # type: ignore
+
+            yield TabPFNEnsembleMember(
+                config=config,
                 cpu_preprocessor=cpu_preprocessor,
+                gpu_preprocessor=gpu_preprocessor,
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
-                n_train_samples=X_train_preprocessed.shape[0],
+                feature_indices=self.subsample_feature_indices[config_index],
             )
 
     def fit_transform_member(
@@ -356,78 +386,20 @@ class TabPFNEnsemblePreprocessor:
         config_index: int,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-    ) -> tuple[TabPFNEnsembleMember, np.ndarray]:
+    ) -> tuple[TabPFNEnsembleMember, np.ndarray | torch.Tensor]:
         """Fit and transform one ensemble member in the calling thread.
 
         The preprocessed training features are returned next to the member
         instead of on it, so the caller owns how long they stay alive.
         """
-        row_indices = (
-            None
-            if self.subsample_row_indices is None
-            else self.subsample_row_indices[config_index]
-        )
-        _, _, cpu_preprocessor, X_preprocessed, y_preprocessed, feature_schema = (
-            _fit_preprocessing_one(
-                config_index,
-                self.configs[config_index],
-                X_train,
-                y_train,
-                feature_schema=self.feature_schema,
-                pipeline=self.pipelines[config_index],
-                feature_indices=self.subsample_feature_indices[config_index],
-                row_indices=row_indices,
-            )
-        )
-        member = self._make_member(
-            config_index,
-            cpu_preprocessor=cpu_preprocessor,
-            X_train=None,
-            y_train=y_preprocessed,
-            feature_schema=feature_schema,
-            n_train_samples=X_preprocessed.shape[0],
-        )
-        return member, X_preprocessed
-
-    def _make_member(
-        self,
-        config_index: int,
-        *,
-        cpu_preprocessor: PreprocessingPipeline,
-        X_train: np.ndarray | None,
-        y_train: np.ndarray,
-        feature_schema: FeatureSchema,
-        n_train_samples: int,
-    ) -> TabPFNEnsembleMember:
-        config = self.configs[config_index]
-        if self.enable_gpu_preprocessing:
-            # The CPU output schema carries scheduled_gpu_transform annotations
-            # set by ReshapeFeatureDistributionsStep, so the GPU factory can read
-            # target indices directly.
-            gpu_preprocessor = create_gpu_preprocessing_pipeline(
-                config=config,
-                keep_fitted_cache=self.keep_fitted_cache,
-                enable_gpu_preprocessing=True,
-                feature_schema=feature_schema,
-                n_train_samples=n_train_samples,
-                random_state=int(self.pipeline_seeds[config_index]),
-            )
-        else:
-            # Legacy path: only the outlier removal step, which needs no CPU
-            # metadata.
-            gpu_preprocessor = create_gpu_preprocessing_pipeline(
-                config=config,
-                keep_fitted_cache=self.keep_fitted_cache,
-            )
-        return TabPFNEnsembleMember(
-            config=config,
-            cpu_preprocessor=cpu_preprocessor,
-            gpu_preprocessor=gpu_preprocessor,
+        (member,) = self.fit_transform_ensemble_members_iterator(
             X_train=X_train,
             y_train=y_train,
-            feature_schema=feature_schema,
-            feature_indices=self.subsample_feature_indices[config_index],
+            parallel_mode="block",
+            config_indices=[config_index],
         )
+        assert member.X_train is not None
+        return dataclasses.replace(member, X_train=None), member.X_train
 
     def fit_transform_ensemble_members(
         self,

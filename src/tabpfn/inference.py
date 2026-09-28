@@ -996,13 +996,14 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
 
         # Members are preprocessed on up to n_preprocessing_jobs threads, at most
-        # that many ahead of the cache builds, and each build releases its
-        # member's preprocessed training features. So only a few copies are alive
-        # at once rather than one per member.
+        # that many ahead of the cache builds, and each member's preprocessed
+        # training features live only until its cache is built.
         n_members = len(ensemble_preprocessor.configs)
         preprocessing_seconds: list[float] = []
 
-        def preprocess(config_index: int) -> tuple[TabPFNEnsembleMember, np.ndarray]:
+        def preprocess(
+            config_index: int,
+        ) -> tuple[TabPFNEnsembleMember, np.ndarray | torch.Tensor]:
             start = time.perf_counter()
             preprocessed = ensemble_preprocessor.fit_transform_member(
                 config_index, X_train, y_train
@@ -1018,20 +1019,18 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 joblib.effective_n_jobs(ensemble_preprocessor.n_preprocessing_jobs),
             ),
         )
-        waiting_seconds: list[float] = []
         build_functions = (
             partial(
                 self._build_member_cache,
-                config_index=config_index,
                 prefetched=prefetched,
-                waiting_seconds=waiting_seconds,
+                config_index=config_index,
                 autocast=autocast,
                 save_peak_mem=save_peak_mem_during_build,
                 stage_cache_on_cpu=stage_caches_on_cpu,
             )
             for config_index in range(n_members)
         )
-        timed_builds = _TimedIterator(
+        timed_caches = _TimedIterator(
             parallel_execute(
                 devices,
                 build_functions,
@@ -1040,53 +1039,49 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             devices,
         )
         try:
-            built = list(timed_builds)
+            built_caches = list(timed_caches)
         finally:
             prefetched.close()
-        self.ensemble_members: list[TabPFNEnsembleMember] = [m for m, _, _ in built]
+        self.ensemble_members: list[TabPFNEnsembleMember] = [
+            member for member, _cache, _device in built_caches
+        ]
         if stage_caches_on_cpu:
             # Each completed cache was staged on CPU by _build_cache while the
             # remaining ensemble members were being constructed. Now that every
             # build has finished, move each cache back to its build device.
-            self.kv_caches: list = [cache.to(device) for _, cache, device in built]
+            self.kv_caches: list = [
+                cache.to(device) for _, cache, device in built_caches
+            ]
         else:
-            self.kv_caches = [cache for _, cache, _device in built]
-        # Preprocessing overlaps the builds, so its time is summed across threads,
-        # and time the builds spent waiting for it is left out of the forward time.
+            self.kv_caches = [cache for _, cache, _device in built_caches]
+        # Preprocessing overlaps the builds: this is summed across its threads, and
+        # the forward time includes any time a build waited for its member.
         self._speed_metrics["fit_preprocessing_seconds"] = sum(preprocessing_seconds)
-        self._speed_metrics["fit_model_forward_seconds"] = max(
-            0.0, timed_builds.elapsed_seconds - sum(waiting_seconds)
-        )
+        self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
     def _build_member_cache(
         self,
         *,
         device: torch.device,
+        prefetched: _BoundedPrefetch[
+            tuple[TabPFNEnsembleMember, np.ndarray | torch.Tensor]
+        ],
         config_index: int,
-        prefetched: _BoundedPrefetch[tuple[TabPFNEnsembleMember, np.ndarray]],
-        waiting_seconds: list[float],
-        autocast: bool,
-        save_peak_mem: bool,
-        stage_cache_on_cpu: bool,
+        **build_kwargs: bool,
     ) -> tuple[TabPFNEnsembleMember, KVCache, torch.device]:
-        """Build one member's KV cache from its preprocessed training features.
+        """Build one member's cache; the member is returned without X_train.
 
-        The member is returned without them: the cache replaces them, and
-        predict only reads y_train.
+        The cache replaces the training features; predict only reads y_train.
         """
-        start = time.perf_counter()
-        member, X_train_preprocessed = prefetched.take(config_index)
-        waiting_seconds.append(time.perf_counter() - start)
+        member, X_train = prefetched.take(config_index)
         cache, cache_device = self._build_cache(
             device=device,
-            X_train=X_train_preprocessed,
+            X_train=X_train,
             y_train=member.y_train,
             feature_schema=member.feature_schema,
             model_index=member.config._model_index,
             gpu_preprocessor=member.gpu_preprocessor,
-            autocast=autocast,
-            save_peak_mem=save_peak_mem,
-            stage_cache_on_cpu=stage_cache_on_cpu,
+            **build_kwargs,
         )
         return member, cache, cache_device
 
