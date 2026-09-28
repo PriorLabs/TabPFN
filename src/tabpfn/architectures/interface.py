@@ -168,9 +168,6 @@ class Architecture(nn.Module, ABC):
     TabPFNClassifier or TabPFNRegressor to form the complete model.
     """
 
-    #: Architectures that can batch set this to True
-    batches_ensemble_members: bool = False
-
     @overload
     @abstractmethod
     def forward(
@@ -270,6 +267,11 @@ class Architecture(nn.Module, ABC):
         e.g. ``"int8"``.
         """
         return ("auto",)
+
+    @property
+    def batches_ensemble_members(self) -> bool:
+        """Whether equal-shape ensemble members may run as one batched forward."""
+        return False
 
     @property
     @abstractmethod

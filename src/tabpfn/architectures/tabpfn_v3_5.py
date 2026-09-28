@@ -182,8 +182,8 @@ class TabPFNV3p5Config(ArchitectureConfig):
     inference_chunk_cells: int = 2048 * 768
     """Cells per Stage 0-2 chunk during inference, summed over the batch.
 
-    The former chunk of 2048 rows at the 768-column maximum. Narrower inputs and
-    smaller batches get proportionally more rows per chunk.
+    Rows per chunk are this divided by the batch size times the column count, so
+    narrower inputs and smaller batches get more rows per chunk.
     """
 
     inference_col_chunk_size: int = 4
@@ -2098,8 +2098,6 @@ class TabPFNV3p5(Architecture):
     7. ICL transformer: y_encoder + standard attention (train-keys only) + decoder
     """
 
-    batches_ensemble_members = True
-
     def __init__(
         self,
         *,
@@ -2241,6 +2239,11 @@ class TabPFNV3p5(Architecture):
         self.icl_blocks.to(torch.bfloat16)
         self.output_norm.to(torch.bfloat16)
         self._icl_bf16 = True
+
+    @property
+    @override
+    def batches_ensemble_members(self) -> bool:
+        return True
 
     @property
     @override
