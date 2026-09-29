@@ -222,14 +222,18 @@ def test__fa4_split_kv_plan() -> None:
     assert plan(batch=64, seq_q=256, seq_kv=100_000) == 1
     # KV too short to be worth chunking.
     assert plan(batch=1, seq_q=16, seq_kv=1_000) == 1
-    assert plan(batch=1, seq_q=16, seq_kv=4_095) == 1
-    assert plan(batch=1, seq_q=16, seq_kv=4_096) == 2
+    assert plan(batch=1, seq_q=16, seq_kv=4_096) == 1  # 2 ways is not worth it
+    assert plan(batch=1, seq_q=16, seq_kv=6_144) == 3
+    # High occupancy already: 2 would be the plan, so do not split.
+    assert plan(batch=8, seq_q=1024, seq_kv=99_991) == 1
     # Empty query: nothing to split, and no division by zero.
     assert plan(batch=1, seq_q=0, seq_kv=1_000_000) == 1
-    # batch > 1 must divide KV exactly (copy-free fold): largest divisor.
-    assert plan(batch=2, seq_q=16, seq_kv=100_000) == 32
-    assert plan(batch=2, seq_q=16, seq_kv=100_001) == 11  # 100_001 = 11 * 9_091
-    assert plan(batch=2, seq_q=16, seq_kv=99_990) == 30
+    # batch > 1 splits regardless of divisibility (varlen takes uneven chunks):
+    # 99_991 is prime, and the ensemble-batched shape from #1312 is batch 4.
+    assert plan(batch=4, seq_q=16, seq_kv=99_991) == 32
+    assert plan(batch=4, seq_q=16, seq_kv=100_000) == 32
+    # ...but an even split within 2x is preferred: 100_002 = 21 * 4_762.
+    assert plan(batch=4, seq_q=16, seq_kv=100_002) == 21
 
 
 # ---------------------------------------------------------------------
@@ -326,7 +330,9 @@ def test__fa4_matches_sdpa_within_tolerance(
     [
         (1, 256, 100_000),  # test rows vs train cache
         (1, 16, 100_001),  # tiny Q; KV not a multiple of the chunk count
-        (2, 16, 50_003),  # batch > 1 with a remainder
+        (2, 16, 50_003),  # batch > 1, uneven chunks: varlen path
+        (4, 256, 99_991),  # n_estimators=8 cached shape, prime KV
+        (4, 16, 100_000),  # batch > 1, even chunks: fold path
     ],
 )
 def test__fa4_long_kv_cross_attention_matches_sdpa(

@@ -45,6 +45,7 @@ _FA4_NUM_SPLITS_SPLIT_KV_ARCHS = 0
 _FA4_SPLIT_KV_Q_TILE = 128  # query rows per work item
 _FA4_SPLIT_KV_TARGET_TILES = 128  # ~one per SM on H100
 _FA4_SPLIT_KV_MAX_SPLITS = 32
+_FA4_SPLIT_KV_MIN_SPLITS = 3  # 2 ways never beat unsplit on H100
 _FA4_SPLIT_KV_MIN_CHUNK = 2048  # keys per chunk below which splitting costs more
 
 # One grid entry per batch element; CUDA caps that dimension.
@@ -61,6 +62,18 @@ def _load_fa4_func() -> Callable | None:
     except ImportError:
         return None
     return flash_attn_func
+
+
+@functools.cache
+def _load_fa4_varlen_func() -> Callable | None:
+    """``flash_attn.cute.flash_attn_varlen_func``; ``None`` if missing."""
+    try:
+        from flash_attn.cute import (  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
+            flash_attn_varlen_func,
+        )
+    except ImportError:
+        return None
+    return flash_attn_varlen_func
 
 
 @functools.cache
@@ -136,11 +149,14 @@ def _split_kv_plan(batch: int, seq_q: int, seq_kv: int) -> int:
         _FA4_SPLIT_KV_TARGET_TILES // tiles,
         seq_kv // _FA4_SPLIT_KV_MIN_CHUNK,
     )
+    if splits < _FA4_SPLIT_KV_MIN_SPLITS:
+        return 1
     if batch > 1:
-        # The fold is copy-free only if KV divides exactly (a sequence slice
-        # of a (B, S, ...) tensor is contiguous only for B == 1).
-        while splits > 1 and seq_kv % splits:
-            splits -= 1
+        # Even chunks fold as a view; uneven ones need the slightly costlier
+        # varlen launch. Prefer a divisor of KV if one is within 2x.
+        for even in range(splits, max(splits // 2, _FA4_SPLIT_KV_MIN_SPLITS - 1), -1):
+            if seq_kv % even == 0:
+                return even
     return max(splits, 1)
 
 
@@ -152,6 +168,10 @@ def _fa4_split_kv(
     seq_kv, n_kv_heads = k.shape[1], k.shape[2]
     chunk = seq_kv // splits
     main = chunk * splits
+    if batch > 1 and main < seq_kv:
+        # Folding a sequence slice into the batch is a view only for B == 1;
+        # uneven chunks at B > 1 go through varlen instead.
+        return _fa4_split_kv_varlen(q, k, v, splits)
 
     def fold(t: torch.Tensor) -> torch.Tensor:
         return t[:, :main].reshape(batch * splits, chunk, n_kv_heads, head_dim)
@@ -163,20 +183,63 @@ def _fa4_split_kv(
     )
     out, lse = fn(q_rep, fold(k), fold(v), return_lse=True)
     outs = [out.view(batch, splits, seq_q, n_heads, head_dim)]
-    lses = [lse.view(batch, splits, n_heads, seq_q)]
-    if main < seq_kv:  # remainder (batch == 1 only, see _split_kv_plan)
+    lses = [lse.view(batch, splits, n_heads, seq_q).transpose(2, 3)]
+    if main < seq_kv:  # remainder, batch == 1
         out_t, lse_t = fn(q, k[:, main:], v[:, main:], return_lse=True)
         outs.append(out_t.unsqueeze(1))
-        lses.append(lse_t.unsqueeze(1))
-    # FA4's own fused combine is not public API; this eager one is within
-    # 6e-5 of SDPA.
-    out_all = torch.cat(outs, dim=1).float()  # (B, S, Q, H, D)
-    lse_all = (
-        torch.cat(lses, dim=1).permute(0, 1, 3, 2).unsqueeze(-1)
-    )  # (B, S, Q, H, 1)
-    weight = torch.exp(lse_all - lse_all.max(dim=1, keepdim=True).values)
-    combined = (out_all * weight).sum(dim=1) / weight.sum(dim=1)
-    return combined.to(q.dtype)
+        lses.append(lse_t.transpose(1, 2).unsqueeze(1))
+    return _combine(torch.cat(outs, dim=1), torch.cat(lses, dim=1), q.dtype)
+
+
+def _fa4_split_kv_varlen(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, splits: int
+) -> torch.Tensor:
+    """Split KV with uneven chunks at any batch: one varlen launch whose
+    sequences are the chunks, over a zero-copy flat view of K and V.
+    """
+    batch, seq_q, n_heads, head_dim = q.shape
+    seq_kv, n_kv_heads = k.shape[1], k.shape[2]
+    chunk = seq_kv // splits
+    dev = q.device
+    # Chunk s of batch element b starts at b * seq_kv + s * chunk; each
+    # element's last chunk runs to the next element's first.
+    starts = (
+        torch.arange(batch, device=dev, dtype=torch.int32)[:, None] * seq_kv
+        + torch.arange(splits, device=dev, dtype=torch.int32)[None, :] * chunk
+    ).flatten()
+    total_k = torch.full((1,), batch * seq_kv, device=dev, dtype=torch.int32)
+    cu_k = torch.cat([starts, total_k])
+    n_seqs = batch * splits
+    cu_q = torch.arange(0, (n_seqs + 1) * seq_q, seq_q, device=dev, dtype=torch.int32)
+    q_rep = (
+        q.unsqueeze(1)
+        .expand(batch, splits, seq_q, n_heads, head_dim)
+        .reshape(n_seqs * seq_q, n_heads, head_dim)
+    )
+    out, lse = _load_fa4_varlen_func()(
+        q_rep,
+        k.reshape(batch * seq_kv, n_kv_heads, head_dim),
+        v.reshape(batch * seq_kv, n_kv_heads, head_dim),
+        cu_seqlens_q=cu_q,
+        cu_seqlens_k=cu_k,
+        max_seqlen_q=seq_q,
+        max_seqlen_k=seq_kv - chunk * (splits - 1),
+        return_lse=True,
+    )
+    out = out.view(batch, splits, seq_q, n_heads, head_dim)
+    lse = lse.view(n_heads, batch, splits, seq_q).permute(1, 2, 3, 0)
+    return _combine(out, lse, q.dtype)
+
+
+def _combine(out: torch.Tensor, lse: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Merge per-chunk outputs ``(B, S, Q, H, D)`` by their LSEs ``(B, S, Q, H)``.
+
+    FA4's own fused combine is not public API; this eager one is within 6e-5
+    of SDPA.
+    """
+    lse = lse.unsqueeze(-1)
+    weight = torch.exp(lse - lse.max(dim=1, keepdim=True).values)
+    return ((out.float() * weight).sum(dim=1) / weight.sum(dim=1)).to(dtype)
 
 
 def fa4_attn_func(
