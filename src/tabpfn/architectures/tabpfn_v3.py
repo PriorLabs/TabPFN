@@ -166,6 +166,8 @@ class TabPFNV3Config(ArchitectureConfig):
 
     Rows per chunk are this divided by the batch size times the column count, so
     narrower inputs and smaller batches get more rows per chunk.
+    2048 (rows) * 768 (max columns of v3.5) is the size we found to be stable
+    before.
     """
 
     inference_col_chunk_size: int = 4
