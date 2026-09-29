@@ -159,7 +159,11 @@ def clean_data_transform(
         numeric = all(
             isinstance(v, (int, float, np.number)) for v in constant_values.values()
         )
-        X = X.astype(np.float64 if numeric and X.dtype.kind in "biuf" else object)
+        # A copy either way: the caller's array must not be written to.
+        if not numeric:
+            X = X.astype(object)
+        else:
+            X = X.astype(X.dtype if X.dtype.kind in "fO" else np.float64)
         for index, value in constant_values.items():
             X[:, index] = value
 
