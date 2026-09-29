@@ -125,7 +125,11 @@ def test__iter_outputs__batched_matches_sequential_in_member_order(
     model = _model()
     batched = _predict(_engine(kind, model))
 
-    monkeypatch.setattr(type(model), "batches_estimators", False)
+    monkeypatch.setattr(
+        type(model),
+        "estimator_batch_budget",
+        property(lambda _: EstimatorBatchBudget(rows=0, cells=0)),
+    )
     sequential = _predict(_engine(kind, model))
 
     assert len(batched) == len(sequential) == N_MEMBERS

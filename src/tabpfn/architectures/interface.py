@@ -290,18 +290,14 @@ class Architecture(nn.Module, ABC):
         return ("auto",)
 
     @property
-    def batches_estimators(self) -> bool:
-        """Whether equal-shape estimators may run as one batched forward pass."""
-        return False
-
-    @property
     def estimator_batch_budget(self) -> EstimatorBatchBudget:
         """How much one forward may carry summed over batched estimators.
 
-        Read when ``batches_estimators`` is true; the ``TABPFN_MAX_BATCHED_*``
-        settings override it.
+        A zero budget means the architecture cannot run equal-shape estimators as
+        one batched forward pass; the ``TABPFN_MAX_BATCHED_*`` settings override
+        any other budget.
         """
-        return DEFAULT_ESTIMATOR_BATCH_BUDGET
+        return EstimatorBatchBudget(rows=0, cells=0)
 
     @property
     @abstractmethod

@@ -92,8 +92,13 @@ def _model_expectes_task_type_arg(model: Architecture) -> bool:
 
 
 def _estimator_batch_budget(model: Architecture) -> EstimatorBatchBudget:
-    """The model's batching budget, with the settings overriding either part."""
+    """The model's batching budget, with the settings overriding either part.
+
+    A model whose budget is zero does not batch estimators, whatever the settings.
+    """
     budget = model.estimator_batch_budget
+    if not _batches(budget):
+        return budget
     rows = settings.tabpfn.max_batched_estimator_rows
     cells = settings.tabpfn.max_batched_estimator_cells
     return EstimatorBatchBudget(
@@ -105,11 +110,22 @@ def _estimator_batch_budget(model: Architecture) -> EstimatorBatchBudget:
 def _shared_estimator_batch_budget(
     model_caches: Sequence[_PerDeviceModelCache],
 ) -> EstimatorBatchBudget:
-    """The tightest budget over the models, for grouping before the model is known."""
+    """The tightest budget over the models, for grouping before the model is known.
+
+    Models that do not batch contribute nothing; if none does, the budget is zero.
+    """
     budgets = [_estimator_batch_budget(cache.get_any()) for cache in model_caches]
+    batching = [b for b in budgets if _batches(b)]
+    if not batching:
+        return EstimatorBatchBudget(rows=0, cells=0)
     return EstimatorBatchBudget(
-        rows=min(b.rows for b in budgets), cells=min(b.cells for b in budgets)
+        rows=min(b.rows for b in batching), cells=min(b.cells for b in batching)
     )
+
+
+def _batches(budget: EstimatorBatchBudget) -> bool:
+    """Whether the budget lets any two estimators share a forward pass."""
+    return budget.rows > 0 and budget.cells > 0
 
 
 def _members_per_forward(
@@ -166,7 +182,7 @@ def _cache_builds(
     member a cache of its own, so predict runs them one at a time as the
     full-forward engines do.
     """
-    if budget.rows == 0 or budget.cells == 0:
+    if not _batches(budget):
         return [[[i]] for i in positions]
     per_forward = _members_per_forward(rows_per_member, columns_per_member, budget)
     return [
@@ -191,7 +207,9 @@ def _member_key(
     members.
     """
     model = model_caches[member.config._model_index].get_any()
-    if not model.batches_estimators or any(d.type == "mps" for d in devices):
+    if not _batches(model.estimator_batch_budget) or any(
+        d.type == "mps" for d in devices
+    ):
         return ("single", index)
     return (member.config._model_index, tuple(member.X_train.shape))
 

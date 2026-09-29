@@ -16,7 +16,11 @@ from torch import Tensor, nn
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2
-from tabpfn.architectures.interface import Architecture, PerformanceOptions
+from tabpfn.architectures.interface import (
+    DEFAULT_ESTIMATOR_BATCH_BUDGET,
+    Architecture,
+    PerformanceOptions,
+)
 from tabpfn.architectures.kv_cache import KVCacheEntry
 from tabpfn.architectures.shared import workaround_mps_linear_bug
 from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
@@ -44,7 +48,7 @@ from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
 
 class _TestModel(Architecture):
-    batches_estimators = True
+    estimator_batch_budget = DEFAULT_ESTIMATOR_BATCH_BUDGET
 
     def __init__(self) -> None:
         """Create a new instance."""
@@ -112,7 +116,7 @@ class _TestModel(Architecture):
 
 
 class _TestModelLegacy(Architecture):
-    batches_estimators = True
+    estimator_batch_budget = DEFAULT_ESTIMATOR_BATCH_BUDGET
 
     """A test model whose forward pass doesn't have task_type argument."""
 
@@ -159,7 +163,7 @@ class _TestModelLegacy(Architecture):
 
 
 class _TestModelWithKVCache(Architecture):
-    batches_estimators = True
+    estimator_batch_budget = DEFAULT_ESTIMATOR_BATCH_BUDGET
 
     """A test model that supports explicit KV cache forward kwargs.
 

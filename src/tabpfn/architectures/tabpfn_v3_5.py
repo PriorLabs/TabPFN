@@ -2263,11 +2263,6 @@ class TabPFNV3p5(Architecture):
 
     @property
     @override
-    def batches_estimators(self) -> bool:
-        return True
-
-    @property
-    @override
     def estimator_batch_budget(self) -> EstimatorBatchBudget:
         return self._estimator_batch_budget
 
