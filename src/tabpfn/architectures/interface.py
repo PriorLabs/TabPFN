@@ -162,8 +162,8 @@ class ArchitectureModule(Protocol):
 
 
 @dataclasses.dataclass(frozen=True)
-class MemberBatchBudget:
-    """What one forward pass may carry summed over batched ensemble members.
+class EstimatorBatchBudget:
+    """What one forward pass may carry summed over batched estimators.
 
     Attributes:
         rows: Train plus test rows, or test rows when predicting from a KV cache.
@@ -174,10 +174,12 @@ class MemberBatchBudget:
     cells: int
 
 
-#: The budget of the architectures that batch members, unless their config says
+#: The budget of the architectures that batch estimators, unless their config says
 #: otherwise: the rows keep the ICL activations of a batch bounded, the cells are
-#: the widest and tallest table a single member already supports.
-DEFAULT_MEMBER_BATCH_BUDGET = MemberBatchBudget(rows=32_768, cells=768 * 1_000_000)
+#: the widest and tallest table a single estimator already supports.
+DEFAULT_ESTIMATOR_BATCH_BUDGET = EstimatorBatchBudget(
+    rows=32_768, cells=768 * 1_000_000
+)
 
 
 class Architecture(nn.Module, ABC):
@@ -288,18 +290,18 @@ class Architecture(nn.Module, ABC):
         return ("auto",)
 
     @property
-    def batches_ensemble_members(self) -> bool:
-        """Whether equal-shape ensemble members may run as one batched forward."""
+    def batches_estimators(self) -> bool:
+        """Whether equal-shape estimators may run as one batched forward pass."""
         return False
 
     @property
-    def member_batch_budget(self) -> MemberBatchBudget:
-        """How much one forward may carry summed over batched ensemble members.
+    def estimator_batch_budget(self) -> EstimatorBatchBudget:
+        """How much one forward may carry summed over batched estimators.
 
-        Read when ``batches_ensemble_members`` is true; the ``TABPFN_MAX_BATCHED_*``
+        Read when ``batches_estimators`` is true; the ``TABPFN_MAX_BATCHED_*``
         settings override it.
         """
-        return DEFAULT_MEMBER_BATCH_BUDGET
+        return DEFAULT_ESTIMATOR_BATCH_BUDGET
 
     @property
     @abstractmethod

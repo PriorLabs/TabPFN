@@ -11,14 +11,14 @@ import torch
 from numpy.random import default_rng
 
 from tabpfn.architectures import tabpfn_v3
-from tabpfn.architectures.interface import MemberBatchBudget
+from tabpfn.architectures.interface import EstimatorBatchBudget
 from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     _batch_member_inputs,
+    _estimator_batch_budget,
     _group_equal,
-    _member_batch_budget,
     _member_groups,
     _member_key,
     _members_per_forward,
@@ -125,7 +125,7 @@ def test__iter_outputs__batched_matches_sequential_in_member_order(
     model = _model()
     batched = _predict(_engine(kind, model))
 
-    monkeypatch.setattr(type(model), "batches_ensemble_members", False)
+    monkeypatch.setattr(type(model), "batches_estimators", False)
     sequential = _predict(_engine(kind, model))
 
     assert len(batched) == len(sequential) == N_MEMBERS
@@ -152,7 +152,7 @@ def test__iter_outputs__row_budget_bounds_the_rows_per_forward(
     cached = kind == "explicit_kv_cache"
     rows = N_TEST if cached else N_TRAIN + N_TEST
     monkeypatch.setattr(
-        settings.tabpfn, "max_batched_member_cells", 2 * rows * N_PREPARED_COLUMNS
+        settings.tabpfn, "max_batched_estimator_cells", 2 * rows * N_PREPARED_COLUMNS
     )
     calls: list[tuple[int, int]] = []
     original = type(model).forward
@@ -203,7 +203,7 @@ def test__explicit_kv_cache__built_one_member_at_a_time_matches_one_forward(
     model = _model()
     expected = _predict(_engine("explicit_kv_cache", model))
 
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", N_TRAIN)
+    monkeypatch.setattr(settings.tabpfn, "max_batched_estimator_rows", N_TRAIN)
     engine = _engine("explicit_kv_cache", model)
     assert isinstance(engine, InferenceEngineExplicitKVCache)
     assert engine.cache_groups == [list(range(N_MEMBERS))]
@@ -220,7 +220,7 @@ def test__explicit_kv_cache__zero_budget_keeps_one_cache_per_member(
     model = _model()
     expected = _predict(_engine("explicit_kv_cache", model))
 
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 0)
+    monkeypatch.setattr(settings.tabpfn, "max_batched_estimator_rows", 0)
     engine = _engine("explicit_kv_cache", model)
     assert isinstance(engine, InferenceEngineExplicitKVCache)
     assert engine.cache_groups == [[i] for i in range(N_MEMBERS)]
@@ -287,31 +287,31 @@ def test__member_groups__spreads_over_devices_before_batching() -> None:
 
 
 def test__members_per_forward__follows_the_tighter_of_both_budgets() -> None:
-    budget = MemberBatchBudget(rows=10_000, cells=10_000)
+    budget = EstimatorBatchBudget(rows=10_000, cells=10_000)
     assert _members_per_forward(100, 10, budget) == 10
     assert _members_per_forward(100, 20, budget) == 5
     assert _members_per_forward(2000, 10, budget) == 1
-    budget = MemberBatchBudget(rows=10_000, cells=10**9)
+    budget = EstimatorBatchBudget(rows=10_000, cells=10**9)
     assert _members_per_forward(100, 20, budget) == 100
     assert _members_per_forward(4000, 1, budget) == 2
-    assert _members_per_forward(1, 1, MemberBatchBudget(rows=0, cells=10**9)) == 1
+    assert _members_per_forward(1, 1, EstimatorBatchBudget(rows=0, cells=10**9)) == 1
 
 
-def test__member_batch_budget__model_default_then_settings_override(
+def test__estimator_batch_budget__model_default_then_settings_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The architecture's config sets the budget; a setting overrides one part."""
     model = _model()
-    assert _member_batch_budget(model) == MemberBatchBudget(
+    assert _estimator_batch_budget(model) == EstimatorBatchBudget(
         rows=32_768, cells=768 * 1_000_000
     )
     config = tabpfn_v3.TabPFNV3Config(
-        max_num_classes=10, num_buckets=5, max_batched_member_rows=5
+        max_num_classes=10, num_buckets=5, max_batched_estimator_rows=5
     )
     small = tabpfn_v3.get_architecture(config)
-    assert _member_batch_budget(small).rows == 5
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 7)
-    assert _member_batch_budget(small) == MemberBatchBudget(
+    assert _estimator_batch_budget(small).rows == 5
+    monkeypatch.setattr(settings.tabpfn, "max_batched_estimator_rows", 7)
+    assert _estimator_batch_budget(small) == EstimatorBatchBudget(
         rows=7, cells=768 * 1_000_000
     )
 

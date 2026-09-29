@@ -44,7 +44,7 @@ from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
 
 class _TestModel(Architecture):
-    batches_ensemble_members = True
+    batches_estimators = True
 
     def __init__(self) -> None:
         """Create a new instance."""
@@ -112,7 +112,7 @@ class _TestModel(Architecture):
 
 
 class _TestModelLegacy(Architecture):
-    batches_ensemble_members = True
+    batches_estimators = True
 
     """A test model whose forward pass doesn't have task_type argument."""
 
@@ -159,7 +159,7 @@ class _TestModelLegacy(Architecture):
 
 
 class _TestModelWithKVCache(Architecture):
-    batches_ensemble_members = True
+    batches_estimators = True
 
     """A test model that supports explicit KV cache forward kwargs.
 

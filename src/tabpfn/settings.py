@@ -69,24 +69,24 @@ class TabPFNSettings(BaseSettings):
         "are chunked. Performance is close to optimal at the default of 32768. "
         "Set to 0 to disable chunking.",
     )
-    max_batched_member_rows: int | None = Field(
+    max_batched_estimator_rows: int | None = Field(
         default=None,
         ge=0,
-        description="Overrides the model's row budget for batching ensemble "
-        "members: members whose rows (train plus test, or test only when predicting "
-        "from a KV cache) sum to at most this many run as one forward pass; longer "
-        "contexts run one member at a time. Unset, each architecture applies its "
-        "own default. Set to 0 to run every member in its own forward pass and its "
-        "own cache.",
+        description="Overrides the model's row budget for batching estimators: "
+        "estimators whose rows (train plus test, or test only when predicting from "
+        "a KV cache) sum to at most this many run as one forward pass; longer "
+        "contexts run one estimator at a time. Unset, each architecture applies its "
+        "own default. Set to 0 to run every estimator in its own forward pass and "
+        "its own cache.",
     )
-    max_batched_member_cells: int | None = Field(
+    max_batched_estimator_cells: int | None = Field(
         default=None,
         ge=0,
-        description="Overrides the model's cell budget for batching ensemble "
-        "members: members whose cells (rows times prepared columns) sum to at most "
-        "this many run as one forward pass. Applies together with the row budget. "
-        "Unset, each architecture applies its own default. Set to 0 to run every "
-        "member in its own forward pass and its own cache.",
+        description="Overrides the model's cell budget for batching estimators: "
+        "estimators whose cells (rows times prepared columns) sum to at most this "
+        "many run as one forward pass. Applies together with the row budget. Unset, "
+        "each architecture applies its own default. Set to 0 to run every estimator "
+        "in its own forward pass and its own cache.",
     )
 
     def model_post_init(self, _: Any) -> None:

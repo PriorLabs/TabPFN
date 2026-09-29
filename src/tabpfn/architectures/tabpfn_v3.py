@@ -42,10 +42,10 @@ import torch.utils.checkpoint
 from torch import nn
 
 from tabpfn.architectures.interface import (
-    DEFAULT_MEMBER_BATCH_BUDGET,
+    DEFAULT_ESTIMATOR_BATCH_BUDGET,
     Architecture,
     ArchitectureConfig,
-    MemberBatchBudget,
+    EstimatorBatchBudget,
     PerformanceOptions,
 )
 from tabpfn.architectures.kv_cache import (
@@ -172,19 +172,19 @@ class TabPFNV3Config(ArchitectureConfig):
     before.
     """
 
-    max_batched_member_rows: int = DEFAULT_MEMBER_BATCH_BUDGET.rows
-    """Rows one forward pass may carry summed over batched ensemble members.
+    max_batched_estimator_rows: int = DEFAULT_ESTIMATOR_BATCH_BUDGET.rows
+    """Rows one forward pass may carry summed over batched estimators.
 
-    Bounds the ICL activations of a batch; longer contexts run one member at a
+    Bounds the ICL activations of a batch; longer contexts run one estimator at a
     time.
     """
 
-    max_batched_member_cells: int = DEFAULT_MEMBER_BATCH_BUDGET.cells
+    max_batched_estimator_cells: int = DEFAULT_ESTIMATOR_BATCH_BUDGET.cells
     """Cells (rows times prepared columns) one forward pass may carry summed over
-    batched ensemble members.
+    batched estimators.
 
     Bounds the stage 0-2 activations; the default is the widest and tallest table
-    a single member supports.
+    a single estimator supports.
     """
 
     inference_col_chunk_size: int = 4
@@ -1868,20 +1868,21 @@ class TabPFNV3(Architecture):
         self._nan_safe_output = True
         self.emsize = config.embed_dim
         self.inference_chunk_cells = config.inference_chunk_cells
-        self._member_batch_budget = MemberBatchBudget(
-            rows=config.max_batched_member_rows, cells=config.max_batched_member_cells
+        self._estimator_batch_budget = EstimatorBatchBudget(
+            rows=config.max_batched_estimator_rows,
+            cells=config.max_batched_estimator_cells,
         )
         self.inference_col_chunk_size = config.inference_col_chunk_size
 
     @property
     @override
-    def batches_ensemble_members(self) -> bool:
+    def batches_estimators(self) -> bool:
         return True
 
     @property
     @override
-    def member_batch_budget(self) -> MemberBatchBudget:
-        return self._member_batch_budget
+    def estimator_batch_budget(self) -> EstimatorBatchBudget:
+        return self._estimator_batch_budget
 
     @property
     @override
