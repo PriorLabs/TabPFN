@@ -153,6 +153,14 @@ def clean_data_transform(
     Returns:
         The cleaned data as a float64 array.
     """
+    if constant_values := getattr(ord_encoder, "constant_values_", None):
+        # A column constant at fit gets its fit-time value back, so it is cleaned
+        # exactly as at fit, whatever it holds at predict.
+        has_string = any(isinstance(v, str) for v in constant_values.values())
+        X = X.astype(object if has_string else X.dtype)
+        for index, value in constant_values.items():
+            X[:, index] = value
+
     if _is_plain_numeric_array(X) and _encoder_selects_nothing(ord_encoder):
         # `passthrough_inf` makes no difference here: it records the +/-inf cells,
         # NaNs them so the encoder does not choke, and writes them back at the same
@@ -189,6 +197,12 @@ def clean_data(
 
     # Ensure categories are ordinally encoded
     ord_encoder = get_ordinal_encoder()
+    # Restored by `clean_data_transform`, so these columns carry no information at
+    # predict and never meet a value, e.g. a string, that fit did not see.
+    ord_encoder.constant_values_ = {  # type: ignore[attr-defined]
+        index: X[0, index]
+        for index in feature_schema.indices_for(FeatureModality.CONSTANT)
+    }
 
     if not cat_indices and _is_plain_numeric_array(X):
         # A numeric array holds no string cell, so with no categorical column
