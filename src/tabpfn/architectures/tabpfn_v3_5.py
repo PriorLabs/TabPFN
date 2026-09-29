@@ -44,8 +44,10 @@ import torch.utils.checkpoint
 from torch import nn
 
 from tabpfn.architectures.interface import (
+    DEFAULT_MEMBER_BATCH_BUDGET,
     Architecture,
     ArchitectureConfig,
+    MemberBatchBudget,
     PerformanceOptions,
 )
 from tabpfn.architectures.kv_cache import (
@@ -184,6 +186,21 @@ class TabPFNV3p5Config(ArchitectureConfig):
 
     Rows per chunk are this divided by the batch size times the column count, so
     narrower inputs and smaller batches get more rows per chunk.
+    """
+
+    max_batched_member_rows: int = DEFAULT_MEMBER_BATCH_BUDGET.rows
+    """Rows one forward pass may carry summed over batched ensemble members.
+
+    Bounds the ICL activations of a batch; longer contexts run one member at a
+    time.
+    """
+
+    max_batched_member_cells: int = DEFAULT_MEMBER_BATCH_BUDGET.cells
+    """Cells (rows times prepared columns) one forward pass may carry summed over
+    batched ensemble members.
+
+    Bounds the stage 0-2 activations; the default is the widest and tallest table
+    a single member supports.
     """
 
     inference_col_chunk_size: int = 4
@@ -2227,6 +2244,9 @@ class TabPFNV3p5(Architecture):
         self._icl_bf16 = False
         self.emsize = config.embed_dim
         self.inference_chunk_cells = config.inference_chunk_cells
+        self._member_batch_budget = MemberBatchBudget(
+            rows=config.max_batched_member_rows, cells=config.max_batched_member_cells
+        )
         self.inference_col_chunk_size = config.inference_col_chunk_size
 
     @property
@@ -2244,6 +2264,11 @@ class TabPFNV3p5(Architecture):
     @override
     def batches_ensemble_members(self) -> bool:
         return True
+
+    @property
+    @override
+    def member_batch_budget(self) -> MemberBatchBudget:
+        return self._member_batch_budget
 
     @property
     @override

@@ -161,6 +161,25 @@ class ArchitectureModule(Protocol):
         ...
 
 
+@dataclasses.dataclass(frozen=True)
+class MemberBatchBudget:
+    """What one forward pass may carry summed over batched ensemble members.
+
+    Attributes:
+        rows: Train plus test rows, or test rows when predicting from a KV cache.
+        cells: Rows times prepared columns.
+    """
+
+    rows: int
+    cells: int
+
+
+#: The budget of the architectures that batch members, unless their config says
+#: otherwise: the rows keep the ICL activations of a batch bounded, the cells are
+#: the widest and tallest table a single member already supports.
+DEFAULT_MEMBER_BATCH_BUDGET = MemberBatchBudget(rows=32_768, cells=768 * 1_000_000)
+
+
 class Architecture(nn.Module, ABC):
     """The interface that all architectures must implement.
 
@@ -272,6 +291,15 @@ class Architecture(nn.Module, ABC):
     def batches_ensemble_members(self) -> bool:
         """Whether equal-shape ensemble members may run as one batched forward."""
         return False
+
+    @property
+    def member_batch_budget(self) -> MemberBatchBudget:
+        """How much one forward may carry summed over batched ensemble members.
+
+        Read when ``batches_ensemble_members`` is true; the ``TABPFN_MAX_BATCHED_*``
+        settings override it.
+        """
+        return DEFAULT_MEMBER_BATCH_BUDGET
 
     @property
     @abstractmethod

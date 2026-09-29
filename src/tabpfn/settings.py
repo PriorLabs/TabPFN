@@ -69,29 +69,24 @@ class TabPFNSettings(BaseSettings):
         "are chunked. Performance is close to optimal at the default of 32768. "
         "Set to 0 to disable chunking.",
     )
-    max_batched_member_rows: int = Field(
-        default=32_768,
+    max_batched_member_rows: int | None = Field(
+        default=None,
         ge=0,
-        description="Row budget of one forward pass shared by several ensemble "
+        description="Overrides the model's row budget for batching ensemble "
         "members: members whose rows (train plus test, or test only when predicting "
-        "from a KV cache) sum to at most this many run as one batch. Bounds the ICL "
-        "activations of the batch, which grow with rows whatever the width, and "
-        "keeps batching to the short contexts where it pays; longer ones run one "
-        "member at a time. A KV cache holds all members of a device and predicts "
-        "them as one batch, chunked by test rows; the budget bounds how many build "
-        "their cache together. Set to 0 to run every member in its own forward "
-        "pass and its own cache.",
+        "from a KV cache) sum to at most this many run as one forward pass; longer "
+        "contexts run one member at a time. Unset, each architecture applies its "
+        "own default. Set to 0 to run every member in its own forward pass and its "
+        "own cache.",
     )
-    max_batched_member_cells: int = Field(
-        default=768 * 1_000_000,
+    max_batched_member_cells: int | None = Field(
+        default=None,
         ge=0,
-        description="Cell budget of one forward pass shared by several ensemble "
+        description="Overrides the model's cell budget for batching ensemble "
         "members: members whose cells (rows times prepared columns) sum to at most "
-        "this many run as one batch. Bounds the stage 0-2 activations, which grow "
-        "with width; the default is the widest and tallest table a single member "
-        "already supports. Applies together with the row budget, with the same "
-        "meaning for a KV cache. Set to 0 to run every member in its own forward "
-        "pass and its own cache.",
+        "this many run as one forward pass. Applies together with the row budget. "
+        "Unset, each architecture applies its own default. Set to 0 to run every "
+        "member in its own forward pass and its own cache.",
     )
 
     def model_post_init(self, _: Any) -> None:

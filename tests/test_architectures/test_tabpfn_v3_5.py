@@ -153,6 +153,8 @@ def test__config__defaults__match_the_v3_5_checkpoint() -> None:
         "cell_ecdf_num_buckets": 8192,
         "cell_embed_row_chunk_size": 2048,
         "inference_chunk_cells": 2048 * 768,
+        "max_batched_member_rows": 32_768,
+        "max_batched_member_cells": 768 * 1_000_000,
         "inference_col_chunk_size": 4,
     }
 

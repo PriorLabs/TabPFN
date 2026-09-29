@@ -11,12 +11,14 @@ import torch
 from numpy.random import default_rng
 
 from tabpfn.architectures import tabpfn_v3
+from tabpfn.architectures.interface import MemberBatchBudget
 from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     _batch_member_inputs,
     _group_equal,
+    _member_batch_budget,
     _member_groups,
     _member_key,
     _members_per_forward,
@@ -284,19 +286,34 @@ def test__member_groups__spreads_over_devices_before_batching() -> None:
     ]
 
 
-def test__members_per_forward__follows_the_tighter_of_both_budgets(
+def test__members_per_forward__follows_the_tighter_of_both_budgets() -> None:
+    budget = MemberBatchBudget(rows=10_000, cells=10_000)
+    assert _members_per_forward(100, 10, budget) == 10
+    assert _members_per_forward(100, 20, budget) == 5
+    assert _members_per_forward(2000, 10, budget) == 1
+    budget = MemberBatchBudget(rows=10_000, cells=10**9)
+    assert _members_per_forward(100, 20, budget) == 100
+    assert _members_per_forward(4000, 1, budget) == 2
+    assert _members_per_forward(1, 1, MemberBatchBudget(rows=0, cells=10**9)) == 1
+
+
+def test__member_batch_budget__model_default_then_settings_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 10_000)
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 10_000)
-    assert _members_per_forward(rows_per_member=100, columns_per_member=10) == 10
-    assert _members_per_forward(rows_per_member=100, columns_per_member=20) == 5
-    assert _members_per_forward(rows_per_member=2000, columns_per_member=10) == 1
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_cells", 10**9)
-    assert _members_per_forward(rows_per_member=100, columns_per_member=20) == 100
-    assert _members_per_forward(rows_per_member=4000, columns_per_member=1) == 2
-    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 0)
-    assert _members_per_forward(rows_per_member=1, columns_per_member=1) == 1
+    """The architecture's config sets the budget; a setting overrides one part."""
+    model = _model()
+    assert _member_batch_budget(model) == MemberBatchBudget(
+        rows=32_768, cells=768 * 1_000_000
+    )
+    config = tabpfn_v3.TabPFNV3Config(
+        max_num_classes=10, num_buckets=5, max_batched_member_rows=5
+    )
+    small = tabpfn_v3.get_architecture(config)
+    assert _member_batch_budget(small).rows == 5
+    monkeypatch.setattr(settings.tabpfn, "max_batched_member_rows", 7)
+    assert _member_batch_budget(small) == MemberBatchBudget(
+        rows=7, cells=768 * 1_000_000
+    )
 
 
 def test__batch_member_inputs__lays_members_along_the_batch_dimension() -> None:
