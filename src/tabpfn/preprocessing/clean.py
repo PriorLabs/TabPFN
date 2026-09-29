@@ -156,8 +156,10 @@ def clean_data_transform(
     if constant_values := getattr(ord_encoder, "constant_values_", None):
         # A column constant at fit gets its fit-time value back, so it is cleaned
         # exactly as at fit, whatever it holds at predict.
-        has_string = any(isinstance(v, str) for v in constant_values.values())
-        X = X.astype(object if has_string else X.dtype)
+        numeric = all(
+            isinstance(v, (int, float, np.number)) for v in constant_values.values()
+        )
+        X = X.astype(np.float64 if numeric and X.dtype.kind in "biuf" else object)
         for index, value in constant_values.items():
             X[:, index] = value
 

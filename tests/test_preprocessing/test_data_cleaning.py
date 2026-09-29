@@ -579,6 +579,22 @@ def test__fit_predict__constant_column_carries_no_information_at_predict(
     np.testing.assert_array_equal(model.predict(X_test), model.predict(X.iloc[:5]))
 
 
+def test__clean_data_transform__all_nan_column_with_integer_predict_array() -> None:
+    schema = FeatureSchema(
+        features=[
+            Feature(name="x", modality=FeatureModality.NUMERICAL),
+            Feature(name="empty", modality=FeatureModality.CONSTANT),
+        ]
+    )
+    _, ord_encoder, _ = clean_data(np.array([[1.0, np.nan], [2.0, np.nan]]), schema)
+
+    X_out = clean_data_transform(
+        np.array([[3, 7]]), cat_indices=[], ord_encoder=ord_encoder
+    )
+
+    np.testing.assert_array_equal(X_out, [[3.0, np.nan]])
+
+
 def test__classifier_fit__string_category_plus_nullable_dtype() -> None:
     """A string category alongside a pandas nullable dtype must not crash at fit.
 
