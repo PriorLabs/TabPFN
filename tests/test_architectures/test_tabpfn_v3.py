@@ -174,7 +174,7 @@ def test__mem_eff_forward_matches_standard_forward() -> None:
 
     # Memory-efficient path: small fixed chunk sizes to force chunking
     # even on this tiny dataset.
-    arch.inference_row_chunk_size = 50
+    arch.inference_chunk_cells = 50 * 2 * 20  # 50 rows of the (100, 2, 20) inputs
     arch.inference_col_chunk_size = 10
     output_mem_eff = arch(
         x,
@@ -218,7 +218,7 @@ def test__chunked_inference_recovers_from_oom(
     expected = arch(x, y, only_return_standard_out=False)
 
     # Force chunking so the inducing-hidden (column) recovery path is exercised.
-    arch.inference_row_chunk_size = 50
+    arch.inference_chunk_cells = 50 * 2 * 20  # 50 rows of the (100, 2, 20) inputs
     arch.inference_col_chunk_size = 10
 
     # Raise a single OOM the first time a column chunk is processed, so the
@@ -332,11 +332,11 @@ def test__kv_cache__multiclass_matches_standard() -> None:
 
 @torch.no_grad()
 def test__kv_cache__row_chunked_matches_unchunked() -> None:
-    """Cached forward with a small inference_row_chunk_size must match unchunked.
+    """Cached forward with a small inference_chunk_cells must match unchunked.
 
     Exercises the chunked branch of ``_forward_with_cache`` (R_test >
     row_chunk_size), which the existing cache tests don't hit because
-    ``inference_row_chunk_size="auto"`` short-circuits to a single chunk
+    a large ``inference_chunk_cells`` short-circuits to a single chunk
     on small R_test.
     """
     arch = _get_regression_model()
@@ -352,7 +352,7 @@ def test__kv_cache__row_chunked_matches_unchunked() -> None:
     _, cache = arch(x, y, performance_options=perf, return_kv_cache=True)
 
     # Force multi-chunk test-row processing: 10 test rows / 3 per chunk = 4 chunks
-    arch.inference_row_chunk_size = 3
+    arch.inference_chunk_cells = 3 * 5  # 3 rows of the 5-column inputs
     out_cached_chunked = arch(x, y, performance_options=perf, kv_cache=cache)
 
     assert torch.allclose(out_standard, out_cached_chunked, atol=1e-6), (
@@ -904,3 +904,34 @@ def test__kv_cache__adaptive__stores_the_grid_the_train_call_left() -> None:
     for entry in cache.kv.values():
         assert isinstance(entry, QuantizedKVCacheEntry)
         assert entry.key.dtype == FP8_KV_DTYPE
+
+
+@torch.no_grad()
+def test__row_chunking__shares_the_chunk_rows_over_the_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A batch of B members runs B times as many, B times smaller row chunks."""
+    arch = _get_regression_model().eval()  # chunked inference is off in training
+    arch.inference_chunk_cells = 8 * 5  # 8 rows of the 5-column inputs
+    perf = PerformanceOptions(use_chunkwise_inference=True)
+    torch.manual_seed(0)
+    x = torch.randn(32, 4, 5) * 0.1
+    y = torch.randn(16, 4)
+
+    chunks: list[int] = []
+    original = tabpfn_v3.TabPFNV3._process_row_chunk
+
+    def counting(self: tabpfn_v3.TabPFNV3, *args: object, **kwargs: object) -> object:
+        chunks.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(tabpfn_v3.TabPFNV3, "_process_row_chunk", counting)
+    out_batched = arch(x, y, performance_options=perf)
+    batched_chunks = len(chunks)
+    chunks.clear()
+    out_single = arch(x[:, :1], y[:, :1], performance_options=perf)
+    single_chunks = len(chunks)
+
+    assert single_chunks == 32 // 8
+    assert batched_chunks == 4 * single_chunks
+    torch.testing.assert_close(out_batched[:, :1], out_single, atol=1e-5, rtol=1e-5)

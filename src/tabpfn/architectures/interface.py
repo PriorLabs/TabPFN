@@ -161,6 +161,27 @@ class ArchitectureModule(Protocol):
         ...
 
 
+@dataclasses.dataclass(frozen=True)
+class EstimatorBatchBudget:
+    """What one forward pass may carry summed over batched estimators.
+
+    Attributes:
+        rows: Train plus test rows, or test rows when predicting from a KV cache.
+        cells: Rows times prepared columns.
+    """
+
+    rows: int
+    cells: int
+
+
+#: The budget of the architectures that batch estimators, unless their config says
+#: otherwise: the rows keep the ICL activations of a batch bounded, the cells are
+#: the widest and tallest table a single estimator already supports.
+DEFAULT_ESTIMATOR_BATCH_BUDGET = EstimatorBatchBudget(
+    rows=32_768, cells=768 * 1_000_000
+)
+
+
 class Architecture(nn.Module, ABC):
     """The interface that all architectures must implement.
 
@@ -267,6 +288,16 @@ class Architecture(nn.Module, ABC):
         e.g. ``"int8"``.
         """
         return ("auto",)
+
+    @property
+    def estimator_batch_budget(self) -> EstimatorBatchBudget:
+        """How much one forward may carry summed over batched estimators.
+
+        A zero budget means the architecture cannot run equal-shape estimators as
+        one batched forward pass; the ``TABPFN_MAX_BATCHED_*`` settings override
+        any other budget.
+        """
+        return EstimatorBatchBudget(rows=0, cells=0)
 
     @property
     @abstractmethod

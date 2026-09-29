@@ -16,7 +16,11 @@ from torch import Tensor, nn
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2
-from tabpfn.architectures.interface import Architecture, PerformanceOptions
+from tabpfn.architectures.interface import (
+    DEFAULT_ESTIMATOR_BATCH_BUDGET,
+    Architecture,
+    PerformanceOptions,
+)
 from tabpfn.architectures.kv_cache import KVCacheEntry
 from tabpfn.architectures.shared import workaround_mps_linear_bug
 from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
@@ -44,6 +48,8 @@ from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
 
 class _TestModel(Architecture):
+    estimator_batch_budget = DEFAULT_ESTIMATOR_BATCH_BUDGET
+
     def __init__(self) -> None:
         """Create a new instance."""
         super().__init__()
@@ -89,10 +95,12 @@ class _TestModel(Architecture):
         assert isinstance(x, Tensor)
         assert isinstance(y, Tensor)
         self.received_task_type = task_type
-        n_train_test, _, _ = x.shape
-        n_train, _ = y.shape
-        test_rows = n_train_test - n_train
-        return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+        n_train = y.shape[0]
+        # (test rows, batch, 1): each test row's feature sum plus the train rows'
+        # mean feature sum, per batch element, so the output depends on both
+        return x[n_train:].sum(-1, keepdim=True) + x[:n_train].sum(
+            -1, keepdim=True
+        ).mean(0, keepdim=True)
 
     @property
     @override
@@ -108,6 +116,8 @@ class _TestModel(Architecture):
 
 
 class _TestModelLegacy(Architecture):
+    estimator_batch_budget = DEFAULT_ESTIMATOR_BATCH_BUDGET
+
     """A test model whose forward pass doesn't have task_type argument."""
 
     def __init__(self) -> None:
@@ -132,10 +142,12 @@ class _TestModelLegacy(Architecture):
         """Perform a forward pass."""
         assert isinstance(x, Tensor)
         assert isinstance(y, Tensor)
-        n_train_test, _, _ = x.shape
-        n_train, _ = y.shape
-        test_rows = n_train_test - n_train
-        return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+        n_train = y.shape[0]
+        # (test rows, batch, 1): each test row's feature sum plus the train rows'
+        # mean feature sum, per batch element, so the output depends on both
+        return x[n_train:].sum(-1, keepdim=True) + x[:n_train].sum(
+            -1, keepdim=True
+        ).mean(0, keepdim=True)
 
     @property
     @override
@@ -151,6 +163,8 @@ class _TestModelLegacy(Architecture):
 
 
 class _TestModelWithKVCache(Architecture):
+    estimator_batch_budget = DEFAULT_ESTIMATOR_BATCH_BUDGET
+
     """A test model that supports explicit KV cache forward kwargs.
 
     Counters track how often each path runs so tests can assert that the
@@ -180,36 +194,26 @@ class _TestModelWithKVCache(Architecture):
     ) -> Tensor | tuple[Tensor, TabPFNV3Cache]:
         assert isinstance(x, Tensor)
         assert isinstance(y, Tensor)
-        n_rows = x.shape[0]
         n_train = y.shape[0]
-        if x_is_test_only:
-            # Test-only path: x carries only test rows
-            test_rows = n_rows
-            output = (
-                x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
-            )
-        else:
-            test_rows = n_rows - n_train
-            if test_rows > 0:
-                output = (
-                    x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
-                )
-            else:
-                # Train-only call (e.g. _build_cache) — output is discarded
-                output = x.new_zeros(1, 1)
-
+        batch = x.shape[1]
+        # (test rows, batch, 1): each test row's feature sum, per batch element. On
+        # the test-only path x carries only test rows; a train-only call (e.g.
+        # _build_cache) has no test rows and its output is discarded.
+        test_x = x if x_is_test_only else x[n_train:]
+        output = test_x.sum(-1, keepdim=True)
         if return_kv_cache:
             self.cache_build_count += 1
             self.cache_build_task_type = task_type
-            # Build a dummy cache with a single KVCacheEntry
+            # Build a dummy cache with a single KVCacheEntry, one batch position
+            # per ensemble member in the batch
             dummy_kv = KVCacheEntry(
-                key=torch.zeros(1, n_train, 1, 1, device=x.device),
-                value=torch.zeros(1, n_train, 1, 1, device=x.device),
+                key=torch.zeros(batch, n_train, 1, 1, device=x.device),
+                value=torch.zeros(batch, n_train, 1, 1, device=x.device),
             )
             cache = TabPFNV3Cache(
                 kv={0: dummy_kv},
-                decoder_keys=torch.zeros(1, n_train, 1, 1, device=x.device),
-                train_shape=(1, n_train),
+                decoder_keys=torch.zeros(batch, n_train, 1, 1, device=x.device),
+                train_shape=(batch, n_train),
             )
             return output, cache
 
@@ -557,18 +561,22 @@ def test__explicit_kv_cache__produces_outputs() -> None:
         autocast=False,
         task_type="multiclass",
     )
-    # _build_cache runs once per ensemble member during engine construction.
-    assert model.cache_build_count == n_configs
+    # _build_cache runs once per group of members sharing a prepared shape; the
+    # two preprocessor configs give two shapes, so two caches for three members.
+    assert len(engine.kv_caches) == len(engine.cache_groups) == 2
+    assert sorted(i for group in engine.cache_groups for i in group) == list(
+        range(n_configs)
+    )
+    assert model.cache_build_count == len(engine.kv_caches)
     assert model.cache_used_count == 0
-    assert len(engine.kv_caches) == n_configs
 
     outputs = list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))
     assert len(outputs) == n_configs
     for output, _config in outputs:
         assert isinstance(output, Tensor)
     # Predict consumed each cache once and did not rebuild any of them.
-    assert model.cache_build_count == n_configs
-    assert model.cache_used_count == n_configs
+    assert model.cache_build_count == len(engine.kv_caches)
+    assert model.cache_used_count == len(engine.kv_caches)
 
 
 def test__explicit_kv_cache__drops_member_train_features_after_build() -> None:
