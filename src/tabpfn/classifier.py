@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 import warnings
 from collections.abc import Callable, Sequence
@@ -277,6 +278,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "batched",
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
+        enable_torch_compile: bool = False,
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
@@ -486,6 +488,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     This does not batch the original input data. We still recommend to
                     batch the test set as necessary if you run out of memory.
 
+            enable_torch_compile:
+                Compile the regions supported by the model architecture. Compilation
+                can speed up repeated inference but adds startup cost to the first
+                prediction, or to fitting when building a key-value cache. Disabled
+                by default. Architectures without compilation support ignore it.
+
             keep_cache_on_device:
                 Only relevant when `fit_mode="fit_with_cache"`. If True
                 (default), the key-value cache is kept on the inference
@@ -588,6 +596,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.fit_mode = fit_mode
         self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
+        self.enable_torch_compile = enable_torch_compile
         self.keep_cache_on_device = keep_cache_on_device
         self.kv_cache_precision = kv_cache_precision
         self.random_state = random_state
@@ -1018,6 +1027,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
+            enable_torch_compile=self.enable_torch_compile,
             use_autocast_=self.use_autocast_,
             task_type="multiclass",
             inference_mode=True,
@@ -1051,6 +1061,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             configs: Ensemble configurations obtained from the preprocessed Dataset
             performance_options: Performance and memory options forwarded to the
                 model on each forward call inside the resulting executor.
+                Compilation is enabled if either these options or the estimator's
+                `enable_torch_compile` parameter enables it.
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
@@ -1105,7 +1117,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             force_inference_dtype=self.forced_inference_dtype_,
             save_peak_mem=self.memory_saving_mode,
             inference_mode=not self.differentiable_input,
-            performance_options=performance_options,
+            performance_options=dataclasses.replace(
+                performance_options,
+                enable_torch_compile=(
+                    self.enable_torch_compile
+                    or performance_options.enable_torch_compile
+                ),
+            ),
         )
 
         return self
@@ -1399,6 +1417,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             force_inference_dtype=self.forced_inference_dtype_,
             save_peak_mem=self.memory_saving_mode,
             inference_mode=False,
+            enable_torch_compile=self.enable_torch_compile,
         )
 
         return self

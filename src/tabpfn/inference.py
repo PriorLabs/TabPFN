@@ -560,6 +560,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
+        enable_torch_compile: bool = False,
     ) -> None:
         """Initialize the on-demand inference engine.
 
@@ -574,7 +575,9 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            enable_torch_compile: Enable the architecture's compiled regions.
         """
+        self.enable_torch_compile = enable_torch_compile
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
@@ -700,6 +703,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             X_tests=X_tests,
             force_inference_dtype=self.force_inference_dtype,
             autocast=autocast,
+            enable_torch_compile=self.enable_torch_compile,
             inference_mode=True,
             only_return_standard_out=only_return_standard_out,
             save_peak_mem=save_peak_mem,
@@ -852,7 +856,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     the ``TABPFN_MAX_BATCHED_ESTIMATOR_ROWS`` and ``_CELLS`` settings override.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
@@ -865,6 +869,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
         no_preprocessing: bool = False,
+        enable_torch_compile: bool = False,
     ) -> None:
         """Initialize the cache preprocessing inference engine.
 
@@ -879,11 +884,13 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            enable_torch_compile: Enable the architecture's compiled regions.
             inference_mode: Whether to use torch.inference mode
                 (this is quicker but disables backpropagation)
             no_preprocessing: If True, skip preprocessing on test data.
                 Used for differentiability.
         """
+        self.enable_torch_compile = enable_torch_compile
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
@@ -1009,6 +1016,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             X_tests=X_tests,
             force_inference_dtype=self.force_inference_dtype,
             autocast=autocast,
+            enable_torch_compile=self.enable_torch_compile,
             inference_mode=self.inference_mode,
             only_return_standard_out=only_return_standard_out,
             save_peak_mem=save_peak_mem,
@@ -1095,6 +1103,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         task_type: str,
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+        enable_torch_compile: bool = False,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -1113,6 +1122,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             dtype_byte_size: Size of the dtype in bytes.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            enable_torch_compile: Enable the architecture's compiled regions.
             autocast: Whether to use torch.autocast during cache build.
             task_type: The task type, e.g. "multiclass" or "regression". Needed
                 at build time because the cached activations are task-specific,
@@ -1131,6 +1141,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 dtype; ``"adaptive"`` follows the grid an attention backend
                 left the keys and values on, else ``"int8"``.
         """
+        self.enable_torch_compile = enable_torch_compile
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
@@ -1260,6 +1271,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         performance_options = dataclasses.replace(
             model.get_default_performance_options(),
+            enable_torch_compile=self.enable_torch_compile,
             save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
             if save_peak_mem
             else None,
@@ -1430,6 +1442,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         performance_options = dataclasses.replace(
             model.get_default_performance_options(),
+            enable_torch_compile=self.enable_torch_compile,
             save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
             if save_peak_mem
             else None,
@@ -1540,7 +1553,7 @@ def _concat_test_chunks(
     }
 
 
-def _call_model_on_members(
+def _call_model_on_members(  # noqa: PLR0913
     model_caches: list[_PerDeviceModelCache],
     *,
     device: torch.device,
@@ -1549,6 +1562,7 @@ def _call_model_on_members(
     force_inference_dtype: torch.dtype | None,
     autocast: bool,
     inference_mode: bool,
+    enable_torch_compile: bool,
     only_return_standard_out: bool,
     save_peak_mem: bool,
     task_type: str,
@@ -1576,6 +1590,7 @@ def _call_model_on_members(
         )
     performance_options = dataclasses.replace(
         model.get_default_performance_options(),
+        enable_torch_compile=enable_torch_compile,
         save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
         if save_peak_mem
         else None,
