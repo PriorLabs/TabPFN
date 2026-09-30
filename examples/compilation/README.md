@@ -62,9 +62,28 @@ python examples/compilation/shapes.py \
   --out examples/compilation/results/dynamic-shapes.json
 ```
 
-This exercises full, singleton-batch, and chunked paths. It requires graph counts
-to remain stable as shapes change within each path, and records numerical
-differences versus eager execution.
+This exercises full, singleton-batch, and chunked paths. It records new and
+cumulative graph counts as shapes change, eager/compiled timings, and numerical
+differences versus eager execution. Recompilation is an observation rather than
+a failing assertion. A failed path is recorded and stopped without retries.
+
+To additionally test model KV-cache creation and reuse, plus compiler disk-cache
+reuse in a fresh process, against a specific checkout:
+
+```bash
+python examples/compilation/run_shapes.py \
+  --repo /path/to/TabPFN-checkout \
+  --checkpoint ~/.cache/tabpfn/tabpfn-v3.5-fast-20260909.safetensors \
+  --out examples/compilation/results/shape-cache-run-1
+```
+
+The runner uses separate compiler caches for the cases with and without model
+KV caching. Each starts empty and is reused in a second process. Model KV caches
+are rebuilt for each training dataset, then reused for 256, 512, and 768 test
+rows with that context fixed. Eager references run before each compiled call.
+Failed paths are excluded from the disk-cache replay; each process has a
+10-minute timeout. These direct model probes use FP16 autocast, numeric random
+inputs, and the same row/column/batch shapes as the original shape check.
 
 The harness runs three separate processes: eager, compiled with empty dedicated
 Inductor/Triton caches, and compiled reusing those disk caches. Each measures the
