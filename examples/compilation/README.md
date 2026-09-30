@@ -44,6 +44,10 @@ The output directory must not exist. Defaults are 50,000 numeric training rows,
 (`auto_scale_n_estimators=False`). Shape arguments can override these defaults.
 Current main's ensemble batching policy is retained.
 
+Pass `--repo /path/to/another/TabPFN/checkout` to run the same harness against
+another revision, including unmodified main. The runner records the imported
+checkout's revision and source path.
+
 The sklearn API does not directly expose `PerformanceOptions`. The benchmark
 uses a forward pre-hook to set that option on its own estimator instances; it
 does not replace any architecture methods. Region selection is implemented in
@@ -108,6 +112,41 @@ differences stayed below 0.000486, while label agreement varied from 98.3% to
 CPU validation passed the selective-compilation, changing-shape, KV-cache,
 serialization, flag-toggle, and gradient checks, plus the existing architecture
 tests. Full measurements are in [native_flag_20260930.json](native_flag_20260930.json).
+
+## Unmodified main comparison, 2026-09-30
+
+The same harness also ran against unmodified main at `09b4188e`, the base of
+this branch, in a separate detached worktree. Hardware, PyTorch, checkpoint,
+numeric dataset, precision, and ensemble size matched the native flag run above:
+50,000 training rows, 1,024 test rows, 200 features, and four estimators.
+Eager predictions were bit-identical across the two revisions.
+
+| Implementation | First prediction, empty caches | First prediction, disk caches reused | Warm prediction | Peak allocated GPU memory |
+| --- | ---: | ---: | ---: | ---: |
+| Main, eager | 10.04 s | N/A | 9.60 s | 7.12 GB |
+| Main, existing compile flag | 95.38 s | 45.32 s | 4.53 s | 4.04 GB |
+| This branch, smaller compiled regions | 23.35 s | 11.88 s | 5.05 s | 4.84 GB |
+
+Main's larger regions reduced warm prediction time by another 10.3% versus this
+branch, and used less GPU memory. The smaller regions reduced the first-call
+time by 4.1x with empty caches and 3.8x with disk caches. First-call measurements
+include prediction execution, but exclude imports, data generation, and fit.
+Warm timings use the empty-cache process's two subsequent predictions; the
+cached main process was similar at 4.52 s.
+
+Main captured 4,524 operations across four FX graphs, versus 424 operations
+across seven graphs on this branch. Disk cache reuse still involves tracing
+and graph processing; the cached first call is not equivalent to a warm call.
+The smaller regions favor short jobs and frequent process starts, while main's
+larger regions retain an advantage for many repeated predictions of this shape.
+Changing-shape reuse on main was not tested in this run.
+
+Main completed without intervention despite symbolic-shape warnings. All
+benchmark checks passed: finite normalized probabilities, exact repeatability,
+no graph breaks, four FX graph cache hits and no misses in the cached process,
+and identical cold/cached outputs. All predicted labels matched eager on this
+dataset; mean absolute probability difference was 0.0000429 and maximum 0.00778.
+Full measurements are in [main_flag_20260930.json](main_flag_20260930.json).
 
 ## Original runtime-patch RTX check, 2026-09-30
 

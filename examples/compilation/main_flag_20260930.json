@@ -1,0 +1,141 @@
+{
+  "revision": "09b4188e2e04cc4cb2eb6c88c87d2f58e5338b84",
+  "torch": "2.10.0+cu128",
+  "cuda": "12.8",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "checkpoint_sha256": "14e0b81285bca7a6d1ef121169f27f651f76dff49cad6c0b8779d5c836018550",
+  "compilation_control": "PerformanceOptions.enable_torch_compile",
+  "source": "Unmodified main in a separate detached worktree",
+  "shape": {
+    "train": 50000,
+    "test": 1024,
+    "features": 200,
+    "estimators": 4
+  },
+  "timing_scope": "predict_proba only; first call excludes imports, data generation and fit; warm median of two subsequent calls.",
+  "measurements": {
+    "eager": {
+      "times_s": [
+        10.042938983009662,
+        9.604574705997948,
+        9.604382594989147
+      ],
+      "warm_median_s": 9.604478650493547,
+      "fit_s": 0.26536141097312793,
+      "peak_allocated_gb_per_call": [
+        7.115054592,
+        7.115054592,
+        7.115054592
+      ],
+      "all_finite": true,
+      "repeat_max_abs": 0.0,
+      "probability_sum_max_error": 1.1920928955078125e-07,
+      "counters": {}
+    },
+    "compiled": {
+      "times_s": [
+        95.37911896198057,
+        4.528636761999223,
+        4.530993551015854
+      ],
+      "warm_median_s": 4.529815156507539,
+      "fit_s": 0.258218756003771,
+      "peak_allocated_gb_per_call": [
+        4.038057984,
+        4.038057984,
+        4.038057984
+      ],
+      "all_finite": true,
+      "repeat_max_abs": 0.0,
+      "probability_sum_max_error": 1.1920928955078125e-07,
+      "counters": {
+        "stats": {
+          "calls_captured": 4524,
+          "unique_graphs": 4
+        },
+        "inductor": {
+          "pattern_matcher_count": 1380,
+          "pattern_matcher_nodes": 1582,
+          "benchmarking.InductorBenchmarker.benchmark_gpu": 405,
+          "pad_mm_bench": 3,
+          "fxgraph_cache_miss": 3,
+          "async_compile_cache_miss": 489,
+          "extern_calls": 432,
+          "async_compile_cache_hit": 278,
+          "triton_bundler_save_kernel": 3256,
+          "triton_bundler_save_static_autotuner": 3,
+          "benchmarking.InductorBenchmarker.benchmark": 399,
+          "triton_bundler_load_static_autotuner": 70,
+          "fxgraph_cache_hit": 1
+        },
+        "aot_autograd": {
+          "total": 5,
+          "autograd_cache_bypass": 5,
+          "ok": 4
+        },
+        "graph_break": {}
+      },
+      "vs_eager": {
+        "max_abs": 0.0077790021896362305,
+        "mean_abs": 4.2858358938246965e-05,
+        "argmax_agreement": 1.0
+      }
+    },
+    "cached": {
+      "times_s": [
+        45.32467004301725,
+        4.520546428975649,
+        4.520542785990983
+      ],
+      "warm_median_s": 4.520544607483316,
+      "fit_s": 0.2608461530180648,
+      "peak_allocated_gb_per_call": [
+        4.037023232,
+        4.037023232,
+        4.037023232
+      ],
+      "all_finite": true,
+      "repeat_max_abs": 0.0,
+      "probability_sum_max_error": 1.1920928955078125e-07,
+      "counters": {
+        "stats": {
+          "calls_captured": 4524,
+          "unique_graphs": 4
+        },
+        "inductor": {
+          "pattern_matcher_count": 1380,
+          "pattern_matcher_nodes": 1582,
+          "triton_bundler_load_static_autotuner": 202,
+          "async_compile_cache_miss": 624,
+          "async_compile_cache_hit": 410,
+          "extern_calls": 432,
+          "fxgraph_cache_hit": 4,
+          "benchmarking.InductorBenchmarker.benchmark": 4,
+          "benchmarking.InductorBenchmarker.benchmark_gpu": 4
+        },
+        "aot_autograd": {
+          "total": 5,
+          "autograd_cache_bypass": 5,
+          "ok": 4
+        }
+      },
+      "vs_eager": {
+        "max_abs": 0.0077790021896362305,
+        "mean_abs": 4.2858358938246965e-05,
+        "argmax_agreement": 1.0
+      }
+    }
+  },
+  "compiled_cached_predictions_sha256": "da0644ad42a6833f4bff479df6ad82a85a7464f6bd9f25a18c732a5b297cb0c6",
+  "comparison": {
+    "native_report": "native_flag_20260930.json",
+    "native_revision": "fadc027cfdeea751089cb57541767d849a000b16",
+    "eager_predictions_bit_identical": true,
+    "main_cold_first_over_native": 4.085403549012681,
+    "main_cached_first_over_native": 3.8165126757421604,
+    "main_warm_time_reduction_fraction": 0.10323034522132035,
+    "changing_shapes_tested_on_main": false
+  },
+  "warm_speedup": 2.120280479148413,
+  "warnings": "Symbolic-shape warnings occurred during compilation; the benchmark completed successfully without intervention."
+}
