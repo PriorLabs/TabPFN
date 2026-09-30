@@ -80,6 +80,35 @@ Keep logs, predictions, and compiler caches under the ignored `results/`
 directory. Caches from the previous A100 experiments must not be reused for the
 RTX run; toolchain and device compatibility matter.
 
+## Native flag and dynamic shapes, 2026-09-30
+
+The native flag implementation was validated on the same RTX and checkpoint,
+using PyTorch 2.10.0+cu128 and the default benchmark shape:
+
+| Mode | First prediction | Warm prediction |
+| --- | ---: | ---: |
+| Eager | 9.97 s | 9.60 s |
+| Native flag, empty caches | 23.35 s | 5.05 s |
+| Native flag, disk caches reused in a new process | 11.88 s | 5.05 s |
+
+The larger benchmark retained the warm speedup and memory reduction of the
+prototype. All labels matched eager on this synthetic classifier dataset;
+probability differences had mean absolute error 0.0000487 and maximum 0.01365.
+The cached process had seven FX graph cache hits and no misses. All calls were
+finite and repeatable, with no graph breaks and identical cold/cached outputs.
+
+The separate shape probe changed row counts, train lengths, feature counts, and
+batch sizes in one process. Cumulative graph counts were `[5, 5, 5]` for full
+inference, `[6, 6]` after switching to singleton batches, and `[7, 7, 7]` after
+switching to chunked inference. Each new path needed a variant; subsequent
+dataset shape changes reused it. On these random-noise inputs, probability
+differences stayed below 0.000486, while label agreement varied from 98.3% to
+99.7%. This is a compilation/shape check, not a predictive-quality benchmark.
+
+CPU validation passed the selective-compilation, changing-shape, KV-cache,
+serialization, flag-toggle, and gradient checks, plus the existing architecture
+tests. Full measurements are in [native_flag_20260930.json](native_flag_20260930.json).
+
 ## Original runtime-patch RTX check, 2026-09-30
 
 These historical measurements used the former runtime patch helper. On the
