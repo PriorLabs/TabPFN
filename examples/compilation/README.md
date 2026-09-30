@@ -40,10 +40,33 @@ Warm time is the median of the two subsequent calls.
 JSON reports include versions, GPU, checkpoint hash, revision, peak allocated
 memory, Dynamo counters, repeatability, and probability/label differences versus
 eager. The runner requires finite normalized probabilities, exact repeatability,
-no graph breaks, cache hits without misses in the cached process, and identical
+no graph breaks, FX graph cache hits without misses in the cached process, and identical
 fresh-compiled/cached outputs. Eager/compiled differences are reported, not
 treated as a general model-quality guarantee from one synthetic dataset.
 
 Keep logs, predictions, and compiler caches under the ignored `results/`
 directory. Caches from the previous A100 experiments must not be reused for the
 RTX run; toolchain and device compatibility matter.
+
+## RTX check, 2026-09-30
+
+On the existing SkyPilot RTX PRO 6000 Blackwell (96 GB), using PyTorch
+2.10.0+cu128 and the default shape above:
+
+| Mode | First prediction | Warm prediction | Peak allocated GPU memory |
+| --- | ---: | ---: | ---: |
+| Eager | 10.04 s | 9.60 s | 7.12 GB |
+| Aggregation compiled, empty caches | 22.79 s | 5.06 s | 4.84 GB |
+| Aggregation compiled, disk caches reused in a new process | 11.54 s | 5.06 s | 4.84 GB |
+
+This quick check gives 1.90x warm speedup and 32% lower peak allocated memory.
+Seven FX graphs were compiled; the cached process had seven FX cache hits and
+zero FX cache misses. All outputs were finite and repeatable, with no graph
+breaks and identical cold/cached outputs. All 1,024 predicted labels matched
+eager. Mean absolute probability difference was 0.0000422; the maximum was
+0.01243, so probability outputs are not bit-identical to eager.
+
+Full measurements and provenance are in [rtx_20260930.json](rtx_20260930.json).
+Each warm measurement summarizes two calls on one synthetic dataset. These
+numbers are not directly comparable to the earlier A100 run: device, PyTorch,
+checkpoint, and main's ensemble batching implementation differ.

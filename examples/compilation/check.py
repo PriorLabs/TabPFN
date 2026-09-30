@@ -59,7 +59,8 @@ assert architecture.ICLTransformerBlock.forward is original_icl
 result = {
     "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
     "revision": subprocess.check_output(  # noqa: S603 -- fixed git command
-        ["git", "-C", str(args.repo), "rev-parse", "HEAD"], text=True  # noqa: S607
+        ["git", "-C", str(args.repo), "rev-parse", "HEAD"],  # noqa: S607
+        text=True,
     ).strip(),
     "torch": torch.__version__,
     "cuda": torch.version.cuda,
