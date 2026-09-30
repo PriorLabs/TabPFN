@@ -728,18 +728,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: torch.Tensor,
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], torch.Tensor, torch.Tensor]:
-        """Initialize the model for differentiable input.
-
-        Polynomial expansion is disabled because it is implemented with
-        non-differentiable NumPy/scikit-learn preprocessing.
-
-        ``TabPFNRegressor`` disables polynomial features on the same path today,
-        but that is an implementation detail rather than a shared contract. If
-        the regressor is ever changed to honour a configured polynomial setting,
-        workflows that depend on gradients reaching an upstream encoder will
-        break at that point rather than gradually, so check the
-        ``differentiable_input`` path of both estimators before relying on it.
-        """
+        """Initialize the model for differentiable input."""
         validate_dataset_size(
             X=X,
             y=y,
