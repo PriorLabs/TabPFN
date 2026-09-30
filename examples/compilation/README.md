@@ -1,16 +1,30 @@
 # Aggregation compilation experiment
 
-This is the selected inference prototype from RES-2159, refreshed on main at
-`09b4188e` for the released `tabpfn-v3.5-fast-20260909.safetensors` checkpoint.
-It is opt-in and lives alongside the architecture. No model source is changed.
+The selected regions from RES-2159 are integrated into the v3.5 architecture
+through the existing `PerformanceOptions.enable_torch_compile` flag. The former
+`aggregation.install()` runtime patch helper has been removed. v3 keeps its
+existing compilation behavior.
 
-`aggregation.install()` patches v3.5 classes for the lifetime of its Python
-process. It compiles the distribution cross-attention blocks, feature aggregation
+```python
+from dataclasses import replace
+
+options = replace(model.get_default_performance_options(), enable_torch_compile=True)
+output = model(x, y, task_type="multiclass", performance_options=options)
+```
+
+The marked regions are distribution cross-attention blocks, feature aggregation
 attention and MLP tensor regions, and final CLS readout. Python retains chunking,
 residual accumulation, cache dispatch, and memory recovery. Preprocessing and ICL
-remain eager. Default compiler tuning and estimator precision are preserved;
-`fullgraph=True` exposes graph breaks as errors. This is an inference experiment,
-not a public estimator option or a validated training implementation.
+remain eager. The flag is per forward call and can be turned off again without
+rebuilding the model. Compiler initialization is lazy and adds no compiler state
+to model serialization.
+
+Compilation uses default tuning, `dynamic=True`, and `fullgraph=True`. Leading
+batch, row, and sequence dimensions are explicitly marked independently dynamic;
+embedding width and model parameter shapes stay specialized. This avoids
+accidental equality guards when unrelated data dimensions happen to match in the
+first input. Singleton dimensions and changes in control flow, dtype, strides,
+or attention backend can still require additional variants.
 
 The main opportunity is fusing normalization, casts, and surrounding tensor
 operations to reduce temporary buffers and memory traffic. Attention backends
@@ -30,6 +44,24 @@ The output directory must not exist. Defaults are 50,000 numeric training rows,
 (`auto_scale_n_estimators=False`). Shape arguments can override these defaults.
 Current main's ensemble batching policy is retained.
 
+The sklearn API does not directly expose `PerformanceOptions`. The benchmark
+uses a forward pre-hook to set that option on its own estimator instances; it
+does not replace any architecture methods. Region selection is implemented in
+the architecture source.
+
+To check graph reuse while train/test lengths, feature counts, and batch sizes
+change in one process:
+
+```bash
+python examples/compilation/shapes.py \
+  --checkpoint ~/.cache/tabpfn/tabpfn-v3.5-fast-20260909.safetensors \
+  --out examples/compilation/results/dynamic-shapes.json
+```
+
+This exercises full, singleton-batch, and chunked paths. It requires graph counts
+to remain stable as shapes change within each path, and records numerical
+differences versus eager execution.
+
 The harness runs three separate processes: eager, compiled with empty dedicated
 Inductor/Triton caches, and compiled reusing those disk caches. Each measures the
 first `predict_proba` and two subsequent calls. First-call timings exclude Python
@@ -48,9 +80,10 @@ Keep logs, predictions, and compiler caches under the ignored `results/`
 directory. Caches from the previous A100 experiments must not be reused for the
 RTX run; toolchain and device compatibility matter.
 
-## RTX check, 2026-09-30
+## Original runtime-patch RTX check, 2026-09-30
 
-On the existing SkyPilot RTX PRO 6000 Blackwell (96 GB), using PyTorch
+These historical measurements used the former runtime patch helper. On the
+existing SkyPilot RTX PRO 6000 Blackwell (96 GB), using PyTorch
 2.10.0+cu128 and the default shape above:
 
 | Mode | First prediction | Warm prediction | Peak allocated GPU memory |

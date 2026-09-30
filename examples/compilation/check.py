@@ -1,11 +1,12 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 """Quick numeric v3.5-fast API check against an explicit source checkout.
 
-Runs eager or the previously selected aggregation-only compilation wrappers.
+Runs eager or aggregation compilation via PerformanceOptions.enable_torch_compile.
 ICL, preprocessing, precision and the new checkout's batching policy are retained.
 """
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -37,7 +38,6 @@ os.environ["MPLCONFIGDIR"] = str(args.out.parent / "matplotlib")
 
 import numpy as np
 import torch
-from aggregation import install
 from sklearn.datasets import make_classification
 
 import tabpfn
@@ -51,10 +51,6 @@ assert torch.cuda.is_available(), "This check requires a GPU allocation"
 assert Path(tabpfn.__file__).resolve().is_relative_to(args.repo.resolve())
 model_path = args.checkpoint.resolve()
 assert model_path.exists(), model_path
-original_icl = architecture.ICLTransformerBlock.forward
-if args.mode == "compiled":
-    install()
-assert architecture.ICLTransformerBlock.forward is original_icl
 
 result = {
     "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
@@ -70,6 +66,7 @@ result = {
     "tabpfn_source": tabpfn.__file__,
     "checkpoint": str(model_path),
     "icl_compiled": False,
+    "compilation_control": "PerformanceOptions.enable_torch_compile",
     "tuning": "default",
     "cache": str(args.cache),
 }
@@ -98,6 +95,26 @@ result["fit_s"] = time.perf_counter() - t
 result["estimators"] = clf.n_estimators_
 assert result["estimators"] == args.estimators
 args.out.parent.mkdir(parents=True, exist_ok=True)
+
+
+def enable_compilation(
+    model: architecture.TabPFNV3p5, inputs: tuple, kwargs: dict
+) -> tuple[tuple, dict]:
+    # The sklearn API does not expose PerformanceOptions directly. This benchmark
+    # adapter only sets the existing per-forward flag; region selection lives in
+    # the architecture and no model methods are replaced.
+    options = (
+        kwargs.get("performance_options") or model.get_default_performance_options()
+    )
+    kwargs["performance_options"] = dataclasses.replace(
+        options, enable_torch_compile=True
+    )
+    return inputs, kwargs
+
+
+if args.mode == "compiled":
+    for model in clf.models_:
+        model.register_forward_pre_hook(enable_compilation, with_kwargs=True)
 
 
 def save() -> None:
