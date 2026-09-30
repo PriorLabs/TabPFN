@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--repo", type=Path, default=ROOT.parents[1])
 parser.add_argument("--out", type=Path, required=True)
 parser.add_argument("--checkpoint", type=Path, required=True)
 parser.add_argument("--train", type=int, default=50000)
@@ -20,7 +21,7 @@ parser.add_argument("--features", type=int, default=200)
 parser.add_argument("--estimators", type=int, default=4)
 args = parser.parse_args()
 OUT = args.out.resolve()
-REPO = ROOT.parents[1]
+REPO = args.repo.resolve()
 # Refuse to overwrite measurements or accidentally reuse a cold-run cache.
 OUT.mkdir(parents=True, exist_ok=False)
 cache_root = OUT / "cache"
