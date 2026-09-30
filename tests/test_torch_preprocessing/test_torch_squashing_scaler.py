@@ -442,16 +442,20 @@ class TestBlockingEquivalence:
 
 
 @pytest.mark.parametrize("outlier", [1000.0, -1000.0])
-def test__call__float16_outlier_does_not_overflow(outlier: float) -> None:
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test__call__low_precision_outlier_does_not_overflow(
+    outlier: float, dtype: torch.dtype
+) -> None:
+    # Both low-precision dtypes take the upcast path, so both need the cover.
     scaler = TorchSquashingScaler()
     x = torch.tensor(
         [0, 1, 1, 1, 2, outlier],
-        dtype=torch.float16,
+        dtype=dtype,
     ).unsqueeze(-1)
 
     out = scaler(x, num_train_rows=5)
 
-    assert out.dtype == torch.float16
+    assert out.dtype == dtype
     assert torch.isfinite(out).all()
     assert 2.5 < abs(out[-1, 0].item()) <= 3.0
     assert out[-1, 0].item() * outlier > 0

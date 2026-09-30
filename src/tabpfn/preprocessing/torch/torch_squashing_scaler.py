@@ -40,15 +40,6 @@ _FIT_UNBLOCKED_BYTES = 512 * 1024 * 1024
 _TRANSFORM_BLOCK_BYTES = 32 * 1024 * 1024
 
 
-def _scalar(value: float, like: torch.Tensor) -> torch.Tensor:
-    """A 0-dim tensor of `like`'s dtype and device, to broadcast into `where`.
-
-    `torch.where` takes a Python float directly, but not alongside `out=`; a 0-dim
-    tensor is what lets the result be written straight into an existing buffer.
-    """
-    return torch.full((), value, dtype=like.dtype, device=like.device)
-
-
 def _replace_inf_with_nan(x: torch.Tensor) -> torch.Tensor:
     """Replace ±inf with NaN so percentile/min/max see only finite values."""
     return torch.where(torch.isinf(x), float("nan"), x)
