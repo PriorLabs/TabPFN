@@ -158,7 +158,7 @@ across seven graphs on this branch. Disk cache reuse still involves tracing
 and graph processing; the cached first call is not equivalent to a warm call.
 The smaller regions favor short jobs and frequent process starts, while main's
 larger regions retain an advantage for many repeated predictions of this shape.
-Changing-shape reuse on main was not tested in this run.
+The separate changing-shape follow-up is recorded below.
 
 Main completed without intervention despite symbolic-shape warnings. All
 benchmark checks passed: finite normalized probabilities, exact repeatability,
@@ -166,6 +166,56 @@ no graph breaks, four FX graph cache hits and no misses in the cached process,
 and identical cold/cached outputs. All predicted labels matched eager on this
 dataset; mean absolute probability difference was 0.0000429 and maximum 0.00778.
 Full measurements are in [main_flag_20260930.json](main_flag_20260930.json).
+
+## Main changing shapes and caches, 2026-09-30
+
+The follow-up used the same unmodified main revision, GPU, checkpoint and
+PyTorch. Total rows/train rows/batch/features changed through
+`(1536, 1024, 2, 31)`, `(1792, 1280, 3, 43)`, and `(2048, 1536, 4, 59)`.
+Singleton batches used the first two row/feature configurations. Chunked
+inference used a 65,536-cell budget. These are the original probe's shapes;
+the extended harness uses independent deterministic seeds per shape, so numeric
+inputs differ from the earlier smaller-region probe.
+
+Each process exercised full, singleton-batch, then chunked inference. The table
+shows cumulative FX graph counts after each dataset, including all three test
+lengths for the KV-cache cases:
+
+| Path | Main without KV cache | Main with KV cache | Smaller regions, earlier probe without KV cache |
+| --- | --- | --- | --- |
+| Full | 2, 2, 2 | 4, 4, 4 | 5, 5, 5 |
+| Singleton batch | 4, 4 | 8, 8 | 6, 6 |
+| Chunked | 8, 10, 10 | 12, 14, 14 | 7, 7, 7 |
+
+Main reused graphs across changing rows, columns and batch sizes on the full
+path. Singleton batches needed initial variants, then reused them. On the
+chunked path, the second dataset required two additional row-processing graphs.
+The recorded guards distinguish chunks containing only training rows, mixed
+training/test rows, or only test rows, and whether the training slice spans
+the whole chunk. That call took 23.29 s without KV caching and 24.02 s when
+building a KV cache. The third dataset reused the graphs and took about 0.05 s.
+Graph counts alone are not a cost comparison: main's graphs cover larger regions.
+
+For model KV caching, each dataset built a new training-context cache and reused
+it for 256, 512, and 768 test rows. The first cached prediction on the full path
+needed two additional graphs (17.10 s); later test lengths and dataset shapes
+reused them. Singleton batches needed their own initial variants. None of the
+tested test-length changes added graphs, including with chunkwise inference
+enabled. Warm cached predictions took approximately 4-12 ms for these small
+direct-model shapes.
+
+Fresh processes using the populated disk caches produced the same graph-count
+sequences, with 10 FX cache hits without KV caching and 14 with it, and zero
+FX cache misses. Tracing and loading the extra variants for the second chunked
+dataset still took 11.80 s and 11.88 s respectively. Disk caches therefore
+reduce the cost of encountering variants but do not remove that cost.
+
+All 80 eager-versus-compiled comparisons passed, with no graph breaks or runtime
+failures. Maximum absolute probability difference was 0.000406 (rounded up);
+all cold/disk-cached output hashes matched exactly. Inputs were random numeric
+data, so this checks execution and graph reuse rather than predictive quality.
+The smaller-region GPU KV-cache cases were not rerun in this follow-up.
+Full measurements are in [main_shapes_20260930.json](main_shapes_20260930.json).
 
 ## Original runtime-patch RTX check, 2026-09-30
 
