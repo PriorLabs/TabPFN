@@ -116,8 +116,9 @@ inputs verify the requested training length and test-only KV-cache inference.
 Optional `--main-cache` and `--branch-cache` seed isolated compiler caches from
 previous experiments. Fit/warmup timings are not clean cold-start measurements.
 
-The harness runs three separate processes: eager, compiled with empty dedicated
-Inductor/Triton caches, and compiled reusing those disk caches. Each measures the
+The cold-start harness (`run.py`) runs three separate processes: eager, compiled
+with empty dedicated Inductor/Triton caches, and compiled reusing those disk
+caches. Each measures the
 first `predict_proba` and two subsequent calls. First-call timings exclude Python
 imports, data generation, and `fit`; `fit_s` and total process wall time are also
 recorded. This is compiler-cache cold, not an OS/filesystem-cache cold boot.
@@ -247,6 +248,70 @@ all cold/disk-cached output hashes matched exactly. Inputs were random numeric
 data, so this checks execution and graph reuse rather than predictive quality.
 The smaller-region GPU KV-cache cases were not rerun in this follow-up.
 Full measurements are in [main_shapes_20260930.json](main_shapes_20260930.json).
+
+## Warm shape grid and single-row KV prediction, 2026-09-30
+
+This sweep used the same RTX, PyTorch 2.10.0+cu128, v3.5-fast checkpoint and four
+estimators. Training rows and raw numeric features varied across five shapes.
+All training rows were retained, including the 100,000-row cases. Observed model
+inputs confirmed test-only prediction from the GPU KV caches; each single-row
+call batched the four ensemble members together.
+
+The numbers below are median full sklearn `predict_proba` times. Batch timings
+use five measured calls after two warmups; single-row timings use 25 measured
+calls after two warmups. Fit/cache construction is excluded. Compiler caches
+were seeded from earlier experiments, so fit/warmup times in the report are
+not clean cold-start measurements.
+
+**1,024 test rows, without model KV caching:**
+
+| Training rows x features | Eager | Main compiled | Smaller regions |
+| --- | ---: | ---: | ---: |
+| 1,000 x 10 | 41.89 ms | 29.53 ms | 30.13 ms |
+| 1,000 x 200 | 337.42 ms | 164.44 ms | 210.05 ms |
+| 50,000 x 200 | 9.598 s | 4.533 s | 5.021 s |
+| 100,000 x 10 | 5.840 s | 5.208 s | 5.275 s |
+| 100,000 x 200 | 21.324 s | 11.019 s | 12.184 s |
+
+**One test row, with model KV caching:**
+
+| Training rows x features | Eager | Main compiled | Smaller regions |
+| --- | ---: | ---: | ---: |
+| 1,000 x 10 | 8.08 ms | 6.95 ms | 7.88 ms |
+| 1,000 x 200 | 8.41 ms | 7.23 ms | 8.36 ms |
+| 50,000 x 200 | 9.61 ms | 8.21 ms | 9.23 ms |
+| 100,000 x 10 | 10.16 ms | 8.97 ms | 10.10 ms |
+| 100,000 x 200 | 11.06 ms | 9.29 ms | 10.27 ms |
+
+**1,024 test rows, with model KV caching:**
+
+| Training rows x features | Eager | Main compiled | Smaller regions |
+| --- | ---: | ---: | ---: |
+| 1,000 x 10 | 18.77 ms | 13.48 ms | 14.07 ms |
+| 1,000 x 200 | 126.48 ms | 52.40 ms | 62.43 ms |
+| 50,000 x 200 | 148.65 ms | 74.27 ms | 84.56 ms |
+| 100,000 x 10 | 62.86 ms | 58.09 ms | 59.30 ms |
+| 100,000 x 200 | 171.18 ms | 97.21 ms | 107.22 ms |
+
+The smaller regions take 1-28% longer than main for uncached batch predictions,
+with the largest relative gap at 1,000 rows and 200 features. At 50,000 and
+100,000 rows with 200 features, the gap is about 11%. Main's single-row cached
+predictions are 0.93-1.13 ms faster; the smaller regions take 10-16% longer there.
+The smaller regions improve single-row latency only slightly over eager in this
+grid. The earlier startup advantage still holds, but the warm-performance
+tradeoff depends on shape and whether the training context is cached.
+
+All 45 cases completed, totaling 525 timed calls. No new FX graphs appeared
+during measurement, no graph breaks were recorded, and repeated outputs were
+identical, finite and normalized. Numerical differences versus eager reached
+0.01449 for smaller regions and 0.01226 for main. On the 100,000x10 dataset,
+both compiled approaches changed one of 1,024 labels relative to eager without
+KV caching; the smaller regions also changed one label with KV caching. All
+other labels matched, including the single-row cases. This synthetic performance
+check is not a model-quality evaluation.
+
+Individual samples, ranges, p95, fit/warmup timings, memory, model-input shapes
+and numerical comparisons are in [warm_grid_20260930.json](warm_grid_20260930.json).
 
 ## Original runtime-patch RTX check, 2026-09-30
 
