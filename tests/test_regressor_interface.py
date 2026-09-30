@@ -1477,6 +1477,41 @@ def test__fit__target_transform__applied_to_the_unnormalized_target() -> None:
     np.testing.assert_allclose(member_y, expected, rtol=1e-8)
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+def test__fit__safepower_standardizes_before_fitting(
+    dtype: type[np.floating], offset: float
+) -> None:
+    X, y = _mk_skewed_reg_dataset(0)
+    y = (y + offset).astype(dtype)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("safepower",)},
+    )
+    reg.fit(X, y)
+
+    preset = reg.executor_.ensemble_members[0].config.target_transform.named_steps[
+        "target_transform"
+    ]
+    standardized = (y - float(np.mean(y))) / (float(np.std(y)) + 1e-20)
+    np.testing.assert_array_equal(
+        preset.named_steps["standardize_input"].transform(y.reshape(-1, 1)).ravel(),
+        standardized,
+    )
+    expected = regressor_module.get_all_reshape_feature_distribution_preprocessors(
+        num_examples=len(y), random_state=42
+    )["safepower"].fit_transform(standardized.reshape(-1, 1))
+    np.testing.assert_array_equal(preset.transform(y.reshape(-1, 1)), expected)
+    pipeline = reg.executor_.ensemble_members[0].config.target_transform
+    np.testing.assert_allclose(
+        pipeline.inverse_transform(pipeline.transform(y.reshape(-1, 1))).ravel(),
+        y,
+        rtol=1e-5,
+    )
+
+
 def test__fit__none_preset_is_resolved_to_no_transform() -> None:
     """`"none"` is the identity, so it must not cost an extra pass."""
     X, y = _mk_skewed_reg_dataset(0)
