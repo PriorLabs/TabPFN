@@ -85,6 +85,37 @@ Failed paths are excluded from the disk-cache replay; each process has a
 10-minute timeout. These direct model probes use FP16 autocast, numeric random
 inputs, and the same row/column/batch shapes as the original shape check.
 
+For a warm sklearn API comparison across small/large row and feature counts:
+
+```bash
+python examples/compilation/run_warm.py \
+  --main /path/to/unmodified-main \
+  --branch /path/to/this-branch \
+  --checkpoint ~/.cache/tabpfn/tabpfn-v3.5-fast-20260909.safetensors \
+  --out examples/compilation/results/warm-grid-1
+```
+
+This compares eager, this branch's compiled regions, and main's compiled regions
+on 1,000x10, 100,000x10, 1,000x200, 50,000x200, and 100,000x200 numeric training
+data. All runs use four estimators, no row subsampling, and the estimator's
+default inference precision. The 100,000-row cases explicitly bypass the
+pretraining-limit check; this is a performance experiment.
+
+Each fitted estimator predicts 1,024 rows. `fit_with_cache` also predicts one
+test row, keeping the model KV caches on GPU in their computed dtype
+(`kv_cache_precision="auto"`). A benchmark subclass installs the flag-setting
+pre-hook after model initialization and before `fit` can build KV caches.
+The architecture implementations are unchanged by the harness.
+
+There are two warmup calls, then five measured batch predictions or 25 measured
+single-row predictions. Timings include the full `predict_proba` call and CUDA
+synchronization. Fit/cache construction and warmup times are recorded separately.
+The probe requires no new graphs during measurement, finite normalized output,
+and exact repeatability; it records differences against eager. Observed model
+inputs verify the requested training length and test-only KV-cache inference.
+Optional `--main-cache` and `--branch-cache` seed isolated compiler caches from
+previous experiments. Fit/warmup timings are not clean cold-start measurements.
+
 The harness runs three separate processes: eager, compiled with empty dedicated
 Inductor/Triton caches, and compiled reusing those disk caches. Each measures the
 first `predict_proba` and two subsequent calls. First-call timings exclude Python
