@@ -65,6 +65,7 @@ class _NoBrowserToken(Enum):
 def _browser_url(
     gui_url: str,
     step: _AuthStep,
+    *,
     hf_repo_id: str | None = None,
     callback_url: str | None = None,
 ) -> str:
@@ -406,7 +407,7 @@ def _headless_interactive_login(
 
     Returns the JWT on success, or ``None`` on abort / EOF.
     """
-    login_url = _browser_url(gui_url, step, hf_repo_id)
+    login_url = _browser_url(gui_url, step, hf_repo_id=hf_repo_id)
     match step:
         case _AuthStep.LOGIN:
             next_steps = (
@@ -564,7 +565,12 @@ def try_browser_login(
         logger.debug("Could not create callback server", exc_info=True)
         return None
 
-    login_url = _browser_url(gui_url, step, hf_repo_id, f"http://localhost:{port}")
+    login_url = _browser_url(
+        gui_url,
+        step,
+        hf_repo_id=hf_repo_id,
+        callback_url=f"http://localhost:{port}",
+    )
 
     server_thread = threading.Thread(
         target=_serve_until_event, args=(httpd, auth_event), daemon=True
