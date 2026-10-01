@@ -182,17 +182,8 @@ jobs:
               print(f"  bit {bit:>2} {name:<16} {bool(mask >> bit & 1)}")
           '
 
-      - name: MPS round-trip diagnostics
-        run: uv run --no-sync python -u scripts/diag_mps_roundtrip.py
-
-      - name: Failing round-trip tests (three repeats)
-        if: always()
-        run: |
-          for i in 1 2 3; do
-            uv run --no-sync pytest -p no:cacheprovider -o addopts="" -q -rA \
-              -k "fit_with_cache and regression and mps" \
-              tests/test_save_load_fitted_model.py || true
-          done
+      - name: MPS border remap determinism
+        run: uv run --no-sync python -u scripts/diag_mps_remap.py
 
       - name: Run Tests (all tests)
         if: false
