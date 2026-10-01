@@ -28,6 +28,16 @@ class TabPFNValidationError(ValueError, TabPFNUserError):
     """User provided invalid data (shape, NaNs, categories, etc.)."""
 
 
+# Users hesitate to accept when they think it shares their datasets with us. Only
+# the API key and license version are sent; data never leaves the machine.
+LICENSE_ACCEPTANCE_HEADER = (
+    "TabPFN requires a one-time license acceptance to download model weights\n"
+    "for local inference. Accepting the license does not share your data with\n"
+    "Prior Labs. The local tabpfn package runs entirely on your machine and\n"
+    "works offline once the weights are downloaded.\n"
+)
+
+
 class TabPFNLicenseError(TabPFNError):
     """Error raised when the user has not accepted the TabPFN license."""
 
@@ -35,9 +45,7 @@ class TabPFNLicenseError(TabPFNError):
         if message is None:
             gui_url = settings.tabpfn.auth_gui_url
             message = (
-                "TabPFN requires a one-time license acceptance"
-                " to download model weights for local"
-                " inference.\n\n"
+                f"{LICENSE_ACCEPTANCE_HEADER}\n"
                 "To authenticate in a non-interactive"
                 " environment:\n"
                 f"  1. Open {gui_url} in a browser"

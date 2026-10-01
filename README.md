@@ -252,7 +252,7 @@ TabPFN requires **Python 3.10+** due to newer language features. Compatible vers
 
 On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://ux.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
 
-Accepting the license does not share your data with Prior Labs. The login only links the license to your account so the weights can be downloaded. Training and prediction run entirely on your machine, and once the weights are downloaded TabPFN works fully offline (see the offline usage question below).
+Accepting the license does not share your data with Prior Labs. The local `tabpfn` package runs entirely on your machine and works offline once the weights are downloaded (see the offline usage question below).
 
 **For headless / CI environments** where a browser is not available, visit [https://ux.priorlabs.ai](https://ux.priorlabs.ai), go to the **License** tab to accept the license, and then set the `TABPFN_TOKEN` environment variable with a token obtained from your account.
 

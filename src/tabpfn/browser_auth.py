@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tabpfn.errors import (
+    LICENSE_ACCEPTANCE_HEADER,
     TabPFNError,
     TabPFNHuggingFaceGatedRepoError,
     TabPFNLicenseError,
@@ -60,14 +61,6 @@ def _has_display() -> bool:
         return not (os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY"))
     # Linux / other Unix: require X11 or Wayland.
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-
-
-# Users hesitate to accept when they think it shares their datasets with us. Only
-# the API key and license version are sent; data never leaves the machine.
-_DATA_STAYS_LOCAL_NOTE = (
-    "Your datasets are never sent to Prior Labs. Once the weights are\n"
-    "downloaded, TabPFN runs entirely on this machine and works offline."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -376,9 +369,7 @@ def _headless_interactive_login(
         login_url += f"?hf_repo_id={urllib.parse.quote(hf_repo_id)}"
 
     print(  # noqa: T201
-        "\nTabPFN requires a one-time license acceptance to download"
-        " model weights for local inference.\n"
-        f"{_DATA_STAYS_LOCAL_NOTE}\n"
+        f"\n{LICENSE_ACCEPTANCE_HEADER}"
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
         f"\nAfter logging in, accept the license on the Licenses tab,\n"
@@ -532,9 +523,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
 
     # --- print unified instructions ---
     print(  # noqa: T201
-        "\nTabPFN requires a one-time license acceptance to download"
-        " model weights for local inference.\n"
-        f"{_DATA_STAYS_LOCAL_NOTE}\n"
+        f"\n{LICENSE_ACCEPTANCE_HEADER}"
         "\nOpening your browser to complete login/registration…\n"
         f"\n  {login_url}\n"
         "\nWaiting for login to complete…\n"
@@ -619,9 +608,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
     if no_browser and no_browser not in ("0", "false", "no", "off"):
         raise TabPFNLicenseError(
-            "TabPFN requires a one-time license acceptance to download\n"
-            "model weights for local inference, but browser login is\n"
-            "disabled (TABPFN_NO_BROWSER is set).\n\n"
+            f"{LICENSE_ACCEPTANCE_HEADER}\n"
+            "Browser login is disabled (TABPFN_NO_BROWSER is set).\n\n"
             "Set the TABPFN_TOKEN environment variable with a valid API key\n"
             "obtained from https://ux.priorlabs.ai"
         )
@@ -629,9 +617,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
     if token is None:
         raise TabPFNLicenseError(
-            "TabPFN requires a one-time license acceptance to download\n"
-            "model weights for local inference, but no interactive terminal\n"
-            "is available.\n\n"
+            f"{LICENSE_ACCEPTANCE_HEADER}\n"
+            "There is no interactive terminal available.\n\n"
             "To authenticate in a non-interactive environment:\n"
             f"  1. Open {gui_url} in a browser and log in (or register)\n"
             f"  2. Accept the license on the Licenses tab\n"
