@@ -587,6 +587,17 @@ class TestHeadlessInteractiveLogin:
         captured = capsys.readouterr()
         assert "hf_repo_id=tabpfn_2_6" in captured.out
 
+    def test_prompt_says_data_stays_local(self, capsys: pytest.CaptureFixture[str]):
+        from tabpfn.browser_auth import _DATA_STAYS_LOCAL_NOTE  # noqa: PLC0415
+
+        headless_login = self._import_headless()
+        with (
+            patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
+            patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
+        ):
+            headless_login("https://ux.priorlabs.ai")
+        assert _DATA_STAYS_LOCAL_NOTE in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # try_browser_login routing
