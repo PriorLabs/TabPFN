@@ -14,17 +14,22 @@ from __future__ import annotations
 
 import statistics
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import Any
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
 
+import tabpfn.classifier as tabpfn_classifier
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.architectures import tabpfn_v3
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNValidationError
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
     clean_data,
@@ -1032,6 +1037,174 @@ def test__estimator_fit_predict__handles_infinities_on_all_dtypes(
 
     assert predictions.shape == (X.shape[0],)
     assert np.isfinite(np.asarray(predictions)).all()
+
+
+# --- predict-path flag propagation (batched vs standard) ------------------------
+#
+# `PASSTHROUGH_INF` is a user setting, so every predict path has to read it off the
+# estimator rather than take the `clean_data_transform` default of False. These
+# tests pin that for the two predict paths of the classifier, which must agree.
+
+
+def _random_init_classifier_checkpoint() -> tuple[Any, Any]:
+    """A tiny randomly-initialised v3 classifier, standing in for a checkpoint."""
+    config = tabpfn_v3.TabPFNV3Config(
+        max_num_classes=10,
+        num_buckets=5,
+        embed_dim=32,
+        nlayers=2,
+        icl_num_heads=4,
+        dist_embed_num_heads=4,
+        dist_embed_num_blocks=1,
+        feat_agg_num_heads=4,
+        feat_agg_num_blocks=1,
+        feat_agg_num_cls_tokens=2,
+        dist_embed_num_inducing_points=8,
+    )
+    torch.manual_seed(0)
+    return tabpfn_v3.get_architecture(config).to(torch.float32).eval(), config
+
+
+@contextmanager
+def _checkpoint_free_tabpfn() -> Iterator[None]:
+    """Serve a random-init model from the checkpoint loader instead of downloading.
+
+    What these tests assert is which flag reaches `clean_data_transform`, not what
+    the network predicts, so the weights are irrelevant and are stubbed out to keep
+    the test runnable without a checkpoint.
+    """
+
+    def _initialize(**kwargs: Any) -> Any:
+        model, config = _random_init_classifier_checkpoint()
+        inference_config = InferenceConfig(
+            PREPROCESS_TRANSFORMS=[
+                PreprocessorConfig("none", categorical_name="ordinal")
+            ],
+            SOFTMAX_TEMPERATURE=1.0,
+        )
+        return [model.to(kwargs["devices"][0])], [config], None, inference_config
+
+    with mock.patch("tabpfn.base.initialize_tabpfn_model", _initialize):
+        yield
+
+
+def _inf_in_categorical_data(seed: int = 0) -> tuple[np.ndarray, ...]:
+    """Training data whose second column is categorical, plus a +inf test row.
+
+    The training frame never holds an infinity, so the ordinal encoder is fitted
+    without one and an infinity arriving at predict time is an unseen category.
+    """
+    rng = np.random.default_rng(seed)
+    X_train = np.empty((40, 2), dtype=object)
+    X_train[:, 0] = rng.standard_normal(40)
+    X_train[:, 1] = rng.choice(["a", "b", "c"], size=40)
+    y_train = rng.integers(0, 2, size=40)
+
+    X_test = np.empty((3, 2), dtype=object)
+    X_test[:, 0] = [0.1, 0.2, 0.3]
+    X_test[:, 1] = ["a", np.inf, "b"]
+    return X_train, y_train, X_test
+
+
+def _cleaned_test_data(predict) -> tuple[bool, np.ndarray]:
+    """Run `predict`, returning the flag it forwarded and the array it cleaned to."""
+    calls: list[tuple[bool, np.ndarray]] = []
+    real = tabpfn_classifier.clean_data_transform
+
+    def _spy(X: Any, **kwargs: Any) -> np.ndarray:
+        cleaned = real(X, **kwargs)
+        calls.append((kwargs.get("passthrough_inf", False), cleaned))
+        return cleaned
+
+    with mock.patch.object(tabpfn_classifier, "clean_data_transform", _spy):
+        predict()
+    assert len(calls) == 1, f"expected one clean_data_transform call, got {len(calls)}"
+    return calls[0]
+
+
+def test__predict_proba_batched__forwards_passthrough_inf_to_clean_data_transform() -> (
+    None
+):
+    """The batched path must forward the user's PASSTHROUGH_INF, not default to False.
+
+    Regression test. The batched call to `clean_data_transform` omitted the
+    kwarg, so `passthrough_inf` fell back to its False default even for a user who
+    set `inference_config={"PASSTHROUGH_INF": True}`, while the standard path
+    forwarded the setting. A +/-inf in a categorical column therefore reached the
+    ordinal encoder on one path but not the other, and was encoded as the unknown
+    category -1.0 instead of surviving as an infinity.
+    """
+    X_train, y_train, X_test = _inf_in_categorical_data()
+
+    with _checkpoint_free_tabpfn():
+        model = TabPFNClassifier(
+            n_estimators=1, device="cpu", inference_config={"PASSTHROUGH_INF": True}
+        )
+        model.fit(X_train, y_train)
+        assert model.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        ), "the second column must be inferred categorical for this test to bite"
+
+        forwarded, cleaned = _cleaned_test_data(
+            lambda: model.predict_proba_batched([X_train], [y_train], [X_test.copy()])
+        )
+
+    assert forwarded is True
+    assert np.isposinf(cleaned[1][1]), (
+        f"the +inf in the categorical column was lost, got {cleaned[1][1]!r}"
+    )
+
+
+def test__predict_proba_batched__matches_standard_path_on_passthrough_inf() -> None:
+    """The two classifier predict paths must clean a +inf categorical the same way.
+
+    The batched path is a separate implementation of what `_raw_predict` does, so
+    the two have to agree on the cleaned array. This compares them directly: before
+    the batched path forwarded `passthrough_inf` the standard path kept the +inf and
+    the batched path returned the finite unknown-category code -1.0 for the same row.
+    """
+    X_train, y_train, X_test = _inf_in_categorical_data()
+
+    with _checkpoint_free_tabpfn():
+        model = TabPFNClassifier(
+            n_estimators=1, device="cpu", inference_config={"PASSTHROUGH_INF": True}
+        )
+        model.fit(X_train, y_train)
+
+        _, standard = _cleaned_test_data(lambda: model.predict_proba(X_test.copy()))
+        _, batched = _cleaned_test_data(
+            lambda: model.predict_proba_batched([X_train], [y_train], [X_test.copy()])
+        )
+
+    np.testing.assert_array_equal(batched, standard)
+    assert np.isposinf(standard[1][1]), (
+        f"the +inf in the categorical column was lost, got {standard[1][1]!r}"
+    )
+
+
+def test__predict_proba_batched__passes_passthrough_inf_false_when_disabled() -> None:
+    """With the setting off, the batched path must forward False rather than True.
+
+    Guards the fix against over-correcting: forwarding the flag must not turn the
+    default configuration into a passthrough one.
+    """
+    X_train, y_train, X_test = _inf_in_categorical_data()
+
+    with _checkpoint_free_tabpfn():
+        model = TabPFNClassifier(
+            n_estimators=1, device="cpu", inference_config={"PASSTHROUGH_INF": False}
+        )
+        model.fit(X_train, y_train)
+
+        forwarded, _ = _cleaned_test_data(
+            lambda: model.predict_proba_batched([X_train], [y_train], [X_test.copy()])
+        )
+        standard_forwarded, _ = _cleaned_test_data(
+            lambda: model.predict_proba(X_test.copy())
+        )
+
+    assert forwarded is False
+    assert standard_forwarded is False
 
 
 # --- CUDA end-to-end (real GPU hardware) ---------------------------------------

@@ -1263,6 +1263,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     FeatureModality.CATEGORICAL
                 ),
                 ord_encoder=getattr(worker, "ordinal_encoder_", None),
+                passthrough_inf=worker.get_inference_config().PASSTHROUGH_INF,
             )
             members = worker.executor_.ensemble_members
             x_context, x_query, cat_indices = [], [], []
