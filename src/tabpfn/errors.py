@@ -32,9 +32,9 @@ class TabPFNValidationError(ValueError, TabPFNUserError):
 # the API key and license version are sent; data never leaves the machine.
 LICENSE_ACCEPTANCE_HEADER = (
     "TabPFN requires a one-time license acceptance to download model weights\n"
-    "for local inference. Accepting the license does not share your data with\n"
-    "Prior Labs. The local tabpfn package runs entirely on your machine and\n"
-    "works offline once the weights are downloaded.\n"
+    "for local inference. Neither your datasets nor anything about them is ever\n"
+    "sent to Prior Labs: the local tabpfn package runs entirely on your machine\n"
+    "and works offline once the weights are downloaded.\n"
 )
 
 
