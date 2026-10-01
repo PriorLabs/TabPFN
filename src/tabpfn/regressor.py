@@ -106,6 +106,7 @@ from tabpfn.preprocessing.target_transform import (
     make_target_transform,
 )
 from tabpfn.preprocessing.text import TextTransformer
+from tabpfn.telemetry import log_usage
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -1340,6 +1341,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return self
 
+    @log_usage("fit")
     @config_context(transform_output="default")  # type: ignore
     def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
@@ -1463,6 +1465,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         quantiles: list[float] | None = None,
     ) -> FullOutputDict: ...
 
+    @log_usage("predict")
     @config_context(transform_output="default")  # type: ignore
     def predict(
         self,
@@ -1854,6 +1857,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ),
         )
 
+    @log_usage("predict", batched=True)
     def predict_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
@@ -2400,6 +2404,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         return main_outputs
 
+    @log_usage("embed")
     def get_embeddings(
         self,
         X: XType,
