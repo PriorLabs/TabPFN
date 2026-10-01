@@ -666,8 +666,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
 def _license_not_accepted_error(gui_url: str, hf_repo_id: str) -> TabPFNLicenseError:
     encoded = urllib.parse.quote(hf_repo_id)
     return TabPFNLicenseError(
-        f"Your API key is valid, but the license for {hf_repo_id} has not\n"
-        "been accepted yet. Accept it once at\n\n"
+        f"You are logged in, but the license for {hf_repo_id} has not been\n"
+        "accepted for your account yet. Accept it once at\n\n"
         f"  {gui_url}/accept-license?hf_repo_id={encoded}\n\n"
-        "while logged in with the account the API key belongs to, then try again."
+        "then try again."
     )

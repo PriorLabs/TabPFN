@@ -339,12 +339,16 @@ class TestEnsureLicenseAccepted:
         ):
             self._import_ensure()("tabpfn_2_6")
 
-    @pytest.mark.parametrize("browser", ["disabled", "unavailable"])
+    @pytest.mark.parametrize("browser", ["disabled", "unavailable", "logged_in"])
     def test_valid_token_without_license_links_to_acceptance(
         self, monkeypatch: pytest.MonkeyPatch, browser: str
     ):
         """A valid token whose license is not accepted gets a direct link."""
-        monkeypatch.setenv("TABPFN_TOKEN", "valid-tok")
+        if browser == "logged_in":
+            login_result = "browser-tok"
+        else:
+            login_result = None
+            monkeypatch.setenv("TABPFN_TOKEN", "valid-tok")
         if browser == "disabled":
             monkeypatch.setenv("TABPFN_NO_BROWSER", "1")
         with (
@@ -353,15 +357,19 @@ class TestEnsureLicenseAccepted:
                 "tabpfn.browser_auth.check_license_accepted",
                 return_value=False,
             ),
-            patch("tabpfn.browser_auth.try_browser_login", return_value=None),
+            patch(
+                "tabpfn.browser_auth.try_browser_login", return_value=login_result
+            ) as login,
             pytest.raises(
                 TabPFNLicenseError,
-                match=r"(?s)API key is valid.*accept-license\?hf_repo_id=tabpfn_2_6",
+                match=r"(?s)not been\naccepted.*accept-license\?hf_repo_id=tabpfn_2_6",
             ),
         ):
             self._import_ensure()("tabpfn_2_6")
+        if browser == "disabled":
+            login.assert_not_called()
 
-    def test_browser_token_rejected_raises(self):
+    def test_login_result_rejected_raises(self):
         """Token from browser rejected by server -> error."""
         with (
             patch(
