@@ -15,6 +15,25 @@ if TYPE_CHECKING:
     import matplotlib.pyplot as plt
 
 
+def _common_dtype(*tensors: torch.Tensor) -> torch.dtype:
+    """The widest dtype among `tensors`, so float64 borders keep float64 results."""
+    dtype = tensors[0].dtype
+    for tensor in tensors[1:]:
+        dtype = torch.promote_types(dtype, tensor.dtype)
+    return dtype
+
+
+def _expected_value(logits: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    """Softmax-weighted sum of `values`, in the wider of the two dtypes.
+
+    The softmax runs in that dtype too, so the weights sum to 1 to that dtype's
+    precision however far `values` lie from zero.
+    """
+    dtype = _common_dtype(logits, values)
+    p = torch.softmax(logits.to(dtype), -1)
+    return p @ values.to(device=logits.device, dtype=dtype)
+
+
 # TODO: Merge functionality from BarDistribution and FullSupportBarDistribution
 class BarDistribution(nn.Module):
     """Distribution over buckets."""
@@ -167,6 +186,7 @@ class BarDistribution(nn.Module):
         """Map each target value to the index of the bucket it falls into."""
         # assert the borders are actually sorted
         assert (self.borders[1:] - self.borders[:-1] >= 0.0).all()
+        y = y.to(self.borders.dtype)
         target_sample = torch.searchsorted(self.borders, y) - 1
         target_sample[y == self.borders[0]] = 0
         target_sample[y == self.borders[-1]] = self.num_bars - 1
@@ -255,8 +275,7 @@ class BarDistribution(nn.Module):
     def mean(self, logits: torch.Tensor) -> torch.Tensor:
         """Expected value of the distribution."""
         bucket_means = self.borders[:-1] + self.bucket_widths / 2
-        p = torch.softmax(logits, -1)
-        return p @ bucket_means
+        return _expected_value(logits, bucket_means)
 
     def median(self, logits: torch.Tensor) -> torch.Tensor:
         """Median of the distribution."""
@@ -363,6 +382,7 @@ class BarDistribution(nn.Module):
         assert maximize
         if not torch.is_tensor(best_f) or not len(best_f.shape):  # type: ignore
             best_f = torch.full(logits[..., 0].shape, best_f, device=logits.device)  # type: ignore
+        best_f = best_f.to(_common_dtype(best_f, self.borders))  # type: ignore
 
         best_f = best_f[..., None].repeat(*[1] * len(best_f.shape), logits.shape[-1])  # type: ignore
         clamped_best_f = best_f.clamp(self.borders[:-1], self.borders[1:])
@@ -375,8 +395,9 @@ class BarDistribution(nn.Module):
             - best_f * (self.borders[1:] - clamped_best_f)
         ) / bucket_diffs
 
-        p = torch.softmax(logits, -1)
-        return torch.einsum("...b,...b->...", p, bucket_contributions)
+        dtype = _common_dtype(logits, bucket_contributions)
+        p = torch.softmax(logits.to(dtype), -1)
+        return torch.einsum("...b,...b->...", p, bucket_contributions.to(dtype))
 
     def pi(
         self,
@@ -422,8 +443,7 @@ class BarDistribution(nn.Module):
             + right_borders.square()
             + left_borders * right_borders
         ) / 3.0
-        p = torch.softmax(logits, -1)
-        return p @ bucket_mean_of_square
+        return _expected_value(logits, bucket_mean_of_square)
 
     def variance(self, logits: torch.Tensor) -> torch.Tensor:
         """Variance of the distribution."""
@@ -729,14 +749,13 @@ class FullSupportBarDistribution(BarDistribution):
     @override
     def mean(self, logits: torch.Tensor) -> torch.Tensor:
         bucket_means = self.borders[:-1] + self.bucket_widths / 2
-        p = torch.softmax(logits, -1)
         side_normals = (
             self.halfnormal_with_p_weight_before(self.bucket_widths[0]),
             self.halfnormal_with_p_weight_before(self.bucket_widths[-1]),
         )
         bucket_means[0] = -side_normals[0].mean + self.borders[1]
         bucket_means[-1] = side_normals[1].mean + self.borders[-2]
-        return p @ bucket_means.to(logits.device).type(logits.dtype)
+        return _expected_value(logits, bucket_means)
 
     @override
     def mean_of_square(self, logits: torch.Tensor) -> torch.Tensor:
@@ -764,8 +783,7 @@ class FullSupportBarDistribution(BarDistribution):
             side_normals[1].variance
             + (side_normals[1].mean + self.borders[-2]).square()
         )
-        p = torch.softmax(logits, -1)
-        return p @ bucket_mean_of_square
+        return _expected_value(logits, bucket_mean_of_square)
 
     @override
     def pi(
@@ -859,6 +877,7 @@ class FullSupportBarDistribution(BarDistribution):
         assert maximize
         if not torch.is_tensor(best_f) or not len(best_f.shape):  # type: ignore
             best_f = torch.full(logits[..., 0].shape, best_f, device=logits.device)  # type: ignore
+        best_f = best_f.to(_common_dtype(best_f, self.borders))  # type: ignore
 
         assert best_f.shape == logits[..., 0].shape, (  # type: ignore
             f"best_f.shape: {best_f.shape}, logits.shape: {logits.shape}"  # type: ignore
@@ -896,8 +915,9 @@ class FullSupportBarDistribution(BarDistribution):
             torch.zeros_like(position_in_side_normals[0]),
         ) - self.ei_for_halfnormal(side_normals[0].scale, position_in_side_normals[0])
 
-        p = torch.softmax(logits, -1)
-        return torch.einsum("...b,...b->...", p, bucket_contributions)
+        dtype = _common_dtype(logits, bucket_contributions)
+        p = torch.softmax(logits.to(dtype), -1)
+        return torch.einsum("...b,...b->...", p, bucket_contributions.to(dtype))
 
 
 def get_bucket_limits(
