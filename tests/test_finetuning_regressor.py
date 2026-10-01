@@ -38,6 +38,7 @@ from tabpfn.finetuning.finetuned_regressor import (
     _targets_in_estimator_space,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
+from tabpfn.preprocessing.target_transform import make_target_transform
 from tabpfn.regressor import TabPFNRegressor
 from tabpfn.settings import settings
 
@@ -554,4 +555,50 @@ def test_regressor_dataset_and_collator_batches_type(
         assert batch.X_query_raw.shape[0] == 1
         assert batch.y_query_raw.shape[0] == 1
         assert batch.y_query.shape[0] == 1
+
+        # The frame relating the two bar distributions. `fit_from_preprocessed`
+        # never sees the target, so the regressor can only get it from here, and
+        # the forward pass needs it to map an estimator's borders back.
+        assert batch.y_train_std > 0.0
+        np.testing.assert_allclose(
+            batch.raw_space_bardist.borders.cpu().numpy(),
+            batch.znorm_space_bardist.borders.cpu().numpy() * batch.y_train_std
+            + batch.y_train_mean,
+            rtol=1e-5,
+        )
         break
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.int32, torch.int64, torch.float32, torch.float64]
+)
+def test__forward_with_loss__uses_raw_targets_for_member_pipeline(
+    dtype: torch.dtype,
+) -> None:
+    """The member pipeline must receive query targets in their original units."""
+    y_train = torch.tensor([100, 200, 300], dtype=dtype).numpy()
+    pipeline = make_target_transform(None).fit(y_train.reshape(-1, 1))
+    raw = torch.tensor([[150, 250]], dtype=dtype)
+    standardized = ((raw - y_train.mean()) / y_train.std()).float()
+    batch = mock.Mock(
+        y_query=standardized,
+        y_query_raw=raw,
+        configs=[[mock.Mock(target_transform=pipeline)]],
+    )
+    reg = FinetunedTabPFNRegressor(
+        device="cpu",
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+    )
+    reg._local_n_estimators_ = 1
+    reg._bardist_loss = mock.Mock(num_bars=3)
+    logits = torch.zeros(2, 1, 3)
+    with (
+        mock.patch.object(reg, "_training_forward", return_value=(None, [logits], [])),
+        mock.patch(
+            "tabpfn.finetuning.finetuned_regressor._compute_regression_loss"
+        ) as loss,
+    ):
+        reg._forward_with_loss(batch)
+    torch.testing.assert_close(loss.call_args.kwargs["targets_BQ"], standardized)

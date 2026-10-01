@@ -66,6 +66,8 @@ class RegressorBatch:
         znorm_space_bardist: Bar distribution in z-normalized target space.
         X_query_raw: Original unprocessed test features.
         y_query_raw: Original unprocessed test targets.
+        y_train_mean: Training-target mean defining the shared aggregation frame.
+        y_train_std: Standard deviation of this split's training target.
     """
 
     X_context: list[torch.Tensor]
@@ -79,6 +81,8 @@ class RegressorBatch:
     znorm_space_bardist: FullSupportBarDistribution
     X_query_raw: torch.Tensor
     y_query_raw: torch.Tensor
+    y_train_mean: float = 0.0
+    y_train_std: float = 1.0
 
 
 Batch = TypeVar("Batch", ClassifierBatch, RegressorBatch)
@@ -453,14 +457,10 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 train_std = eps
 
             y_test_standardized = (y_test_raw - train_mean) / train_std
-            y_train_standardized = (y_train_raw - train_mean) / train_std
             raw_space_bardist_ = FullSupportBarDistribution(
                 znorm_space_bardist_.borders * train_std
                 + train_mean  # Inverse normalization back to raw space
             ).float()
-            y_train = y_train_standardized
-        else:
-            y_train = y_train_raw
 
         num_columns = x_train_raw.shape[1]
         feature_schema = FeatureSchema.from_only_categorical_indices(
@@ -475,7 +475,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         )
         ensemble_members = ensemble_preprocessor.fit_transform_ensemble_members(
             X_train=x_train_raw,
-            y_train=y_train,
+            y_train=y_train_raw,
         )
         X_trains_preprocessed = [m.X_train for m in ensemble_members]
         y_trains_preprocessed = [m.y_train for m in ensemble_members]
@@ -530,6 +530,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 znorm_space_bardist=znorm_space_bardist_,
                 X_query_raw=x_test_raw,
                 y_query_raw=y_test_raw,
+                y_train_mean=float(train_mean),
+                y_train_std=float(train_std),
             )
 
         return ClassifierBatch(
@@ -695,6 +697,9 @@ def meta_dataset_collator(
         znorm_space_bardist=first_item.znorm_space_bardist,
         X_query_raw=_collate_tensor_field(batch, "X_query_raw", padding_val),
         y_query_raw=_collate_tensor_field(batch, "y_query_raw", padding_val),
+        # The target frame belongs to the bar distributions above.
+        y_train_mean=first_item.y_train_mean,
+        y_train_std=first_item.y_train_std,
     )
 
 

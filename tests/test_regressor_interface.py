@@ -1404,6 +1404,69 @@ def test__predict_batched__uses_fitted_target_transforms() -> None:
         np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), atol=1e-4)
 
 
+def test__predict_batched__datasets_with_different_target_scales() -> None:
+    """Each dataset's borders must be mapped back in its own target frame.
+
+    The worker is refitted per dataset, so its own `y_train_mean_`/`y_train_std_`
+    only ever hold the last dataset's. Targets that differ by six orders of
+    magnitude make a leaked frame impossible to miss.
+    """
+    X, y = _mk_reg_dataset(0)
+    scales = [1e-3, 1.0, 1e6]
+    X_list = [X] * len(scales)
+    y_list = [y * scale for scale in scales]
+    X_tests = [X[:5]] * len(scales)
+
+    kwargs = {
+        "n_estimators": 4,
+        "device": "cpu",
+        "random_state": 42,
+        "inference_precision": torch.float32,
+    }
+    batched = TabPFNRegressor(**kwargs).predict_batched(X_list, y_list, X_tests)
+
+    for i, scale in enumerate(scales):
+        ref = TabPFNRegressor(**kwargs)
+        ref.fit(X_list[i], y_list[i])
+        np.testing.assert_allclose(
+            batched[i], ref.predict(X_tests[i]), rtol=1e-4, atol=1e-6 * scale
+        )
+
+
+def test__fit__member_target_is_the_znormalized_target() -> None:
+    """Without subsampling or a preset, model inputs match global standardization."""
+    X, y = _mk_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)},
+    )
+    reg.fit(X, y)
+
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    assert np.array_equal(member_y, (y - np.mean(y)) / (np.std(y) + 1e-20))
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test__fit__target_frame_is_independent_of_the_target_units(dtype: str) -> None:
+    """Rescaling the target changes its frame but preserves standardized inputs."""
+    X, y = _mk_reg_dataset(0)
+    y = y.astype(dtype)
+    members = []
+    for scale in (1.0, 1e6):
+        scaled_y = y * scale
+        reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=42)
+        reg.fit(X, scaled_y)
+        # Compute from the actual input: scaling and reduction round differently.
+        assert reg.y_train_mean_ == float(np.mean(scaled_y))
+        assert reg.y_train_std_ == float(np.std(scaled_y)) + 1e-20
+        members.append(np.asarray(reg.executor_.ensemble_members[0].y_train))
+
+    np.testing.assert_allclose(members[0], members[1], rtol=1e-5)
+
+
 @pytest.mark.parametrize("device", devices)
 def test__predict_batched__matches_per_dataset_dataframe(device: str) -> None:
     """Batched prediction matches per-dataset on non-numeric DataFrame inputs.
