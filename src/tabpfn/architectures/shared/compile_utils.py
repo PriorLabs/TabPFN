@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 import torch
+from torch.torch_version import TorchVersion
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -44,11 +45,16 @@ def compile_when_enabled(fn: F) -> F:
         nonlocal compiled
         if not kwargs.get("enable_torch_compile", False):
             return fn(*args, **kwargs)
+        if TorchVersion(torch.__version__) < TorchVersion("2.6"):
+            raise ValueError(
+                "v3.5 compilation requires PyTorch >= 2.6. Upgrade PyTorch or "
+                "set enable_torch_compile=False."
+            )
         for arg in (*args, *kwargs.values()):
             if isinstance(arg, torch.Tensor):
                 torch._dynamo.mark_dynamic(arg, list(range(arg.ndim - 1)))
         if compiled is None:
-            compiled = torch.compile(fn, dynamic=True, fullgraph=True)
+            compiled = torch.compile(fn, dynamic=True, fullgraph=False)
         return compiled(*args, **kwargs)
 
     return wrapper  # type: ignore[return-value]

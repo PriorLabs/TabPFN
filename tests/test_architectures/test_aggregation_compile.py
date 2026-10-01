@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 import torch
+from torch.torch_version import TorchVersion
 
 from tabpfn.architectures import tabpfn_v3_5 as v35
 from tabpfn.architectures.interface import PerformanceOptions
@@ -29,9 +30,18 @@ _REGIONS = [
 ]
 
 
-@pytest.fixture
-def compiled_regions(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+@pytest.fixture(
+    params=[
+        pytest.param(False, id="production"),
+        pytest.param(True, id="fullgraph"),
+    ]
+)
+def compiled_regions(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> list[str]:
     """Trace real graphs without requiring Inductor or inheriting cached wrappers."""
+    if TorchVersion(torch.__version__) < TorchVersion("2.6"):
+        pytest.skip("v3.5 compilation requires PyTorch >= 2.6")
     for cls, name in _REGIONS:
         original = getattr(cls, name).__wrapped__
         monkeypatch.setattr(cls, name, compile_when_enabled(original))
@@ -39,7 +49,10 @@ def compiled_regions(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     regions = []
 
     def compile_region(fn, **kwargs) -> Callable:
-        assert kwargs == {"dynamic": True, "fullgraph": True}
+        assert kwargs == {"dynamic": True, "fullgraph": False}
+        # Production permits graph breaks; the strict variant catches accidental
+        # fragmentation of the supported aggregation regions.
+        kwargs["fullgraph"] = request.param
         compiled = real_compile(fn, backend="eager", **kwargs)
 
         def run(*args, **call_kwargs) -> Any:
@@ -51,6 +64,24 @@ def compiled_regions(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(torch, "compile", compile_region)
     torch._dynamo.reset()
     return regions
+
+
+@torch.no_grad()
+def test__compile_flag__unsupported_pytorch__raises_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _get_model()
+    x, y = _inputs("multiclass")
+    expected = model(x, y, "multiclass")
+    monkeypatch.setattr(torch, "__version__", "2.5.0")
+    with pytest.raises(ValueError, match=r"v3.5 compilation requires PyTorch >= 2\.6"):
+        model(
+            x,
+            y,
+            "multiclass",
+            performance_options=PerformanceOptions(enable_torch_compile=True),
+        )
+    torch.testing.assert_close(model(x, y, "multiclass"), expected)
 
 
 @torch.no_grad()

@@ -518,6 +518,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 can speed up repeated inference but adds startup cost to the first
                 prediction, or to fitting when building a key-value cache. Disabled
                 by default. Architectures without compilation support ignore it.
+                v3.5 compilation requires PyTorch 2.6 or newer.
 
             keep_cache_on_device:
                 Only relevant when `fit_mode="fit_with_cache"`. If True
