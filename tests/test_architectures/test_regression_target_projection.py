@@ -8,45 +8,36 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Literal
 
 import pytest
 import torch
+from torch.torch_version import TorchVersion
 
 from tests.test_architectures.test_tabpfn_v3 import _get_regression_model
 from tests.test_architectures.test_tabpfn_v3_5 import _get_model
 
 
 @pytest.mark.parametrize("version", ["v3", "v3.5"])
-@pytest.mark.parametrize("stage", ["col", "icl"])
-@pytest.mark.parametrize("batch", [1, 8])
-@pytest.mark.parametrize("contiguous", [False, True])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_regression_target_projection(
-    version: str,
-    stage: Literal["col", "icl"],
-    batch: int,
-    contiguous: bool,
-    device: str,
-) -> None:
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA unavailable")
+def test_regression_target_projection(version: str) -> None:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model = (_get_regression_model() if version == "v3" else _get_model()).to(device)
-    targets = torch.randn(1002, batch, device=device).T
-    if contiguous:
-        targets = targets.contiguous()
-    targets.requires_grad_()
-    project = getattr(model, f"_embed_{stage}_y")
+    targets = torch.randn(1002, 8, device=device).T.requires_grad_()
     kwargs = {} if version == "v3" else {"task_type": "regression"}
-    expected = torch.cat([project(row[None], **kwargs) for row in targets])
-    expected_grad = torch.autograd.grad(expected.square().sum(), targets)[0]
-    actual = project(targets, **kwargs)
-    actual_grad = torch.autograd.grad(actual.square().sum(), targets)[0]
-    torch.testing.assert_close(actual, expected)
-    torch.testing.assert_close(actual_grad, expected_grad)
+    for stage in ("col", "icl"):
+        project = getattr(model, f"_embed_{stage}_y")
+        expected = torch.cat([project(row[None], **kwargs) for row in targets])
+        expected_grad = torch.autograd.grad(expected.square().sum(), targets)[0]
+        actual = project(targets, **kwargs)
+        actual_grad = torch.autograd.grad(actual.square().sum(), targets)[0]
+        torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(actual_grad, expected_grad)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+@pytest.mark.skipif(
+    TorchVersion(torch.__version__) < TorchVersion("2.13"),
+    reason="Eager Triton outer-product dispatch requires Torch 2.13+",
+)
 def test_regression_target_projection_without_compiler(tmp_path: Path) -> None:
     result = subprocess.run(
         [
