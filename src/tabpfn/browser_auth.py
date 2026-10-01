@@ -724,12 +724,15 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
 
     license_status = check_license_accepted(token, api_url, license_version)
     if license_status is True:
-        # The browser may be signed in to another account than the key. A
-        # TABPFN_TOKEN key outranks the one just saved, so without this check
-        # every later run would reopen the browser without saying why.
+        # The browser may be signed in to another account than the valid key
+        # we started with. A TABPFN_TOKEN key outranks the one just saved, so
+        # without this check every later run would reopen the browser. Only
+        # the acceptance step had a verified key; after a login, a leftover
+        # key is just invalid, not another account.
         next_run_token = get_cached_token()
         if (
-            next_run_token is not None
+            step is _AuthStep.ACCEPT_LICENSE
+            and next_run_token is not None
             and next_run_token != token
             and check_license_accepted(next_run_token, api_url, license_version)
             is False

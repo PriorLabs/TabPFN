@@ -435,6 +435,24 @@ class TestEnsureLicenseAccepted:
                 assert self._import_ensure()("tabpfn_2_6") is True
                 assert browser_auth.get_cached_token() == "browser-tok"
 
+    def test_invalid_env_key_then_browser_login_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A rejected TABPFN_TOKEN is not a different account: the login still works."""
+        monkeypatch.setenv("TABPFN_TOKEN", "stale-tok")
+        with (
+            patch(
+                "tabpfn.browser_auth.verify_token",
+                side_effect=lambda key, _: key == "browser-tok",
+            ),
+            patch(
+                "tabpfn.browser_auth.check_license_accepted",
+                side_effect=lambda key, *_: key == "browser-tok",
+            ),
+            patch("tabpfn.browser_auth.try_browser_login", return_value="browser-tok"),
+        ):
+            assert self._import_ensure()("tabpfn_2_6") is True
+
     def test_login_result_rejected_raises(self):
         """Token from browser rejected by server -> error."""
         with (
