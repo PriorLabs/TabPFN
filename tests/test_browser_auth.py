@@ -369,6 +369,39 @@ class TestEnsureLicenseAccepted:
         if browser == "disabled":
             login.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("license_accepted", "step"),
+        [(False, "accept_license"), (None, "login")],
+        ids=["valid_key_without_license", "no_cached_key"],
+    )
+    def test_browser_is_asked_for_the_missing_step(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        license_accepted: bool | None,
+        step: str,
+    ):
+        """A valid key only needs acceptance; without one the user must log in."""
+        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+
+        if license_accepted is not None:
+            monkeypatch.setenv("TABPFN_TOKEN", "valid-tok")
+        with (
+            patch("tabpfn.browser_auth.verify_token", return_value=True),
+            patch(
+                "tabpfn.browser_auth.check_license_accepted",
+                side_effect=[license_accepted, True]
+                if license_accepted is not None
+                else [True],
+            ),
+            patch(
+                "tabpfn.browser_auth.try_browser_login", return_value="browser-tok"
+            ) as login,
+        ):
+            assert self._import_ensure()("tabpfn_2_6") is True
+        login.assert_called_once_with(
+            "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6", step=_AuthStep(step)
+        )
+
     def test_login_result_rejected_raises(self):
         """Token from browser rejected by server -> error."""
         with (
@@ -617,6 +650,25 @@ class TestHeadlessInteractiveLogin:
         captured = capsys.readouterr()
         assert "hf_repo_id=tabpfn_2_6" in captured.out
 
+    def test_accept_step_links_to_acceptance_page(
+        self, capsys: pytest.CaptureFixture[str]
+    ):
+        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+
+        headless_login = self._import_headless()
+        with (
+            patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
+            patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
+        ):
+            headless_login(
+                "https://ux.priorlabs.ai",
+                hf_repo_id="tabpfn_2_6",
+                step=_AuthStep.ACCEPT_LICENSE,
+            )
+        out = capsys.readouterr().out
+        assert "https://ux.priorlabs.ai/accept-license?hf_repo_id=tabpfn_2_6" in out
+        assert "/login" not in out
+
 
 # ---------------------------------------------------------------------------
 # try_browser_login routing
@@ -638,6 +690,8 @@ class TestTryBrowserLoginRouting:
 
     def test_headless_routes_to_headless_login(self):
         """TTY + no display → delegates to _headless_interactive_login."""
+        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+
         try_login = self._import_try_login()
         with (
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
@@ -652,7 +706,30 @@ class TestTryBrowserLoginRouting:
 
         assert result == "headless-jwt"
         mock_headless.assert_called_once_with(
-            "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6"
+            "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6", step=_AuthStep.LOGIN
+        )
+
+    def test_graphical_accept_step_opens_acceptance_page(self):
+        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+
+        try_login = self._import_try_login()
+        with (
+            patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
+            patch("tabpfn.browser_auth._has_display", return_value=True),
+            patch("tabpfn.browser_auth.webbrowser.open") as mock_browser,
+            patch("tabpfn.browser_auth._poll_for_token", return_value="browser-jwt"),
+        ):
+            mock_stdin.isatty.return_value = True
+            try_login(
+                "https://ux.priorlabs.ai",
+                hf_repo_id="tabpfn_2_6",
+                step=_AuthStep.ACCEPT_LICENSE,
+            )
+
+        (url,), _ = mock_browser.call_args
+        assert url.startswith(
+            "https://ux.priorlabs.ai/accept-license?hf_repo_id=tabpfn_2_6"
+            "&callback=http://localhost:"
         )
 
     def test_graphical_opens_browser(self):

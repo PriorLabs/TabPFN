@@ -22,8 +22,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing_extensions import assert_never
 
 from tabpfn.errors import (
     TabPFNError,
@@ -40,6 +42,45 @@ logger = logging.getLogger(__name__)
 # In-process cache: tracks which HF repos have been confirmed this session.
 # Short-circuits repeated calls within the same Python process.
 _accepted_repos: set[str] = set()
+
+
+class _AuthStep(Enum):
+    """What the user still has to do in the browser."""
+
+    # No usable API key: log in (or register), then accept the license.
+    LOGIN = "login"
+    # The API key is valid; only the license acceptance is missing.
+    ACCEPT_LICENSE = "accept_license"
+
+
+class _NoBrowserToken(Enum):
+    """Why the browser flow produced no API key."""
+
+    # TABPFN_NO_BROWSER is set, so the browser flow never ran.
+    DISABLED = "disabled"
+    # No interactive terminal, or the user aborted the flow.
+    UNAVAILABLE = "unavailable"
+
+
+def _browser_url(
+    gui_url: str,
+    step: _AuthStep,
+    hf_repo_id: str | None = None,
+    callback_url: str | None = None,
+) -> str:
+    """Return the web app page that completes ``step``."""
+    match step:
+        case _AuthStep.LOGIN:
+            path = "login"
+        case _AuthStep.ACCEPT_LICENSE:
+            path = "accept-license"
+        case _:
+            assert_never(step)
+    # Kept unencoded: the web app reads the callback verbatim.
+    params = [f"callback={callback_url}"] if callback_url else []
+    if hf_repo_id:
+        params.insert(0, f"hf_repo_id={urllib.parse.quote(hf_repo_id)}")
+    return f"{gui_url}/{path}" + (f"?{'&'.join(params)}" if params else "")
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +395,9 @@ def _poll_for_token(
 
 
 def _headless_interactive_login(
-    gui_url: str, hf_repo_id: str | None = None
+    gui_url: str,
+    hf_repo_id: str | None = None,
+    step: _AuthStep = _AuthStep.LOGIN,
 ) -> str | None:
     """Token acquisition for headless but interactive environments (e.g. SSH).
 
@@ -363,18 +406,27 @@ def _headless_interactive_login(
 
     Returns the JWT on success, or ``None`` on abort / EOF.
     """
-    login_url = f"{gui_url}/login"
-    if hf_repo_id:
-        login_url += f"?hf_repo_id={urllib.parse.quote(hf_repo_id)}"
+    login_url = _browser_url(gui_url, step, hf_repo_id)
+    match step:
+        case _AuthStep.LOGIN:
+            next_steps = (
+                "\nAfter logging in, accept the license on the Licenses tab,\n"
+                f"then copy your API Key from\n  {gui_url}/account\n"
+            )
+        case _AuthStep.ACCEPT_LICENSE:
+            next_steps = (
+                "\nYour API key is valid; only the license acceptance is missing.\n"
+                "After accepting, paste your API key below.\n"
+            )
+        case _:
+            assert_never(step)
 
     print(  # noqa: T201
         "\nTabPFN requires a one-time license acceptance to download"
         " model weights for local inference.\n"
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
-        f"\nAfter logging in, accept the license on the Licenses tab,\n"
-        f"then copy your API Key from\n"
-        f"  {gui_url}/account\n"
+        f"{next_steps}"
     )
 
     try:
@@ -479,7 +531,11 @@ def _headless_readline_loop(login_url: str) -> str | None:
         return None
 
 
-def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None:
+def try_browser_login(
+    gui_url: str,
+    hf_repo_id: str | None = None,
+    step: _AuthStep = _AuthStep.LOGIN,
+) -> str | None:
     """Obtain a token via browser callback and/or manual paste concurrently.
 
     Chooses the right strategy based on the environment:
@@ -496,7 +552,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
         return None
 
     if not _has_display():
-        return _headless_interactive_login(gui_url, hf_repo_id=hf_repo_id)
+        return _headless_interactive_login(gui_url, hf_repo_id=hf_repo_id, step=step)
 
     auth_event = threading.Event()
     received_token: list[str | None] = [None]
@@ -508,10 +564,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
         logger.debug("Could not create callback server", exc_info=True)
         return None
 
-    callback_url = f"http://localhost:{port}"
-    login_url = f"{gui_url}/login?callback={callback_url}"
-    if hf_repo_id:
-        login_url += f"&hf_repo_id={urllib.parse.quote(hf_repo_id)}"
+    login_url = _browser_url(gui_url, step, hf_repo_id, f"http://localhost:{port}")
 
     server_thread = threading.Thread(
         target=_serve_until_event, args=(httpd, auth_event), daemon=True
@@ -522,19 +575,34 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
     webbrowser.open(login_url)
 
     # --- print unified instructions ---
+    match step:
+        case _AuthStep.LOGIN:
+            instructions = (
+                "\nOpening your browser to complete login/registration…\n"
+                f"\n  {login_url}\n"
+                "\nWaiting for login to complete…\n"
+                "\nHaving trouble? You can also authenticate manually:\n"
+                f"  1. Open {gui_url}/account in a browser"
+                " (log in or register if needed)\n"
+                f"  2. Accept the license at {gui_url}/account/licenses\n"
+                "  3. Copy your API Key\n"
+                "  4. Paste the API key below\n"
+            )
+        case _AuthStep.ACCEPT_LICENSE:
+            instructions = (
+                "\nYour API key is valid; only the license acceptance is missing."
+                "\nOpening your browser to accept it…\n"
+                f"\n  {login_url}\n"
+                "\nWaiting for acceptance to complete…\n"
+                "\nHaving trouble? Accept the license at the link above,"
+                " then paste your API key below.\n"
+            )
+        case _:
+            assert_never(step)
     print(  # noqa: T201
         "\nTabPFN requires a one-time license acceptance to download"
         " model weights for local inference."
-        "\nOpening your browser to complete login/registration…\n"
-        f"\n  {login_url}\n"
-        "\nWaiting for login to complete…\n"
-        "\nHaving trouble? You can also authenticate manually:\n"
-        f"  1. Open {gui_url}/account in a browser"
-        " (log in or register if needed)\n"
-        "  2. Accept the license at"
-        f" {gui_url}/account/licenses\n"
-        "  3. Copy your API Key\n"
-        "  4. Paste the API key below\n"
+        f"{instructions}"
     )
 
     # --- main thread: poll stdin while waiting for callback ---
@@ -574,10 +642,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
     api_url = settings.tabpfn.auth_api_url
 
     license_version = _get_license_name(hf_repo_id)
-    # Users often create an API key but forget the acceptance step. If we
-    # cannot open a browser for them, say exactly that instead of the generic
-    # "please authenticate" instructions, which they have already followed.
-    has_token_without_license = False
+    step = _AuthStep.LOGIN
 
     token = get_cached_token()
     if token is not None:
@@ -594,9 +659,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
                     "Could not reach the license server to verify acceptance.\n\n"
                     "Please check your internet connection and try again."
                 )
-            # license_status is False — license not yet accepted.
-            # Fall through to browser login so the GUI can show the acceptance form.
-            has_token_without_license = True
+            # license_status is False: the key works, only acceptance is missing.
+            step = _AuthStep.ACCEPT_LICENSE
             logger.info(
                 "Token valid but license not accepted; opening browser for acceptance.",
             )
@@ -610,33 +674,43 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
             logger.info("Cached token is invalid; deleting and re-authenticating.")
             delete_cached_token()
 
-    # No usable cached token — need browser login.
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
-    browser_disabled = no_browser and no_browser not in ("0", "false", "no", "off")
-    token = None if browser_disabled else try_browser_login(gui_url, hf_repo_id)
-    if token is None and has_token_without_license:
-        raise _license_not_accepted_error(gui_url, hf_repo_id)
-    if browser_disabled:
-        raise TabPFNLicenseError(
-            "TabPFN requires a one-time license acceptance to download\n"
-            "model weights for local inference, but browser login is\n"
-            "disabled (TABPFN_NO_BROWSER is set).\n\n"
-            "Set the TABPFN_TOKEN environment variable with a valid API key\n"
-            "obtained from https://ux.priorlabs.ai"
-        )
-    if token is None:
-        raise TabPFNLicenseError(
-            "TabPFN requires a one-time license acceptance to download\n"
-            "model weights for local inference, but no interactive terminal\n"
-            "is available.\n\n"
-            "To authenticate in a non-interactive environment:\n"
-            f"  1. Open {gui_url} in a browser and log in (or register)\n"
-            f"  2. Accept the license on the Licenses tab\n"
-            f"  3. Copy your API Key from {gui_url}/account\n"
-            '  4. Set the environment variable: export TABPFN_TOKEN="<your-api-key>"\n'
-            "     or in Python (before calling .fit()):"
-            ' import os; os.environ["TABPFN_TOKEN"] = "<your-api-key>"'
-        )
+    browser_result: str | _NoBrowserToken
+    if no_browser and no_browser not in ("0", "false", "no", "off"):
+        browser_result = _NoBrowserToken.DISABLED
+    else:
+        browser_token = try_browser_login(gui_url, hf_repo_id=hf_repo_id, step=step)
+        browser_result = browser_token or _NoBrowserToken.UNAVAILABLE
+
+    match step, browser_result:
+        case _, str() as token:
+            pass
+        case _AuthStep.ACCEPT_LICENSE, _NoBrowserToken():
+            raise _license_not_accepted_error(gui_url, hf_repo_id)
+        case _AuthStep.LOGIN, _NoBrowserToken.DISABLED:
+            raise TabPFNLicenseError(
+                "TabPFN requires a one-time license acceptance to download\n"
+                "model weights for local inference, but browser login is\n"
+                "disabled (TABPFN_NO_BROWSER is set).\n\n"
+                "Set the TABPFN_TOKEN environment variable with a valid API key\n"
+                "obtained from https://ux.priorlabs.ai"
+            )
+        case _AuthStep.LOGIN, _NoBrowserToken.UNAVAILABLE:
+            raise TabPFNLicenseError(
+                "TabPFN requires a one-time license acceptance to download\n"
+                "model weights for local inference, but no interactive terminal\n"
+                "is available.\n\n"
+                "To authenticate in a non-interactive environment:\n"
+                f"  1. Open {gui_url} in a browser and log in (or register)\n"
+                f"  2. Accept the license on the Licenses tab\n"
+                f"  3. Copy your API Key from {gui_url}/account\n"
+                "  4. Set the environment variable:"
+                ' export TABPFN_TOKEN="<your-api-key>"\n'
+                "     or in Python (before calling .fit()):"
+                ' import os; os.environ["TABPFN_TOKEN"] = "<your-api-key>"'
+            )
+        case _:
+            assert_never((step, browser_result))
 
     # Verify the token we just received from the browser.
     status = verify_token(token, api_url)
