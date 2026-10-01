@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import math
 import warnings
 from collections.abc import Callable
 from enum import Enum
@@ -33,6 +34,15 @@ from tabpfn.regression_metrics import (
 from tabpfn.utils import infer_random_state
 
 MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING = 500
+
+MAX_TUNING_FOLDS = 100
+"""Upper bound on the (stratified) k-fold count implied by a holdout fraction.
+
+A smaller holdout fraction means more folds, and folds are what make each tuning
+split expensive, so we refuse fractions that would ask for more than this many.
+"""
+MIN_TUNING_HOLDOUT_FRAC = 1 / MAX_TUNING_FOLDS
+"""The smallest holdout fraction that stays within `MAX_TUNING_FOLDS`."""
 
 
 @dataclasses.dataclass
@@ -235,6 +245,40 @@ def compute_regression_metric_to_minimize(
     )
 
 
+def _folds_for_holdout_frac(holdout_frac: float) -> int:
+    """Derives the number of (stratified) k-folds from a holdout fraction.
+
+    Each k-fold split holds out `1 / n_folds` of the data, so the requested
+    fraction has to be inverted to get the fold count.
+
+    Args:
+        holdout_frac: The fraction of the data to hold out for tuning.
+
+    Returns:
+        The number of folds to use, in `[2, MAX_TUNING_FOLDS]`.
+
+    Raises:
+        ValueError: If `holdout_frac` is not a finite number in the open
+            interval `(0, 1)`, or if it would need more than
+            `MAX_TUNING_FOLDS` folds.
+    """
+    if not math.isfinite(holdout_frac) or not 0.0 < holdout_frac < 1.0:
+        raise ValueError(
+            "tuning holdout fraction must be a finite number strictly between "
+            f"0 and 1, got {holdout_frac!r}."
+        )
+    if holdout_frac < MIN_TUNING_HOLDOUT_FRAC:
+        raise ValueError(
+            f"tuning holdout fraction {holdout_frac!r} is too small: it would "
+            f"need more than {MAX_TUNING_FOLDS} tuning folds. Use a value of at "
+            f"least {MIN_TUNING_HOLDOUT_FRAC}."
+        )
+    # Inverse the fraction directly rather than rounding it first: pre-rounding
+    # to 2 decimals collapses values below 0.005 to zero (dividing by zero) and
+    # inflates values just above it (0.005 -> 0.01 -> 100 folds).
+    return min(max(round(1 / holdout_frac), 2), MAX_TUNING_FOLDS)
+
+
 def get_tuning_splits(
     X: np.ndarray,
     y: np.ndarray,
@@ -260,13 +304,15 @@ def get_tuning_splits(
         Returns a list of splits as tuples of
         (X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh).
         Shape suffixes: Nt=num train samples, F=num features, Nh=num holdout samples.
+
+    Raises:
+        ValueError: If `holdout_frac` is not a finite number in the open
+            interval `(0, 1)`.
     """
     # We want to use (Stratified)KFold to ensure that no train samples are used twice.
     # Therefore, we have to invert the holdout_frac to get the number of folds to
-    # use for (Stratified)KFold. Round holdout_frac to 2 digits to avoid needing
-    # more than 100 folds
-    rounded_holdout_frac = round(holdout_frac, 2)
-    n_folds = max(2, round(1 / rounded_holdout_frac))
+    # use for (Stratified)KFold.
+    n_folds = _folds_for_holdout_frac(holdout_frac)
 
     if isinstance(random_state, np.random.Generator):
         # (Stratified)KFold does not accept np.random.Generator.
