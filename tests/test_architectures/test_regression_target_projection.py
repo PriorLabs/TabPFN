@@ -4,27 +4,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, Literal
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Literal
 
 import pytest
 import torch
-from torch.utils._python_dispatch import TorchDispatchMode
 
 from tests.test_architectures.test_tabpfn_v3 import _get_regression_model
 from tests.test_architectures.test_tabpfn_v3_5 import _get_model
-
-
-class _RejectBmm(TorchDispatchMode):
-    def __torch_dispatch__(
-        self,
-        func: Callable,
-        types: tuple[type, ...],
-        args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] | None = None,
-    ) -> Any:
-        assert func is not torch.ops.aten.bmm.default, "Target projection reached BMM"
-        return func(*args, **(kwargs or {}))
 
 
 @pytest.mark.parametrize("version", ["v3", "v3.5"])
@@ -50,8 +40,47 @@ def test_regression_target_projection(
     kwargs = {} if version == "v3" else {"task_type": "regression"}
     expected = torch.cat([project(row[None], **kwargs) for row in targets])
     expected_grad = torch.autograd.grad(expected.square().sum(), targets)[0]
-    with _RejectBmm():
-        actual = project(targets, **kwargs)
-        actual_grad = torch.autograd.grad(actual.square().sum(), targets)[0]
+    actual = project(targets, **kwargs)
+    actual_grad = torch.autograd.grad(actual.square().sum(), targets)[0]
     torch.testing.assert_close(actual, expected)
     torch.testing.assert_close(actual_grad, expected_grad)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_regression_target_projection_without_compiler(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tests.test_architectures.test_regression_target_projection",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env={**os.environ, "TRITON_CACHE_DIR": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _check_without_compiler() -> None:
+    from triton.runtime import build  # noqa: PLC0415
+
+    def reject_compilation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Regression target encoding requested a C compiler")
+
+    build._build = reject_compilation
+    targets = torch.randn(1002, 8, device="cuda").T
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        for version in ("v3", "v3.5"):
+            model = (
+                _get_regression_model() if version == "v3" else _get_model()
+            ).cuda()
+            kwargs = {} if version == "v3" else {"task_type": "regression"}
+            for stage in ("col", "icl"):
+                getattr(model, f"_embed_{stage}_y")(targets, **kwargs)
+        torch.cuda.synchronize()
+
+
+if __name__ == "__main__":
+    _check_without_compiler()
