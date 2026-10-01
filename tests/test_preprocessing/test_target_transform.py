@@ -71,18 +71,43 @@ def test__make_target_transform__without_a_transform_only_standardizes() -> None
 
 
 @pytest.mark.parametrize("name", TRANSFORM_NAMES)
-def test__make_target_transform__transform_sees_the_standardized_target(
+def test__make_target_transform__transform_sees_the_unnormalized_target(
     name: str,
 ) -> None:
-    """The preset receives standardized targets."""
+    """The preset reshapes the raw target before standardization."""
     y = _target()
     transform = _get_transform(name, len(y))
 
     got = make_target_transform(transform).fit_transform(y.reshape(-1, 1)).astype(float)
 
-    standardized = (y - np.mean(y)) / (np.std(y) + StandardizeTarget.EPSILON)
-    expected = _get_transform(name, len(y)).fit_transform(standardized.reshape(-1, 1))
-    np.testing.assert_allclose(got, np.asarray(expected, dtype=float), rtol=1e-12)
+    reshaped = np.asarray(
+        _get_transform(name, len(y)).fit_transform(y.reshape(-1, 1)), dtype=float
+    )
+    expected = (reshaped - reshaped.mean()) / (
+        reshaped.std() + StandardizeTarget.EPSILON
+    )
+    np.testing.assert_allclose(got, expected, rtol=1e-10)
+
+
+def test__make_target_transform__log_of_the_target_is_defined() -> None:
+    """Positive raw targets stay finite even when their z-scores fall below -1."""
+    rng = np.random.default_rng(0)
+    y = rng.normal(100.0, 10.0, size=500)  # symmetric, strictly positive
+
+    standardized = (y - np.mean(y)) / np.std(y)
+    assert not np.isfinite(np.log1p(standardized)).all()
+
+    got = (
+        make_target_transform(_get_transform("1_plus_log", len(y)))
+        .fit_transform(y.reshape(-1, 1))
+        .ravel()
+    )
+
+    assert np.isfinite(got).all()
+    expected = np.log1p(y)
+    np.testing.assert_allclose(
+        got, (expected - expected.mean()) / expected.std(), rtol=1e-10
+    )
 
 
 @pytest.mark.parametrize("name", TRANSFORM_NAMES)

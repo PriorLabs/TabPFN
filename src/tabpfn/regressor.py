@@ -37,6 +37,7 @@ from sklearn.base import (
     check_is_fitted,
     clone,
 )
+from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
@@ -123,7 +124,6 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
     from tabpfn.architectures.interface import (
@@ -1006,11 +1006,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_examples=y.shape[0],  # Use length of validated y
             random_state=random_state,  # Use the provided rng
         )
+        # Yeo-Johnson depends on units and offset; fit it on standardized targets.
+        possible_target_transforms["safepower"] = Pipeline(
+            steps=[
+                ("standardize_input", StandardizeTarget()),
+                ("safepower", possible_target_transforms["safepower"]),
+            ]
+        )
         # Each member fits its target pipeline on raw targets.
         target_preprocessors: list[TransformerMixin | Pipeline | None] = [
             make_target_transform(
                 None
-                if y_target_preprocessor is None
+                if y_target_preprocessor in (None, "none")
                 else possible_target_transforms[y_target_preprocessor]
             )
             for y_target_preprocessor in (
