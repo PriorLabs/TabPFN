@@ -2144,13 +2144,17 @@ class TabPFNV3(Architecture):
         """Embed y_train for the col stage → (B, T, E)."""
         if self.task_type == "multiclass":
             return self.col_y_encoder(y_BN)
-        return self.col_y_encoder(y_BN.unsqueeze(-1))
+        # A 2D projection avoids eager Triton BMM and its C compiler requirement.
+        y_emb = self.col_y_encoder(y_BN.reshape(-1, 1))
+        return y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
 
     def _embed_icl_y(self, y_BN: torch.Tensor) -> torch.Tensor:
         """Embed y_train for the ICL stage → (B, T, D)."""
         if self.task_type == "multiclass":
             return self.icl_y_encoder(y_BN)
-        return self.icl_y_encoder(y_BN.unsqueeze(-1))
+        # A 2D projection avoids eager Triton BMM and its C compiler requirement.
+        y_emb = self.icl_y_encoder(y_BN.reshape(-1, 1))
+        return y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
 
     def _preprocess_raw(
         self,
