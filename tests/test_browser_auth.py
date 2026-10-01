@@ -389,7 +389,9 @@ class TestEnsureLicenseAccepted:
             patch("tabpfn.browser_auth.verify_token", return_value=True),
             patch(
                 "tabpfn.browser_auth.check_license_accepted",
-                side_effect=[license_accepted, True]
+                # Key not accepted, browser key accepted, and the same account's
+                # key accepted on the re-check.
+                side_effect=[license_accepted, True, True]
                 if license_accepted is not None
                 else [True],
             ),
@@ -401,6 +403,37 @@ class TestEnsureLicenseAccepted:
         login.assert_called_once_with(
             "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6", step=_AuthStep(step)
         )
+
+    @pytest.mark.parametrize("key_source", ["env", "cache_file"])
+    def test_acceptance_in_a_different_browser_account(
+        self, monkeypatch: pytest.MonkeyPatch, key_source: str
+    ):
+        """The browser may be signed in to another account than the key.
+
+        Only a TABPFN_TOKEN key keeps winning on later runs; a cached key is
+        replaced by the browser's key, so that case just works.
+        """
+        from tabpfn import browser_auth  # noqa: PLC0415
+
+        if key_source == "env":
+            monkeypatch.setenv("TABPFN_TOKEN", "key-tok")
+        else:
+            browser_auth.save_token("key-tok")
+        accepted = {"key-tok": False, "browser-tok": True}
+        with (
+            patch("tabpfn.browser_auth.verify_token", return_value=True),
+            patch(
+                "tabpfn.browser_auth.check_license_accepted",
+                side_effect=lambda token, *_: accepted[token],
+            ),
+            patch("tabpfn.browser_auth.try_browser_login", return_value="browser-tok"),
+        ):
+            if key_source == "env":
+                with pytest.raises(TabPFNLicenseError, match="different account"):
+                    self._import_ensure()("tabpfn_2_6")
+            else:
+                assert self._import_ensure()("tabpfn_2_6") is True
+                assert browser_auth.get_cached_token() == "browser-tok"
 
     def test_login_result_rejected_raises(self):
         """Token from browser rejected by server -> error."""
@@ -636,7 +669,7 @@ class TestHeadlessInteractiveLogin:
                 return_value="jwt-val",
             ) as mock_readline,
         ):
-            result = headless_login("https://ux.priorlabs.ai")
+            result = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
         assert result == "jwt-val"
         mock_readline.assert_called_once()
 
@@ -649,25 +682,6 @@ class TestHeadlessInteractiveLogin:
             headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
         captured = capsys.readouterr()
         assert "hf_repo_id=tabpfn_2_6" in captured.out
-
-    def test_accept_step_links_to_acceptance_page(
-        self, capsys: pytest.CaptureFixture[str]
-    ):
-        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
-
-        headless_login = self._import_headless()
-        with (
-            patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
-            patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
-        ):
-            headless_login(
-                "https://ux.priorlabs.ai",
-                hf_repo_id="tabpfn_2_6",
-                step=_AuthStep.ACCEPT_LICENSE,
-            )
-        out = capsys.readouterr().out
-        assert "https://ux.priorlabs.ai/accept-license?hf_repo_id=tabpfn_2_6" in out
-        assert "/login" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -683,13 +697,30 @@ class TestTryBrowserLoginRouting:
 
     def test_non_interactive_returns_none(self):
         """Non-TTY stdin → returns None without attempting any login."""
+        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+
         try_login = self._import_try_login()
         with patch("tabpfn.browser_auth.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = False
-            assert try_login("https://ux.priorlabs.ai") is None
+            assert (
+                try_login(
+                    "https://ux.priorlabs.ai",
+                    hf_repo_id="tabpfn_2_6",
+                    step=_AuthStep.LOGIN,
+                )
+                is None
+            )
 
-    def test_headless_routes_to_headless_login(self):
-        """TTY + no display → delegates to _headless_interactive_login."""
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [("login", "headless-jwt"), ("accept_license", None)],
+    )
+    def test_headless_routes_by_step(self, step: str, expected: str | None):
+        """TTY + no display: log in by pasting a key; acceptance has nothing to paste.
+
+        For acceptance the key is already set, so returning None lets the caller
+        raise the error that links to the acceptance page.
+        """
         from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
 
         try_login = self._import_try_login()
@@ -702,12 +733,17 @@ class TestTryBrowserLoginRouting:
             ) as mock_headless,
         ):
             mock_stdin.isatty.return_value = True
-            result = try_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+            result = try_login(
+                "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6", step=_AuthStep(step)
+            )
 
-        assert result == "headless-jwt"
-        mock_headless.assert_called_once_with(
-            "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6", step=_AuthStep.LOGIN
-        )
+        assert result == expected
+        if expected is None:
+            mock_headless.assert_not_called()
+        else:
+            mock_headless.assert_called_once_with(
+                "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6"
+            )
 
     def test_graphical_accept_step_opens_acceptance_page(self):
         from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
@@ -734,6 +770,8 @@ class TestTryBrowserLoginRouting:
 
     def test_graphical_opens_browser(self):
         """TTY + display → opens browser (existing flow)."""
+        from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+
         try_login = self._import_try_login()
         with (
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
@@ -742,7 +780,9 @@ class TestTryBrowserLoginRouting:
             patch("tabpfn.browser_auth._poll_for_token", return_value="browser-jwt"),
         ):
             mock_stdin.isatty.return_value = True
-            result = try_login("https://ux.priorlabs.ai")
+            result = try_login(
+                "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6", step=_AuthStep.LOGIN
+            )
 
         assert result == "browser-jwt"
         mock_browser.assert_called_once()

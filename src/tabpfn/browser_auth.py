@@ -66,7 +66,7 @@ def _browser_url(
     gui_url: str,
     step: _AuthStep,
     *,
-    hf_repo_id: str | None = None,
+    hf_repo_id: str,
     callback_url: str | None = None,
 ) -> str:
     """Return the web app page that completes ``step``."""
@@ -77,11 +77,8 @@ def _browser_url(
             path = "accept-license"
         case _:
             assert_never(step)
-    # Kept unencoded: the web app reads the callback verbatim.
-    params = [f"callback={callback_url}"] if callback_url else []
-    if hf_repo_id:
-        params.insert(0, f"hf_repo_id={urllib.parse.quote(hf_repo_id)}")
-    return f"{gui_url}/{path}" + (f"?{'&'.join(params)}" if params else "")
+    url = f"{gui_url}/{path}?hf_repo_id={urllib.parse.quote(hf_repo_id)}"
+    return f"{url}&callback={callback_url}" if callback_url else url
 
 
 # ---------------------------------------------------------------------------
@@ -395,11 +392,7 @@ def _poll_for_token(
     return received_token[0]
 
 
-def _headless_interactive_login(
-    gui_url: str,
-    hf_repo_id: str | None = None,
-    step: _AuthStep = _AuthStep.LOGIN,
-) -> str | None:
+def _headless_interactive_login(gui_url: str, *, hf_repo_id: str) -> str | None:
     """Token acquisition for headless but interactive environments (e.g. SSH).
 
     Shows the login URL, offers single-keypress clipboard copy via OSC 52,
@@ -407,27 +400,16 @@ def _headless_interactive_login(
 
     Returns the JWT on success, or ``None`` on abort / EOF.
     """
-    login_url = _browser_url(gui_url, step, hf_repo_id=hf_repo_id)
-    match step:
-        case _AuthStep.LOGIN:
-            next_steps = (
-                "\nAfter logging in, accept the license on the Licenses tab,\n"
-                f"then copy your API Key from\n  {gui_url}/account\n"
-            )
-        case _AuthStep.ACCEPT_LICENSE:
-            next_steps = (
-                "\nYour API key is valid; only the license acceptance is missing.\n"
-                "After accepting, paste your API key below.\n"
-            )
-        case _:
-            assert_never(step)
+    login_url = _browser_url(gui_url, _AuthStep.LOGIN, hf_repo_id=hf_repo_id)
 
     print(  # noqa: T201
         "\nTabPFN requires a one-time license acceptance to download"
         " model weights for local inference.\n"
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
-        f"{next_steps}"
+        f"\nAfter logging in, accept the license on the Licenses tab,\n"
+        f"then copy your API Key from\n"
+        f"  {gui_url}/account\n"
     )
 
     try:
@@ -534,8 +516,9 @@ def _headless_readline_loop(login_url: str) -> str | None:
 
 def try_browser_login(
     gui_url: str,
-    hf_repo_id: str | None = None,
-    step: _AuthStep = _AuthStep.LOGIN,
+    *,
+    hf_repo_id: str,
+    step: _AuthStep,
 ) -> str | None:
     """Obtain a token via browser callback and/or manual paste concurrently.
 
@@ -553,7 +536,15 @@ def try_browser_login(
         return None
 
     if not _has_display():
-        return _headless_interactive_login(gui_url, hf_repo_id=hf_repo_id, step=step)
+        match step:
+            case _AuthStep.LOGIN:
+                return _headless_interactive_login(gui_url, hf_repo_id=hf_repo_id)
+            case _AuthStep.ACCEPT_LICENSE:
+                # The key is already set, so there is nothing to paste; the
+                # caller's error links to the acceptance page instead.
+                return None
+            case _:
+                assert_never(step)
 
     auth_event = threading.Event()
     received_token: list[str | None] = [None]
@@ -685,8 +676,10 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
     if no_browser and no_browser not in ("0", "false", "no", "off"):
         browser_result = _NoBrowserToken.DISABLED
     else:
-        browser_token = try_browser_login(gui_url, hf_repo_id=hf_repo_id, step=step)
-        browser_result = browser_token or _NoBrowserToken.UNAVAILABLE
+        browser_result = (
+            try_browser_login(gui_url, hf_repo_id=hf_repo_id, step=step)
+            or _NoBrowserToken.UNAVAILABLE
+        )
 
     match step, browser_result:
         case _, str() as token:
@@ -731,6 +724,17 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
 
     license_status = check_license_accepted(token, api_url, license_version)
     if license_status is True:
+        # The browser may be signed in to another account than the key. A
+        # TABPFN_TOKEN key outranks the one just saved, so without this check
+        # every later run would reopen the browser without saying why.
+        next_run_token = get_cached_token()
+        if (
+            next_run_token is not None
+            and next_run_token != token
+            and check_license_accepted(next_run_token, api_url, license_version)
+            is False
+        ):
+            raise _different_account_error(gui_url, hf_repo_id)
         print("License accepted — API key cached for future sessions.\n")  # noqa: T201
         _accepted_repos.add(hf_repo_id)
         return True
@@ -744,10 +748,21 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
 
 
 def _license_not_accepted_error(gui_url: str, hf_repo_id: str) -> TabPFNLicenseError:
-    encoded = urllib.parse.quote(hf_repo_id)
+    accept_url = _browser_url(gui_url, _AuthStep.ACCEPT_LICENSE, hf_repo_id=hf_repo_id)
     return TabPFNLicenseError(
         f"You are logged in, but the license for {hf_repo_id} has not been\n"
         "accepted for your account yet. Accept it once at\n\n"
-        f"  {gui_url}/accept-license?hf_repo_id={encoded}\n\n"
+        f"  {accept_url}\n\n"
+        "then try again."
+    )
+
+
+def _different_account_error(gui_url: str, hf_repo_id: str) -> TabPFNLicenseError:
+    accept_url = _browser_url(gui_url, _AuthStep.ACCEPT_LICENSE, hf_repo_id=hf_repo_id)
+    return TabPFNLicenseError(
+        f"The license for {hf_repo_id} was accepted in the browser for a\n"
+        "different account than the one your TABPFN_TOKEN key belongs to.\n"
+        "Sign in to the browser with that key's account and accept it at\n\n"
+        f"  {accept_url}\n\n"
         "then try again."
     )
