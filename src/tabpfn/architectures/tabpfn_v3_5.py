@@ -2577,7 +2577,9 @@ class TabPFNV3p5(Architecture):
         if task_type == "multiclass":
             y_emb = self.col_y_encoder["multiclass"](y_BN)
         elif task_type == "regression":
-            y_emb = self.col_y_encoder["regression"](y_BN.unsqueeze(-1))
+            # A 2D projection avoids eager Triton BMM and its C compiler requirement.
+            y_emb = self.col_y_encoder["regression"](y_BN.reshape(-1, 1))
+            y_emb = y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
         else:
             raise ValueError(f"Unsupported task type: {task_type}")
         return self.col_y_layernorm(y_emb)
@@ -2587,7 +2589,9 @@ class TabPFNV3p5(Architecture):
         if task_type == "multiclass":
             y_emb = self.icl_y_encoder["multiclass"](y_BN)
         elif task_type == "regression":
-            y_emb = self.icl_y_encoder["regression"](y_BN.unsqueeze(-1))
+            # A 2D projection avoids eager Triton BMM and its C compiler requirement.
+            y_emb = self.icl_y_encoder["regression"](y_BN.reshape(-1, 1))
+            y_emb = y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
         else:
             raise ValueError(f"Unsupported task type: {task_type}")
         return self.icl_y_layernorm(y_emb)
