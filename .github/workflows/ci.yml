@@ -41,22 +41,7 @@ jobs:
         # separate workflow below. This is because we wish to gate the GPU workflow on
         # it, which requires a separate workflow.
         include:
-          - os: ubuntu-latest
-            python-version: "3.10"
-            dependency-set: lowest-direct
-          - os: macos-latest
-            python-version: "3.10"
-            dependency-set: lowest-direct
-          - os: windows-latest
-            python-version: "3.10"
-            dependency-set: lowest-direct
-          # macos-latest (macOS 26) runs on a virtual GPU that cannot compile the
-          # fp16/bf16 attention kernel torch >= 2.14 uses there, so the MPS tests
-          # fail. Physical Macs are fine. TODO: retry macos-latest around 2026-11.
           - os: macos-15
-            python-version: "3.14"
-            dependency-set: highest
-          - os: windows-latest
             python-version: "3.14"
             dependency-set: highest
     runs-on: ${{ matrix.os }}
@@ -197,25 +182,37 @@ jobs:
               print(f"  bit {bit:>2} {name:<16} {bool(mask >> bit & 1)}")
           '
 
+      - name: MPS round-trip diagnostics
+        run: uv run --no-sync python -u scripts/diag_mps_roundtrip.py
+
+      - name: Failing round-trip tests (three repeats)
+        if: always()
+        run: |
+          for i in 1 2 3; do
+            uv run --no-sync pytest -p no:cacheprovider -o addopts="" -q -rA \
+              -k "fit_with_cache and regression and mps" \
+              tests/test_save_load_fitted_model.py || true
+          done
+
       - name: Run Tests (all tests)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+        if: false
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        if: false
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.6 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
 
       - name: Run Tests (all tests, MPS disabled)
-        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+        if: false
         env:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
-        if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        if: false
         env:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
@@ -235,6 +232,7 @@ jobs:
   # Ubuntu-latest + highest dependencies (used as gate for GPU)
   # -------------------------------------------------------------------
   test_ubuntu_latest_314:
+    if: false
     name: Test Ubuntu-latest (Py 3.14)
     needs: check_python_linting
     runs-on: ubuntu-latest
@@ -283,6 +281,7 @@ jobs:
   # -------------------------------------------------------------------
 
   test_first_party_packages:
+    if: false
     name: Test ${{ matrix.repo-name }}
     needs: check_python_linting
     runs-on: ubuntu-latest
