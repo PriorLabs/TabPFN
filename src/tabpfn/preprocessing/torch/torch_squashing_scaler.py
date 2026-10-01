@@ -40,15 +40,6 @@ _FIT_UNBLOCKED_BYTES = 512 * 1024 * 1024
 _TRANSFORM_BLOCK_BYTES = 32 * 1024 * 1024
 
 
-def _scalar(value: float, like: torch.Tensor) -> torch.Tensor:
-    """A 0-dim tensor of `like`'s dtype and device, to broadcast into `where`.
-
-    `torch.where` takes a Python float directly, but not alongside `out=`; a 0-dim
-    tensor is what lets the result be written straight into an existing buffer.
-    """
-    return torch.full((), value, dtype=like.dtype, device=like.device)
-
-
 def _replace_inf_with_nan(x: torch.Tensor) -> torch.Tensor:
     """Replace ±inf with NaN so percentile/min/max see only finite values."""
     return torch.where(torch.isinf(x), float("nan"), x)
@@ -245,15 +236,24 @@ class TorchSquashingScaler:
 
         # only the output has to exist in full
         out = torch.empty_like(x)
-        nan = _scalar(float("nan"), x)
+        work_dtype = (
+            torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
+        )
+        work_center = center if work_dtype == x.dtype else center.to(work_dtype)
+        work_scale = scale if work_dtype == x.dtype else scale.to(work_dtype)
+        work_nan = torch.full((), float("nan"), dtype=work_dtype, device=x.device)
         block = _block_size(x, dim=0, budget_bytes=_TRANSFORM_BLOCK_BYTES)
         for start in range(0, x.shape[0], block):
             stop = start + block
-            # rows are safe to split on because every step in
-            # `_transform_block` is elementwise
+            x_block = x[start:stop]
+            out_block = out[start:stop]
+            work_x = x_block if work_dtype == x.dtype else x_block.to(work_dtype)
+            work_out = out_block if work_dtype == x.dtype else torch.empty_like(work_x)
             self._transform_block(
-                x[start:stop], out[start:stop], center, scale, zero_mask, nan
+                work_x, work_out, work_center, work_scale, zero_mask, work_nan
             )
+            if work_dtype != x.dtype:
+                out_block.copy_(work_out)
         return out
 
     def _transform_block(
