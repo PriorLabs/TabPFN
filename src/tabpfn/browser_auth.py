@@ -101,6 +101,14 @@ def _has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+# Users hesitate to accept when they think it shares their datasets with us. Only
+# the API key and license version are sent; data never leaves the machine.
+_DATA_STAYS_LOCAL_NOTE = (
+    "Your datasets are never sent to Prior Labs. Once the weights are\n"
+    "downloaded, TabPFN runs entirely on this machine and works offline."
+)
+
+
 # ---------------------------------------------------------------------------
 # Token cache helpers
 # ---------------------------------------------------------------------------
@@ -405,6 +413,7 @@ def _headless_interactive_login(gui_url: str, *, hf_repo_id: str) -> str | None:
     print(  # noqa: T201
         "\nTabPFN requires a one-time license acceptance to download"
         " model weights for local inference.\n"
+        f"{_DATA_STAYS_LOCAL_NOTE}\n"
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
         f"\nAfter logging in, accept the license on the Licenses tab,\n"
@@ -598,7 +607,8 @@ def try_browser_login(
             assert_never(step)
     print(  # noqa: T201
         "\nTabPFN requires a one-time license acceptance to download"
-        " model weights for local inference."
+        " model weights for local inference.\n"
+        f"{_DATA_STAYS_LOCAL_NOTE}\n"
         f"{instructions}"
     )
 
