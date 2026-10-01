@@ -6,7 +6,10 @@ from __future__ import annotations
 import dataclasses
 import functools
 import pickle
+import threading
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -82,6 +85,47 @@ def test__compile_flag__unsupported_pytorch__raises_only_when_enabled(
             performance_options=PerformanceOptions(enable_torch_compile=True),
         )
     torch.testing.assert_close(model(x, y, "multiclass"), expected)
+
+
+@pytest.mark.skipif(
+    TorchVersion(torch.__version__) < TorchVersion("2.6"),
+    reason="v3.5 compilation requires PyTorch >= 2.6",
+)
+def test__compiled_region__concurrent_first_calls__initialize_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    real_compile = torch.compile
+
+    def compile_region(fn, **kwargs) -> Callable:
+        calls.append(fn)
+        time.sleep(0.05)  # Release the GIL during wrapper creation to expose races.
+        return real_compile(fn, backend="eager", **kwargs)
+
+    monkeypatch.setattr(torch, "compile", compile_region)
+
+    @compile_when_enabled
+    def region(layer, x, *, enable_torch_compile=False) -> torch.Tensor:
+        del enable_torch_compile
+        return layer(x)
+
+    layers = [torch.nn.Linear(4, 4).eval() for _ in range(2)]
+    x = torch.randn(3, 4)
+    expected = [layer(x) for layer in layers]
+    start = threading.Barrier(2)
+
+    def run(layer) -> torch.Tensor:
+        start.wait(timeout=10)
+        return region(layer, x.clone(), enable_torch_compile=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        actual = list(pool.map(run, layers))
+    for output, reference in zip(actual, expected, strict=True):
+        torch.testing.assert_close(output, reference)
+    torch.testing.assert_close(
+        region(layers[0], x, enable_torch_compile=True), expected[0]
+    )
+    assert len(calls) == 1
 
 
 @torch.no_grad()

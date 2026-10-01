@@ -16,6 +16,7 @@ only *applying* it does, so ``import torch`` at module scope here is safe.
 from __future__ import annotations
 
 import functools
+import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -39,6 +40,7 @@ def compile_when_enabled(fn: F) -> F:
     equals the number of CLS tokens. Model embedding/parameter sizes stay static.
     """
     compiled: Callable[..., Any] | None = None
+    init_lock = threading.Lock()
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -54,7 +56,9 @@ def compile_when_enabled(fn: F) -> F:
             if isinstance(arg, torch.Tensor):
                 torch._dynamo.mark_dynamic(arg, list(range(arg.ndim - 1)))
         if compiled is None:
-            compiled = torch.compile(fn, dynamic=True, fullgraph=False)
+            with init_lock:
+                if compiled is None:
+                    compiled = torch.compile(fn, dynamic=True, fullgraph=False)
         return compiled(*args, **kwargs)
 
     return wrapper  # type: ignore[return-value]
