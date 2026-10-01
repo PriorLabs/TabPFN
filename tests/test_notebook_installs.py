@@ -128,7 +128,9 @@ def test_notebook_resolves_latest_pinned_packages(
             ["uv", "pip", "install", *shlex.split(line)],  # noqa: S607
             env=env,
             check=True,
-            timeout=600,
+            # One line can pull ~560 MiB (xgboost -> nvidia-nccl-cu12). Keep
+            # this below the workflow's 30-minute job timeout.
+            timeout=1200,
         )
 
     # `tabpfn` must be installed by every notebook in this directory; the
