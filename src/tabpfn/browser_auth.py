@@ -552,7 +552,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
 # ---------------------------------------------------------------------------
 
 
-def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
+def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PLR0912
     """Ensure the user has accepted the TabPFN license.
 
     Checks for a cached token, verifies it, and falls back to browser login
@@ -574,6 +574,10 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     api_url = settings.tabpfn.auth_api_url
 
     license_version = _get_license_name(hf_repo_id)
+    # Users often create an API key but forget the acceptance step. If we
+    # cannot open a browser for them, say exactly that instead of the generic
+    # "please authenticate" instructions, which they have already followed.
+    has_token_without_license = False
 
     token = get_cached_token()
     if token is not None:
@@ -592,6 +596,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
                 )
             # license_status is False — license not yet accepted.
             # Fall through to browser login so the GUI can show the acceptance form.
+            has_token_without_license = True
             logger.info(
                 "Token valid but license not accepted; opening browser for acceptance.",
             )
@@ -605,9 +610,13 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             logger.info("Cached token is invalid; deleting and re-authenticating.")
             delete_cached_token()
 
-    # No valid cached token — need browser login.
+    # No usable cached token — need browser login.
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
-    if no_browser and no_browser not in ("0", "false", "no", "off"):
+    browser_disabled = no_browser and no_browser not in ("0", "false", "no", "off")
+    token = None if browser_disabled else try_browser_login(gui_url, hf_repo_id)
+    if token is None and has_token_without_license:
+        raise _license_not_accepted_error(gui_url, hf_repo_id)
+    if browser_disabled:
         raise TabPFNLicenseError(
             "TabPFN requires a one-time license acceptance to download\n"
             "model weights for local inference, but browser login is\n"
@@ -615,8 +624,6 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "Set the TABPFN_TOKEN environment variable with a valid API key\n"
             "obtained from https://ux.priorlabs.ai"
         )
-
-    token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
     if token is None:
         raise TabPFNLicenseError(
             "TabPFN requires a one-time license acceptance to download\n"
@@ -653,8 +660,14 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "Please check your internet connection and try again."
         )
     # license_status is False
+    raise _license_not_accepted_error(gui_url, hf_repo_id)
+
+
+def _license_not_accepted_error(gui_url: str, hf_repo_id: str) -> TabPFNLicenseError:
     encoded = urllib.parse.quote(hf_repo_id)
-    raise TabPFNLicenseError(
-        "License not yet accepted. Please complete the acceptance form at\n"
-        f"{gui_url}/accept-license?hf_repo_id={encoded} and try again."
+    return TabPFNLicenseError(
+        f"Your API key is valid, but the license for {hf_repo_id} has not\n"
+        "been accepted yet. Accept it once at\n\n"
+        f"  {gui_url}/accept-license?hf_repo_id={encoded}\n\n"
+        "while logged in with the account the API key belongs to, then try again."
     )
