@@ -60,8 +60,8 @@ def _assert_roundtrip_predictions(
 ) -> None:
     """Check that a save/load round-trip produced an equivalent model.
 
-    Same-device round-trips must reproduce predictions near-exactly, so we
-    assert numerical equivalence. Cross-device round-trips (e.g.
+    Same-device round-trips must reproduce predictions to float32 precision, so
+    we assert numerical equivalence. Cross-device round-trips (e.g.
     ``cpu``<->``cuda``) cannot: CPU and GPU use different default inference
     precisions and different matmul/attention kernels whose summation order
     differs, so bit-identity is unattainable. For those we only verify that the
@@ -85,9 +85,19 @@ def _assert_roundtrip_predictions(
         return
 
     # Same device: the round-trip must be numerically faithful.
-    np.testing.assert_array_almost_equal(original_preds, loaded_preds)
     if isinstance(original, TabPFNClassifier):
+        np.testing.assert_array_almost_equal(original_preds, loaded_preds)
         np.testing.assert_array_almost_equal(original_probas, loaded_probas)
+    else:
+        # original_preds = (y_train_std * z) + y_train_mean
+        # z is computed in float32, so its error grows with |z|, and the
+        # predictions must agree to float32 error scaled by y_train_std * |z|.
+        y_train_std_abs_z = np.abs(original_preds - original.y_train_mean_)
+        min_abs_z = 1.0
+        atol = 1e-6 * max(
+            float(np.max(y_train_std_abs_z)), original.y_train_std_ * min_abs_z
+        )
+        np.testing.assert_allclose(loaded_preds, original_preds, rtol=0, atol=atol)
 
 
 @pytest.mark.parametrize(
