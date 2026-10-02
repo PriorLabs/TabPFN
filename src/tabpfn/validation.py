@@ -117,6 +117,38 @@ def validate_categorical_features_indices(indices: Sequence[int] | None) -> None
             )
 
 
+def validate_quantiles(quantiles: Sequence[float]) -> list[float]:
+    """Coerce `quantiles` to floats and check that each one lies in [0, 1].
+
+    Quantiles are read positionally, so any real numeric type is accepted: ints
+    that are already in range and NumPy scalars of any float width work, and are
+    returned as plain Python floats in the order given. The two failure modes
+    are reported separately, because a value outside [0, 1] is a range mistake
+    and saying so is the only useful thing we can tell the caller.
+
+    Returns:
+        The quantiles as a list of Python floats, in the order given.
+
+    Raises:
+        TabPFNValidationError: On an entry that is not a real number, or that
+            falls outside [0, 1].
+    """
+    coerced: list[float] = []
+    for entry in quantiles:
+        if not isinstance(entry, numbers.Real):
+            raise TabPFNValidationError(
+                "All quantiles must be real numbers between 0 and 1, got "
+                f"{entry!r} ({type(entry).__name__})."
+            )
+        value = float(entry)
+        if not 0.0 <= value <= 1.0:
+            raise TabPFNValidationError(
+                f"All quantiles must be between 0 and 1, got {value!r}."
+            )
+        coerced.append(value)
+    return coerced
+
+
 def ensure_compatible_fit_inputs(
     X: XType,
     y: YType,

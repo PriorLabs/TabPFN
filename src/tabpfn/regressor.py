@@ -113,6 +113,7 @@ from tabpfn.validation import (
     ensure_compatible_predict_input_sklearn,
     extract_input_shape,
     validate_dataset_size,
+    validate_quantiles,
 )
 
 logger = logging.getLogger(__name__)
@@ -1452,10 +1453,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        elif not all((0 <= q <= 1) and isinstance(q, float) for q in quantiles):
-            raise TabPFNValidationError(
-                "All quantiles must be between 0 and 1 and floats."
-            )
+        else:
+            quantiles = validate_quantiles(quantiles)
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
@@ -1884,10 +1883,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        elif not all((0 <= q <= 1) and isinstance(q, float) for q in quantiles):
-            raise TabPFNValidationError(
-                "All quantiles must be between 0 and 1 and floats."
-            )
+        else:
+            quantiles = validate_quantiles(quantiles)
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
