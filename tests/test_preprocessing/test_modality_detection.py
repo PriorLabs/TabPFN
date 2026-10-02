@@ -44,7 +44,7 @@ def test__detect_feature_modalities_basic():
             "const": [1.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
-    feature_schema = detect_feature_modalities(
+    feature_schema, _ = detect_feature_modalities(
         X=df.values,
         feature_names=df.columns.tolist(),
         min_samples_for_inference=1,
@@ -111,7 +111,7 @@ def test__detect_feature_modalities__input_types(
     expected_modalities: dict[FeatureModality, list[int]],
 ) -> None:
     """Test that different input types are correctly tagged and sanitized."""
-    feature_schema = detect_feature_modalities(
+    feature_schema, _ = detect_feature_modalities(
         X=input_data,
         feature_names=None,
         min_samples_for_inference=1,
@@ -145,7 +145,7 @@ def _for_test_detect_with_defaults(
         min_unique_for_numerical=min_unique_for_numerical,
         min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-    )
+    ).modality
 
 
 def _for_test_detect_modality(
@@ -413,7 +413,7 @@ def test__infer_categorical_features(
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
     )
-    feature_schema = detect_feature_modalities(
+    feature_schema, _ = detect_feature_modalities(
         X=X,
         feature_names=None,
         min_samples_for_inference=min_samples_for_inference,
@@ -665,7 +665,7 @@ class TestDetectFeatureModalitiesWarnsOnText:
         self, X: pd.DataFrame, declared: list[int] | None = None
     ) -> FeatureSchema:
         """Run modality detection over a frame, as `fit()` does."""
-        return detect_feature_modalities(
+        schema, _ = detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
             provided_categorical_indices=declared,
@@ -674,6 +674,7 @@ class TestDetectFeatureModalitiesWarnsOnText:
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
         )
+        return schema
 
     def test__free_text_column__warns(self) -> None:
         X = pd.DataFrame(
@@ -897,7 +898,7 @@ def test__category_and_text_thresholds__move_independently() -> None:
     string_column = np.array([f"g{i % 35}" for i in range(200)], dtype=object)
     X = np.column_stack([numeric_column, string_column])
 
-    schema = detect_feature_modalities(
+    schema, _ = detect_feature_modalities(
         X=X,
         feature_names=["num", "str"],
         min_samples_for_inference=100,
@@ -923,7 +924,7 @@ def _reference_modalities(
             min_unique_for_numerical=thresholds["min_unique_for_numerical"],
             min_cardinality_for_text=thresholds["min_cardinality_for_text"],
             big_enough_n_to_infer_cat=big_enough,
-        )
+        ).modality
         for j in range(X.shape[1])
     ]
 
@@ -958,7 +959,7 @@ def test__numeric_arrays__block_wise_count_matches_per_column(seed: int) -> None
     n_provided = int(rng.integers(0, n_cols + 1))
     provided = {int(j) for j in rng.choice(n_cols, size=n_provided, replace=False)}
 
-    schema = detect_feature_modalities(
+    schema, _ = detect_feature_modalities(
         X=X,
         feature_names=None,
         provided_categorical_indices=sorted(provided),
@@ -1032,3 +1033,107 @@ def test__count_distinct_per_column__bool_array__matches_nunique() -> None:
     np.testing.assert_array_equal(counts, expected)
     assert counts.dtype == np.int64
     np.testing.assert_array_equal(_count_distinct_per_column(X[:1]), [1, 1, 1, 1])
+
+
+def _decisions_for(X: np.ndarray, **thresholds: int) -> list:
+    """The decisions detection takes on `X`, with the package defaults unless given."""
+    settings = {
+        "min_samples_for_inference": 100,
+        "max_unique_for_category": 30,
+        "min_unique_for_numerical": 4,
+        "min_cardinality_for_text": 30,
+    }
+    settings.update(thresholds)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        _, decisions = detect_feature_modalities(X, feature_names=None, **settings)
+    return decisions
+
+
+def test__detect_feature_modalities__object_array__decisions_carry_the_evidence():
+    """Every column gets a decision that agrees with the schema and records what
+    the rule saw: the distinct count, that it covered every row, and whether the
+    values were numbers.
+    """
+    n = 200
+    X = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype=float),
+            "low": np.arange(n) % 3,
+            "text": [f"free text {i}" for i in range(n)],
+            "cat": [f"c{i % 5}" for i in range(n)],
+            "numbers_as_strings": [str(i) for i in range(n)],
+            "constant": [np.nan] * n,
+        }
+    ).to_numpy(dtype=object)
+
+    with pytest.warns(UserWarning, match="look like free text"):
+        schema, decisions = detect_feature_modalities(
+            X,
+            feature_names=None,
+            min_samples_for_inference=100,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
+        )
+
+    assert [d.modality for d in decisions] == [f.modality for f in schema.features]
+    assert [d.modality for d in decisions] == [
+        FeatureModality.NUMERICAL,
+        FeatureModality.CATEGORICAL,
+        FeatureModality.TEXT,
+        FeatureModality.CATEGORICAL,
+        FeatureModality.NUMERICAL,
+        FeatureModality.CONSTANT,
+    ]
+    assert [d.n_unique for d in decisions] == [n, 3, n, 5, n, 1]
+    assert all(d.n_unique_is_exact for d in decisions)
+    assert [d.numeric_like for d in decisions] == [
+        True,
+        True,
+        False,
+        False,
+        True,
+        None,
+    ]
+
+
+@pytest.mark.parametrize("dtype", [float, object])
+def test__detect_feature_modalities__past_the_prefix__decided_count_is_a_lower_bound(
+    dtype: type,
+):
+    """Past the prefix rows, a column that already cleared every threshold keeps
+    the prefix count as a lower bound; a column that did not is counted in full.
+    Same on the block-wise numeric path and the per-column object path.
+    """
+    n = _EARLY_EXIT_PREFIX_ROWS + 500
+    X = np.column_stack([np.arange(n, dtype=float), np.arange(n) % 3]).astype(dtype)
+
+    high, low = _decisions_for(X)
+
+    assert high.modality is FeatureModality.NUMERICAL
+    assert high.n_unique == _EARLY_EXIT_PREFIX_ROWS
+    assert not high.n_unique_is_exact
+    assert low.modality is FeatureModality.CATEGORICAL
+    assert low.n_unique == 3
+    assert low.n_unique_is_exact
+    assert high.numeric_like is True
+    assert low.numeric_like is True
+
+
+def test__detect_feature_modalities__numeric_array__decisions_match_object_path():
+    """The block-wise count on a numeric array records the same evidence as the
+    per-column path does for the same values held as objects.
+    """
+    rng = np.random.default_rng(seed=3)
+    n = _EARLY_EXIT_PREFIX_ROWS + 200
+    X = np.column_stack(
+        [
+            rng.normal(size=n),
+            rng.integers(0, 3, size=n),
+            np.where(rng.random(n) < 0.5, np.nan, 1.0),
+            np.ones(n),
+        ]
+    )
+
+    assert _decisions_for(X) == _decisions_for(X.astype(object))
