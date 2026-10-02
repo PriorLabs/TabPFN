@@ -1259,11 +1259,12 @@ def _prepare_targets(y: torch.Tensor, num_rows: int, batch_size: int) -> torch.T
     if num_train_labels > num_rows:
         raise ValueError("No test rows provided.")
     target_RB1 = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
-    return torch.nn.functional.pad(
-        target_RB1,
-        (0, 0, 0, 0, 0, num_rows - num_train_labels),
-        value=float("nan"),
+    # Not F.pad: on MPS with torch <= 2.14, MPSGraph's constant pad corrupts the
+    # input once it reaches 2**16 rows, so every target came out NaN or misplaced.
+    nan_rows = target_RB1.new_full(
+        (num_rows - num_train_labels, *target_RB1.shape[1:]), float("nan")
     )
+    return torch.cat([target_RB1, nan_rows])
 
 
 def get_architecture(config: ArchitectureConfig) -> TabPFNV2:
