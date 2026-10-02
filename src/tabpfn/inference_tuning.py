@@ -273,9 +273,6 @@ def _folds_for_holdout_frac(holdout_frac: float) -> int:
             f"need more than {MAX_TUNING_FOLDS} tuning folds. Use a value of at "
             f"least {MIN_TUNING_HOLDOUT_FRAC}."
         )
-    # Inverse the fraction directly rather than rounding it first: pre-rounding
-    # to 2 decimals collapses values below 0.005 to zero (dividing by zero) and
-    # inflates values just above it (0.005 -> 0.01 -> 100 folds).
     return min(max(round(1 / holdout_frac), 2), MAX_TUNING_FOLDS)
 
 
