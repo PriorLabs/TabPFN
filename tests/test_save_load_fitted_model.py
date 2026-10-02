@@ -89,9 +89,14 @@ def _assert_roundtrip_predictions(
         np.testing.assert_array_almost_equal(original_preds, loaded_preds)
         np.testing.assert_array_almost_equal(original_probas, loaded_probas)
     else:
-        # Inference runs in float32, so regression outputs agree to float32
-        # precision of their own scale rather than to a fixed number of decimals.
-        atol = 1e-6 * max(float(np.max(np.abs(original_preds))), 1.0)
+        # original_preds = (y_train_std * z) + y_train_mean
+        # z is computed in float32, so its error grows with |z|, and the
+        # predictions must agree to float32 error scaled by y_train_std * |z|.
+        y_train_std_abs_z = np.abs(original_preds - original.y_train_mean_)
+        min_abs_z = 1.0
+        atol = 1e-6 * max(
+            float(np.max(y_train_std_abs_z)), original.y_train_std_ * min_abs_z
+        )
         np.testing.assert_allclose(loaded_preds, original_preds, rtol=0, atol=atol)
 
 
