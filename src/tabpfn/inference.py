@@ -376,8 +376,7 @@ class InferenceEngine(ABC):
             autocast: Whether to use torch.autocast during inference.
             task_type: The task type, e.g. "multiclass" or "regression".
             only_return_standard_out: Whether to return only the standard output
-                instead of a dict that also holds the train/test embeddings. Every
-                engine must accept it: `get_embeddings()` passes False.
+                instead of a dict that also holds the train/test embeddings.
         """
         ...
 
