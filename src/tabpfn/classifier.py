@@ -38,7 +38,9 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     expand_dates_and_text,
+    fold_nested_inference_config_params,
     get_embeddings,
+    get_nested_inference_config_params,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
@@ -700,6 +702,43 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if not hasattr(self, "inference_config_"):
             self._initialize_model_variables()
         return copy.deepcopy(self.inference_config_)
+
+    def get_params(
+        self,
+        deep: bool = True,  # noqa: FBT001, FBT002
+    ) -> dict[str, Any]:
+        """Get parameters, exposing nested `inference_config__FIELD` params.
+
+        Args:
+            deep: If True, include an `inference_config__FIELD` entry for
+                each explicitly set inference-config override.
+
+        Returns:
+            Parameter mapping including nested inference-config overrides.
+        """
+        params = super().get_params(deep=deep)
+        if deep:
+            params.update(get_nested_inference_config_params(self.inference_config))
+        return params
+
+    def set_params(self, **params: Any) -> Self:
+        """Set parameters, accepting nested `inference_config__FIELD` params.
+
+        Each `inference_config__FIELD=value` entry is merged into the
+        `inference_config` override dict, so single inference settings can be
+        tuned (e.g. via `GridSearchCV`) without replacing the whole dict.
+        Passing both `inference_config={...}` and nested pieces in one call
+        is accepted when the pieces agree with the whole dict (which is what
+        `get_params(deep=True)` produces, so the sklearn
+        `set_params(**get_params())` round-trip works); genuinely conflicting
+        dual specification is rejected as ambiguous.
+
+        Returns:
+            The estimator instance.
+        """
+        return super().set_params(
+            **fold_nested_inference_config_params(self.inference_config, params)
+        )
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
