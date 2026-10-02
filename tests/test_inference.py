@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from inspect import signature
 from typing import Literal, overload
 from typing_extensions import override
 
@@ -28,6 +29,8 @@ from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
 from tabpfn.base import create_inference_engine, get_embeddings
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference import (
+    InferenceEngine,
+    InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
@@ -1117,3 +1120,156 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             "int8", architecture=arch, device=torch.device("cpu")
         )
     assert resolved == "auto"
+
+
+class _RecordingStandardOutModel(_TestModel):
+    """Records the only_return_standard_out it was called with."""
+
+    def __init__(self) -> None:
+        """Create a new instance."""
+        super().__init__()
+        self.received_only_return_standard_out: list[bool] = []
+
+    @override
+    def forward(  # type: ignore[override]
+        self,
+        x: Tensor,
+        y: Tensor,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        performance_options: PerformanceOptions | None = None,
+        task_type: str | None = None,
+    ) -> Tensor | dict[str, Tensor]:
+        """Return the standard output, or a dict of embeddings when asked to."""
+        self.received_only_return_standard_out.append(only_return_standard_out)
+        logits = super().forward(
+            x,
+            y,
+            only_return_standard_out=True,
+            categorical_inds=categorical_inds,
+            performance_options=performance_options,
+            task_type=task_type,
+        )
+        if only_return_standard_out:
+            return logits
+        # The batched engine hands over x as (features, train + test rows) and y as
+        # (1, n_train), so the test rows are what is left of x's second axis.
+        n_train = y.shape[-1]
+        n_test = x.shape[-1] - n_train
+        return {
+            "logits": logits,
+            "train_embeddings": torch.zeros((n_train, 1, 2)),
+            "test_embeddings": torch.full((n_test, 1, 2), 0.25),
+        }
+
+
+def _batched_engine(
+    model: Architecture, *, n_estimators: int = 2, batch_size: int = 2
+) -> InferenceEngineBatchedNoPreprocessing:
+    """A batched engine over preprocessed tensors, as finetuning builds it."""
+    n_train, _n_test, n_features, n_classes = 40, 6, 4, 3
+    generator = torch.Generator().manual_seed(0)
+    X_trains = [
+        torch.randn(n_train, n_features + 1, generator=generator)
+        for _ in range(batch_size)
+    ]
+    y_trains = [
+        torch.randint(0, n_classes, (n_train, 1), generator=generator)
+        for _ in range(batch_size)
+    ]
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=True,
+        polynomial_features="no",
+        feature_shift_decoder="shuffle",
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none", categorical_name="numeric", max_features_per_estimator=500
+            )
+        ],
+        class_shift_method="shuffle",
+        n_classes=n_classes,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+    return InferenceEngineBatchedNoPreprocessing(
+        X_trains=X_trains,
+        y_trains=y_trains,
+        # One entry per dataset, each holding one schema per estimator slot.
+        feature_schema=[
+            [
+                FeatureSchema.from_only_categorical_indices([], n_features + 1)
+                for _ in range(batch_size)
+            ]
+            for _ in range(batch_size)
+        ],
+        ensemble_configs=[configs for _ in range(batch_size)],
+        models=[model],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=False,
+        inference_mode=True,
+        performance_options=PerformanceOptions(),
+    )
+
+
+def test__iter_outputs__batched_honours_only_return_standard_out() -> None:
+    """The batched engine honours only_return_standard_out.
+
+    get_embeddings() always passes only_return_standard_out=False to reach the
+    embeddings, so an engine that rejects the keyword -- or swallows it and keeps
+    returning only the standard output -- breaks it. The batched engine used for
+    finetuning previously hardcoded True and did not accept the keyword at all.
+    """
+    model = _RecordingStandardOutModel()
+    engine = _batched_engine(model)
+    X_tests = [torch.randn(6, 5) for _ in range(2)]
+
+    default_outputs = list(
+        engine.iter_outputs(X_tests, autocast=False, task_type="multiclass")
+    )
+    assert model.received_only_return_standard_out == [True, True]
+    assert all(isinstance(output, Tensor) for output, _ in default_outputs)
+
+    model.received_only_return_standard_out.clear()
+    embedding_outputs = list(
+        engine.iter_outputs(
+            X_tests,
+            autocast=False,
+            task_type="multiclass",
+            only_return_standard_out=False,
+        )
+    )
+    assert model.received_only_return_standard_out == [False, False]
+    for output, _ in embedding_outputs:
+        assert isinstance(output, dict)
+        assert output["test_embeddings"].shape == (6, 1, 2)
+
+
+@pytest.mark.parametrize(
+    "engine_cls",
+    [
+        InferenceEngineOnDemand,
+        InferenceEngineCachePreprocessing,
+        InferenceEngineBatchedNoPreprocessing,
+        InferenceEngineExplicitKVCache,
+    ],
+)
+def test__iter_outputs__every_engine_accepts_only_return_standard_out(
+    engine_cls: type,
+) -> None:
+    """Every engine takes the keyword get_embeddings() passes.
+
+    InferenceEngine declares it, but a declaration no engine has to satisfy is
+    not a contract: the batched engine shipped without it and failed at runtime
+    only once get_embeddings() reached it.
+    """
+    assert (
+        "only_return_standard_out" in signature(engine_cls.iter_outputs).parameters
+    ), f"{engine_cls.__name__}.iter_outputs must accept it"
+    assert (
+        "only_return_standard_out" in signature(InferenceEngine.iter_outputs).parameters
+    ), "the abstract base class must declare the contract"
