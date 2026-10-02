@@ -822,7 +822,7 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         else:
             if not (0 < subsample_samples < 1):
                 raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
-            size = int(subsample_samples * n_samples) + 1
+            size = max(1, int(subsample_samples * n_samples))
         return _subsample_rows_by_method(
             method=method,
             subsample_size=size,
