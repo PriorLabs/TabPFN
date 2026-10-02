@@ -1147,9 +1147,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
+        # X_preprocessed is the collated batch: (n_datasets, n_train_rows,
+        # n_columns), so the column count is the last dimension.
         feature_schema = convert_batch_of_cat_ix_to_schema(
             batch_of_cat_indices=cat_ix,
-            num_features=X_preprocessed[0].shape[1],
+            num_features=X_preprocessed[0].shape[-1],
         )
 
         # Preprocessed tensors hold no dates or strings either, so these fit
