@@ -1,8 +1,6 @@
 ## Issue
-Please link the corresponding GitHub issue. If an issue does not already exist,
-please open one to describe the bug or feature request before creating a pull request.
-
-This allows us to discuss the proposal and helps avoid unnecessary work.
+Link the related GitHub issue, if there is one. For larger features or API
+changes, please open an issue first so we can agree on the direction.
 
 ## Motivation and Context
 
@@ -16,6 +14,15 @@ This allows us to discuss the proposal and helps avoid unnecessary work.
 ---
 
 ## How Has This Been Tested?
+
+---
+
+## AI Assistance
+
+See [AI-assisted contributions](https://github.com/PriorLabs/TabPFN/blob/main/CONTRIBUTING.md#ai-assisted-contributions).
+
+-   [ ] No AI tools were used for this PR
+-   [ ] AI tools were used (briefly describe how below). I have reviewed and understood every change and will answer review comments myself.
 
 ---
 

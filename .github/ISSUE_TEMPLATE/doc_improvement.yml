@@ -15,3 +15,16 @@ body:
     label: Suggest a potential alternative/fix
     description: >
       Tell us how we could improve the documentation in this regard.
+- type: dropdown
+  id: ai-assistance
+  attributes:
+    label: AI assistance
+    description: >
+      Did you use AI tools to find, investigate or write up this report? See
+      [AI-assisted contributions](https://github.com/PriorLabs/TabPFN/blob/main/CONTRIBUTING.md#ai-assisted-contributions).
+      Fully automated submissions without human review will be closed.
+    options:
+      - "No"
+      - "Yes, and I have reviewed this report myself"
+  validations:
+    required: true

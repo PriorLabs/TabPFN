@@ -28,3 +28,16 @@ body:
       - High (Major improvement)
       - Medium (Significant enhancement)
       - Low (Nice to have)
+- type: dropdown
+  id: ai-assistance
+  attributes:
+    label: AI assistance
+    description: >
+      Did you use AI tools to find, investigate or write up this request? See
+      [AI-assisted contributions](https://github.com/PriorLabs/TabPFN/blob/main/CONTRIBUTING.md#ai-assisted-contributions).
+      Fully automated submissions without human review will be closed.
+    options:
+      - "No"
+      - "Yes, and I have reviewed this request myself"
+  validations:
+    required: true
