@@ -39,5 +39,6 @@ body:
     options:
       - "No"
       - "Yes, and I have reviewed this request myself"
+      - "I am an AI agent, and no human reviewed this request before submission"
   validations:
     required: true

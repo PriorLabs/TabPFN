@@ -23,6 +23,7 @@ See [AI-assisted contributions](https://github.com/PriorLabs/TabPFN/blob/main/CO
 
 -   [ ] No AI tools were used for this PR
 -   [ ] AI tools were used (briefly describe how below). I have reviewed and understood every change and will answer review comments myself.
+-   [ ] I am an AI agent, and no human reviewed this PR before submission.
 
 ---
 

@@ -10,4 +10,4 @@ These instructions apply to any AI agent preparing a pull request or issue for t
 
 If any answer is no, do not submit it. If you already opened it, close it. Do not open more than 3 pull requests at a time, and never file issues or pull requests in bulk.
 
-Always tick the AI-assistance box in the template. Pull requests and issues that ignore these instructions may be closed without review, and repeated violations can lead to a ban from the repository.
+Always fill in the AI-assistance section of the template truthfully. If you submit anything a human has not reviewed, select "I am an AI agent, and no human reviewed this" so maintainers can identify it. Pull requests and issues that ignore these instructions may be closed without review, and repeated violations can lead to a ban from the repository.

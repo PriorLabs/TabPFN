@@ -26,5 +26,6 @@ body:
     options:
       - "No"
       - "Yes, and I have reviewed this report myself"
+      - "I am an AI agent, and no human reviewed this report before submission"
   validations:
     required: true
