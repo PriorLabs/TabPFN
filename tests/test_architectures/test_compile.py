@@ -161,7 +161,10 @@ def test__enable_torch_compile__no_graph_break_in_tabpfn_code(
 
     torch.testing.assert_close(out_compiled, out_eager, atol=1e-5, rtol=1e-5)
     # A silent fall-back to eager would make the assertions below vacuous.
-    assert torch._dynamo.utils.counters["frames"]["ok"] > 0, "nothing was compiled"
+    # fullgraph=True uses a tracing path that does not increment frames["ok"].
+    assert torch._dynamo.utils.counters["stats"]["unique_graphs"] > 0, (
+        "nothing was compiled"
+    )
 
     blocks = "\n".join(records).split(_BREAK_HEADER)[1:]
     if torch._dynamo.utils.counters["graph_break"] and not blocks:

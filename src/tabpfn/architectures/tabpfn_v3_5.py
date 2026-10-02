@@ -61,6 +61,7 @@ from tabpfn.architectures.shared.attention_backends import (
     recorded_attention_backends,
 )
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
+from tabpfn.architectures.shared.compile_utils import compile_when_enabled
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
@@ -1446,11 +1447,15 @@ class CrossAttentionBlock(nn.Module):
         self.layernorm2 = norm_factory(emsize)
 
     @override
+    @compile_when_enabled
     def forward(
         self,
         x_BQE: torch.Tensor,
         context_BVE: torch.Tensor,
+        *,
+        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
+        del enable_torch_compile  # Consumed by the region decorator.
         attn_out = self.attn(
             self.layernorm_q(x_BQE),
             self.layernorm_kv(context_BVE),
@@ -1493,9 +1498,13 @@ class TransformerBlock(nn.Module):
         x_BRCE: torch.Tensor,
         rope: RotaryEmbedding,
         save_peak_memory_factor: int | None = None,
+        *,
+        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
         x_BRCE = chunked_evaluate_maybe_inplace(
-            lambda x, rope: self.attention(self.layernorm(x), rope=rope),
+            lambda x, rope: self._attention_delta(
+                x, rope, enable_torch_compile=enable_torch_compile
+            ),
             x_BRCE,
             save_peak_memory_factor=save_peak_memory_factor,
             residual=True,
@@ -1503,23 +1512,45 @@ class TransformerBlock(nn.Module):
             rope=rope,
         )
         return chunked_evaluate_maybe_inplace(
-            lambda x: self.mlp(self.layernorm_mlp(x)),
+            lambda x: self._mlp_delta(x, enable_torch_compile=enable_torch_compile),
             x_BRCE,
             save_peak_memory_factor=save_peak_memory_factor,
             residual=True,
             batch_dims=3,
         )
 
+    @compile_when_enabled
+    def _attention_delta(
+        self,
+        x: torch.Tensor,
+        rope: RotaryEmbedding,
+        *,
+        enable_torch_compile: bool = False,
+    ) -> torch.Tensor:
+        del enable_torch_compile
+        return self.attention(self.layernorm(x), rope=rope)
+
+    @compile_when_enabled
+    def _mlp_delta(
+        self, x: torch.Tensor, *, enable_torch_compile: bool = False
+    ) -> torch.Tensor:
+        del enable_torch_compile
+        return self.mlp(self.layernorm_mlp(x))
+
+    @compile_when_enabled
     def forward_cross(
         self,
         query_BRQE: torch.Tensor,
         context_BRCE: torch.Tensor,
         rope: RotaryEmbedding,
+        *,
+        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
         """Cross-attention variant: query attends to context.
 
         Used in ColumnAggregator for the last CLS-readout block.
         """
+        del enable_torch_compile
         B, R, Q, _ = query_BRQE.shape
         _, _, V, E = context_BRCE.shape
 
@@ -1726,6 +1757,7 @@ class InducedSelfAttentionBlock(nn.Module):
         cached_hidden: torch.Tensor | None = None,
         *,
         return_hidden: bool = False,
+        enable_torch_compile: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Induced self-attention with optional hidden-state return.
 
@@ -1740,8 +1772,12 @@ class InducedSelfAttentionBlock(nn.Module):
             Bc, R, _ = x_BcRE.shape
             N = R if single_eval_pos is None else single_eval_pos
             ind = self.inducing_vectors.unsqueeze(0).expand(Bc, -1, -1)
-            hidden = self.cross_attn_block1(ind, x_BcRE[:, :N])
-        out = self.cross_attn_block2(x_BcRE, hidden)
+            hidden = self.cross_attn_block1(
+                ind, x_BcRE[:, :N], enable_torch_compile=enable_torch_compile
+            )
+        out = self.cross_attn_block2(
+            x_BcRE, hidden, enable_torch_compile=enable_torch_compile
+        )
         if return_hidden:
             return out, hidden.detach()
         return out
@@ -1755,6 +1791,7 @@ class InducedSelfAttentionBlock(nn.Module):
         *,
         cached_hidden: torch.Tensor | None = None,
         return_hidden: bool = False,
+        enable_torch_compile: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward with optional inducing hidden-state caching.
 
@@ -1771,6 +1808,7 @@ class InducedSelfAttentionBlock(nn.Module):
                 x_BcRE,
                 single_eval_pos=single_eval_pos,
                 return_hidden=True,
+                enable_torch_compile=enable_torch_compile,
             )
         else:
             out_BcRE = chunked_evaluate_maybe_inplace(
@@ -1781,6 +1819,7 @@ class InducedSelfAttentionBlock(nn.Module):
                 batch_dims=1,
                 single_eval_pos=single_eval_pos,
                 cached_hidden=cached_hidden,
+                enable_torch_compile=enable_torch_compile,
             )
             hidden = None
 
@@ -1838,6 +1877,7 @@ class FeatureDistributionEmbedder(nn.Module):
         force_recompute_layer: bool = False,
         cached_hidden: list[torch.Tensor] | None = None,
         return_hidden: bool = False,
+        enable_torch_compile: bool = False,
     ) -> tuple[torch.Tensor, list[torch.Tensor] | None]:
         """Forward pass through all induced self-attention blocks.
 
@@ -1857,6 +1897,7 @@ class FeatureDistributionEmbedder(nn.Module):
                     num_train_rows,
                     use_reentrant=False,
                     save_peak_memory_factor=save_peak_memory_factor,
+                    enable_torch_compile=enable_torch_compile,
                 )
             else:
                 layer_cached = cached_hidden[i] if cached_hidden is not None else None
@@ -1864,6 +1905,7 @@ class FeatureDistributionEmbedder(nn.Module):
                     x_BRiCE,
                     single_eval_pos=num_train_rows,
                     save_peak_memory_factor=save_peak_memory_factor,
+                    enable_torch_compile=enable_torch_compile,
                     cached_hidden=layer_cached,
                     return_hidden=return_hidden,
                 )
@@ -1928,6 +1970,8 @@ class ColumnAggregator(nn.Module):
         x_BRiCE: torch.Tensor,
         save_peak_memory_factor: int | None = None,
         force_recompute_layer: bool = False,
+        *,
+        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
         """Transform feature embeddings into per-row CLS representations.
 
@@ -1935,6 +1979,7 @@ class ColumnAggregator(nn.Module):
             x_BRiCE: (B, Ri, C, E)
             save_peak_memory_factor: If set, chunk the evaluation to save memory.
             force_recompute_layer: If True, force gradient checkpointing.
+            enable_torch_compile: Compile attention/MLP regions inside each block.
 
         Returns:
             (B, Ri, num_cls_tokens, E)
@@ -1953,10 +1998,14 @@ class ColumnAggregator(nn.Module):
                     self.rope,
                     save_peak_memory_factor,
                     use_reentrant=False,
+                    enable_torch_compile=enable_torch_compile,
                 )
             else:
                 x = block(
-                    x, rope=self.rope, save_peak_memory_factor=save_peak_memory_factor
+                    x,
+                    rope=self.rope,
+                    save_peak_memory_factor=save_peak_memory_factor,
+                    enable_torch_compile=enable_torch_compile,
                 )
 
         # Last block: CLS tokens as query, full sequence as key/value (v2 readout)
@@ -1970,9 +2019,12 @@ class ColumnAggregator(nn.Module):
                 x_full,
                 self.rope,
                 use_reentrant=False,
+                enable_torch_compile=enable_torch_compile,
             )
         else:
-            cls_out = last_block.forward_cross(cls_part, x_full, self.rope)
+            cls_out = last_block.forward_cross(
+                cls_part, x_full, self.rope, enable_torch_compile=enable_torch_compile
+            )
 
         del x
         return self.out_ln(cls_out)
@@ -2345,11 +2397,6 @@ class TabPFNV3p5(Architecture):
         x_RiBC = x
         B = x_RiBC.shape[1]
         num_train = y.shape[0]
-        if performance_options.enable_torch_compile:
-            torch._dynamo.mark_dynamic(x_RiBC, index=0)
-            torch._dynamo.mark_dynamic(x_RiBC, index=1)
-            torch._dynamo.mark_dynamic(x_RiBC, index=2)
-
         x_BRiClE, inducing_hidden, scaler_stats = self._stages_0_to_2(
             x_RiBC,
             y,
@@ -2724,58 +2771,22 @@ class TabPFNV3p5(Architecture):
         # Collect (B, Cj, I, E) per column-chunk, per block
         hidden_per_block: list[list[torch.Tensor]] = [[] for _ in range(num_blocks)]
 
-        process_col_fn = (
-            self._compiled(self._process_col_chunk)
-            if enable_torch_compile
-            else self._process_col_chunk
-        )
-
         for c0 in range(0, num_columns, col_chunk_size):
             c1 = min(c0 + col_chunk_size, num_columns)
             x_grouped_chunk_BNCjG = self._group_feature_cols(
                 x_train_BNC, nan_ind_train_BNC, ecdf_train_BNC, c0, c1
             )
-            if enable_torch_compile:
-                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=0)
-                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=1)
-                # Will compile two versions: one with cols dynamic and one with
-                # cols static for the fixed chunk size.
-                if (c1 - c0) != col_chunk_size:
-                    torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=2)
-
-            chunk_outputs_BCjIE = process_col_fn(
+            chunk_outputs_BCjIE = self._process_col_chunk(
                 x_grouped_chunk_BNCjG=x_grouped_chunk_BNCjG,
                 y_col_emb_BNE=y_col_emb_BNE,
                 num_train=num_train,
+                enable_torch_compile=enable_torch_compile,
             )
             for blk_idx, h in enumerate(chunk_outputs_BCjIE):
                 hidden_per_block[blk_idx].append(h)
 
         # Concatenate and flatten column chunks (B * C_out, I, E) per block.
         return [torch.cat(chunks, dim=1).flatten(0, 1) for chunks in hidden_per_block]
-
-    def _compiled(self, method: Callable) -> Callable:
-        """Lazily `torch.compile` a bound method of this instance.
-
-        The compiled callable is cached per underlying function, so dynamo /
-        inductor are only imported when `torch.compile` is actually
-        requested (keeping `import tabpfn` and eager inference free of them),
-        and each method is compiled at most once.
-        """
-        cache = self.__dict__.setdefault("_torch_compile_cache", {})
-        key = method.__func__
-        if key not in cache:
-            cache[key] = torch.compile(method, dynamic=True)
-        return cache[key]
-
-    def __getstate__(self) -> dict[str, Any]:
-        # `torch.compile`-d callables are not picklable, so exclude the lazily
-        # populated compile cache from (un)pickling / torch.save. It is
-        # rebuilt on demand by `_compiled()`. Delegate to nn.Module first so
-        # its own state handling (e.g. `_compiled_call_impl`) is preserved.
-        state = super().__getstate__()
-        state.pop("_torch_compile_cache", None)
-        return state
 
     def _preprocess_and_group(
         self,
@@ -2787,7 +2798,7 @@ class TabPFNV3p5(Architecture):
     ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
         """Preprocess rows, embed y for the col stage, and group features.
 
-        Combines the three pre-chunk-loop steps into one compiled pass.
+        Runs eagerly before the aggregation blocks, which can be compiled separately.
         Returns the grouped x of shape `(B, Ri, C, G)` tensor, optionally the
         `(B, N_train, E)` y embedding, and the scaler statistics fitted during
         preprocessing (for reuse in the inference cache).
@@ -2860,9 +2871,6 @@ class TabPFNV3p5(Architecture):
             row_chunk_size = None
             col_chunk_size = None
 
-        force_recompute_layer = performance_options.force_recompute_layer
-        save_peak_memory_factor = performance_options.save_peak_memory_factor
-
         if kv_cache is not None and not kv_cache.is_empty():
             rows_RiBC = x_RiBC if x_is_test_only else x_RiBC[num_train:]
             assert kv_cache.scaler_cache is not None
@@ -2896,12 +2904,7 @@ class TabPFNV3p5(Architecture):
                 )
             )
         else:
-            preprocess_fn = (
-                self._compiled(self._preprocess_and_group)
-                if performance_options.enable_torch_compile
-                else self._preprocess_and_group
-            )
-            x_grouped_BRiCG, y_col_emb_BNE, scaler_stats = preprocess_fn(
+            x_grouped_BRiCG, y_col_emb_BNE, scaler_stats = self._preprocess_and_group(
                 rows_RiBC, y, num_train, scaler_cache, task_type
             )
 
@@ -2938,12 +2941,6 @@ class TabPFNV3p5(Architecture):
         is_full_path = not use_chunks and precomputed_hidden is None
         effective_chunk_size = row_chunk_size if use_chunks else num_rows
 
-        enable_torch_compile = performance_options.enable_torch_compile
-        process_row_chunk = (
-            self._compiled(self._process_row_chunk)
-            if enable_torch_compile
-            else self._process_row_chunk
-        )
         while True:
             parts: list[torch.Tensor] = []
             inducing_hidden: list[torch.Tensor] | None = None
@@ -2962,23 +2959,14 @@ class TabPFNV3p5(Architecture):
                             nan_ind_BRiC[:, row_chunk_start:row_chunk_end],
                             ecdf_BRiC[:, row_chunk_start:row_chunk_end],
                         )
-                    if enable_torch_compile:
-                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=0)
-                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=2)
-                        # Will compile two versions: One with dynamic rows and
-                        # one with static rows for the fixed chunk size.
-                        if (row_chunk_end - row_chunk_start) != row_chunk_size:
-                            torch._dynamo.mark_dynamic(x_grouped_chunk, index=1)
-
-                    row_embedding_chunk, chunk_hidden = process_row_chunk(
+                    row_embedding_chunk, chunk_hidden = self._process_row_chunk(
                         x_grouped_chunk_BRjCG=x_grouped_chunk,
                         y_col_emb=y_col_emb_BNE,
                         chunk_start=row_chunk_start,
                         chunk_end=row_chunk_end,
                         effective_num_train=effective_num_train,
                         precomputed_hidden=precomputed_hidden,
-                        save_peak_memory_factor=save_peak_memory_factor,
-                        force_recompute_layer=force_recompute_layer,
+                        performance_options=performance_options,
                         return_inducing_hidden=return_inducing_hidden,
                         is_full_path=is_full_path,
                     )
@@ -3009,6 +2997,7 @@ class TabPFNV3p5(Architecture):
         x_grouped_chunk_BNCjG: torch.Tensor,
         y_col_emb_BNE: torch.Tensor | None,
         num_train: int,
+        enable_torch_compile: bool = False,
     ) -> list[torch.Tensor]:
         """Compute inducing hidden for one column chunk across all dist-embedder blocks.
 
@@ -3034,12 +3023,16 @@ class TabPFNV3p5(Architecture):
         chunk_outputs: list[torch.Tensor] = []
         for blk_idx, blk in enumerate(layers):
             ind = blk.inducing_vectors.unsqueeze(0).expand(B * Cj, -1, -1)
-            hidden = blk.cross_attn_block1(ind, x_flat)  # (B*cc, n_ind, E)
+            hidden = blk.cross_attn_block1(
+                ind, x_flat, enable_torch_compile=enable_torch_compile
+            )  # (B*cc, n_ind, E)
             # Reshape for correct batch-column ordering when concatenated
             chunk_outputs.append(hidden.reshape(B, Cj, -1, E))
             # Update train embeddings for next block's Step 1
             if blk_idx < num_blocks - 1:
-                x_flat = blk.cross_attn_block2(x_flat, hidden)
+                x_flat = blk.cross_attn_block2(
+                    x_flat, hidden, enable_torch_compile=enable_torch_compile
+                )
 
         return chunk_outputs
 
@@ -3051,9 +3044,8 @@ class TabPFNV3p5(Architecture):
         chunk_end: int,
         effective_num_train: int,
         precomputed_hidden: list[torch.Tensor] | None,
-        save_peak_memory_factor: int | None,
         *,
-        force_recompute_layer: bool,
+        performance_options: PerformanceOptions,
         return_inducing_hidden: bool,
         is_full_path: bool,
     ) -> tuple[torch.Tensor, list[torch.Tensor] | None]:
@@ -3064,6 +3056,9 @@ class TabPFNV3p5(Architecture):
         Returns `(row_embedding_chunk, chunk_hidden)`. `chunk_hidden` is
         only non-None when `return_inducing_hidden` is True on the full path.
         """
+        save_peak_memory_factor = performance_options.save_peak_memory_factor
+        force_recompute_layer = performance_options.force_recompute_layer
+        enable_torch_compile = performance_options.enable_torch_compile
         row_chunk_range = chunk_end - chunk_start
         # Number of train rows in this chunk, not overall dataset.
         num_train_rows = max(0, min(effective_num_train - chunk_start, row_chunk_range))
@@ -3081,11 +3076,13 @@ class TabPFNV3p5(Architecture):
             save_peak_memory_factor=(save_peak_memory_factor if is_full_path else None),
             force_recompute_layer=force_recompute_layer and is_full_path,
             return_hidden=return_inducing_hidden and is_full_path,
+            enable_torch_compile=enable_torch_compile,
         )
         row_embedding_chunk = self.column_aggregator(
             x_BRiCE=x_emb,
             save_peak_memory_factor=save_peak_memory_factor,
             force_recompute_layer=force_recompute_layer and is_full_path,
+            enable_torch_compile=enable_torch_compile,
         )
         return row_embedding_chunk, chunk_hidden
 
