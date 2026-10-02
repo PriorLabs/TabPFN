@@ -364,6 +364,7 @@ class InferenceEngine(ABC):
         *,
         autocast: bool,
         task_type: str,
+        only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model for each ensemble configuration.
 
@@ -374,6 +375,8 @@ class InferenceEngine(ABC):
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
             task_type: The task type, e.g. "multiclass" or "regression".
+            only_return_standard_out: Whether to return only the standard output
+                instead of a dict that also holds the train/test embeddings.
         """
         ...
 
@@ -778,6 +781,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         *,
         autocast: bool,
         task_type: str,
+        only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
@@ -806,7 +810,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                     output = model(
                         train_x_full.transpose(0, 1),
                         train_y_batch.transpose(0, 1),
-                        only_return_standard_out=True,
+                        only_return_standard_out=only_return_standard_out,
                         categorical_inds=list(  # noqa: C411
                             [
                                 cat_item[i].indices_for(FeatureModality.CATEGORICAL)
