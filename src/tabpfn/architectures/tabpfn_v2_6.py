@@ -1124,11 +1124,12 @@ def _prepare_targets(
 
     # Make sure the target is 3-dimensional.
     target_RBY = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
-    return torch.nn.functional.pad(
-        target_RBY,
-        (0, 0, 0, 0, 0, num_train_rows - num_train_labels),
-        value=float("nan"),
+    # Not F.pad: on MPS with torch <= 2.14, MPSGraph's constant pad corrupts the
+    # input once it reaches 2**16 rows, so every target came out NaN or misplaced.
+    nan_rows = target_RBY.new_full(
+        (num_train_rows - num_train_labels, *target_RBY.shape[1:]), float("nan")
     )
+    return torch.cat([target_RBY, nan_rows])
 
 
 def _remove_constant_features(

@@ -3124,11 +3124,13 @@ def _prepare_targets(
     if num_train_labels > num_train_and_test_rows:
         raise ValueError("No test rows provided.")
     target_RBT = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
-    return F.pad(
-        target_RBT,
-        (0, 0, 0, 0, 0, num_train_and_test_rows - num_train_labels),
-        value=float("nan"),
+    # Not F.pad: on MPS with torch <= 2.14, MPSGraph's constant pad corrupts the
+    # input once it reaches 2**16 rows, so every target came out NaN or misplaced.
+    nan_rows = target_RBT.new_full(
+        (num_train_and_test_rows - num_train_labels, *target_RBT.shape[1:]),
+        float("nan"),
     )
+    return torch.cat([target_RBT, nan_rows])
 
 
 def _impute_nan_and_inf_with_mean(
