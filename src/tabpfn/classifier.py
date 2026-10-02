@@ -774,7 +774,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
-            polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
+            polynomial_features="no",
             preprocessor_configs=preprocessor_configs,
             class_shift_method=None,
             n_classes=self.n_classes_,

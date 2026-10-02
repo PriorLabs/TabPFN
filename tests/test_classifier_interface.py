@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
-from tabpfn import TabPFNClassifier
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.base import ModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
@@ -1742,3 +1742,64 @@ def test__predict_proba_batched__does_not_mutate_estimator() -> None:
     fitted.predict_proba_batched(X_list, y_list, X_tests)
     after = fitted.predict_proba(a_x[:5])
     np.testing.assert_array_equal(before, after)
+
+
+@pytest.mark.parametrize(
+    "estimator_cls",
+    [TabPFNClassifier, TabPFNRegressor],
+    ids=["classifier", "regressor"],
+)
+@pytest.mark.parametrize("polynomial_features", ["all", 3])
+def test__fit_with_differentiable_input__disables_polynomial_features(
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+    polynomial_features: Literal["all"] | int,
+) -> None:
+    # Both estimators disable polynomial features on the differentiable path
+    # today, for the same reason: the polynomial branch runs through an sklearn
+    # StandardScaler on numpy and is not differentiable. The regressor's is not
+    # a shared contract with the classifier's, so cover it here too — a future
+    # change to either side that lets a polynomial config survive shows up as
+    # this assertion failing rather than as a silently broken workflow.
+    is_classifier = estimator_cls is TabPFNClassifier
+    torch.manual_seed(0)
+    encoder = nn.Linear(4, 4)
+    X_train = encoder(torch.randn(20, 4))
+    X_query = encoder(torch.randn(5, 4))
+    # encoder(...) is non-leaf, so retain_grad() is what exposes the input-side
+    # gradient that an upstream module would actually receive.
+    X_train.retain_grad()
+    X_query.retain_grad()
+    y = torch.tensor([0, 1] * 10) if is_classifier else torch.randn(20)
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        inference_precision=torch.float32,
+        differentiable_input=True,
+        ignore_pretraining_limits=True,
+        inference_config={"POLYNOMIAL_FEATURES": polynomial_features},
+    )
+
+    model.fit_with_differentiable_input(X_train, y)
+    assert all(config.polynomial_features == "no" for config in model.ensemble_configs_)
+
+    if is_classifier:
+        output = model.forward(
+            X_query,
+            use_inference_mode=True,
+            return_logits=True,
+        )
+    else:
+        # The regressor's forward takes no return_logits and returns
+        # (averaged_logits, per-estimator outputs, per-estimator borders).
+        output, _, _ = model.forward(X_query, use_inference_mode=True)
+    assert output is not None, "No differentiable output to backpropagate"
+    output.sum().backward()
+
+    for name, tensor in [
+        ("training inputs", X_train),
+        ("query inputs", X_query),
+        ("encoder weights", encoder.weight),
+    ]:
+        assert tensor.grad is not None, f"No gradient for {name}"
+        assert torch.isfinite(tensor.grad).all(), f"Nonfinite gradient for {name}"
+        assert tensor.grad.abs().sum() > 0, f"Zero gradient for {name}"
