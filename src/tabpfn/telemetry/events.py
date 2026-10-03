@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal
 
+import torch
 from sklearn.base import ClassifierMixin
 from sklearn.utils.validation import _num_features, _num_samples
 
@@ -79,6 +80,7 @@ def _single_event(
     num_rows, num_columns = _shape(arguments.get("X"))
     if num_rows is None and kind != "predict":
         return None
+
     fields: dict[str, Any] = {"num_rows": num_rows, "num_columns": num_columns}
 
     # After a failed fit, the fitted state may still describe an earlier fit.
@@ -118,6 +120,7 @@ def _batched_event(
         "num_datasets": len(arguments["X_train_list"]) or None,
         "predict_params": predict_params_of(arguments),
     }
+
     if len(train_shapes) == 1 and len(test_shapes) == 1:
         fit_num_rows, num_columns = next(iter(train_shapes))
         num_rows, _ = next(iter(test_shapes))
@@ -143,11 +146,14 @@ def _call_fields(
         # A fine-tuned model is held in memory, not in a checkpoint file. Its
         # version is the one that was fine-tuned.
         model_version = label_of(getattr(estimator, "finetune_model_version", None))
+
     is_classifier = isinstance(estimator, ClassifierMixin)
+    devices = getattr(fitted, "devices_", None)
     return {
         "timestamp": started_at.isoformat(),
         "python_version": platform.python_version(),
         "tabpfn_version": _tabpfn_version(),
+        "gpu_type": _gpu_type(devices[0]) if devices else None,
         "model_path": model_path,
         "model_version": model_version,
         "task": "classification" if is_classifier else "regression",
@@ -195,6 +201,20 @@ def _shape(X: Any) -> tuple[int | None, int | None]:
         return num_rows, _num_features(X)
     except TypeError:
         return num_rows, None
+
+
+@functools.lru_cache
+def _gpu_type(device: torch.device) -> str | None:
+    """The GPU a call ran on, or None if it ran on the CPU."""
+    if device.type == "mps":
+        return "mps"
+    if device.type != "cuda":
+        return None
+    try:
+        return label_of(torch.cuda.get_device_name(device))
+    except (RuntimeError, AssertionError):
+        # CUDA cannot start here, as in a process forked after it had started.
+        return None
 
 
 @functools.cache

@@ -10,13 +10,18 @@ Only the outermost logged call is logged. The calls a logged method makes
 internally, such as the holdout fits of `tuning_config` or `predict` running
 `forward`, belong to the call that made them and are not logged on their own.
 
-Nothing is logged until `set_sink` installs a sink.
+Usage events are only sent for accounts that opted in to usage telemetry: see
+`collector`, which receives them until `set_sink` installs another sink.
 
 - `decorator`: the `log_usage` decorator, and where its usage events go.
 - `events`: the usage events a call is logged as.
 - `parameters`: which of an estimator's parameters are logged.
+- `collector`: queues usage events and delivers them, for accounts that opted in.
 """
 
+from tabpfn.telemetry import collector
 from tabpfn.telemetry.decorator import log_usage, set_sink
+
+set_sink(collector.collect)
 
 __all__ = ["log_usage", "set_sink"]
