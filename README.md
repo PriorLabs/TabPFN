@@ -13,12 +13,12 @@
 
 ## Quick Start
 
-### Interactive Notebook Tutorial
+### 🍳 TabPFN Cookbook
 > [!TIP]
 >
-> Dive right in with our interactive Colab notebook! It's the best way to get a hands-on feel for TabPFN, walking you through installation, classification, and regression examples.
+> Explore use-cases and demos of TabPFN in action in these runnable notebooks. All in the Cookbook section of our documentation!
 >
-> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
+> [Open the Cookbook](https://docs.priorlabs.ai/cookbook?utm_source=readme)
 
 ### Installation
 ```bash
