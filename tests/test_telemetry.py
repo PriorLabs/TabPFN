@@ -27,7 +27,7 @@ from tabpfn.finetuning import FinetunedTabPFNClassifier, FinetunedTabPFNRegresso
 from tabpfn.model_loading import ModelType, _get_model_source
 from tabpfn.settings import settings
 from tabpfn.telemetry import log_usage, set_sink
-from tabpfn.telemetry.events import _shape, _tabpfn_version
+from tabpfn.telemetry.events import _gpu_type, _shape, _tabpfn_version
 from tabpfn.telemetry.parameters import (
     _CONFIG_FIELDS,
     _EMBED_PARAMS,
@@ -49,6 +49,8 @@ V3_CHECKPOINT = _get_model_source(
 
 class _Classifier(ClassifierMixin, BaseEstimator):
     """Mirrors how TabPFNClassifier's public methods call each other."""
+
+    devices_: tuple[torch.device, ...]
 
     def __init__(
         self,
@@ -179,6 +181,7 @@ def test__log_usage__each_event_has_only_the_fields_of_its_kind(
         "timestamp",
         "python_version",
         "tabpfn_version",
+        "gpu_type",
         "model_path",
         "model_version",
         "task",
@@ -716,6 +719,64 @@ def test__log_usage__tabpfn_version__logged_without_a_local_build_suffix(
         _tabpfn_version.cache_clear()
 
     assert events[0]["tabpfn_version"] == "9.0.1.dev3"
+
+
+@pytest.fixture
+def gpu_names(monkeypatch: pytest.MonkeyPatch) -> Generator[list[Any]]:
+    """Pretend every CUDA device is an A100, recording which devices are asked."""
+    asked: list[Any] = []
+
+    def get_device_name(device: Any) -> str:
+        asked.append(device)
+        return "NVIDIA A100-SXM4-80GB"
+
+    monkeypatch.setattr(torch.cuda, "get_device_name", get_device_name)
+    _gpu_type.cache_clear()
+    yield asked
+    _gpu_type.cache_clear()
+
+
+def test__log_usage__gpu_type__name_of_the_gpu_the_estimator_ran_on(
+    events: list[Event], gpu_names: list[Any]
+) -> None:
+    clf = _Classifier().fit(X_TRAIN, Y_TRAIN)
+    clf.devices_ = (torch.device("cuda", 1), torch.device("cuda", 0))
+    clf.predict(X_TRAIN)
+    clf.predict(X_TRAIN)
+
+    assert [e["gpu_type"] for e in events] == [None, *["NVIDIA A100-SXM4-80GB"] * 2]
+    # Asked once, about the first device.
+    assert gpu_names == [torch.device("cuda", 1)]
+
+
+@pytest.mark.parametrize(
+    ("device", "expected"),
+    [(torch.device("cpu"), None), (torch.device("mps"), "mps")],
+)
+def test__gpu_type__not_cuda(
+    gpu_names: list[Any], device: torch.device, expected: str | None
+) -> None:
+    assert _gpu_type(device) == expected
+    assert gpu_names == []
+
+
+@pytest.mark.usefixtures("gpu_names")
+def test__gpu_type__cuda_cannot_start__none(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(_: Any) -> str:
+        raise RuntimeError("Cannot re-initialize CUDA in forked subprocess.")
+
+    monkeypatch.setattr(torch.cuda, "get_device_name", fail)
+
+    assert _gpu_type(torch.device("cuda", 0)) is None
+
+
+@pytest.mark.usefixtures("gpu_names")
+def test__gpu_type__name_the_api_does_not_accept__none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda _: "GPU/with/slashes")
+
+    assert _gpu_type(torch.device("cuda", 0)) is None
 
 
 def test__log_usage__generator_function__rejected() -> None:

@@ -2,9 +2,9 @@
 
 """The `log_usage` decorator, and where the usage events it logs go.
 
-Usage is logged only for users who have opted in to usage telemetry, for whom a
-sink is installed with `set_sink`. For everyone else, which is the default, no
-usage event is built, collected or sent.
+Usage events go to the sink installed with `set_sink`, by default
+`tabpfn.telemetry.collector.collect`, which sends them only for accounts that
+opted in to usage telemetry. Without a sink, no usage event is built.
 """
 
 from __future__ import annotations
