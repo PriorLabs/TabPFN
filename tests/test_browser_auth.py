@@ -16,6 +16,7 @@ import pytest
 
 from tabpfn.browser_auth import (
     _has_display,
+    check_telemetry_enabled,
     delete_cached_token,
     get_cached_token,
     save_token,
@@ -35,7 +36,7 @@ def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     token_file = cache_dir / "auth_token"
     client_file = tmp_path / ".tabpfn" / "token"
 
-    monkeypatch.setattr("tabpfn.browser_auth._CACHE_DIR", cache_dir)
+    monkeypatch.setattr("tabpfn.browser_auth.CACHE_DIR", cache_dir)
     monkeypatch.setattr("tabpfn.browser_auth._TOKEN_FILE", token_file)
     monkeypatch.setattr("tabpfn.browser_auth._CLIENT_TOKEN_FILE", client_file)
 
@@ -134,11 +135,12 @@ class TestSaveAndDeleteToken:
 
 
 class _DummyHTTPResponse:
-    def __init__(self, status: int = 200):
+    def __init__(self, status: int = 200, body: bytes = b""):
         self.status = status
+        self.body = body
 
     def read(self) -> bytes:
-        return b""
+        return self.body
 
     def __enter__(self):
         return self
@@ -230,6 +232,87 @@ class TestVerifyToken:
             verify_token("tok", "https://api.example.com/")
 
         assert called_with[0] == "https://api.example.com/protected/"
+
+
+# ---------------------------------------------------------------------------
+# check_telemetry_enabled
+# ---------------------------------------------------------------------------
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url="",
+        code=code,
+        msg="",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,  # type: ignore[arg-type]
+    )
+
+
+class TestCheckTelemetryEnabled:
+    @pytest.fixture(autouse=True)
+    def _uncached(self) -> None:
+        check_telemetry_enabled.cache_clear()
+
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            (b'{"enabled": true}', True),
+            (b'{"enabled": false}', False),
+            (b'{"enabled": "true"}', False),
+            (b"{}", False),
+            (b"not json", None),
+            (b"[true]", None),
+        ],
+    )
+    def test_response(self, body: bytes, expected: bool | None):
+        with patch.object(
+            urllib.request, "urlopen", return_value=_DummyHTTPResponse(200, body)
+        ):
+            assert check_telemetry_enabled("tok", "https://api.example.com") is expected
+
+    @pytest.mark.parametrize(
+        ("code", "expected"), [(401, False), (403, False), (500, None)]
+    )
+    def test_http_error(self, code: int, expected: bool | None):
+        with patch.object(urllib.request, "urlopen", side_effect=_http_error(code)):
+            assert check_telemetry_enabled("tok", "https://api.example.com") is expected
+
+    def test_server_unreachable(self):
+        with patch.object(
+            urllib.request,
+            "urlopen",
+            side_effect=urllib.error.URLError("connection refused"),
+        ):
+            assert check_telemetry_enabled("tok", "https://api.example.com") is None
+
+    @pytest.mark.parametrize(
+        "api_url", ["https://api.example.com", "https://api.example.com/"]
+    )
+    def test_url_construction(self, api_url: str):
+        called_with: list[str] = []
+
+        def capture_url(
+            req: urllib.request.Request, **_kw: object
+        ) -> _DummyHTTPResponse:
+            called_with.append(req.full_url)
+            return _DummyHTTPResponse(200, b'{"enabled": true}')
+
+        with patch.object(urllib.request, "urlopen", side_effect=capture_url):
+            check_telemetry_enabled("tok", api_url)
+
+        assert called_with == ["https://api.example.com/account/telemetry"]
+
+    def test_answer_cached(self):
+        with patch.object(
+            urllib.request,
+            "urlopen",
+            return_value=_DummyHTTPResponse(200, b'{"enabled": true}'),
+        ) as urlopen:
+            check_telemetry_enabled("tok", "https://api.example.com")
+            check_telemetry_enabled("tok", "https://api.example.com")
+
+        assert urlopen.call_count == 1
 
 
 # ---------------------------------------------------------------------------

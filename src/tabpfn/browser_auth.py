@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -66,8 +67,8 @@ def _has_display() -> bool:
 # Token cache helpers
 # ---------------------------------------------------------------------------
 
-_CACHE_DIR = Path.home() / ".cache" / "tabpfn"
-_TOKEN_FILE = _CACHE_DIR / "auth_token"
+CACHE_DIR = Path.home() / ".cache" / "tabpfn"
+_TOKEN_FILE = CACHE_DIR / "auth_token"
 
 # tabpfn-client stores its token here — we read it as a fallback.
 _CLIENT_TOKEN_FILE = Path.home() / ".tabpfn" / "token"
@@ -97,7 +98,7 @@ def get_cached_token() -> str | None:
 
 def save_token(token: str) -> None:
     """Persist *token* to ``~/.cache/tabpfn/auth_token``."""
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _TOKEN_FILE.write_text(token)
     logger.debug("Token saved to %s", _TOKEN_FILE)
 
@@ -206,6 +207,44 @@ def check_license_accepted(token: str, api_url: str, version: str) -> bool | Non
         return None
     except Exception:
         logger.debug("License check endpoint unreachable", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Telemetry enablement check
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def check_telemetry_enabled(token: str, api_url: str) -> bool | None:
+    """Check whether usage telemetry is enabled for the account of *token*.
+
+    It is off for every account, unless Prior Labs enables it for one with the
+    account's explicit consent. This waits up to 10 seconds for the API, so it
+    must only be called off the caller's thread. The answer is cached, so a
+    forked process does not ask again.
+
+    Returns:
+    -------
+    True
+        Usage telemetry is enabled.
+    False
+        Usage telemetry is not enabled (or token invalid).
+    None
+        Server is unreachable — cannot verify.
+    """
+    url = f"{api_url.rstrip('/')}/account/telemetry"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            return json.loads(resp.read()).get("enabled") is True
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False
+        logger.debug("Unexpected HTTP %s from telemetry check endpoint", exc.code)
+        return None
+    except Exception:
+        logger.debug("Telemetry check endpoint unreachable", exc_info=True)
         return None
 
 

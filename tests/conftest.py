@@ -15,6 +15,7 @@ import torch
 
 from tabpfn.constants import ModelVersion
 from tabpfn.settings import settings
+from tabpfn.telemetry import set_sink
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -29,6 +30,16 @@ def default_to_fast_model() -> None:
     """
     if "TABPFN_MODEL_VERSION" not in os.environ:
         settings.tabpfn.model_version = ModelVersion.V3_5_FAST
+
+
+@pytest.fixture(autouse=True, scope="session")
+def no_usage_telemetry() -> None:
+    """Log no usage from the tests.
+
+    With an API key in the environment, the first logged call would otherwise
+    start collecting usage, and ask the telemetry API whether to send it.
+    """
+    set_sink(None)
 
 
 @pytest.fixture(autouse=True, scope="session")
