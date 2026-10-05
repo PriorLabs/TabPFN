@@ -33,6 +33,7 @@ import atexit
 import contextlib
 import hashlib
 import http.client
+import itertools
 import json
 import logging
 import os
@@ -81,6 +82,9 @@ SAVED_BATCHES_ROOT = CACHE_DIR / "telemetry"
 
 # Put on the queue to stop the collector once it has delivered the events before.
 _STOP = object()
+
+# Numbers the batches this process saves, in order.
+_saves = itertools.count()
 
 
 class Collector(threading.Thread):
@@ -271,8 +275,10 @@ def _post(body: bytes, *, token: str, api_url: str) -> int | None:
 def _save(directory: Path, body: bytes) -> None:
     """Save a batch to disk, then delete the oldest beyond `MAX_SAVED_BATCHES`."""
     directory.mkdir(parents=True, exist_ok=True)
-    # Named after the time, so that the names sort oldest first.
-    path = directory / f"{time.time_ns()}-{uuid.uuid4().hex}.json"
+    # Named after the time, then the order of saving in this process, so that
+    # the names sort oldest first even within one tick of a coarse clock, as on
+    # Windows.
+    path = directory / f"{time.time_ns()}-{next(_saves):09d}-{uuid.uuid4().hex}.json"
     # Written whole, then renamed, so that a batch is never read half-written.
     writing = path.with_suffix(".tmp")
     writing.write_bytes(body)

@@ -456,6 +456,8 @@ def test__save__keeps_the_newest_batches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(collector, "MAX_SAVED_BATCHES", 3)
+    # Saved within one tick of the clock, as Windows' clock ticks every 15ms.
+    monkeypatch.setattr(collector.time, "time_ns", lambda: 1_700_000_000_000_000_000)
     batches = [_events(2) for _ in range(5)]
     for batch in batches:
         collector._save(tmp_path, _body(batch))
