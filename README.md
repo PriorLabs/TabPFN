@@ -110,7 +110,7 @@ The code in this repository is licensed under the [Apache License 2.0](LICENSE).
 
 Model weights are licensed separately.
 
-The TabPFN-2.5, TabPFN-2.6, TabPFN-3 and TabPFN-3.5 model weights are released under non-commercial licenses (TabPFN-3.5 [license](https://huggingface.co/Prior-Labs/tabpfn_3_5/blob/main/LICENSE), TabPFN-3 [license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE); see the [Models page](https://docs.priorlabs.ai/models#tabpfn-model-license) for prior releases). TabPFN-3.5 is used by default.
+The TabPFN-2.5, TabPFN-2.6, TabPFN-3, TabPFN-3.5 and TabPFN-3.5-Fast model weights are released under non-commercial licenses (TabPFN-3.5 and TabPFN-3.5-Fast [license](https://huggingface.co/Prior-Labs/tabpfn_3_5/blob/main/LICENSE), TabPFN-3 [license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE); see the [Models page](https://docs.priorlabs.ai/models#tabpfn-model-license) for prior releases). TabPFN-3.5 is used by default.
 
 The TabPFN-2 model weights are licensed under the Prior Labs License (Apache 2.0 with an additional attribution requirement): [classifier license](https://huggingface.co/Prior-Labs/TabPFN-v2-clf/blob/main/LICENSE.txt), [regressor license](https://huggingface.co/Prior-Labs/TabPFN-v2-reg/blob/main/LICENSE.txt). To use the v2 model weights, instantiate your model as follows:
 
@@ -222,7 +222,7 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 
 ## Usage Tips
 
-- **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
+- **Predict in a single call**: By default, each `predict` call recomputes the training set, so predicting 100 samples one at a time is almost 100 times slower and more expensive than a single call. Pass the whole test set at once, and only split it up if you run out of memory — the error raised then shows how. To reuse the training-set representation across repeated `predict` calls on the same training data, fit with `fit_mode="fit_with_cache"`, which also chunks large test sets automatically (see [kv_cache_fast_prediction.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/kv_cache_fast_prediction.py)).
 - **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
 - **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
 - **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. **TabPFN-3.5** and **TabPFN-3.5-Fast** accept up to **1,000,000 rows** and **20,000 features**. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
@@ -248,7 +248,7 @@ TabPFN requires **Python 3.10+** due to newer language features. Compatible vers
 ### **Installation & Setup**
 
 <details>
-<summary><b>Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3 / TabPFN-3.5?</b></summary>
+<summary><b>Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3 / TabPFN-3.5 / TabPFN-3.5-Fast?</b></summary>
 
 On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://ux.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
 
@@ -281,12 +281,12 @@ This script will download the main classifier and regressor models, as well as a
    - TabPFN-3.5-Fast: [tabpfn-v3.5-fast-20260909.safetensors](https://huggingface.co/Prior-Labs/tabpfn_3_5/blob/main/tabpfn-v3.5-fast-20260909.safetensors)
 
 2. Place the file in one of these locations:
-   - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
+   - Specify directly: `TabPFNClassifier(model_path="/path/to/tabpfn-v3.5-20260909.safetensors")`. Keep the downloaded filename: the model version is inferred from it, and a name carrying no version identifier is read as TabPFN-2.
    - Set environment variable: `export TABPFN_MODEL_CACHE_DIR="/path/to/dir"` (see environment variables FAQ below)
    - Default OS cache directory:
      - Windows: `%APPDATA%\tabpfn\`
      - macOS: `~/Library/Caches/tabpfn/`
-     - Linux: `~/.cache/tabpfn/`
+     - Linux: `$XDG_CACHE_HOME/tabpfn/` when set, otherwise `~/.cache/tabpfn/`
 
 </details>
 
@@ -310,6 +310,7 @@ TabPFN uses Pydantic settings for configuration, supporting environment variable
 
 **Model Configuration:**
 - `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
+- `TABPFN_MODEL_VERSION`: Which checkpoint `TabPFNClassifier()` and `TabPFNRegressor()` download and load when no `model_path` is given (default: `v3.5`). One of `v2`, `v2.5`, `v2.6`, `v3`, `v3.5`, `v3.5-fast`. Set before importing TabPFN. An explicit `model_path`, or `create_default_for_version()`, takes precedence.
 - `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU above the per-model sample limit (5000 for TabPFN-3, TabPFN-3.5 and TabPFN-3.5-Fast, 1000 for older versions). Set to `true` to override the CPU limitation. Note: large datasets can still be slow on CPU!
 - `TABPFN_MPS_MEMORY_FRACTION`: Fraction of recommended max MPS memory to allow on Apple Silicon (default: `0.7`). Used to prevent macOS system crashes; set before importing TabPFN. Values above `1.0` are not recommended.
 - `TABPFN_MAX_BATCHED_TEST_ROWS`: Maximum number of test rows fed through the model in a single forward pass during cached (`fit_mode="fit_with_cache"`) inference (default: `32768`). Larger test sets are split into independent chunks of at most this size and concatenated, bounding peak memory. Test rows are conditionally independent given the KV cache, so chunking is mathematically equivalent — results may still differ slightly due to floating-point non-associativity (see [#800](https://github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425)). Performance should be close to optimal at the default of `32768`: the hardware is already saturated at that chunk size and, since the computations are independent, larger chunks bring no speedup. Set to `0` to disable chunking.
