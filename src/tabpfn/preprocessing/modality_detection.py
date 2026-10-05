@@ -136,9 +136,10 @@ def _warn_on_text(feature_schema: FeatureSchema) -> None:
         "numeric features, or consider the tabpfn-client API, which embeds text "
         "natively: https://github.com/PriorLabs/tabpfn-client",
         UserWarning,
-        # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
-        # `warning.filename` asserts in the tests.
-        stacklevel=6,
+        # stacklevel=7 reaches the `estimator.fit(X, y)` call site, past the
+        # `log_usage` wrapper around `fit`; pinned by the `warning.filename`
+        # asserts in the tests.
+        stacklevel=7,
     )
 
 
