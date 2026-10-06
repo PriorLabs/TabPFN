@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for tabpfn.telemetry."""
+"""Tests for tabpfn.analytics."""
 
 from __future__ import annotations
 
@@ -22,18 +22,18 @@ from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 
 import tabpfn
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.constants import ModelVersion
-from tabpfn.finetuning import FinetunedTabPFNClassifier, FinetunedTabPFNRegressor
-from tabpfn.model_loading import ModelType, _get_model_source
-from tabpfn.settings import settings
-from tabpfn.telemetry import log_usage, set_sink
-from tabpfn.telemetry.events import _gpu_type, _shape, _tabpfn_version
-from tabpfn.telemetry.parameters import (
+from tabpfn.analytics import log_usage, set_sink
+from tabpfn.analytics.events import _gpu_type, _shape, _tabpfn_version
+from tabpfn.analytics.parameters import (
     _CONFIG_FIELDS,
     _EMBED_PARAMS,
     _PREDICT_PARAMS,
     config_of,
 )
+from tabpfn.constants import ModelVersion
+from tabpfn.finetuning import FinetunedTabPFNClassifier, FinetunedTabPFNRegressor
+from tabpfn.model_loading import ModelType, _get_model_source
+from tabpfn.settings import settings
 
 Event = dict[str, Any]
 
@@ -174,7 +174,7 @@ def test__log_usage__each_event_has_only_the_fields_of_its_kind(
     clf.predict(X_TRAIN)
     clf.get_embeddings(X_TRAIN, data_source="train")
 
-    # The telemetry API rejects any field an event of its kind does not have.
+    # The analytics API rejects any field an event of its kind does not have.
     common = {
         "event",
         "event_id",
@@ -206,7 +206,7 @@ def test__log_usage__each_event_has_only_the_fields_of_its_kind(
 def test__log_usage__estimators_used_in_turn__each_event_describes_its_own_estimator(
     events: list[Event],
 ) -> None:
-    # The old telemetry kept these values per thread, so `b` overwrote `a`'s.
+    # The earlier usage tracking kept these values per thread, so `b` overwrote `a`'s.
     a = _Classifier(model_path=f"/models/{V2_CHECKPOINT}", fit_mode="low_memory")
     b = _Classifier(model_path=V3_CHECKPOINT, fit_mode="fit_with_cache")
     a.fit(X_TRAIN, Y_TRAIN)
@@ -600,7 +600,7 @@ def test__log_usage__method__logged_with_the_class_that_defines_it(
     _LocalClassifier().fit(X_TRAIN, Y_TRAIN)
 
     # A class defined in a function has "<locals>" in its qualified name, which
-    # the telemetry API rejects, so only the method's name is logged for it.
+    # the analytics API rejects, so only the method's name is logged for it.
     assert [e["method"] for e in events] == ["_TuningClassifier.fit", "fit"]
 
 
@@ -864,7 +864,7 @@ def test__log_usage__wraps_exactly_the_entry_points_usage_is_logged_for(
     estimator_class: type[BaseEstimator], entry_points: set[str]
 ) -> None:
     # Not `forward`, `fit_from_preprocessed`, `fit_with_differentiable_input` or
-    # the like, which usage telemetry leaves out for now.
+    # the like, which usage analytics leaves out for now.
     logged = {
         name
         for name, attribute in vars(estimator_class).items()

@@ -32,6 +32,7 @@ from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted, clone
 from tqdm.auto import tqdm
 
+from tabpfn.analytics import log_usage
 from tabpfn.base import (
     ModelSpecs,
     create_inference_engine,
@@ -97,7 +98,6 @@ from tabpfn.preprocessing.ensemble import (
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.text import TextTransformer
-from tabpfn.telemetry import log_usage
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,

@@ -36,7 +36,7 @@ def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     token_file = cache_dir / "auth_token"
     client_file = tmp_path / ".tabpfn" / "token"
 
-    monkeypatch.setattr("tabpfn.browser_auth.CACHE_DIR", cache_dir)
+    monkeypatch.setattr("tabpfn.browser_auth._CACHE_DIR", cache_dir)
     monkeypatch.setattr("tabpfn.browser_auth._TOKEN_FILE", token_file)
     monkeypatch.setattr("tabpfn.browser_auth._CLIENT_TOKEN_FILE", client_file)
 

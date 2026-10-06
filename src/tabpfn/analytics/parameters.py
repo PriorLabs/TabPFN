@@ -24,7 +24,7 @@ from tabpfn.constants import ModelVersion
 from tabpfn.model_loading import ModelType, _get_model_source, resolve_model_version
 
 Label = Annotated[str, StringConstraints(pattern=r"^[\w .:+()\-]{1,128}$")]
-"""A string the telemetry API accepts: short, and without the "/", "\\" or "@"
+"""A string the analytics API accepts: short, and without the "/", "\\" or "@"
 that paths, URLs and email addresses need."""
 
 
@@ -36,7 +36,7 @@ def _torch_name(value: Any) -> Any:
 TorchName = Annotated[Label, BeforeValidator(_torch_name)]
 """A `Label`, which may also be given as a torch dtype or device."""
 
-# The values the telemetry API accepts in an event, declared as gapi declares
+# The values the analytics API accepts in an event, declared as gapi declares
 # them in `TabPFNConfig`, `PredictParams` and `EmbedCalled`; keep them in sync.
 # The API rejects any other name and any value of another type, such as the
 # "auto" default of `n_estimators`, so those are left out.
@@ -70,7 +70,7 @@ _LABEL: TypeAdapter[str] = TypeAdapter(Label)
 
 
 def config_of(estimator: Any) -> dict[str, Any]:
-    """The estimator's settings that the telemetry API accepts.
+    """The estimator's settings that the analytics API accepts.
 
     They are read from the estimator's constructor parameters with `get_params`,
     so a renamed or removed parameter is no longer logged.
@@ -79,17 +79,17 @@ def config_of(estimator: Any) -> dict[str, Any]:
 
 
 def predict_params_of(arguments: Mapping[str, Any]) -> dict[str, Any]:
-    """The arguments of a prediction that the telemetry API accepts."""
+    """The arguments of a prediction that the analytics API accepts."""
     return _accepted(_PREDICT_PARAMS, arguments)
 
 
 def embed_params_of(arguments: Mapping[str, Any]) -> dict[str, Any]:
-    """The arguments of an embedding call that the telemetry API accepts."""
+    """The arguments of an embedding call that the analytics API accepts."""
     return _accepted(_EMBED_PARAMS, arguments)
 
 
 def label_of(value: Any) -> str | None:
-    """The value as a string the telemetry API accepts, or None if it is not one."""
+    """The value as a string the analytics API accepts, or None if it is not one."""
     try:
         return _LABEL.validate_python(value)
     except ValidationError:
@@ -118,7 +118,7 @@ def checkpoint_of(estimator: Any) -> tuple[str | None, str | None]:
 def _accepted(
     fields: Mapping[str, TypeAdapter[Any]], values: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """The values the telemetry API accepts for these fields, as it accepts them.
+    """The values the analytics API accepts for these fields, as it accepts them.
 
     A missing value, or one the API would reject, is left out.
     """

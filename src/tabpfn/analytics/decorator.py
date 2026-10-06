@@ -3,8 +3,8 @@
 """The `log_usage` decorator, and where the usage events it logs go.
 
 Usage events go to the sink installed with `set_sink`, by default
-`tabpfn.telemetry.collector.collect`, which sends them only for accounts that
-opted in to usage telemetry. Without a sink, no usage event is built.
+`tabpfn.analytics.collector.collect`, which sends them only for accounts that
+opted in to usage analytics. Without a sink, no usage event is built.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from contextvars import ContextVar, copy_context
 from datetime import datetime, timezone
 from typing import Any, Concatenate, ParamSpec, TypeVar
 
-from tabpfn.telemetry.events import EventKind, usage_event
-from tabpfn.telemetry.parameters import label_of
+from tabpfn.analytics.events import EventKind, usage_event
+from tabpfn.analytics.parameters import label_of
 
 logger = logging.getLogger(__name__)
 

@@ -67,8 +67,8 @@ def _has_display() -> bool:
 # Token cache helpers
 # ---------------------------------------------------------------------------
 
-CACHE_DIR = Path.home() / ".cache" / "tabpfn"
-_TOKEN_FILE = CACHE_DIR / "auth_token"
+_CACHE_DIR = Path.home() / ".cache" / "tabpfn"
+_TOKEN_FILE = _CACHE_DIR / "auth_token"
 
 # tabpfn-client stores its token here — we read it as a fallback.
 _CLIENT_TOKEN_FILE = Path.home() / ".tabpfn" / "token"
@@ -98,7 +98,7 @@ def get_cached_token() -> str | None:
 
 def save_token(token: str) -> None:
     """Persist *token* to ``~/.cache/tabpfn/auth_token``."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _TOKEN_FILE.write_text(token)
     logger.debug("Token saved to %s", _TOKEN_FILE)
 
