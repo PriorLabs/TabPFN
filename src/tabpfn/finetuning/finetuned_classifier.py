@@ -21,9 +21,9 @@ from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNClassifier
+from tabpfn.analytics import log_usage
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
-from tabpfn.telemetry import log_usage
 
 logger = logging.getLogger(__name__)
 

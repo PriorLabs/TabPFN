@@ -41,6 +41,7 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
+from tabpfn.analytics import log_usage
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     ModelSpecs,
@@ -106,7 +107,6 @@ from tabpfn.preprocessing.target_transform import (
     make_target_transform,
 )
 from tabpfn.preprocessing.text import TextTransformer
-from tabpfn.telemetry import log_usage
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,

@@ -2,7 +2,7 @@
 
 """The usage event a finished call is logged as.
 
-Each event is a dict in the format of the telemetry API's events, with the same
+Each event is a dict in the format of the analytics API's events, with the same
 field names, so what is built here is what is sent.
 """
 
@@ -19,7 +19,7 @@ import torch
 from sklearn.base import ClassifierMixin
 from sklearn.utils.validation import _num_features, _num_samples
 
-from tabpfn.telemetry.parameters import (
+from tabpfn.analytics.parameters import (
     checkpoint_of,
     config_of,
     embed_params_of,
@@ -45,7 +45,7 @@ def usage_event(
 
     Every call is one event. A batched call's event covers all of its datasets,
     see `_batched_event`. A fit or embedding call that failed before the size of
-    its data could be read is not logged: the telemetry API requires that size.
+    its data could be read is not logged: the analytics API requires that size.
     """
     fitted = _fitted(estimator)
     fields = _call_fields(
@@ -73,7 +73,7 @@ def _single_event(
 ) -> dict[str, Any] | None:
     """The event of a call, sized from its `X` argument.
 
-    None for a call the telemetry API would reject: a fit or embedding call that
+    None for a call the analytics API would reject: a fit or embedding call that
     failed before the size of its data could be read, or an embedding call
     with a data source the API does not accept.
     """
