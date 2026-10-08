@@ -1620,27 +1620,14 @@ class ICLTransformerBlock(nn.Module):
             )
             x_BRE = x_BRE + attn_out
         elif cached_kv is not None:
-            # Use cached KV -- chunking over test batch is fine
-            # TODO: Performance test this as it might not be needed.
-            def _attn_fn_cached(
-                x: torch.Tensor,
-                single_eval_pos: int | None = None,
-            ) -> torch.Tensor:
-                out, _ = self.icl_attention(
-                    self.layernorm(x),
-                    single_eval_pos=single_eval_pos,
-                    cached_kv=cached_kv,
-                )
-                return out
-
-            x_BRE = chunked_evaluate_maybe_inplace(
-                _attn_fn_cached,
-                x_BRE,
-                save_peak_memory_factor=save_peak_memory_factor,
-                residual=True,
-                batch_dims=1,
+            # Query and cache batch indices must stay aligned; the generic
+            # chunking helper slices only the queries, not their cached K/V.
+            attn_out, _ = self.icl_attention(
+                self.layernorm(x_BRE),
                 single_eval_pos=single_eval_pos,
+                cached_kv=cached_kv,
             )
+            x_BRE = x_BRE + attn_out
         else:
             # Default path -- no cache
             def _attn_fn(
