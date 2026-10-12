@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Lazy wrapper around ``torch.compiler.disable``.
+"""Lazy helpers for explicitly selected compilation regions.
 
 Applying ``@torch.compiler.disable`` at class-definition time forces
 ``torch._dynamo`` / ``torch._inductor`` to be imported during ``import
@@ -16,12 +16,53 @@ only *applying* it does, so ``import torch`` at module scope here is safe.
 from __future__ import annotations
 
 import functools
+import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 import torch
+from torch.torch_version import TorchVersion
 
 F = TypeVar("F", bound=Callable[..., Any])
+R = TypeVar("R")
+
+
+def compile_when_enabled(fn: Callable[..., R]) -> Callable[..., R]:
+    """Compile a tensor region when its ``enable_torch_compile`` keyword is true.
+
+    The wrapper consumes the keyword, defaulting to False. When an outer graph
+    is already being compiled, the function is traced directly. Initialization is
+    lazy, and the cached callable takes the module as an ordinary argument, so
+    no compiled callables or compilation settings enter model state/pickles.
+
+    Tensor arguments must have leading batch/sequence dimensions and a final
+    embedding dimension. Mark the leading dimensions independently dynamic to
+    avoid accidental equality guards when, for example, batch size initially
+    equals the number of CLS tokens. Model embedding/parameter sizes stay static.
+    """
+    compiled_fn: Callable[..., R] | None = None
+    init_lock = threading.Lock()
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, enable_torch_compile: bool = False, **kwargs: Any) -> R:
+        nonlocal compiled_fn
+        if not enable_torch_compile or torch.compiler.is_compiling():
+            return fn(*args, **kwargs)
+        if TorchVersion(torch.__version__) < TorchVersion("2.6"):
+            raise ValueError(
+                "v3.5 compilation requires PyTorch >= 2.6. Upgrade PyTorch or "
+                "set enable_torch_compile=False."
+            )
+        for arg in (*args, *kwargs.values()):
+            if isinstance(arg, torch.Tensor):
+                torch._dynamo.mark_dynamic(arg, list(range(arg.ndim - 1)))
+        if compiled_fn is None:
+            with init_lock:
+                if compiled_fn is None:
+                    compiled_fn = torch.compile(fn, dynamic=True, fullgraph=False)
+        return compiled_fn(*args, **kwargs)
+
+    return wrapper
 
 
 def lazy_compiler_disable(fn: F) -> F:

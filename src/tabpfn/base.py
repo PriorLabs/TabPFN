@@ -330,6 +330,7 @@ def create_inference_engine(  # noqa: PLR0913
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+    enable_torch_compile: bool = False,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -354,6 +355,7 @@ def create_inference_engine(  # noqa: PLR0913
             initialization and is task-specific.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
+        enable_torch_compile: Enable the architecture's compiled inference regions.
         keep_cache_on_device: Only relevant for ``fit_mode="fit_with_cache"``.
             If True (default), each per-estimator KV cache stays on the
             inference device. If False, caches are offloaded to CPU as they
@@ -378,6 +380,7 @@ def create_inference_engine(  # noqa: PLR0913
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            enable_torch_compile=enable_torch_compile,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
@@ -390,6 +393,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
+            enable_torch_compile=enable_torch_compile,
         )
     if fit_mode == "fit_with_cache":
         return InferenceEngineExplicitKVCache(
@@ -405,6 +409,7 @@ def create_inference_engine(  # noqa: PLR0913
             task_type=task_type,
             keep_cache_on_device=keep_cache_on_device,
             kv_cache_precision=kv_cache_precision,
+            enable_torch_compile=enable_torch_compile,
         )
     if fit_mode == "batched":
         raise ValueError(
