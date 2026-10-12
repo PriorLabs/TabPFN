@@ -955,9 +955,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Args:
             X: The input data.
             y: The target variable.
-            additional_inputs: Passed as is to the model's forward when
-                predicting, unless the predict call gives its own. The forward sees
-                the train rows in the order of `X`.
+            additional_inputs: Stored, and passed as is to the model's forward
+                whenever it runs. The forward sees the train rows in the order of
+                `X`.
 
         Returns:
             self
@@ -1598,7 +1598,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         *,
         return_logits: bool,
         return_raw_logits: bool = False,
-        additional_inputs: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Internal method to run prediction.
 
@@ -1613,7 +1612,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                            post-processing steps.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The raw torch.Tensor output, either logits or probabilities,
@@ -1646,22 +1644,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 use_inference_mode=True,
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
-                additional_inputs=additional_inputs,
             )
 
-    def predict(
-        self, X: XType, *, additional_inputs: dict[str, Any] | None = None
-    ) -> np.ndarray:
+    def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted class labels as a NumPy array.
         """
-        probas = self._predict_proba(X=X, additional_inputs=additional_inputs)
+        probas = self._predict_proba(X=X)
         y_pred = np.argmax(probas, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
             return self.label_encoder_.inverse_transform(y_pred)
@@ -1669,9 +1663,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return y_pred
 
     @config_context(transform_output="default")
-    def predict_logits(
-        self, X: XType, *, additional_inputs: dict[str, Any] | None = None
-    ) -> np.ndarray:
+    def predict_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
         Logits represent the unnormalized log-probabilities of the classes
@@ -1679,20 +1671,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted logits as a NumPy array. Shape (n_samples, n_classes).
         """
-        logits_tensor = self._raw_predict(
-            X, return_logits=True, additional_inputs=additional_inputs
-        )
+        logits_tensor = self._raw_predict(X, return_logits=True)
         return logits_tensor.float().detach().cpu().numpy()
 
     @config_context(transform_output="default")
-    def predict_raw_logits(
-        self, X: XType, *, additional_inputs: dict[str, Any] | None = None
-    ) -> np.ndarray:
+    def predict_raw_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
         Logits represent the unnormalized log-probabilities of the classes
@@ -1702,7 +1689,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             An array of predicted logits for each estimator,
@@ -1712,45 +1698,37 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X,
             return_logits=False,
             return_raw_logits=True,
-            additional_inputs=additional_inputs,
         )
         return logits_tensor.float().detach().cpu().numpy()
 
-    def predict_proba(
-        self, X: XType, *, additional_inputs: dict[str, Any] | None = None
-    ) -> np.ndarray:
+    def predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         This is a wrapper around the `_predict_proba` method.
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
-        return self._predict_proba(X, additional_inputs=additional_inputs)
+        return self._predict_proba(X)
 
     @config_context(transform_output="default")  # type: ignore
-    def _predict_proba(
-        self, X: XType, *, additional_inputs: dict[str, Any] | None = None
-    ) -> np.ndarray:
+    def _predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
-        probas_tensor = self._raw_predict(
-            X, return_logits=False, additional_inputs=additional_inputs
+        probas = (
+            self._raw_predict(X, return_logits=False).float().detach().cpu().numpy()
         )
-        probas = probas_tensor.float().detach().cpu().numpy()
         probas = self._maybe_reweight_probas(probas=probas)
         if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
             probas = np.around(probas, decimals=SKLEARN_16_DECIMAL_PRECISION)
@@ -1942,7 +1920,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         use_inference_mode: bool = False,
         return_logits: bool = False,
         return_raw_logits: bool = False,
-        additional_inputs: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Forward pass returning predicted probabilities or logits
         for TabPFNClassifier Inference Engine. Used in
@@ -1961,7 +1938,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Otherwise, probabilities are returned.
             return_raw_logits: If True, returns the raw logits, without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted probabilities or logits of the classes as a torch.Tensor.
@@ -2029,11 +2005,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 X,
                 autocast=self.use_autocast_,
                 task_type="multiclass",
-                additional_inputs=(
-                    additional_inputs
-                    if additional_inputs is not None
-                    else getattr(self, "additional_inputs_", None)
-                ),
+                additional_inputs=getattr(self, "additional_inputs_", None),
             ),
             total=self.n_estimators_,
             desc="TabPFN inference",

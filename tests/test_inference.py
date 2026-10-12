@@ -1149,12 +1149,8 @@ def _record_additional_inputs(
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 @pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
-@pytest.mark.parametrize("pass_to_predict", [True, False])
 def test__predict__with_additional_inputs_given_to_fit__forward_gets_the_same_dict(
-    estimator_cls: type,
-    fit_mode: str,
-    pass_to_predict: bool,
-    monkeypatch: pytest.MonkeyPatch,
+    estimator_cls: type, fit_mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _record_additional_inputs(estimator_cls, monkeypatch)
     X, y = sklearn.datasets.make_classification(
@@ -1165,7 +1161,26 @@ def test__predict__with_additional_inputs_given_to_fit__forward_gets_the_same_di
     model = estimator_cls(n_estimators=2, device="cpu", fit_mode=fit_mode)
     model.fit(X, y, additional_inputs=inputs)
     calls.clear()
-    model.predict(X[:5], additional_inputs=inputs if pass_to_predict else None)
+    model.predict(X[:5])
+
+    assert calls
+    assert all(call is inputs for call in calls)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__get_embeddings__with_additional_inputs_given_to_fit__forward_gets_them(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _record_additional_inputs(estimator_cls, monkeypatch)
+    X, y = sklearn.datasets.make_classification(
+        n_samples=40, n_features=4, random_state=0
+    )
+    inputs = {"anything": object()}
+
+    model = estimator_cls(n_estimators=1, device="cpu")
+    model.fit(X, y, additional_inputs=inputs)
+    calls.clear()
+    model.get_embeddings(X[:5])
 
     assert calls
     assert all(call is inputs for call in calls)

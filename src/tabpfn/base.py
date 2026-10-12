@@ -762,6 +762,7 @@ def get_embeddings(
         autocast=model.use_autocast_,
         task_type=task_type,
         only_return_standard_out=False,
+        additional_inputs=getattr(model, "additional_inputs_", None),
     ):
         # Cast output to Any to allow dict-like access
         output_dict = typing.cast("dict[str, torch.Tensor]", output)
