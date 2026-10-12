@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.2.0] - 2026-10-12
+
+### Added
+
+- Add an opt-in `enable_torch_compile` setting to classifiers and regressors, with selective compilation of v3.5 aggregation regions on PyTorch 2.6 or newer. ([#1331](https://github.com/PriorLabs/TabPFN/pull/1331))
+
+### Fixed
+
+- Fix incorrect predictions and repeated cache dequantization for batched TabPFN-3 and TabPFN-3.5 cached inference with memory saving enabled. ([#1365](https://github.com/PriorLabs/TabPFN/pull/1365))
+
+
 ## [9.1.0] - 2026-10-02
 
 ### Breaking Changes
