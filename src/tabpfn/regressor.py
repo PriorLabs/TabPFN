@@ -263,6 +263,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     text_transformer_: TextTransformer
     """The transformer that expanded every text column before validation."""
 
+    additional_inputs_: dict[str, Any] | None = None
+    """The `additional_inputs` given to `fit`."""
+
     categorical_features_indices_: list[int] | None
     """Declared categorical column positions after date/text expansion, including
     columns declared through pandas `category` dtype. Expanded source columns are
@@ -1286,9 +1289,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Args:
             X: The input data.
             y: The target variable.
-            additional_inputs: Stored, and passed as is to the model's forward
-                whenever it runs. The forward sees the train rows in the order of
-                `X`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             self
@@ -1317,12 +1318,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        _check_additional_inputs(
-            additional_inputs,
-            fit_mode=self.fit_mode,
-            inference_config=self.inference_config_,
-        )
         self.additional_inputs_ = additional_inputs
+        _check_additional_inputs(self)
         ensemble_configs, X, y, znorm_space_bardist = (
             self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
@@ -2213,7 +2210,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X,
             autocast=self.use_autocast_,
             task_type="regression",
-            additional_inputs=getattr(self, "additional_inputs_", None),
+            additional_inputs=self.additional_inputs_,
         ):
             output = output.float()  # noqa: PLW2901
             if temperature != 1:
