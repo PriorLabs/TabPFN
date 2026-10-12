@@ -20,12 +20,12 @@ body:
   attributes:
     label: AI assistance
     description: >
-      Did you use AI tools to find, investigate or write up this report? See
+      Did you use AI tools to find, investigate or write up this suggestion? See
       [AI-assisted contributions](https://github.com/PriorLabs/TabPFN/blob/main/CONTRIBUTING.md#ai-assisted-contributions).
       Fully automated submissions without human review will be closed.
     options:
       - "No"
-      - "Yes, and I have reviewed this report myself"
-      - "I am an AI agent, and no human reviewed this report before submission"
+      - "Yes, and I have reviewed this suggestion myself"
+      - "I am an AI agent, and no human reviewed this suggestion before submission"
   validations:
     required: true

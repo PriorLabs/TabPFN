@@ -27,7 +27,7 @@ Tick exactly one:
 -   [ ] AI tools were used. I have reviewed and understood every change and will answer review comments myself.
 -   [ ] I am an AI agent, and no human reviewed this PR before submission.
 
-If you used AI tools, say which ones and how. If an AI tool wrote this description, add a short summary of the changes in your own words at the top.
+If an AI tool wrote this description, add a short summary of the changes in your own words at the top.
 
 
 ---
