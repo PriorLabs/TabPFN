@@ -547,6 +547,54 @@ def test__classifier_fit_predict__all_missing_declared_categorical_then_strings(
     assert np.isfinite(proba).all()
 
 
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+@pytest.mark.parametrize(
+    ("fit_value", "predict_value"),
+    [
+        pytest.param(np.nan, "ACTING DEPUTY PRINCIPAL", id="all_nan_then_string"),
+        pytest.param("a", "b", id="single_string_then_unseen_string"),
+    ],
+)
+def test__fit_predict__constant_column_carries_no_information_at_predict(
+    estimator_cls: type[TabPFNClassifier | TabPFNRegressor],
+    fit_value: object,
+    predict_value: object,
+) -> None:
+    """An all-NaN object column is numeric at fit, so a string in it at predict
+    used to crash with `could not convert string to float`.
+    """
+    rng = np.random.default_rng(0)
+    n = 60
+    X = pd.DataFrame(
+        {"x": rng.normal(size=n), "note": np.array([fit_value] * n, dtype=object)}
+    )
+    y = X["x"] * 2
+    if estimator_cls is TabPFNClassifier:
+        y = (y > 0).astype(int)
+    X_test = X.iloc[:5].copy()
+    X_test.loc[X_test.index[0], "note"] = predict_value
+
+    model = estimator_cls(n_estimators=1, device="cpu", random_state=0).fit(X, y)
+
+    np.testing.assert_array_equal(model.predict(X_test), model.predict(X.iloc[:5]))
+
+
+def test__clean_data_transform__all_nan_column_with_integer_predict_array() -> None:
+    schema = FeatureSchema(
+        features=[
+            Feature(name="x", modality=FeatureModality.NUMERICAL),
+            Feature(name="empty", modality=FeatureModality.CONSTANT),
+        ]
+    )
+    _, ord_encoder, _ = clean_data(np.array([[1.0, np.nan], [2.0, np.nan]]), schema)
+
+    X_out = clean_data_transform(
+        np.array([[3, 7]]), cat_indices=[], ord_encoder=ord_encoder
+    )
+
+    np.testing.assert_array_equal(X_out, [[3.0, np.nan]])
+
+
 def test__classifier_fit__string_category_plus_nullable_dtype() -> None:
     """A string category alongside a pandas nullable dtype must not crash at fit.
 

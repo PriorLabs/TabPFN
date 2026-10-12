@@ -928,6 +928,7 @@ def test__process_text_na_dataframe__single_float_block_round_trips_infs() -> No
     assert got_neg[3, 2]
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(PANDAS_BELOW_3, reason="native pandas <3.0.0 is faster and in use")
 def test__inf_mask__per_block_path_not_slower_than_pandas_on_fragmented() -> None:
     """On a fragmented frame the per-block numpy path beats pure pandas.
@@ -959,6 +960,7 @@ def test__inf_mask__per_block_path_not_slower_than_pandas_on_fragmented() -> Non
     )
 
 
+@pytest.mark.slow
 def test__inf_mask__pandas_path_not_slower_than_per_block_on_single_block() -> None:
     """On a consolidated float frame the fast pandas path beats per-block numpy.
 
