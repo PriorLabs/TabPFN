@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 from typing import Literal, overload
 from typing_extensions import override
 
@@ -1134,6 +1135,8 @@ def _record_additional_inputs(
     original = architecture.forward
     calls: list[object] = []
 
+    # Keeps the original signature visible, so `task_type` is still passed.
+    @functools.wraps(original)
     def forward(
         self: object,
         *args: object,
