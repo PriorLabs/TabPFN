@@ -1117,7 +1117,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
         get_preprocessed_datasets. This function always uses the "batched" fit_mode.
-        Does not support `additional_inputs`; clears any given to an earlier `fit`.
+        Raises if an earlier `fit` was given `additional_inputs`.
 
         Args:
             X_preprocessed: The input features obtained from the preprocessed Dataset
@@ -1132,6 +1132,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
+        if self.additional_inputs_ is not None:
+            raise TabPFNValidationError(
+                "fit_from_preprocessed does not support additional_inputs."
+            )
         if self.fit_mode != "batched":
             logging.warning(
                 "The model was not in 'batched' mode. "
@@ -1162,7 +1166,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # duration, like any fitted one.
         self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
         self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
-        self.additional_inputs_ = None
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(

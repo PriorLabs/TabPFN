@@ -1619,7 +1619,7 @@ def test__tabpfn_classifier__fit_from_preprocessed_runs(
         break
 
 
-def test__fit_from_preprocessed__after_fit_with_additional_inputs__clears_them(
+def test__fit_from_preprocessed__after_fit_with_additional_inputs__raises(
     classifier_instance: TabPFNClassifier,
     classification_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ) -> None:
@@ -1633,17 +1633,14 @@ def test__fit_from_preprocessed__after_fit_with_additional_inputs__clears_them(
     clf.fit_mode = "fit_preprocessors"
     clf.fit(X_train, y_train, additional_inputs={"anything": 1})
 
-    clf.fit_from_preprocessed(
-        batch.X_context,
-        batch.y_context,
-        cast(list[list[list[int]]], batch.cat_indices),
-        batch.configs,
-        performance_options=PerformanceOptions(),
-    )
-    preds = clf.forward(batch.X_query)
-
-    assert clf.additional_inputs_ is None
-    assert preds.shape[0] == batch.X_query[0].shape[0]
+    with pytest.raises(TabPFNValidationError, match="additional_inputs"):
+        clf.fit_from_preprocessed(
+            batch.X_context,
+            batch.y_context,
+            cast(list[list[list[int]]], batch.cat_indices),
+            batch.configs,
+            performance_options=PerformanceOptions(),
+        )
 
 
 def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() -> None:

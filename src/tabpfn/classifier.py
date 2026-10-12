@@ -58,7 +58,7 @@ from tabpfn.downsample_correction import (
     context_class_prior,
     downsample_class_weights,
 )
-from tabpfn.errors import handle_oom_errors
+from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -1048,7 +1048,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
         get_preprocessed_datasets. This function always uses the "batched" fit_mode.
-        Does not support `additional_inputs`; clears any given to an earlier `fit`.
+        Raises if an earlier `fit` was given `additional_inputs`.
 
         Args:
             X_preprocessed: The input features obtained from the preprocessed Dataset
@@ -1063,6 +1063,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
+        if self.additional_inputs_ is not None:
+            raise TabPFNValidationError(
+                "fit_from_preprocessed does not support additional_inputs."
+            )
         if self.fit_mode != "batched":
             logging.warning(
                 "The model was not in 'batched' mode. "
@@ -1101,7 +1105,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # duration, like any fitted one.
         self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
         self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
-        self.additional_inputs_ = None
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
