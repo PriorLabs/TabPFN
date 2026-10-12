@@ -789,9 +789,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         if additional_inputs is not None:
-            raise TabPFNValidationError(
-                "Batched inference does not support `additional_inputs`."
-            )
+            raise TabPFNValidationError("Batched inference takes no additional_inputs.")
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
 
