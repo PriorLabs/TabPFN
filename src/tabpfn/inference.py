@@ -376,8 +376,8 @@ class InferenceEngine(ABC):
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
             task_type: The task type, e.g. "multiclass" or "regression".
-            additional_inputs: Passed to the model's forward untouched, with the
-                estimator index added, or None to pass nothing.
+            additional_inputs: Passed to the model's forward as is, or None to
+                pass nothing.
         """
         ...
 
@@ -657,7 +657,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                         members=members,
                         X_tests=[em.transform_X_test(X) for em in members],
                         additional_inputs=additional_inputs,
-                        estimator_indices=groups[-1],
                         autocast=autocast,
                         only_return_standard_out=only_return_standard_out,
                         save_peak_mem=save_peak_mem,
@@ -691,7 +690,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         members: list[TabPFNEnsembleMember],
         X_tests: list[torch.Tensor | np.ndarray],
         additional_inputs: dict[str, Any] | None,
-        estimator_indices: list[int],
         autocast: bool,
         only_return_standard_out: bool,
         save_peak_mem: bool,
@@ -708,7 +706,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             members=members,
             X_tests=X_tests,
             additional_inputs=additional_inputs,
-            estimator_indices=estimator_indices,
             force_inference_dtype=self.force_inference_dtype,
             autocast=autocast,
             inference_mode=True,
@@ -976,7 +973,6 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 members=[members[i] for i in group],
                 X_tests=[_transform_X_test(members[i]) for i in group],
                 additional_inputs=additional_inputs,
-                estimator_indices=group,
                 autocast=autocast,
                 only_return_standard_out=only_return_standard_out,
                 save_peak_mem=save_peak_mem,
@@ -1012,7 +1008,6 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         members: list[TabPFNEnsembleMember],
         X_tests: list[torch.Tensor | np.ndarray],
         additional_inputs: dict[str, Any] | None,
-        estimator_indices: list[int],
         autocast: bool,
         only_return_standard_out: bool,
         save_peak_mem: bool,
@@ -1029,7 +1024,6 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             members=members,
             X_tests=X_tests,
             additional_inputs=additional_inputs,
-            estimator_indices=estimator_indices,
             force_inference_dtype=self.force_inference_dtype,
             autocast=autocast,
             inference_mode=self.inference_mode,
@@ -1575,7 +1569,6 @@ def _call_model_on_members(  # noqa: PLR0913
     members: list[TabPFNEnsembleMember],
     X_tests: list[torch.Tensor | np.ndarray],
     additional_inputs: dict[str, Any] | None,
-    estimator_indices: list[int],
     force_inference_dtype: torch.dtype | None,
     autocast: bool,
     inference_mode: bool,
@@ -1587,8 +1580,7 @@ def _call_model_on_members(  # noqa: PLR0913
 
     Members whose prepared inputs share a shape run as one forward with the members
     along the batch dimension. Returns each forward's output with the positions in
-    ``members`` it holds. With ``additional_inputs``, the forward also gets one copy
-    of them per member of the batch, each with its ``estimator_index`` added.
+    ``members`` it holds. ``additional_inputs``, if given, go to the forward as is.
     """
     model = model_caches[members[0].config._model_index].get(device)
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
@@ -1614,14 +1606,13 @@ def _call_model_on_members(  # noqa: PLR0913
     kwargs: dict[str, Any] = {}
     if _model_expectes_task_type_arg(model):
         kwargs["task_type"] = task_type
-    if (
-        additional_inputs is not None
-        and "additional_inputs" not in signature(model.forward).parameters
-    ):
-        raise TabPFNValidationError(
-            f"`additional_inputs` were given, but the forward of "
-            f"{type(model).__name__} does not take them."
-        )
+    if additional_inputs is not None:
+        if "additional_inputs" not in signature(model.forward).parameters:
+            raise TabPFNValidationError(
+                f"`additional_inputs` were given, but the forward of "
+                f"{type(model).__name__} does not take them."
+            )
+        kwargs["additional_inputs"] = additional_inputs
 
     # GPU preprocessing may have changed the members' widths, so the group is
     # refined by the prepared shapes.
@@ -1631,11 +1622,6 @@ def _call_model_on_members(  # noqa: PLR0913
         X, y = _batch_member_inputs(
             [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
         )
-        if additional_inputs is not None:
-            kwargs["additional_inputs"] = [
-                {**additional_inputs, "estimator_index": estimator_indices[i]}
-                for i in positions
-            ]
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(inference_mode),

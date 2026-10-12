@@ -1149,26 +1149,23 @@ def _record_additional_inputs(
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 @pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
-def test__predict__with_additional_inputs__forward_gets_them_per_estimator(
+def test__predict__with_additional_inputs__forward_gets_fit_s_updated_by_predict_s(
     estimator_cls: type, fit_mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _record_additional_inputs(estimator_cls, monkeypatch)
     X, y = sklearn.datasets.make_classification(
         n_samples=40, n_features=4, random_state=0
     )
-    fit_inputs = {"anything": object()}
-    predict_inputs = {"anything": object()}
+    only_fit, only_predict = object(), object()
 
     model = estimator_cls(n_estimators=2, device="cpu", fit_mode=fit_mode)
-    model.fit(X, y, additional_inputs=fit_inputs)
+    model.fit(X, y, additional_inputs={"a": only_fit, "shared": 1})
     calls.clear()
-    model.predict(X[:5], additional_inputs=predict_inputs)
+    model.predict(X[:5], additional_inputs={"b": only_predict, "shared": 2})
 
-    handed = [member for call in calls for member in call]  # type: ignore[attr-defined]
-    assert sorted(m["estimator_index"] for m in handed) == [0, 1]
-    for member in handed:
-        assert member["fit"] is fit_inputs
-        assert member["predict"] is predict_inputs
+    assert calls
+    for call in calls:
+        assert call == {"a": only_fit, "b": only_predict, "shared": 2}
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])

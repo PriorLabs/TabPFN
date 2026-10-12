@@ -47,9 +47,9 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     expand_dates_and_text,
-    forward_additional_inputs,
     get_embeddings,
     initialize_model_variables_helper,
+    merge_additional_inputs,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
@@ -1287,11 +1287,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Args:
             X: The input data.
             y: The target variable.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["fit"]`, next to the predict call's own as
-                `additional_inputs["predict"]`. The forward gets one such dict per
-                estimator in its batch, with that estimator's `"estimator_index"`
-                added, and train rows in the order of `X`.
+            additional_inputs: Passed to the model's forward as is, updated with
+                the `additional_inputs` of the predict call. The forward sees the
+                train rows in the order of `X`.
 
         Returns:
             self
@@ -1455,8 +1453,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned. The predictions per quantile match
                 the input order.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
@@ -1709,8 +1707,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
@@ -2232,7 +2230,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X,
             autocast=self.use_autocast_,
             task_type="regression",
-            additional_inputs=forward_additional_inputs(
+            additional_inputs=merge_additional_inputs(
                 getattr(self, "additional_inputs_", None), additional_inputs
             ),
         ):

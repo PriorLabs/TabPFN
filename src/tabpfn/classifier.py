@@ -39,9 +39,9 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     expand_dates_and_text,
-    forward_additional_inputs,
     get_embeddings,
     initialize_model_variables_helper,
+    merge_additional_inputs,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
@@ -956,11 +956,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Args:
             X: The input data.
             y: The target variable.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["fit"]`, next to the predict call's own as
-                `additional_inputs["predict"]`. The forward gets one such dict per
-                estimator in its batch, with that estimator's `"estimator_index"`
-                added, and train rows in the order of `X`.
+            additional_inputs: Passed to the model's forward as is, updated with
+                the `additional_inputs` of the predict call. The forward sees the
+                train rows in the order of `X`.
 
         Returns:
             self
@@ -1616,8 +1614,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                            post-processing steps.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The raw torch.Tensor output, either logits or probabilities,
@@ -1660,8 +1658,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The predicted class labels as a NumPy array.
@@ -1684,8 +1682,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The predicted logits as a NumPy array. Shape (n_samples, n_classes).
@@ -1708,8 +1706,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             An array of predicted logits for each estimator,
@@ -1732,8 +1730,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
@@ -1749,8 +1747,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
@@ -1975,8 +1973,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Otherwise, probabilities are returned.
             return_raw_logits: If True, returns the raw logits, without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed to the model's forward untouched, as
-                `additional_inputs["predict"]`; see `fit`.
+            additional_inputs: Passed to the model's forward as is, on top of
+                the `additional_inputs` given to `fit`.
 
         Returns:
             The predicted probabilities or logits of the classes as a torch.Tensor.
@@ -2044,7 +2042,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 X,
                 autocast=self.use_autocast_,
                 task_type="multiclass",
-                additional_inputs=forward_additional_inputs(
+                additional_inputs=merge_additional_inputs(
                     getattr(self, "additional_inputs_", None), additional_inputs
                 ),
             ),
