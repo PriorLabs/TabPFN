@@ -1117,3 +1117,106 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             "int8", architecture=arch, device=torch.device("cpu")
         )
     assert resolved == "auto"
+
+
+_NOT_PASSED = object()
+
+
+def _record_additional_inputs(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> list[object]:
+    """Give the model's forward `additional_inputs`; record what each call gets."""
+    X, y = sklearn.datasets.make_classification(
+        n_samples=30, n_features=4, random_state=0
+    )
+    probe = estimator_cls(n_estimators=1, device="cpu").fit(X, y)
+    architecture = type(probe.models_[0])
+    original = architecture.forward
+    calls: list[object] = []
+
+    def forward(
+        self: object,
+        *args: object,
+        additional_inputs: object = _NOT_PASSED,
+        **kwargs: object,
+    ) -> object:
+        calls.append(additional_inputs)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(architecture, "forward", forward)
+    return calls
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+@pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
+def test__predict__with_additional_inputs__forward_gets_them_per_estimator(
+    estimator_cls: type, fit_mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _record_additional_inputs(estimator_cls, monkeypatch)
+    X, y = sklearn.datasets.make_classification(
+        n_samples=40, n_features=4, random_state=0
+    )
+    fit_inputs = {"anything": object()}
+    predict_inputs = {"anything": object()}
+
+    model = estimator_cls(n_estimators=2, device="cpu", fit_mode=fit_mode)
+    model.fit(X, y, additional_inputs=fit_inputs)
+    calls.clear()
+    model.predict(X[:5], additional_inputs=predict_inputs)
+
+    handed = [member for call in calls for member in call]  # type: ignore[attr-defined]
+    assert sorted(m["estimator_index"] for m in handed) == [0, 1]
+    for member in handed:
+        assert member["fit"] is fit_inputs
+        assert member["predict"] is predict_inputs
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__predict__without_additional_inputs__forward_gets_no_argument(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _record_additional_inputs(estimator_cls, monkeypatch)
+    X, y = sklearn.datasets.make_classification(
+        n_samples=40, n_features=4, random_state=0
+    )
+
+    model = estimator_cls(n_estimators=2, device="cpu").fit(X, y)
+    calls.clear()
+    model.predict(X[:5])
+
+    assert calls
+    assert all(call is _NOT_PASSED for call in calls)
+
+
+def test__predict__with_additional_inputs_and_a_forward_without_them__is_refused() -> (
+    None
+):
+    X, y = sklearn.datasets.make_classification(
+        n_samples=40, n_features=4, random_state=0
+    )
+
+    model = TabPFNClassifier(n_estimators=1, device="cpu")
+    model.fit(X, y, additional_inputs={"anything": 1})
+    with pytest.raises(TabPFNValidationError, match="additional_inputs"):
+        model.predict(X[:5])
+
+
+@pytest.mark.parametrize(
+    ("fit_mode", "inference_config"),
+    [("fit_with_cache", None), ("fit_preprocessors", {"SUBSAMPLE_SAMPLES": 20})],
+)
+def test__fit__with_additional_inputs_where_rows_differ__is_refused(
+    fit_mode: str, inference_config: dict | None
+) -> None:
+    X, y = sklearn.datasets.make_classification(
+        n_samples=40, n_features=4, random_state=0
+    )
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        fit_mode=fit_mode,
+        inference_config=inference_config,
+    )
+    with pytest.raises(TabPFNValidationError, match="additional_inputs"):
+        model.fit(X, y, additional_inputs={"anything": 1})

@@ -42,10 +42,12 @@ from tqdm.auto import tqdm
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     ModelSpecs,
+    check_additional_inputs,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
     expand_dates_and_text,
+    forward_additional_inputs,
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
@@ -1277,12 +1279,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return self
 
     @config_context(transform_output="default")  # type: ignore
-    def fit(self, X: XType, y: YType) -> Self:
+    def fit(
+        self, X: XType, y: YType, *, additional_inputs: dict[str, Any] | None = None
+    ) -> Self:
         """Fit the model.
 
         Args:
             X: The input data.
             y: The target variable.
+            additional_inputs: Passed to the model's forward untouched, as
+                `additional_inputs["fit"]`, next to the predict call's own as
+                `additional_inputs["predict"]`. The forward gets one such dict per
+                estimator in its batch, with that estimator's `"estimator_index"`
+                added, and train rows in the order of `X`.
 
         Returns:
             self
@@ -1311,6 +1320,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
+        check_additional_inputs(
+            additional_inputs,
+            fit_mode=self.fit_mode,
+            inference_config=self.inference_config_,
+        )
+        self.additional_inputs_ = additional_inputs
         ensemble_configs, X, y, znorm_space_bardist = (
             self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
@@ -1373,6 +1388,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["mean", "median", "mode"] = "mean",
         quantiles: list[float] | None = None,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> np.ndarray: ...
 
     @overload
@@ -1382,6 +1398,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["quantiles"],
         quantiles: list[float] | None = None,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> list[np.ndarray]: ...
 
     @overload
@@ -1391,6 +1408,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["main"],
         quantiles: list[float] | None = None,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> MainOutputDict: ...
 
     @overload
@@ -1400,6 +1418,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["full"],
         quantiles: list[float] | None = None,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
@@ -1410,6 +1429,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # TODO: support "ei", "pi"
         output_type: OutputType = "mean",
         quantiles: list[float] | None = None,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> RegressionResultType:
         """Runs the forward() method and then transform the logits
         from the binning space in order to predict target variable.
@@ -1435,6 +1455,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned. The predictions per quantile match
                 the input order.
+            additional_inputs: Passed to the model's forward untouched, as
+                `additional_inputs["predict"]`; see `fit`.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
@@ -1462,7 +1484,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        logits = self._compute_aggregated_logits(X)
+        logits = self._compute_aggregated_logits(X, additional_inputs=additional_inputs)
 
         # Determine and return intended output type
         logit_to_output = partial(
@@ -1662,7 +1684,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return holdout_folds
 
     def _compute_aggregated_logits(
-        self, X: XType, *, apply_downsample_correction: bool = True
+        self,
+        X: XType,
+        *,
+        apply_downsample_correction: bool = True,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Run the ensemble and aggregate it into one log-probability tensor.
 
@@ -1683,6 +1709,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
+            additional_inputs: Passed to the model's forward untouched, as
+                `additional_inputs["predict"]`; see `fit`.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
@@ -1708,7 +1736,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_train_samples=getattr(self, "n_train_samples_", None),
         ):
             for borders_t, output in tqdm(
-                self._iter_forward_executor(X, use_inference_mode=True),
+                self._iter_forward_executor(
+                    X, use_inference_mode=True, additional_inputs=additional_inputs
+                ),
                 total=self.n_estimators_,
                 desc="TabPFN inference",
                 unit="estimator",
@@ -2157,6 +2187,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[np.ndarray, torch.Tensor]]:
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
@@ -2198,7 +2229,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
         temperature = resolved_softmax_temperature(self)
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_, task_type="regression"
+            X,
+            autocast=self.use_autocast_,
+            task_type="regression",
+            additional_inputs=forward_additional_inputs(
+                getattr(self, "additional_inputs_", None), additional_inputs
+            ),
         ):
             output = output.float()  # noqa: PLW2901
             if temperature != 1:

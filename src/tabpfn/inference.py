@@ -13,7 +13,7 @@ from copy import copy, deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -25,6 +25,7 @@ from tabpfn.architectures.shared.workaround_mps_linear_bug import (
     maybe_replace_linears_on_mps,
 )
 from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
@@ -364,6 +365,7 @@ class InferenceEngine(ABC):
         *,
         autocast: bool,
         task_type: str,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model for each ensemble configuration.
 
@@ -374,6 +376,8 @@ class InferenceEngine(ABC):
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
             task_type: The task type, e.g. "multiclass" or "regression".
+            additional_inputs: Passed to the model's forward untouched, with the
+                estimator index added, or None to pass nothing.
         """
         ...
 
@@ -596,6 +600,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         devices = self.get_devices()
         save_peak_mem = should_save_peak_mem(
@@ -651,6 +656,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                         self._call_model,
                         members=members,
                         X_tests=[em.transform_X_test(X) for em in members],
+                        additional_inputs=additional_inputs,
+                        estimator_indices=groups[-1],
                         autocast=autocast,
                         only_return_standard_out=only_return_standard_out,
                         save_peak_mem=save_peak_mem,
@@ -683,6 +690,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         device: torch.device,
         members: list[TabPFNEnsembleMember],
         X_tests: list[torch.Tensor | np.ndarray],
+        additional_inputs: dict[str, Any] | None,
+        estimator_indices: list[int],
         autocast: bool,
         only_return_standard_out: bool,
         save_peak_mem: bool,
@@ -698,6 +707,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             device=device,
             members=members,
             X_tests=X_tests,
+            additional_inputs=additional_inputs,
+            estimator_indices=estimator_indices,
             force_inference_dtype=self.force_inference_dtype,
             autocast=autocast,
             inference_mode=True,
@@ -778,7 +789,12 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         *,
         autocast: bool,
         task_type: str,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
+        if additional_inputs is not None:
+            raise TabPFNValidationError(
+                "Batched inference does not support `additional_inputs`."
+            )
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
 
@@ -917,6 +933,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         devices = self.get_devices()
 
@@ -958,6 +975,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 self._call_model,
                 members=[members[i] for i in group],
                 X_tests=[_transform_X_test(members[i]) for i in group],
+                additional_inputs=additional_inputs,
+                estimator_indices=group,
                 autocast=autocast,
                 only_return_standard_out=only_return_standard_out,
                 save_peak_mem=save_peak_mem,
@@ -992,6 +1011,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         device: torch.device,
         members: list[TabPFNEnsembleMember],
         X_tests: list[torch.Tensor | np.ndarray],
+        additional_inputs: dict[str, Any] | None,
+        estimator_indices: list[int],
         autocast: bool,
         only_return_standard_out: bool,
         save_peak_mem: bool,
@@ -1007,6 +1028,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             device=device,
             members=members,
             X_tests=X_tests,
+            additional_inputs=additional_inputs,
+            estimator_indices=estimator_indices,
             force_inference_dtype=self.force_inference_dtype,
             autocast=autocast,
             inference_mode=self.inference_mode,
@@ -1320,7 +1343,12 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
+        additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        if additional_inputs is not None:
+            raise TabPFNValidationError(
+                'fit_mode="fit_with_cache" does not support `additional_inputs`.'
+            )
         devices = self.get_devices()
 
         if self.force_inference_dtype is not None:
@@ -1540,12 +1568,14 @@ def _concat_test_chunks(
     }
 
 
-def _call_model_on_members(
+def _call_model_on_members(  # noqa: PLR0913
     model_caches: list[_PerDeviceModelCache],
     *,
     device: torch.device,
     members: list[TabPFNEnsembleMember],
     X_tests: list[torch.Tensor | np.ndarray],
+    additional_inputs: dict[str, Any] | None,
+    estimator_indices: list[int],
     force_inference_dtype: torch.dtype | None,
     autocast: bool,
     inference_mode: bool,
@@ -1557,7 +1587,8 @@ def _call_model_on_members(
 
     Members whose prepared inputs share a shape run as one forward with the members
     along the batch dimension. Returns each forward's output with the positions in
-    ``members`` it holds.
+    ``members`` it holds. With ``additional_inputs``, the forward also gets one copy
+    of them per member of the batch, each with its ``estimator_index`` added.
     """
     model = model_caches[members[0].config._model_index].get(device)
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
@@ -1580,9 +1611,17 @@ def _call_model_on_members(
         if save_peak_mem
         else None,
     )
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if _model_expectes_task_type_arg(model):
         kwargs["task_type"] = task_type
+    if (
+        additional_inputs is not None
+        and "additional_inputs" not in signature(model.forward).parameters
+    ):
+        raise TabPFNValidationError(
+            f"`additional_inputs` were given, but the forward of "
+            f"{type(model).__name__} does not take them."
+        )
 
     # GPU preprocessing may have changed the members' widths, so the group is
     # refined by the prepared shapes.
@@ -1592,6 +1631,11 @@ def _call_model_on_members(
         X, y = _batch_member_inputs(
             [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
         )
+        if additional_inputs is not None:
+            kwargs["additional_inputs"] = [
+                {**additional_inputs, "estimator_index": estimator_indices[i]}
+                for i in positions
+            ]
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(inference_mode),
