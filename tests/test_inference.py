@@ -1203,16 +1203,14 @@ def test__predict__without_additional_inputs__forward_gets_no_argument(
     assert all(call is _NOT_PASSED for call in calls)
 
 
-def test__predict__with_additional_inputs_and_a_forward_without_them__is_refused() -> (
-    None
-):
+def test__predict__with_additional_inputs_and_a_forward_without_them__raises() -> None:
     X, y = sklearn.datasets.make_classification(
         n_samples=40, n_features=4, random_state=0
     )
 
     model = TabPFNClassifier(n_estimators=1, device="cpu")
     model.fit(X, y, additional_inputs={"anything": 1})
-    with pytest.raises(TabPFNValidationError, match="additional_inputs"):
+    with pytest.raises(TypeError, match="additional_inputs"):
         model.predict(X[:5])
 
 

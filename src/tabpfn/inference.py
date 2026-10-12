@@ -1602,11 +1602,6 @@ def _call_model_on_members(  # noqa: PLR0913
     if _model_expectes_task_type_arg(model):
         kwargs["task_type"] = task_type
     if additional_inputs is not None:
-        if "additional_inputs" not in signature(model.forward).parameters:
-            raise TabPFNValidationError(
-                f"`additional_inputs` were given, but the forward of "
-                f"{type(model).__name__} does not take them."
-            )
         kwargs["additional_inputs"] = additional_inputs
 
     # GPU preprocessing may have changed the members' widths, so the group is
