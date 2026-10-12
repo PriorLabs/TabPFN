@@ -8,6 +8,7 @@ Thanks for helping improve TabPFN. Bug reports, fixes, docs and use cases are al
 - Fill in the pull request template, including a changelog fragment (see [`changelog/README.md`](changelog/README.md)).
 - Keep each PR focused on one change, with tests that fail before the change and pass after it.
 - External contributors can have at most **3 open pull requests** at a time. We may close additional ones without review; reopen them once earlier ones are merged or closed.
+- The first time you open a pull request, you'll be asked to sign our Contributor License Agreement (CLA).
 
 ## What we fix
 
@@ -21,12 +22,18 @@ You may use AI tools to write code, tests, docs or issues. We follow the same pr
 
 1. **A human owns it.** You have reviewed every change, understand it and can explain it in your own words. You're responsible for its correctness, licensing and tests, as with code you typed yourself.
 2. **Disclose it.** Tick the AI-assistance box in the pull request or issue template and say briefly how AI was used.
-3. **Answer reviews yourself.** Respond to review comments personally. Don't paste in AI-generated replies to reviewer questions.
-4. **No fully automated submissions.** Agents must not open pull requests or issues without a human reviewing each one before it is submitted.
+3. **Speak for yourself.** Respond to review comments personally. Don't paste in AI-generated replies to reviewer questions. Using AI to translate or fix grammar is fine. If an AI tool wrote your pull request description, start it with a short summary of the changes in your own words.
+4. **No fully automated submissions.** Agents must not open pull requests or issues without a human reviewing each one before it is submitted. Automation set up by the maintainers, such as Dependabot, is exempt.
 5. **Report real problems.** Issues should describe a problem you or a user actually ran into, or one you have reproduced with the minimal example in the bug template. Bulk-filed reports from automated bug-hunting are not welcome.
 
 ## When the guidelines aren't followed
 
-Maintainers may close any pull request or issue that doesn't follow this page, without a detailed review, linking to the relevant section. If a contributor keeps breaking these guidelines after that, we may block them from the repository.
+Maintainers may close any pull request or issue that doesn't follow this page, without a detailed review, linking to the relevant section. If a contributor keeps breaking these guidelines after that, we may block them from the repository. A block needs two maintainers to agree.
+
+If you think we closed something by mistake, reply on the pull request or issue and a maintainer will take another look.
 
 This isn't personal. Maintainer time is limited, and these rules let us spend it on contributions where a person is engaged.
+
+Maintainers can close with this message:
+
+> Thanks for the contribution. We're closing this because it doesn't follow our [contribution guidelines](https://github.com/PriorLabs/TabPFN/blob/main/CONTRIBUTING.md): \<reason, with a link to the relevant section\>. If you think we got this wrong, reply here and a maintainer will take another look.
