@@ -34,7 +34,7 @@ from tqdm.auto import tqdm
 
 from tabpfn.base import (
     ModelSpecs,
-    check_additional_inputs,
+    _check_additional_inputs,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -980,7 +980,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        check_additional_inputs(
+        _check_additional_inputs(
             additional_inputs,
             fit_mode=self.fit_mode,
             inference_config=self.inference_config_,
@@ -1613,8 +1613,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                            post-processing steps.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The raw torch.Tensor output, either logits or probabilities,
@@ -1657,8 +1656,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted class labels as a NumPy array.
@@ -1681,8 +1679,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted logits as a NumPy array. Shape (n_samples, n_classes).
@@ -1705,8 +1702,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             An array of predicted logits for each estimator,
@@ -1729,8 +1725,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
@@ -1746,22 +1741,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
-        probas = (
-            self._raw_predict(
-                X, return_logits=False, additional_inputs=additional_inputs
-            )
-            .float()
-            .detach()
-            .cpu()
-            .numpy()
+        probas_tensor = self._raw_predict(
+            X, return_logits=False, additional_inputs=additional_inputs
         )
+        probas = probas_tensor.float().detach().cpu().numpy()
         probas = self._maybe_reweight_probas(probas=probas)
         if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
             probas = np.around(probas, decimals=SKLEARN_16_DECIMAL_PRECISION)
@@ -1972,8 +1961,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Otherwise, probabilities are returned.
             return_raw_logits: If True, returns the raw logits, without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The predicted probabilities or logits of the classes as a torch.Tensor.

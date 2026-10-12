@@ -415,7 +415,7 @@ def create_inference_engine(  # noqa: PLR0913
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
-def check_additional_inputs(
+def _check_additional_inputs(
     additional_inputs: dict[str, Any] | None,
     *,
     fit_mode: str,

@@ -42,7 +42,7 @@ from tqdm.auto import tqdm
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     ModelSpecs,
-    check_additional_inputs,
+    _check_additional_inputs,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -1317,7 +1317,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        check_additional_inputs(
+        _check_additional_inputs(
             additional_inputs,
             fit_mode=self.fit_mode,
             inference_config=self.inference_config_,
@@ -1452,8 +1452,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned. The predictions per quantile match
                 the input order.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
@@ -1706,8 +1705,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
-            additional_inputs: Passed as is to the model's forward; None uses
-                the `additional_inputs` given to `fit`.
+            additional_inputs: Passed as is to the model's forward.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
