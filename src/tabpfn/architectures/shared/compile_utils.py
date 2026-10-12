@@ -24,13 +24,14 @@ import torch
 from torch.torch_version import TorchVersion
 
 F = TypeVar("F", bound=Callable[..., Any])
+R = TypeVar("R")
 
 
-def compile_when_enabled(fn: F) -> F:
+def compile_when_enabled(fn: Callable[..., R]) -> Callable[..., R]:
     """Compile a tensor region when its ``enable_torch_compile`` keyword is true.
 
-    The decorated function must accept that keyword, defaulting to False. Its
-    callers and all undecorated functions stay eager. Compiler initialization is
+    The wrapper consumes the keyword, defaulting to False. When an outer graph
+    is already being compiled, the function is traced directly. Initialization is
     lazy, and the cached callable takes the module as an ordinary argument, so
     no compiled callables or compilation settings enter model state/pickles.
 
@@ -39,13 +40,13 @@ def compile_when_enabled(fn: F) -> F:
     avoid accidental equality guards when, for example, batch size initially
     equals the number of CLS tokens. Model embedding/parameter sizes stay static.
     """
-    compiled_fn: Callable[..., Any] | None = None
+    compiled_fn: Callable[..., R] | None = None
     init_lock = threading.Lock()
 
     @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: Any, enable_torch_compile: bool = False, **kwargs: Any) -> R:
         nonlocal compiled_fn
-        if not kwargs.get("enable_torch_compile", False):
+        if not enable_torch_compile or torch.compiler.is_compiling():
             return fn(*args, **kwargs)
         if TorchVersion(torch.__version__) < TorchVersion("2.6"):
             raise ValueError(
@@ -61,7 +62,7 @@ def compile_when_enabled(fn: F) -> F:
                     compiled_fn = torch.compile(fn, dynamic=True, fullgraph=False)
         return compiled_fn(*args, **kwargs)
 
-    return wrapper  # type: ignore[return-value]
+    return wrapper
 
 
 def lazy_compiler_disable(fn: F) -> F:

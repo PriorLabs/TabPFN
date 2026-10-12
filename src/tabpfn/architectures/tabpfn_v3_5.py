@@ -1452,10 +1452,7 @@ class CrossAttentionBlock(nn.Module):
         self,
         x_BQE: torch.Tensor,
         context_BVE: torch.Tensor,
-        *,
-        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
-        del enable_torch_compile  # Consumed by the region decorator.
         attn_out = self.attn(
             self.layernorm_q(x_BQE),
             self.layernorm_kv(context_BVE),
@@ -1522,17 +1519,11 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         rope: RotaryEmbedding,
-        *,
-        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
-        del enable_torch_compile
         return self.attention(self.layernorm(x), rope=rope)
 
     @compile_when_enabled
-    def _mlp_delta(
-        self, x: torch.Tensor, *, enable_torch_compile: bool = False
-    ) -> torch.Tensor:
-        del enable_torch_compile
+    def _mlp_delta(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp(self.layernorm_mlp(x))
 
     @compile_when_enabled
@@ -1541,14 +1532,11 @@ class TransformerBlock(nn.Module):
         query_BRQE: torch.Tensor,
         context_BRCE: torch.Tensor,
         rope: RotaryEmbedding,
-        *,
-        enable_torch_compile: bool = False,
     ) -> torch.Tensor:
         """Cross-attention variant: query attends to context.
 
         Used in ColumnAggregator for the last CLS-readout block.
         """
-        del enable_torch_compile
         B, R, Q, _ = query_BRQE.shape
         _, _, V, E = context_BRCE.shape
 

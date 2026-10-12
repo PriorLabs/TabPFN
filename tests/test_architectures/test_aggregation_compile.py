@@ -105,8 +105,7 @@ def test__compiled_region__concurrent_first_calls__initialize_once(
     monkeypatch.setattr(torch, "compile", compile_region)
 
     @compile_when_enabled
-    def region(layer, x, *, enable_torch_compile=False) -> torch.Tensor:
-        del enable_torch_compile
+    def region(layer, x) -> torch.Tensor:
         return layer(x)
 
     layers = [torch.nn.Linear(4, 4).eval() for _ in range(2)]
