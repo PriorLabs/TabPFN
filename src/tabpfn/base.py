@@ -422,9 +422,7 @@ def _set_additional_inputs(
     """Store `additional_inputs`, refusing the settings that do not support them."""
     if additional_inputs is not None:
         if estimator.fit_mode == "fit_with_cache":
-            raise TabPFNValidationError(
-                'fit_mode="fit_with_cache" does not support `additional_inputs`.'
-            )
+            raise TabPFNValidationError("fit_with_cache takes no additional_inputs.")
         if estimator.inference_config_.SUBSAMPLE_SAMPLES is not None:
             raise TabPFNValidationError(
                 "`SUBSAMPLE_SAMPLES` does not support `additional_inputs`: each "

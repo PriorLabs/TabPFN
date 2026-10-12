@@ -376,8 +376,7 @@ class InferenceEngine(ABC):
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
             task_type: The task type, e.g. "multiclass" or "regression".
-            additional_inputs: Passed to the model's forward as is, or None to
-                pass nothing.
+            additional_inputs: Passed as is to the model's forward.
         """
         ...
 
@@ -1338,9 +1337,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         additional_inputs: dict[str, Any] | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         if additional_inputs is not None:
-            raise TabPFNValidationError(
-                'fit_mode="fit_with_cache" does not support `additional_inputs`.'
-            )
+            raise TabPFNValidationError("fit_with_cache takes no additional_inputs.")
         devices = self.get_devices()
 
         if self.force_inference_dtype is not None:
