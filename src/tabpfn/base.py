@@ -8,7 +8,7 @@ import dataclasses
 import pathlib
 import typing
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -413,6 +413,24 @@ def create_inference_engine(  # noqa: PLR0913
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
+
+
+def _set_additional_inputs(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    additional_inputs: dict[str, Any] | None,
+) -> None:
+    """Store `additional_inputs`, refusing the settings that do not support them."""
+    if additional_inputs is not None:
+        if estimator.fit_mode == "fit_with_cache":
+            raise TabPFNValidationError(
+                'fit_mode="fit_with_cache" does not support `additional_inputs`.'
+            )
+        if estimator.inference_config_.SUBSAMPLE_SAMPLES is not None:
+            raise TabPFNValidationError(
+                "`SUBSAMPLE_SAMPLES` does not support `additional_inputs`: each "
+                "estimator would see a different subset of the rows of `X`."
+            )
+    estimator.additional_inputs_ = additional_inputs
 
 
 def resolve_categorical_features_indices(
