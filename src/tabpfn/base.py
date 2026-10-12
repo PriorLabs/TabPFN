@@ -415,21 +415,6 @@ def create_inference_engine(  # noqa: PLR0913
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
-def _check_additional_inputs(estimator: TabPFNClassifier | TabPFNRegressor) -> None:
-    """Refuse `additional_inputs_` with the settings that do not support them."""
-    if estimator.additional_inputs_ is None:
-        return
-    if estimator.fit_mode == "fit_with_cache":
-        raise TabPFNValidationError(
-            'fit_mode="fit_with_cache" does not support `additional_inputs`.'
-        )
-    if estimator.inference_config_.SUBSAMPLE_SAMPLES is not None:
-        raise TabPFNValidationError(
-            "`SUBSAMPLE_SAMPLES` does not support `additional_inputs`: each "
-            "estimator would see a different subset of the rows of `X`."
-        )
-
-
 def resolve_categorical_features_indices(
     X: XType,
     categorical_features_indices: Sequence[int] | None,

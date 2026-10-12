@@ -42,7 +42,6 @@ from tqdm.auto import tqdm
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     ModelSpecs,
-    _check_additional_inputs,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -1104,6 +1103,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return TabPFNRegressor(**params)
 
+    def _set_additional_inputs(self, additional_inputs: dict[str, Any] | None) -> None:
+        """Store `additional_inputs`, refusing the settings that do not support them."""
+        if additional_inputs is not None:
+            if self.fit_mode == "fit_with_cache":
+                raise TabPFNValidationError(
+                    'fit_mode="fit_with_cache" does not support `additional_inputs`.'
+                )
+            if self.inference_config_.SUBSAMPLE_SAMPLES is not None:
+                raise TabPFNValidationError(
+                    "`SUBSAMPLE_SAMPLES` does not support `additional_inputs`: each "
+                    "estimator would see a different subset of the rows of `X`."
+                )
+        self.additional_inputs_ = additional_inputs
+
     def fit_from_preprocessed(
         self,
         X_preprocessed: list[torch.Tensor],
@@ -1320,8 +1333,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        self.additional_inputs_ = additional_inputs
-        _check_additional_inputs(self)
+        self._set_additional_inputs(additional_inputs)
         ensemble_configs, X, y, znorm_space_bardist = (
             self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
