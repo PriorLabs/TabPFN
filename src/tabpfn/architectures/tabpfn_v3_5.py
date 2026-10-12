@@ -1502,9 +1502,7 @@ class TransformerBlock(nn.Module):
         enable_torch_compile: bool = False,
     ) -> torch.Tensor:
         x_BRCE = chunked_evaluate_maybe_inplace(
-            lambda x, rope: self._attention_delta(
-                x, rope, enable_torch_compile=enable_torch_compile
-            ),
+            partial(self._attention_delta, enable_torch_compile=enable_torch_compile),
             x_BRCE,
             save_peak_memory_factor=save_peak_memory_factor,
             residual=True,
@@ -1512,7 +1510,7 @@ class TransformerBlock(nn.Module):
             rope=rope,
         )
         return chunked_evaluate_maybe_inplace(
-            lambda x: self._mlp_delta(x, enable_torch_compile=enable_torch_compile),
+            partial(self._mlp_delta, enable_torch_compile=enable_torch_compile),
             x_BRCE,
             save_peak_memory_factor=save_peak_memory_factor,
             residual=True,

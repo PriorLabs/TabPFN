@@ -39,12 +39,12 @@ def compile_when_enabled(fn: F) -> F:
     avoid accidental equality guards when, for example, batch size initially
     equals the number of CLS tokens. Model embedding/parameter sizes stay static.
     """
-    compiled: Callable[..., Any] | None = None
+    compiled_fn: Callable[..., Any] | None = None
     init_lock = threading.Lock()
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        nonlocal compiled
+        nonlocal compiled_fn
         if not kwargs.get("enable_torch_compile", False):
             return fn(*args, **kwargs)
         if TorchVersion(torch.__version__) < TorchVersion("2.6"):
@@ -55,11 +55,11 @@ def compile_when_enabled(fn: F) -> F:
         for arg in (*args, *kwargs.values()):
             if isinstance(arg, torch.Tensor):
                 torch._dynamo.mark_dynamic(arg, list(range(arg.ndim - 1)))
-        if compiled is None:
+        if compiled_fn is None:
             with init_lock:
-                if compiled is None:
-                    compiled = torch.compile(fn, dynamic=True, fullgraph=False)
-        return compiled(*args, **kwargs)
+                if compiled_fn is None:
+                    compiled_fn = torch.compile(fn, dynamic=True, fullgraph=False)
+        return compiled_fn(*args, **kwargs)
 
     return wrapper  # type: ignore[return-value]
 
