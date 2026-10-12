@@ -1619,6 +1619,33 @@ def test__tabpfn_classifier__fit_from_preprocessed_runs(
         break
 
 
+def test__fit_from_preprocessed__after_fit_with_additional_inputs__clears_them(
+    classifier_instance: TabPFNClassifier,
+    classification_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+) -> None:
+    X_train, _X_test, y_train, _y_test = classification_data
+    clf = classifier_instance
+    split_fn = partial(train_test_split, test_size=0.3, random_state=42)
+    datasets_list = _get_classifier_dataset_chunks(clf, X_train, y_train, split_fn)
+    batch = next(
+        iter(DataLoader(datasets_list, batch_size=1, collate_fn=meta_dataset_collator))
+    )
+    clf.fit_mode = "fit_preprocessors"
+    clf.fit(X_train, y_train, additional_inputs={"anything": 1})
+
+    clf.fit_from_preprocessed(
+        batch.X_context,
+        batch.y_context,
+        cast(list[list[list[int]]], batch.cat_indices),
+        batch.configs,
+        performance_options=PerformanceOptions(),
+    )
+    preds = clf.forward(batch.X_query)
+
+    assert clf.additional_inputs_ is None
+    assert preds.shape[0] == batch.X_query[0].shape[0]
+
+
 def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() -> None:
     """Test consistency between standard and finetuning preprocessing pipelines.
 
