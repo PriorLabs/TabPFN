@@ -41,7 +41,6 @@ from tabpfn.base import (
     expand_dates_and_text,
     get_embeddings,
     initialize_model_variables_helper,
-    merge_additional_inputs,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
@@ -956,9 +955,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Args:
             X: The input data.
             y: The target variable.
-            additional_inputs: Passed to the model's forward as is, updated with
-                the `additional_inputs` of the predict call. The forward sees the
-                train rows in the order of `X`.
+            additional_inputs: Passed as is to the model's forward when
+                predicting, unless the predict call gives its own. The forward sees
+                the train rows in the order of `X`.
 
         Returns:
             self
@@ -1614,7 +1613,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                            post-processing steps.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1658,7 +1657,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1682,7 +1681,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1706,7 +1705,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1730,7 +1729,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1747,7 +1746,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1973,7 +1972,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Otherwise, probabilities are returned.
             return_raw_logits: If True, returns the raw logits, without
                 averaging estimators or temperature scaling.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -2042,8 +2041,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 X,
                 autocast=self.use_autocast_,
                 task_type="multiclass",
-                additional_inputs=merge_additional_inputs(
-                    getattr(self, "additional_inputs_", None), additional_inputs
+                additional_inputs=(
+                    additional_inputs
+                    if additional_inputs is not None
+                    else getattr(self, "additional_inputs_", None)
                 ),
             ),
             total=self.n_estimators_,

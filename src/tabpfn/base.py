@@ -439,15 +439,6 @@ def check_additional_inputs(
         )
 
 
-def merge_additional_inputs(
-    fit_inputs: dict[str, Any] | None, predict_inputs: dict[str, Any] | None
-) -> dict[str, Any] | None:
-    """The `additional_inputs` of `fit` updated with those of predict, or None."""
-    if fit_inputs is None and predict_inputs is None:
-        return None
-    return {**(fit_inputs or {}), **(predict_inputs or {})}
-
-
 def resolve_categorical_features_indices(
     X: XType,
     categorical_features_indices: Sequence[int] | None,

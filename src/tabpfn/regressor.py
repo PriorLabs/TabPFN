@@ -49,7 +49,6 @@ from tabpfn.base import (
     expand_dates_and_text,
     get_embeddings,
     initialize_model_variables_helper,
-    merge_additional_inputs,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
     resolved_n_estimators,
@@ -1287,9 +1286,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Args:
             X: The input data.
             y: The target variable.
-            additional_inputs: Passed to the model's forward as is, updated with
-                the `additional_inputs` of the predict call. The forward sees the
-                train rows in the order of `X`.
+            additional_inputs: Passed as is to the model's forward when
+                predicting, unless the predict call gives its own. The forward sees
+                the train rows in the order of `X`.
 
         Returns:
             self
@@ -1453,7 +1452,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned. The predictions per quantile match
                 the input order.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -1707,7 +1706,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
-            additional_inputs: Passed to the model's forward as is, on top of
+            additional_inputs: Passed as is to the model's forward; None uses
                 the `additional_inputs` given to `fit`.
 
         Returns:
@@ -2230,8 +2229,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X,
             autocast=self.use_autocast_,
             task_type="regression",
-            additional_inputs=merge_additional_inputs(
-                getattr(self, "additional_inputs_", None), additional_inputs
+            additional_inputs=(
+                additional_inputs
+                if additional_inputs is not None
+                else getattr(self, "additional_inputs_", None)
             ),
         ):
             output = output.float()  # noqa: PLW2901

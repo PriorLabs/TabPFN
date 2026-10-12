@@ -1149,23 +1149,26 @@ def _record_additional_inputs(
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 @pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
-def test__predict__with_additional_inputs__forward_gets_fit_s_updated_by_predict_s(
-    estimator_cls: type, fit_mode: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("pass_to_predict", [True, False])
+def test__predict__with_additional_inputs_given_to_fit__forward_gets_the_same_dict(
+    estimator_cls: type,
+    fit_mode: str,
+    pass_to_predict: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = _record_additional_inputs(estimator_cls, monkeypatch)
     X, y = sklearn.datasets.make_classification(
         n_samples=40, n_features=4, random_state=0
     )
-    only_fit, only_predict = object(), object()
+    inputs = {"anything": object()}
 
     model = estimator_cls(n_estimators=2, device="cpu", fit_mode=fit_mode)
-    model.fit(X, y, additional_inputs={"a": only_fit, "shared": 1})
+    model.fit(X, y, additional_inputs=inputs)
     calls.clear()
-    model.predict(X[:5], additional_inputs={"b": only_predict, "shared": 2})
+    model.predict(X[:5], additional_inputs=inputs if pass_to_predict else None)
 
     assert calls
-    for call in calls:
-        assert call == {"a": only_fit, "b": only_predict, "shared": 2}
+    assert all(call is inputs for call in calls)
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
