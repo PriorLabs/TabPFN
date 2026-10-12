@@ -24,6 +24,48 @@ from tabpfn.architectures.kv_cache import (
 from tabpfn.inference import _resolve_kv_cache_precision
 
 
+@pytest.mark.parametrize(
+    "block_type",
+    [tabpfn_v3.ICLTransformerBlock, tabpfn_v3_5.ICLTransformerBlock],
+    ids=["v3", "v3.5"],
+)
+@pytest.mark.parametrize("quantized", [False, True])
+@torch.no_grad()
+def test__cached_attention__memory_saving_preserves_each_members_cache(
+    block_type: type[tabpfn_v3.ICLTransformerBlock]
+    | type[tabpfn_v3_5.ICLTransformerBlock],
+    quantized: bool,
+) -> None:
+    block = block_type(
+        emsize=8, nhead=1, dim_feedforward=16, norm_factory=torch.nn.LayerNorm
+    ).eval()
+    # The default zero projection would hide incorrect attention output.
+    block.icl_attention.out_projection.weight.copy_(torch.eye(8))
+    x = torch.randn(2, 1, 8)
+    caches = [
+        KVCacheEntry(key=torch.randn(1, 5, 1, 8), value=torch.full((1, 5, 1, 8), value))
+        for value in (0.0, 1.0)
+    ]
+    batched_cache = KVCacheEntry.concatenate(caches)
+    expected = torch.cat(
+        [
+            block(
+                x[i : i + 1].clone(),
+                single_eval_pos=0,
+                cached_kv=cache.quantize() if quantized else cache,
+            )[0]
+            for i, cache in enumerate(caches)
+        ]
+    )
+    actual, _ = block(
+        x.clone(),
+        single_eval_pos=0,
+        save_peak_memory_factor=8,
+        cached_kv=batched_cache.quantize() if quantized else batched_cache,
+    )
+    torch.testing.assert_close(actual, expected)
+
+
 def _kv_tensor(seed: int = 0) -> torch.Tensor:
     torch.manual_seed(seed)
     # (B, N, num_kv_heads, head_dim), with per-head magnitude variation so
