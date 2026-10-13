@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import pickle
 import zipfile
 from copy import deepcopy
 from itertools import product
@@ -609,21 +608,3 @@ def test__save_fit_state__serializes_inference_config_dataclass(
     loaded = estimator_class.load_from_fit_state(path, device="cpu")
     assert loaded.inference_config_ == model.inference_config_
     _assert_roundtrip_predictions(model, loaded, X, cross_device=False)
-
-
-@pytest.mark.parametrize("format", ["archive", "pickle"])
-def test__legacy_regressor_fit_state_requires_refitting(
-    tmp_path: Path, format: str
-) -> None:
-    X, y = _make_regression_data()
-    model = TabPFNRegressor(n_estimators=2, device="cpu", random_state=0).fit(X, y)
-    del model.target_transform_version_
-    if format == "archive":
-        path = tmp_path / "legacy.tabpfn_fit"
-        model.save_fit_state(path)
-        with pytest.raises(ValueError, match="Refit it"):
-            load_fitted_tabpfn_model(path, device="cpu")
-    else:
-        restored = pickle.loads(pickle.dumps(model))  # noqa: S301
-        with pytest.raises(ValueError, match="Refit it"):
-            restored.predict(X[:4])

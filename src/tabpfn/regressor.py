@@ -1204,7 +1204,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ),
         )
 
-        self.target_transform_version_ = 1
         return self
 
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
@@ -1306,7 +1305,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y_raw=y_float.detach().cpu().float().numpy()
         )
 
-        self.target_transform_version_ = 1
         return self
 
     @config_context(transform_output="default")  # type: ignore
@@ -1371,7 +1369,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 )
             )
             # No need to create an inference engine for a constant prediction
-            self.target_transform_version_ = 1
             return self
 
         # Each tuning fold must derive its target statistics from its own raw targets.
@@ -1395,7 +1392,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self._compute_downsample_correction(y_raw=y_raw)
 
-        self.target_transform_version_ = 1
         return self
 
     @overload
@@ -1473,7 +1469,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             quantiles), or a dictionary with detailed outputs.
         """
         check_is_fitted(self)
-        self._validate_target_transform_version()
 
         # TODO: Move these at some point to InferenceEngine
         check_input_shape_matches(X, estimator=self)
@@ -2199,13 +2194,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return logit_to_output(output_type=output_type)
 
-    def _validate_target_transform_version(self) -> None:
-        if getattr(self, "target_transform_version_", None) != 1:
-            raise ValueError(
-                "This fitted regressor uses an incompatible target-transform format. "
-                "Refit it with the current TabPFN version."
-            )
-
     def _iter_forward_executor(
         self,
         X: list[torch.Tensor] | XType,
@@ -2242,7 +2230,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
 
         check_is_fitted(self)
-        self._validate_target_transform_version()
         # Ensure torch.inference_mode is OFF to allow gradients
         if self.fit_mode in ["fit_preprocessors", "batched"]:
             # only these two modes support this option.
