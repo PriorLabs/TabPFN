@@ -33,6 +33,7 @@ from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted, clone
 from tqdm.auto import tqdm
 
+from tabpfn.analytics import log_usage
 from tabpfn.base import (
     ModelSpecs,
     create_inference_engine,
@@ -955,6 +956,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return TabPFNClassifier(**params)
 
+    @log_usage("fit")
     @config_context(transform_output="default")  # type: ignore
     def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
@@ -1129,6 +1131,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
+    @log_usage("predict", batched=True)
     def predict_proba_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
@@ -1654,6 +1657,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_raw_logits=return_raw_logits,
             )
 
+    @log_usage("predict")
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
@@ -1670,6 +1674,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return y_pred
 
+    @log_usage("predict")
     @config_context(transform_output="default")
     def predict_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
@@ -1686,6 +1691,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         logits_tensor = self._raw_predict(X, return_logits=True)
         return logits_tensor.float().detach().cpu().numpy()
 
+    @log_usage("predict")
     @config_context(transform_output="default")
     def predict_raw_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
@@ -1709,6 +1715,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         return logits_tensor.float().detach().cpu().numpy()
 
+    @log_usage("predict")
     def predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
@@ -2087,6 +2094,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return output
 
+    @log_usage("embed")
     def get_embeddings(
         self,
         X: XType,
