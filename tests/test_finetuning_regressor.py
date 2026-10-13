@@ -562,7 +562,7 @@ def test_regressor_dataset_and_collator_batches_type(
         assert batch.y_train_std > 0.0
         np.testing.assert_allclose(
             batch.raw_space_bardist.borders.cpu().numpy(),
-            batch.znorm_space_bardist.borders.cpu().numpy() * batch.y_train_std
+            batch.znorm_space_bardist.borders.cpu().double().numpy() * batch.y_train_std
             + batch.y_train_mean,
             rtol=1e-5,
         )
