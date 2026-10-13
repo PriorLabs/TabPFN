@@ -1485,6 +1485,8 @@ def load_fitted_tabpfn_model(
             tmp / "executor_state.joblib", est.models_
         )
 
+        if saved_cls_name == "TabPFNRegressor":
+            est._validate_target_transform_version()
         est.to(device)
 
         return est

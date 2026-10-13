@@ -327,8 +327,8 @@ def test__targets_in_estimator_space__applies_the_estimator_target_transform() -
     """Members with a target transform are scored on transformed targets."""
     y = torch.tensor([0.5, -1.0, 2.0])
 
-    plain = _targets_in_estimator_space(y, mock.Mock(target_transform=None))
-    assert plain is y
+    with pytest.raises(ValueError, match="fitted target pipeline"):
+        _targets_in_estimator_space(y, mock.Mock(target_transform=None))
 
     negate = FunctionTransformer(lambda x: -x)
     transformed = _targets_in_estimator_space(y, mock.Mock(target_transform=negate))

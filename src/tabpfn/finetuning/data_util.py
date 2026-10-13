@@ -18,6 +18,7 @@ from sklearn.model_selection import StratifiedKFold
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.target_transform import StandardizeTarget
 from tabpfn.utils import infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
@@ -81,8 +82,8 @@ class RegressorBatch:
     znorm_space_bardist: FullSupportBarDistribution
     X_query_raw: torch.Tensor
     y_query_raw: torch.Tensor
-    y_train_mean: float = 0.0
-    y_train_std: float = 1.0
+    y_train_mean: float
+    y_train_std: float
 
 
 Batch = TypeVar("Batch", ClassifierBatch, RegressorBatch)
@@ -370,7 +371,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         return len(self.configs)
 
     @override
-    def __getitem__(self, index: int) -> ClassifierBatch | RegressorBatch:  # noqa: C901, PLR0912
+    def __getitem__(self, index: int) -> ClassifierBatch | RegressorBatch:  # noqa: C901
         """Retrieves, splits, and preprocesses the dataset config at the index.
 
         Performs train/test splitting and applies potentially multiple
@@ -442,19 +443,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         # This however makes also sense when considering that
         # this attribute changes on every dataset
         if is_regression_task:
-            train_mean = np.mean(y_train_raw)
-            train_std = np.std(y_train_raw)
-
-            eps = 1e-8
-            if train_std < eps:
-                warnings.warn(
-                    f"Target variable has constant or near-constant values "
-                    f"(std={train_std:.2e}). Adding epsilon={eps} to prevent "
-                    f"division by zero in standardization.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                train_std = eps
+            frame = StandardizeTarget().fit(y_train_raw)
+            train_mean, train_std = frame.mean_, frame.std_
 
             y_test_standardized = (y_test_raw - train_mean) / train_std
             znorm_borders = znorm_space_bardist_.borders

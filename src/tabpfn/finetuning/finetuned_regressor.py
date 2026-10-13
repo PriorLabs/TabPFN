@@ -46,7 +46,7 @@ def _targets_in_estimator_space(
     transformed context targets, so their loss must use transformed targets too.
     """
     if config.target_transform is None:
-        return y_Q
+        raise ValueError("A fitted target pipeline is required for regression loss.")
     y_np = config.target_transform.transform(y_Q.cpu().numpy().reshape(-1, 1))
     return torch.as_tensor(y_np.ravel(), device=y_Q.device)
 
@@ -368,13 +368,10 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
     @override
     def _setup_batch(self, batch: RegressorBatch) -> None:  # type: ignore[override]
-        """Set up bar distribution and target frame for this batch."""
+        """Set up the bar distributions for this batch."""
         self.finetuned_estimator_.raw_space_bardist_ = batch.raw_space_bardist
         self.finetuned_estimator_.bardist_ = batch.znorm_space_bardist
         self._bardist_loss = batch.znorm_space_bardist
-        # Preprocessed fitting needs the batch's target frame for border mapping.
-        self.finetuned_estimator_.y_train_mean_ = batch.y_train_mean
-        self.finetuned_estimator_.y_train_std_ = batch.y_train_std
 
     @override
     def _forward_with_loss(self, batch: RegressorBatch) -> torch.Tensor:  # type: ignore[override]
