@@ -62,6 +62,7 @@ from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
+from tabpfn.architectures.shared.workaround_mps_pad_bug import pad_rows_with_nan
 from tabpfn.errors import is_oom_error
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
@@ -2580,13 +2581,7 @@ def _prepare_targets(
     if num_train_labels > num_train_and_test_rows:
         raise ValueError("No test rows provided.")
     target_RBT = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
-    # Not F.pad: on MPS with torch <= 2.14, MPSGraph's constant pad corrupts the
-    # input once it reaches 2**16 rows, so every target came out NaN or misplaced.
-    nan_rows = target_RBT.new_full(
-        (num_train_and_test_rows - num_train_labels, *target_RBT.shape[1:]),
-        float("nan"),
-    )
-    return torch.cat([target_RBT, nan_rows])
+    return pad_rows_with_nan(target_RBT, num_train_and_test_rows)
 
 
 def _impute_nan_and_inf_with_mean(
