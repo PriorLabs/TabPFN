@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests that `_prepare_targets` keeps the train targets intact at >= 2**16 rows.
 
 On MPS with torch <= 2.14, `F.pad` with a non-zero fill value overwrites its input
