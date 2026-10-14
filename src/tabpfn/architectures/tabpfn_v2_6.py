@@ -30,7 +30,7 @@ from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
-from tabpfn.architectures.shared.workaround_mps_pad_bug import pad_rows_with_nan
+from tabpfn.architectures.shared.workaround_mps_linear_bug import pad_rows_with_nan
 from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
