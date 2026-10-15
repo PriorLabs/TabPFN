@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import warnings
 from collections.abc import Sequence
@@ -28,6 +29,27 @@ _EARLY_EXIT_PREFIX_ROWS = 1024
 _MAX_TEXT_COLUMNS_IN_WARNING = 10
 
 
+@dataclasses.dataclass(frozen=True)
+class ModalityDecision:
+    """One column's detected modality and the evidence behind it.
+
+    Attributes:
+        modality: The detected modality.
+        n_unique: Distinct values counted, a missing value counting as one of
+            them. A lower bound when `n_unique_is_exact` is False.
+        n_unique_is_exact: Whether `n_unique` covers every row. Counting stops
+            once a prefix of the column has cleared every cardinality threshold,
+            since the rest of the column cannot change the outcome.
+        numeric_like: Whether every value is a number or a spelling of one.
+            `None` when the column was settled as constant before this was read.
+    """
+
+    modality: FeatureModality
+    n_unique: int
+    n_unique_is_exact: bool
+    numeric_like: bool | None
+
+
 def detect_feature_modalities(
     X: np.ndarray,
     feature_names: list[str] | None,
@@ -37,7 +59,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
-) -> FeatureSchema:
+) -> tuple[FeatureSchema, list[ModalityDecision]]:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
     !!! note
@@ -60,9 +82,11 @@ def detect_feature_modalities(
             `CATEGORICAL` -- independent of the two thresholds above.
 
     Returns:
-        The inferred `FeatureSchema`.
+        The inferred `FeatureSchema`, and one `ModalityDecision` per column with
+        the evidence behind it.
     """
     features: list[Feature] = []
+    decisions: list[ModalityDecision] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
     provided = set(provided_categorical_indices or ())
@@ -73,20 +97,22 @@ def detect_feature_modalities(
     )
     # A numeric array needs no per-column parsing: every column is numeric, so only
     # the distinct-value count decides, and that is counted for all columns at once.
-    n_unique_per_column = _numeric_n_unique_per_column(X, decided_at=decided_at)
+    numeric_counts = _numeric_n_unique_per_column(X, decided_at=decided_at)
     for i, index in enumerate(range(X.shape[1])):
         feature_name = unique_feature_names[i]
         reported_categorical = index in provided
-        if n_unique_per_column is not None:
-            feat_modality = _numeric_modality(
+        if numeric_counts is not None:
+            n_unique_per_column, n_unique_is_exact = numeric_counts
+            decision = _numeric_decision(
                 n_unique=int(n_unique_per_column[index]),
+                n_unique_is_exact=bool(n_unique_is_exact[index]),
                 reported_categorical=reported_categorical,
                 max_unique_for_category=max_unique_for_category,
                 min_unique_for_numerical=min_unique_for_numerical,
                 big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
             )
         else:
-            feat_modality = _detect_feature_modality(
+            decision = _detect_feature_modality(
                 s=pd.Series(X[:, index], name=feature_name),
                 reported_categorical=reported_categorical,
                 max_unique_for_category=max_unique_for_category,
@@ -94,10 +120,11 @@ def detect_feature_modalities(
                 min_cardinality_for_text=min_cardinality_for_text,
                 big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
             )
-        features.append(Feature(name=feature_name, modality=feat_modality))
+        features.append(Feature(name=feature_name, modality=decision.modality))
+        decisions.append(decision)
     feature_schema = FeatureSchema(features=features)
     _warn_on_text(feature_schema)
-    return feature_schema
+    return feature_schema, decisions
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -150,8 +177,8 @@ def _detect_feature_modality(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
-) -> FeatureModality:
-    """Decide a single column's modality via heuristics."""
+) -> ModalityDecision:
+    """Decide a single column's modality via heuristics, keeping the evidence."""
     assert not isinstance(s.dtype, pd.CategoricalDtype), (
         "Categorical dtype must be converted before modality detection; "
         "preserve its intent in provided_categorical_indices."
@@ -166,18 +193,26 @@ def _detect_feature_modality(
         n_unique = _get_unique_with_sklearn_compatible_error(
             s.iloc[:_EARLY_EXIT_PREFIX_ROWS]
         )
-    if n_unique < decided_at:
+    # A prefix count that already clears every threshold is kept as a lower bound.
+    n_unique_is_exact = n_unique < decided_at
+    if n_unique_is_exact:
         n_unique = _get_unique_with_sklearn_compatible_error(s)
 
     if n_unique <= 1 and not reported_categorical:
         # All-missing or single-value. A declared-categorical column is exempt so
         # it still routes through the ordinal encoder instead of crashing as a
         # constant numeric column when predict sees an unseen string value.
-        return FeatureModality.CONSTANT
+        return ModalityDecision(
+            modality=FeatureModality.CONSTANT,
+            n_unique=n_unique,
+            n_unique_is_exact=n_unique_is_exact,
+            numeric_like=None,
+        )
 
     if _is_numeric_pandas_series(s):
-        return _numeric_modality(
+        return _numeric_decision(
             n_unique=n_unique,
+            n_unique_is_exact=n_unique_is_exact,
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
@@ -189,9 +224,15 @@ def _detect_feature_modality(
     if pd.api.types.is_string_dtype(s.dtype):
         # A declared categorical is taken at face value: the cardinality cutoff
         # only sorts undeclared string columns into category or text.
-        if reported_categorical or n_unique <= min_cardinality_for_text:
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.TEXT
+        is_categorical = reported_categorical or n_unique <= min_cardinality_for_text
+        return ModalityDecision(
+            modality=FeatureModality.CATEGORICAL
+            if is_categorical
+            else FeatureModality.TEXT,
+            n_unique=n_unique,
+            n_unique_is_exact=n_unique_is_exact,
+            numeric_like=False,
+        )
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
@@ -220,37 +261,47 @@ def _decided_at(
     )
 
 
-def _numeric_modality(
+def _numeric_decision(
     *,
     n_unique: int,
+    n_unique_is_exact: bool,
     reported_categorical: bool,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     big_enough_n_to_infer_cat: bool,
-) -> FeatureModality:
-    """The modality of a numeric column with `n_unique` distinct values (NaN counted).
+) -> ModalityDecision:
+    """The decision for a numeric column with `n_unique` distinct values (NaN counted).
 
     A constant (or all-missing) column is `CONSTANT` unless declared categorical, so
     that it still routes through the ordinal encoder instead of crashing as a
     constant numeric column when predict sees an unseen value.
     """
     if n_unique <= 1 and not reported_categorical:
-        return FeatureModality.CONSTANT
-    if _detect_numeric_as_categorical(
+        modality = FeatureModality.CONSTANT
+    elif _detect_numeric_as_categorical(
         n_unique=n_unique,
         reported_categorical=reported_categorical,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
     ):
-        return FeatureModality.CATEGORICAL
-    return FeatureModality.NUMERICAL
+        modality = FeatureModality.CATEGORICAL
+    else:
+        modality = FeatureModality.NUMERICAL
+    return ModalityDecision(
+        modality=modality,
+        n_unique=n_unique,
+        n_unique_is_exact=n_unique_is_exact,
+        # A constant column is settled before its values are read, on either path.
+        numeric_like=None if modality is FeatureModality.CONSTANT else True,
+    )
 
 
 def _numeric_n_unique_per_column(
     X: np.ndarray, *, decided_at: int
-) -> np.ndarray | None:
-    """Distinct values per column of a numeric or bool array, NaN counted as a value.
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Distinct values per column of a numeric or bool array, NaN counted as a value,
+    and whether each count covers every row.
 
     `None` for anything else (an object array is parsed column by column). Mirrors
     the per-column early exit: a column whose first `_EARLY_EXIT_PREFIX_ROWS` rows
@@ -262,14 +313,14 @@ def _numeric_n_unique_per_column(
         return None
     n_rows, n_columns = X.shape
     if n_rows == 0:
-        return np.zeros(n_columns, dtype=np.int64)
+        return np.zeros(n_columns, dtype=np.int64), np.ones(n_columns, dtype=bool)
     if n_rows <= _EARLY_EXIT_PREFIX_ROWS:
-        return _count_distinct_per_column(X)
+        return _count_distinct_per_column(X), np.ones(n_columns, dtype=bool)
     n_unique = _count_distinct_per_column(X[:_EARLY_EXIT_PREFIX_ROWS])
-    undecided = np.flatnonzero(n_unique < decided_at)
-    if len(undecided):
+    undecided = n_unique < decided_at
+    if undecided.any():
         n_unique[undecided] = _count_distinct_per_column(X[:, undecided])
-    return n_unique
+    return n_unique, undecided
 
 
 def _count_distinct_per_column(X: np.ndarray) -> np.ndarray:
