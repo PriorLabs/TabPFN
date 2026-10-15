@@ -39,6 +39,7 @@ from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
+from tabpfn.architectures.shared.workarounds_mps_bugs import pad_rows_with_nan
 from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
@@ -1259,11 +1260,7 @@ def _prepare_targets(y: torch.Tensor, num_rows: int, batch_size: int) -> torch.T
     if num_train_labels > num_rows:
         raise ValueError("No test rows provided.")
     target_RB1 = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
-    return torch.nn.functional.pad(
-        target_RB1,
-        (0, 0, 0, 0, 0, num_rows - num_train_labels),
-        value=float("nan"),
-    )
+    return pad_rows_with_nan(target_RB1, num_rows)
 
 
 def get_architecture(config: ArchitectureConfig) -> TabPFNV2:

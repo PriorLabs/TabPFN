@@ -32,6 +32,7 @@ from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
+from tabpfn.architectures.shared.workarounds_mps_bugs import pad_rows_with_nan
 from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
@@ -1147,11 +1148,7 @@ def _prepare_targets(
 
     # Make sure the target is 3-dimensional.
     target_RBY = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
-    return torch.nn.functional.pad(
-        target_RBY,
-        (0, 0, 0, 0, 0, num_train_rows - num_train_labels),
-        value=float("nan"),
-    )
+    return pad_rows_with_nan(target_RBY, num_train_rows)
 
 
 def _replace_keys_from_base_architecture(
