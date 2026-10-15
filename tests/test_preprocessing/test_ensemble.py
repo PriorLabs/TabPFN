@@ -90,7 +90,7 @@ def test__get_subsample_indices_for_estimators():
     assert len(subsample_indices) == 3
     for subsample_index in subsample_indices:
         assert subsample_index is not None
-        assert len(subsample_index) == 3  # int(0.5 * 5) + 1 = 3
+        assert len(subsample_index) == 2  # int(0.5 * 5) = 2
 
     subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=2,
@@ -135,12 +135,12 @@ def test__get_subsample_indices_for_estimators__balanced_coverage():
 def test__get_subsample_indices_for_estimators__balanced_coverage_float():
     """Float subsample_samples also produces exact balanced row coverage.
 
-    Uses frac=0.2 so that size = int(0.2 * 20) + 1 = 5, and 20 % 5 == 0,
+    Uses frac=0.25 so that size = int(0.25 * 20) = 5, and 20 % 5 == 0,
     ensuring pool cycles align with estimator boundaries.
     """
     n_rows = 20
     num_estimators = 8
-    frac = 0.2  # size = int(0.2 * 20) + 1 = 5, 20 % 5 == 0 -> exact balance
+    frac = 0.25  # size = int(0.25 * 20) = 5, 20 % 5 == 0 -> exact balance
     # 8 * 5 = 40 draws, 40 / 20 = 2 per row
 
     indices = _get_subsample_indices_for_estimators(
@@ -151,7 +151,7 @@ def test__get_subsample_indices_for_estimators__balanced_coverage_float():
     )
 
     assert len(indices) == num_estimators
-    subsample_size = int(frac * n_rows) + 1  # = 5
+    subsample_size = int(frac * n_rows)  # = 5
     for idx in indices:
         assert idx is not None
         assert len(idx) == subsample_size
@@ -159,6 +159,92 @@ def test__get_subsample_indices_for_estimators__balanced_coverage_float():
     counts = np.bincount(np.concatenate(indices), minlength=n_rows)
     assert counts.min() == 2
     assert counts.max() == 2
+
+
+def test__get_subsample_indices_for_estimators__float_fraction_exact_size():
+    """A float subsample_samples takes exactly that fraction of the rows.
+
+    The float branch used to resolve to ``int(frac * n_samples) + 1``, so
+    ``0.5`` of 1000 rows subsampled 501 rows instead of the 500 the parameter
+    documents, and the equivalent int spelling (500) produced a different
+    context for the model. The float spelling must agree with the int spelling,
+    truncate rather than round up, and never resolve to an empty subsample.
+    """
+    n_samples = 1000
+
+    by_fraction = _get_subsample_indices_for_estimators(
+        subsample_samples=0.5,
+        num_estimators=2,
+        n_samples=n_samples,
+        rng=np.random.default_rng(0),
+    )
+    by_count = _get_subsample_indices_for_estimators(
+        subsample_samples=500,
+        num_estimators=2,
+        n_samples=n_samples,
+        rng=np.random.default_rng(0),
+    )
+
+    assert by_fraction is not None
+    assert by_count is not None
+    for indices in by_fraction:
+        assert len(indices) == 500  # exactly 0.5 * 1000, not 501
+    # The two spellings of the same size draw the same rows.
+    assert all((by_fraction[i] == by_count[i]).all() for i in range(len(by_count)))
+
+    # Truncation, not rounding up: 0.333 of 1000 is 333 rows.
+    truncated = _get_subsample_indices_for_estimators(
+        subsample_samples=0.333,
+        num_estimators=1,
+        n_samples=n_samples,
+        rng=np.random.default_rng(0),
+    )
+    assert truncated is not None
+    assert len(truncated[0]) == 333
+
+    # A fraction of a tiny dataset still subsamples a single row, never 0.
+    tiny = _get_subsample_indices_for_estimators(
+        subsample_samples=0.01,
+        num_estimators=1,
+        n_samples=10,
+        rng=np.random.default_rng(0),
+    )
+    assert tiny is not None
+    assert len(tiny[0]) == 1
+
+    # The class-aware path honours the fraction as well; "stratified" is what
+    # "auto" resolves to for classifiers.
+    y = np.array([0] * 40 + [1] * 35 + [2] * 25)
+    stratified = _get_subsample_indices_for_estimators(
+        subsample_samples=0.4,
+        num_estimators=2,
+        n_samples=len(y),
+        rng=np.random.default_rng(0),
+        method=SampleSubsamplingMethod.STRATIFIED,
+        y=y,
+    )
+    assert stratified is not None
+    for indices in stratified:
+        assert len(indices) == 40  # exactly 0.4 * 100, not 41
+
+
+def test__get_subsample_indices_for_estimators__float_fraction_below_class_count():
+    """A fraction resolving below the class count errors instead of inflating.
+
+    One row cannot represent three classes, so a 1% subsample of 100 rows is
+    rejected. The resolved size is deliberately not raised to the class count,
+    because that would hand the model more rows than were asked for.
+    """
+    y = np.array([0] * 40 + [1] * 35 + [2] * 25)
+    with pytest.raises(ValueError, match="number of classes"):
+        _get_subsample_indices_for_estimators(
+            subsample_samples=0.01,
+            num_estimators=1,
+            n_samples=len(y),
+            rng=np.random.default_rng(0),
+            method=SampleSubsamplingMethod.STRATIFIED,
+            y=y,
+        )
 
 
 def test__get_subsample_feature_indices__no_subsampling_needed():
@@ -706,7 +792,7 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         y=y,
     )
     assert result_float is not None
-    expected_size = int(0.4 * n_samples) + 1  # 41
+    expected_size = int(0.4 * n_samples)  # 40, matching the int spelling above
     for indices in result_float:
         assert len(indices) == expected_size
         counts = np.bincount(y[indices], minlength=2)
