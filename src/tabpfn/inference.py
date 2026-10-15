@@ -21,7 +21,7 @@ import torch
 
 from tabpfn.architectures.interface import EstimatorBatchBudget
 from tabpfn.architectures.kv_cache import KV_CACHE_PRECISION_DTYPES, KVCache
-from tabpfn.architectures.shared.workaround_mps_linear_bug import (
+from tabpfn.architectures.shared.workarounds_mps_bugs import (
     maybe_replace_linears_on_mps,
 )
 from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode

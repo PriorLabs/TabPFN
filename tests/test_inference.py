@@ -22,8 +22,8 @@ from tabpfn.architectures.interface import (
     PerformanceOptions,
 )
 from tabpfn.architectures.kv_cache import KVCacheEntry
-from tabpfn.architectures.shared import workaround_mps_linear_bug
-from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
+from tabpfn.architectures.shared import workarounds_mps_bugs
+from tabpfn.architectures.shared.workarounds_mps_bugs import MpsSafeLinear
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
 from tabpfn.base import create_inference_engine, get_embeddings
 from tabpfn.errors import TabPFNValidationError
@@ -821,11 +821,9 @@ def test__init__mps_target_device__applies_mps_linear_bug_workaround(
 ) -> None:
     """Moving an engine to MPS replaces Linears with MpsSafeLinear.
 
-    See tabpfn.architectures.shared.workaround_mps_linear_bug.
+    See tabpfn.architectures.shared.workarounds_mps_bugs.
     """
-    monkeypatch.setattr(
-        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
-    )
+    monkeypatch.setattr(workarounds_mps_bugs, "_mps_linear_bias_is_buggy", lambda: True)
     rng = default_rng(seed=0)
     X_train = rng.standard_normal((20, 4))
     y_train = rng.integers(0, 3, (20, 1))
@@ -878,11 +876,9 @@ def test__to__mps_target_device__applies_mps_linear_bug_workaround(
 ) -> None:
     """Moving an engine to MPS replaces Linears with MpsSafeLinear.
 
-    See tabpfn.architectures.shared.workaround_mps_linear_bug.
+    See tabpfn.architectures.shared.workarounds_mps_bugs.
     """
-    monkeypatch.setattr(
-        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
-    )
+    monkeypatch.setattr(workarounds_mps_bugs, "_mps_linear_bias_is_buggy", lambda: True)
     rng = default_rng(seed=0)
     X_train = rng.standard_normal((20, 4))
     y_train = rng.integers(0, 3, (20, 1))

@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for tabpfn.architectures.shared.workaround_mps_linear_bug."""
+"""Tests for tabpfn.architectures.shared.workarounds_mps_bugs."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import pytest
 import torch
 from torch import nn
 
-from tabpfn.architectures.shared import workaround_mps_linear_bug
-from tabpfn.architectures.shared.workaround_mps_linear_bug import (
+from tabpfn.architectures.shared import workarounds_mps_bugs
+from tabpfn.architectures.shared.workarounds_mps_bugs import (
     MpsSafeLinear,
     maybe_replace_linears_on_mps,
     pad_rows_with_nan,
@@ -33,7 +33,7 @@ def test__maybe_replace_linears_on_mps__mps_not_selected__does_not_test_for_bug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        workaround_mps_linear_bug,
+        workarounds_mps_bugs,
         "_mps_linear_bias_is_buggy",
         lambda: pytest.fail("self-test must not run without an MPS device"),
     )
@@ -47,7 +47,7 @@ def test__maybe_replace_linears_on_mps__bug_not_present__model_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: False
+        workarounds_mps_bugs, "_mps_linear_bias_is_buggy", lambda: False
     )
     model = _make_model()
     maybe_replace_linears_on_mps(model, [torch.device("mps")])
@@ -58,9 +58,7 @@ def test__maybe_replace_linears_on_mps__bug_not_present__model_unchanged(
 def test__maybe_replace_linears_on_mps__retypes_only_bias_linears(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
-    )
+    monkeypatch.setattr(workarounds_mps_bugs, "_mps_linear_bias_is_buggy", lambda: True)
     model = _make_model()
     maybe_replace_linears_on_mps(model, [torch.device("mps")])
 
@@ -76,9 +74,7 @@ def test__maybe_replace_linears_on_mps__retypes_only_bias_linears(
 def test__maybe_replace_linears_on_mps__force_replac__output_unchanged_when_on_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
-    )
+    monkeypatch.setattr(workarounds_mps_bugs, "_mps_linear_bias_is_buggy", lambda: True)
     torch.manual_seed(0)
     model = _make_model()
     x = torch.randn(*_TRIGGER_SHAPE)

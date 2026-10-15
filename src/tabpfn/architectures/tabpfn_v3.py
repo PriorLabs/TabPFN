@@ -62,7 +62,7 @@ from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
-from tabpfn.architectures.shared.workaround_mps_linear_bug import pad_rows_with_nan
+from tabpfn.architectures.shared.workarounds_mps_bugs import pad_rows_with_nan
 from tabpfn.errors import is_oom_error
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
