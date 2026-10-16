@@ -73,6 +73,28 @@ META_BATCH_SIZE = 1
 MAX_VALIDATION_SAMPLES = 50_000
 
 
+def _resolve_resume_checkpoint(
+    output_dir: Path | None,
+    train_size: int,
+    *,
+    resume_from_checkpoint: bool,
+) -> tuple[Path | None, int]:
+    """Decide whether finetuning resumes from a checkpoint in `output_dir`.
+
+    Returns:
+        The checkpoint path and epoch to restart from, or `(None, 0)` to
+        start fresh when there is no output dir, resuming is disabled, or
+        no checkpoint exists yet.
+    """
+    if output_dir is None or not resume_from_checkpoint:
+        return None, 0
+    return get_checkpoint_path_and_epoch_from_output_dir(
+        output_dir=output_dir,
+        train_size=train_size,
+        get_best=False,
+    )
+
+
 def _init_distributed_if_needed(
     device: str,
 ) -> tuple[bool, int, str]:
@@ -733,6 +755,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         X_val: XType | None = None,
         y_val: YType | None = None,
         output_dir: Path | None = None,
+        *,
+        resume_from_checkpoint: bool = True,
     ) -> FinetunedTabPFNBase:
         """Fine-tune the TabPFN model on the provided training data.
 
@@ -744,6 +768,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             output_dir: Directory path for saving checkpoints. If None, no
                 checkpointing is performed and progress will be lost if
                 training is interrupted.
+            resume_from_checkpoint: If True (default) and `output_dir`
+                already holds checkpoints from a previous run, resume
+                training from the latest one. Set to False to always start
+                fresh, so re-running a script with the same `output_dir`
+                gives the same result as a clean directory.
 
         Returns:
             The fitted instance itself.
@@ -758,7 +787,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        return self._fit(X=X, y=y, X_val=X_val, y_val=y_val, output_dir=output_dir)
+        return self._fit(
+            X=X,
+            y=y,
+            X_val=X_val,
+            y_val=y_val,
+            output_dir=output_dir,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
 
     def _fit(  # noqa: C901,PLR0912
         self,
@@ -767,6 +803,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         X_val: XType | None = None,
         y_val: YType | None = None,
         output_dir: Path | None = None,
+        *,
+        resume_from_checkpoint: bool = True,
     ) -> FinetunedTabPFNBase:
         """Internal implementation of fit that runs the finetuning loop."""
         validation_frequency = self.validation_frequency
@@ -870,22 +908,17 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         validation_eval_config["device"] = eval_devices
         final_inference_eval_config["device"] = eval_devices
 
-        epoch_to_start_from = 0
-        checkpoint_path = None
-        if output_dir is not None:
-            checkpoint_path, epoch_to_start_from = (
-                get_checkpoint_path_and_epoch_from_output_dir(
-                    output_dir=output_dir,
-                    train_size=train_size,
-                    get_best=False,
-                )
+        checkpoint_path, epoch_to_start_from = _resolve_resume_checkpoint(
+            output_dir,
+            train_size,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
+        if checkpoint_path is not None:
+            logger.info(
+                f"Restarting training from checkpoint {checkpoint_path} at epoch "
+                f"{epoch_to_start_from}",
             )
-            if checkpoint_path is not None:
-                logger.info(
-                    f"Restarting training from checkpoint {checkpoint_path} at epoch "
-                    f"{epoch_to_start_from}",
-                )
-                finetuning_estimator_config["model_path"] = checkpoint_path
+            finetuning_estimator_config["model_path"] = checkpoint_path
 
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self.finetuned_estimator_._initialize_model_variables()
