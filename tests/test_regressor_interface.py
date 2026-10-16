@@ -26,6 +26,7 @@ from torch import nn
 import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
+from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import ModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
@@ -39,6 +40,8 @@ from tabpfn.inference_tuning import (
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.ensemble import generate_regression_ensemble_configs
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
@@ -2100,3 +2103,139 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
     round_tripped = TabPFNRegressor().set_params(**params)
     assert round_tripped.eval_metric == eval_metric
     assert round_tripped.tuning_config == tuning_config
+
+
+# =============================================================================
+# fit_from_preprocessed: the feature schema is built from the column count
+# =============================================================================
+
+
+N_BATCH_ROWS = 5
+N_BATCH_COLS = 8
+BATCH_CAT_COL = N_BATCH_COLS - 1  # index 7 >= the 5 rows of a collated batch
+
+
+def _collated_batch(
+    n_datasets: int = 2, n_estimators: int = 2
+) -> tuple[
+    ModelSpecs,
+    list[torch.Tensor],
+    list[torch.Tensor],
+    list[list[list[int]]],
+    list[list[object]],
+]:
+    """The (n_datasets, n_train_rows, n_columns) tensors the collator produces."""
+    specs = _create_dummy_regressor_model_specs()
+    flat_configs = generate_regression_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder="shuffle",
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none", categorical_name="numeric", max_features_per_estimator=500
+            )
+        ],
+        target_transforms=[None],
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+    configs: list[list[object]] = [
+        [flat_configs[estimator] for estimator in range(n_estimators)]
+        for _ in range(n_datasets)
+    ]
+    torch.manual_seed(0)
+    X_preprocessed = [
+        torch.randn(n_datasets, N_BATCH_ROWS, N_BATCH_COLS),
+    ]
+    y_preprocessed = [
+        torch.randn(n_datasets, N_BATCH_ROWS),
+    ]
+    cat_ix = [[[BATCH_CAT_COL] for _ in range(n_estimators)] for _ in range(n_datasets)]
+    return specs, X_preprocessed, y_preprocessed, cat_ix, configs
+
+
+def test__fit_from_preprocessed__feature_schema_spans_the_columns() -> None:
+    """The schema is as wide as the batch's columns, not its rows.
+
+    X_preprocessed[0] is the collated (n_datasets, n_train_rows, n_columns)
+    tensor, so `shape[1]` is the row count. A schema built from it is narrower
+    than the data whenever there are more columns than rows, which silently
+    drops every categorical column whose index is >= n_train_rows and tells the
+    model those columns are numerical.
+    """
+    specs, X_preprocessed, y_preprocessed, cat_ix, configs = _collated_batch()
+
+    reg = TabPFNRegressor(
+        model_path=specs, device="cpu", n_estimators=2, random_state=0
+    )
+    reg.fit_from_preprocessed(
+        X_preprocessed,
+        y_preprocessed,
+        cat_ix,
+        configs,
+        performance_options=PerformanceOptions(),
+    )
+
+    assert X_preprocessed[0].shape[1] == N_BATCH_ROWS
+    assert X_preprocessed[0].shape[-1] == N_BATCH_COLS
+    for dataset_schemas in reg.executor_.feature_schema_list:
+        for schema in dataset_schemas:
+            assert len(schema.features) == N_BATCH_COLS
+            assert schema.indices_for(FeatureModality.CATEGORICAL) == [BATCH_CAT_COL]
+
+
+def test__predict_batched__tells_the_model_about_high_categorical_columns() -> None:
+    """Batched inference reports the same categorical columns as the single path.
+
+    A wide dataset pushes the categorical past the row count after
+    preprocessing (the SVD/fingerprint steps add columns), so a row-wide schema
+    omits it and the model is told the column is numerical -- while `predict`,
+    which uses each member's own schema, still reports it.
+    """
+    n_rows = 100  # wide enough to be a realistic regression context
+    n_cols = 250  # wide enough that the categorical lands beyond n_train_rows
+    rng = np.random.RandomState(0)
+    X = rng.randn(n_rows, n_cols).astype(object)
+    X[:, -1] = rng.choice(["a", "b", "c", "d"], size=n_rows)
+    y = rng.randn(n_rows)
+    X_test = np.repeat(X[:1], 2, axis=0).astype(object)
+    X_test[:, -1] = ["a", "b"]
+
+    reg = TabPFNRegressor(
+        model_path=_create_dummy_regressor_model_specs(),
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+    )
+    reg.fit(X, y)
+
+    member_cats = reg.executor_.ensemble_members[0].feature_schema.indices_for(
+        FeatureModality.CATEGORICAL
+    )
+    # Precondition: this is the case the bug needs, so the test cannot pass
+    # vacuously on a schema that happened to keep the column.
+    assert [c for c in member_cats if c >= n_rows], (
+        f"expected a categorical column at index >= {n_rows}, got {member_cats}"
+    )
+
+    seen: list[object] = []
+    original_forward = type(reg.models_[0]).forward
+
+    def spy(self: object, x: torch.Tensor, y: torch.Tensor, **kwargs: object) -> object:
+        seen.append(kwargs.get("categorical_inds"))
+        return original_forward(self, x, y, **kwargs)  # type: ignore[arg-type]
+
+    type(reg.models_[0]).forward = spy  # type: ignore[method-assign]
+    try:
+        reg.predict(X_test)
+        single = list(seen)
+        seen.clear()
+        reg.predict_batched([X], [y], [X_test])
+        batched = list(seen)
+    finally:
+        type(reg.models_[0]).forward = original_forward  # type: ignore[method-assign]
+
+    assert single, "the spy recorded no forward calls for predict"
+    assert batched == single
