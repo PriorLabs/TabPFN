@@ -561,6 +561,108 @@ def test__get_tuning_splits__classification_is_unchanged_by_default() -> None:
 
 
 @pytest.mark.parametrize(
+    "holdout_frac",
+    [
+        pytest.param(0.0, id="zero"),
+        pytest.param(-0.1, id="negative"),
+        pytest.param(1.0, id="one"),
+        pytest.param(1.5, id="above_one"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="inf"),
+    ],
+)
+def test__get_tuning_splits__rejects_holdout_frac_outside_open_unit_interval(
+    holdout_frac: float,
+) -> None:
+    y = np.random.default_rng(0).normal(size=200)
+
+    # A frac that rounds to zero previously raised ZeroDivisionError, and NaN or
+    # out-of-range fracs silently produced a nonsense fold count.
+    with pytest.raises(ValueError, match="strictly between"):
+        get_tuning_splits(
+            X=_identity_X(200),
+            y=y,
+            holdout_frac=holdout_frac,
+            n_splits=1,
+            task_type="regressor",
+        )
+
+
+@pytest.mark.parametrize(
+    ("holdout_frac", "expected_holdout_size"),
+    [
+        pytest.param(0.15, 143, id="fractional_frac"),
+        pytest.param(0.01, 10, id="at_the_supported_lower_bound"),
+    ],
+)
+def test__get_tuning_splits__derives_sane_fold_count_from_awkward_frac(
+    holdout_frac: float,
+    expected_holdout_size: int,
+) -> None:
+    n_samples = 1_000
+    y = np.random.default_rng(0).normal(size=n_samples)
+
+    splits = get_tuning_splits(
+        X=_identity_X(n_samples),
+        y=y,
+        holdout_frac=holdout_frac,
+        n_splits=1,
+        task_type="regressor",
+    )
+
+    # The fold count is derived from the exact frac, so 0.15 maps to the nearest
+    # usable fold count (7) instead of the 6 that pre-rounding implied.
+    assert len(splits[0][1]) == expected_holdout_size
+
+
+@pytest.mark.parametrize("holdout_frac", [0.004, 0.005, 0.009])
+def test__get_tuning_splits__rejects_frac_needing_more_folds_than_supported(
+    holdout_frac: float,
+) -> None:
+    y = np.random.default_rng(0).normal(size=200)
+
+    # These all need more than the supported fold count. Previously 0.004 divided
+    # by zero outright, and 0.005 asked for 100 folds, which StratifiedKFold
+    # rejects on most real datasets.
+    with pytest.raises(ValueError, match="too small"):
+        get_tuning_splits(
+            X=_identity_X(200),
+            y=y,
+            holdout_frac=holdout_frac,
+            n_splits=1,
+            task_type="regressor",
+        )
+
+
+@pytest.mark.parametrize(
+    ("holdout_frac", "expected_holdout_size"),
+    [
+        pytest.param(0.1, 100, id="auto_default_small_dataset"),
+        pytest.param(0.2, 200, id="auto_default_mid_dataset"),
+        pytest.param(0.3, 334, id="auto_default_large_dataset"),
+    ],
+)
+def test__get_tuning_splits__auto_default_fracs_keep_their_fold_counts(
+    holdout_frac: float,
+    expected_holdout_size: int,
+) -> None:
+    # `get_default_tuning_holdout_frac` only ever yields 0.1/0.2/0.3. Those must
+    # keep implying 10/5/3 folds, so existing users see no behaviour change.
+    n_samples = 1_000
+    y = np.random.default_rng(0).normal(size=n_samples)
+
+    splits = get_tuning_splits(
+        X=_identity_X(n_samples),
+        y=y,
+        holdout_frac=holdout_frac,
+        n_splits=1,
+        task_type="regressor",
+    )
+
+    assert len(splits[0][1]) == expected_holdout_size
+
+
+@pytest.mark.parametrize(
     ("num_samples", "expected_holdout_frac", "expected_n_folds"),
     [
         (1_000, 0.1, 10),
