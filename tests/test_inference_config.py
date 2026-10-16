@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 import sklearn.datasets
 import torch
+from sklearn.base import clone
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
@@ -916,3 +917,126 @@ def test__classifier_n_estimators__checkpoint_count__is_never_scaled(
         clf.fit(X, y)
 
     assert clf.n_estimators_ == 3
+
+
+# =============================================================================
+# Nested `inference_config__FIELD` params (issue #322)
+# =============================================================================
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__set_and_get_roundtrip(estimator_cls: type) -> None:
+    """Single inference settings can be named without replacing the whole dict."""
+    est = estimator_cls(device="cpu")
+    est.set_params(inference_config__POLYNOMIAL_FEATURES="all")
+
+    assert est.inference_config == {"POLYNOMIAL_FEATURES": "all"}
+    assert est.get_params()["inference_config__POLYNOMIAL_FEATURES"] == "all"
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__merges_into_existing_dict(
+    estimator_cls: type,
+) -> None:
+    """Nested pieces merge into the existing dict instead of replacing it."""
+    est = estimator_cls(device="cpu", inference_config={"POLYNOMIAL_FEATURES": "all"})
+    est.set_params(inference_config__N_ESTIMATORS=4)
+
+    assert est.inference_config == {
+        "POLYNOMIAL_FEATURES": "all",
+        "N_ESTIMATORS": 4,
+    }
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__whole_and_nested_together__raises(
+    estimator_cls: type,
+) -> None:
+    """Naming the dict wholesale and in pieces at once is ambiguous."""
+    est = estimator_cls(device="cpu")
+    with pytest.raises(ValueError, match="not both in one call"):
+        est.set_params(
+            inference_config={"POLYNOMIAL_FEATURES": "all"},
+            inference_config__N_ESTIMATORS=4,
+        )
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__unknown_field__raises(
+    estimator_cls: type,
+) -> None:
+    """Typos in nested field names fail fast instead of at fit time."""
+    est = estimator_cls(device="cpu")
+    with pytest.raises(ValueError, match="Unknown inference_config field"):
+        est.set_params(inference_config__NOT_A_FIELD=1)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__clone_preserves_them(
+    estimator_cls: type,
+) -> None:
+    """`clone` carries nested overrides via the merged `inference_config` dict."""
+    est = estimator_cls(device="cpu")
+    est.set_params(inference_config__POLYNOMIAL_FEATURES="all")
+
+    cloned = clone(est)
+    assert cloned.inference_config == {"POLYNOMIAL_FEATURES": "all"}
+    assert cloned.get_params()["inference_config__POLYNOMIAL_FEATURES"] == "all"
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__deep_false_hides_them(
+    estimator_cls: type,
+) -> None:
+    """`deep=False` callers (tuning helpers, model persistence) are unaffected."""
+    est = estimator_cls(device="cpu", inference_config={"POLYNOMIAL_FEATURES": "all"})
+    shallow = est.get_params(deep=False)
+
+    assert shallow["inference_config"] == {"POLYNOMIAL_FEATURES": "all"}
+    assert "inference_config__POLYNOMIAL_FEATURES" not in shallow
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__set_params_get_params_roundtrip(
+    estimator_cls: type,
+) -> None:
+    """Sklearn's `set_params(**est.get_params())` round-trip keeps working."""
+    est = estimator_cls(
+        device="cpu",
+        inference_config={"POLYNOMIAL_FEATURES": "all", "N_ESTIMATORS": 4},
+    )
+
+    round_tripped = estimator_cls(device="cpu").set_params(**est.get_params())
+
+    assert round_tripped.inference_config == {
+        "POLYNOMIAL_FEATURES": "all",
+        "N_ESTIMATORS": 4,
+    }
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__agreeing_whole_and_nested__accepted(
+    estimator_cls: type,
+) -> None:
+    """Pieces that repeat the whole dict (as `get_params` emits) are redundant."""
+    est = estimator_cls(device="cpu")
+
+    est.set_params(
+        inference_config={"POLYNOMIAL_FEATURES": "all"},
+        inference_config__POLYNOMIAL_FEATURES="all",
+    )
+
+    assert est.inference_config == {"POLYNOMIAL_FEATURES": "all"}
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__nested_inference_config__conflicting_values__raises(
+    estimator_cls: type,
+) -> None:
+    """A piece disagreeing with the whole dict for the same field is ambiguous."""
+    est = estimator_cls(device="cpu")
+    with pytest.raises(ValueError, match="not both in one call"):
+        est.set_params(
+            inference_config={"POLYNOMIAL_FEATURES": "all"},
+            inference_config__POLYNOMIAL_FEATURES="no",
+        )
