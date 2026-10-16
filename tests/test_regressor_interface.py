@@ -39,6 +39,8 @@ from tabpfn.inference_tuning import (
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
@@ -1689,6 +1691,69 @@ def test__predict_batched__rejects_bad_arguments() -> None:
         reg.predict_batched([X], [y], [X[:3]], output_type="nonsense")  # type: ignore[arg-type]
     with pytest.raises(regressor_module.TabPFNValidationError):
         reg.predict_batched([X], [y], [X[:3]], output_type="quantiles", quantiles=[1.5])
+
+
+def _quantiles_ready_regressor() -> TabPFNRegressor:
+    """A regressor holding just the fitted state `predict` reads before it
+    validates `quantiles`.
+
+    Built with `__new__` because `__init__` blocks on the model-weight license
+    download, which this validation never reaches. The constant target makes an
+    accepted `quantiles` list come back as predictions rather than needing a
+    model.
+    """
+    reg = TabPFNRegressor.__new__(TabPFNRegressor)
+    X, _ = _mk_reg_dataset(0, n=8, f=3)
+    reg.date_transformer_ = DateTransformer().fit(X)
+    reg.text_transformer_ = TextTransformer().fit(X)
+    reg.n_features_in_ = X.shape[1]
+    reg.inference_config_ = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    reg.is_constant_target_ = True
+    reg.constant_value_ = 1.0
+    return reg
+
+
+@pytest.mark.parametrize(
+    "quantiles",
+    [
+        np.array([0.1, 0.9], dtype=np.float32),
+        np.array([0.1, 0.5, 0.9], dtype=np.float64),
+        [0, 1],
+        [0.25, 0.75],
+    ],
+)
+def test__predict__quantiles__accepts_any_real_numeric_type(
+    quantiles: Any,
+) -> None:
+    """Quantiles are read numerically, so a float32 array or an in-range int is
+    as valid as a Python float.
+    """
+    reg = _quantiles_ready_regressor()
+    X, _ = _mk_reg_dataset(0, n=8, f=3)
+
+    predictions = reg.predict(X, output_type="quantiles", quantiles=quantiles)
+
+    assert len(predictions) == len(quantiles)
+
+
+@pytest.mark.parametrize(
+    "quantiles", [[5, 95], [1.5], [-0.1], [0.5, 100]], ids=["pct", "hi", "lo", "mixed"]
+)
+def test__predict__quantiles__out_of_range_reports_the_range(
+    quantiles: list[float],
+) -> None:
+    """A value outside [0, 1] is a range mistake, and is reported as one."""
+    reg = _quantiles_ready_regressor()
+    X, _ = _mk_reg_dataset(0, n=8, f=3)
+
+    with pytest.raises(
+        regressor_module.TabPFNValidationError, match=r"must be between 0 and 1"
+    ) as excinfo:
+        reg.predict(X, output_type="quantiles", quantiles=quantiles)
+
+    # The range is the whole problem here, so the message must not also demand
+    # that the values be floats: 5 and 95 are ints because they are out of range.
+    assert "and floats" not in str(excinfo.value)
 
 
 def test__predict_batched__folds_estimators_one_at_a_time(
