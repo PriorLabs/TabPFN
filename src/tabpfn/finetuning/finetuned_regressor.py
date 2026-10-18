@@ -21,6 +21,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNRegressor
+from tabpfn.analytics import log_usage
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 from tabpfn.regression_metrics import (
@@ -499,6 +500,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         self.finetuned_inference_regressor_.fit(self.X_, self.y_)  # type: ignore
 
     @override
+    @log_usage("fit", main_process_only=True)
     def fit(
         self,
         X: XType,
@@ -528,6 +530,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         return self
 
     @override
+    @log_usage("predict")
     def predict(self, X: XType, **kwargs) -> RegressionResultType:
         """Predict target values for X.
 

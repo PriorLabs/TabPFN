@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import torch
 
+from tabpfn.analytics import set_sink
 from tabpfn.constants import ModelVersion
 from tabpfn.settings import settings
 
@@ -29,6 +30,16 @@ def default_to_fast_model() -> None:
     """
     if "TABPFN_MODEL_VERSION" not in os.environ:
         settings.tabpfn.model_version = ModelVersion.V3_5_FAST
+
+
+@pytest.fixture(autouse=True, scope="session")
+def no_usage_analytics() -> None:
+    """Log no usage from the tests.
+
+    With an API key in the environment, the first logged call would otherwise
+    start collecting usage, and ask the analytics API whether to send it.
+    """
+    set_sink(None)
 
 
 @pytest.fixture(autouse=True, scope="session")
