@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
+import numbers
 import typing
 import warnings
 from collections.abc import Iterator, Sequence
@@ -1471,10 +1472,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        elif not all((0 <= q <= 1) and isinstance(q, float) for q in quantiles):
+        elif not all(isinstance(q, numbers.Real) and 0 <= q <= 1 for q in quantiles):
             raise TabPFNValidationError(
-                "All quantiles must be between 0 and 1 and floats."
+                f"All quantiles must be real numbers between 0 and 1, got {quantiles}."
             )
+        quantiles = [float(q) for q in quantiles]
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
@@ -1903,10 +1905,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        elif not all((0 <= q <= 1) and isinstance(q, float) for q in quantiles):
+        elif not all(isinstance(q, numbers.Real) and 0 <= q <= 1 for q in quantiles):
             raise TabPFNValidationError(
-                "All quantiles must be between 0 and 1 and floats."
+                f"All quantiles must be real numbers between 0 and 1, got {quantiles}."
             )
+        quantiles = [float(q) for q in quantiles]
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
