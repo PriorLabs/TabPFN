@@ -597,8 +597,7 @@ def try_browser_login(
         case _:
             assert_never(step)
     print(  # noqa: T201
-        f"\n{LICENSE_ACCEPTANCE_HEADER}"
-        f"{instructions}"
+        f"\n{LICENSE_ACCEPTANCE_HEADER}{instructions}"
     )
 
     # --- main thread: poll stdin while waiting for callback ---

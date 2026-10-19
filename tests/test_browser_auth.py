@@ -709,7 +709,7 @@ class TestHeadlessInteractiveLogin:
             patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
             patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
         ):
-            headless_login("https://ux.priorlabs.ai")
+            headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
         assert LICENSE_ACCEPTANCE_HEADER in capsys.readouterr().out
 
 
@@ -799,8 +799,8 @@ class TestTryBrowserLoginRouting:
 
     def test_graphical_opens_browser(self, capsys: pytest.CaptureFixture[str]):
         """TTY + display → opens browser (existing flow)."""
-        from tabpfn.errors import LICENSE_ACCEPTANCE_HEADER  # noqa: PLC0415
         from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+        from tabpfn.errors import LICENSE_ACCEPTANCE_HEADER  # noqa: PLC0415
 
         try_login = self._import_try_login()
         with (
