@@ -701,6 +701,17 @@ class TestHeadlessInteractiveLogin:
         captured = capsys.readouterr()
         assert "hf_repo_id=tabpfn_2_6" in captured.out
 
+    def test_prompt_says_data_stays_local(self, capsys: pytest.CaptureFixture[str]):
+        from tabpfn.errors import LICENSE_ACCEPTANCE_HEADER  # noqa: PLC0415
+
+        headless_login = self._import_headless()
+        with (
+            patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
+            patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
+        ):
+            headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+        assert LICENSE_ACCEPTANCE_HEADER in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # try_browser_login routing
@@ -786,9 +797,10 @@ class TestTryBrowserLoginRouting:
             "&callback=http://localhost:"
         )
 
-    def test_graphical_opens_browser(self):
+    def test_graphical_opens_browser(self, capsys: pytest.CaptureFixture[str]):
         """TTY + display → opens browser (existing flow)."""
         from tabpfn.browser_auth import _AuthStep  # noqa: PLC0415
+        from tabpfn.errors import LICENSE_ACCEPTANCE_HEADER  # noqa: PLC0415
 
         try_login = self._import_try_login()
         with (
@@ -804,3 +816,4 @@ class TestTryBrowserLoginRouting:
 
         assert result == "browser-jwt"
         mock_browser.assert_called_once()
+        assert LICENSE_ACCEPTANCE_HEADER in capsys.readouterr().out

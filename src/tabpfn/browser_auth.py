@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from typing_extensions import assert_never
 
 from tabpfn.errors import (
+    LICENSE_ACCEPTANCE_HEADER,
     TabPFNError,
     TabPFNHuggingFaceGatedRepoError,
     TabPFNLicenseError,
@@ -403,8 +404,7 @@ def _headless_interactive_login(gui_url: str, *, hf_repo_id: str) -> str | None:
     login_url = _browser_url(gui_url, _AuthStep.LOGIN, hf_repo_id=hf_repo_id)
 
     print(  # noqa: T201
-        "\nTabPFN requires a one-time license acceptance to download"
-        " model weights for local inference.\n"
+        f"\n{LICENSE_ACCEPTANCE_HEADER}"
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
         f"\nAfter logging in, accept the license on the Licenses tab,\n"
@@ -597,9 +597,7 @@ def try_browser_login(
         case _:
             assert_never(step)
     print(  # noqa: T201
-        "\nTabPFN requires a one-time license acceptance to download"
-        " model weights for local inference."
-        f"{instructions}"
+        f"\n{LICENSE_ACCEPTANCE_HEADER}{instructions}"
     )
 
     # --- main thread: poll stdin while waiting for callback ---
@@ -688,17 +686,15 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
             raise _license_not_accepted_error(gui_url, hf_repo_id)
         case _AuthStep.LOGIN, _NoBrowserToken.DISABLED:
             raise TabPFNLicenseError(
-                "TabPFN requires a one-time license acceptance to download\n"
-                "model weights for local inference, but browser login is\n"
-                "disabled (TABPFN_NO_BROWSER is set).\n\n"
+                f"{LICENSE_ACCEPTANCE_HEADER}\n"
+                "Browser login is disabled (TABPFN_NO_BROWSER is set).\n\n"
                 "Set the TABPFN_TOKEN environment variable with a valid API key\n"
                 "obtained from https://ux.priorlabs.ai"
             )
         case _AuthStep.LOGIN, _NoBrowserToken.UNAVAILABLE:
             raise TabPFNLicenseError(
-                "TabPFN requires a one-time license acceptance to download\n"
-                "model weights for local inference, but no interactive terminal\n"
-                "is available.\n\n"
+                f"{LICENSE_ACCEPTANCE_HEADER}\n"
+                "There is no interactive terminal available.\n\n"
                 "To authenticate in a non-interactive environment:\n"
                 f"  1. Open {gui_url} in a browser and log in (or register)\n"
                 f"  2. Accept the license on the Licenses tab\n"
