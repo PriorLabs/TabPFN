@@ -1476,6 +1476,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raise TabPFNValidationError(
                 f"All quantiles must be real numbers between 0 and 1, got {quantiles}."
             )
+        quantiles = [float(q) for q in quantiles]
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
@@ -1908,6 +1909,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raise TabPFNValidationError(
                 f"All quantiles must be real numbers between 0 and 1, got {quantiles}."
             )
+        quantiles = [float(q) for q in quantiles]
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
