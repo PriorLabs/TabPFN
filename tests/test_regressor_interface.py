@@ -1676,6 +1676,19 @@ def test__predict_batched__float64_inputs_match_per_dataset() -> None:
         np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), rtol=1e-4)
 
 
+def test__predict__quantiles_accept_any_real_type_and_reject_out_of_range() -> None:
+    X, y = _mk_reg_dataset(0, n=40)
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=42).fit(X, y)
+
+    expected = reg.predict(X[:3], output_type="quantiles", quantiles=[0.0, 0.5, 1.0])
+    got = reg.predict(X[:3], output_type="quantiles", quantiles=[0, np.float32(0.5), 1])
+    for e, g in zip(expected, got, strict=True):
+        np.testing.assert_allclose(g, e)
+
+    with pytest.raises(regressor_module.TabPFNValidationError, match="between 0 and 1"):
+        reg.predict(X[:3], output_type="quantiles", quantiles=[5, 95])
+
+
 def test__predict_batched__rejects_bad_arguments() -> None:
     """Length, emptiness, output_type and quantile validation mirror predict."""
     X, y = _mk_reg_dataset(0, n=40)
