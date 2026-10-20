@@ -67,6 +67,8 @@ def create_preprocessing_pipeline(
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features
     )
+    steps.append(RemoveConstantFeaturesStep())
+
     if use_poly_features:
         steps.append(
             NanHandlingPolynomialFeaturesStep(
@@ -74,8 +76,6 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             ),
         )
-
-    steps.append(RemoveConstantFeaturesStep())
 
     # Decide whether the reshape transform moves to GPU. The reshape step
     # still runs on CPU (handling categorical reclassification,

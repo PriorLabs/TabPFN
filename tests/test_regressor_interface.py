@@ -781,7 +781,10 @@ def test_pandas_output_config():
         np.testing.assert_array_almost_equal(default_pred, polars_pred)
 
 
-def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
+@pytest.mark.parametrize("polynomial_features", ["no", "all"])
+def test_constant_feature_handling(
+    X_y: tuple[np.ndarray, np.ndarray], polynomial_features: str
+) -> None:
     """Test that constant features are properly handled and don't affect predictions."""
     X, y = X_y
 
@@ -790,7 +793,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         n_estimators=1,
         random_state=42,
         inference_config={
-            "POLYNOMIAL_FEATURES": "no",
+            "POLYNOMIAL_FEATURES": polynomial_features,
             # Set to False to avoid different fingerprint features for tiny
             # numerical variations e.g. from non-deterministic algorithms in
             # preprocessing steps before adding the fingerprint feature.
@@ -817,7 +820,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         n_estimators=1,
         random_state=42,
         inference_config={
-            "POLYNOMIAL_FEATURES": "no",
+            "POLYNOMIAL_FEATURES": polynomial_features,
             "FINGERPRINT_FEATURE": False,  # see above for why
         },
     )

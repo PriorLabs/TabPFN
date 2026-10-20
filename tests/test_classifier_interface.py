@@ -922,14 +922,21 @@ def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):
         np.testing.assert_array_almost_equal(default_proba, polars_proba)
 
 
-def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
+@pytest.mark.parametrize("polynomial_features", ["no", "all"])
+def test_constant_feature_handling(
+    X_y: tuple[np.ndarray, np.ndarray], polynomial_features: str
+) -> None:
     """Test that constant features are properly handled and
     don't affect predictions.
     """
     X, y = X_y
 
     # Create a TabPFNClassifier with fixed random state for reproducibility
-    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model = TabPFNClassifier(
+        n_estimators=2,
+        random_state=42,
+        inference_config={"POLYNOMIAL_FEATURES": polynomial_features},
+    )
     model.fit(X, y)
 
     # Get predictions on original data
@@ -947,7 +954,11 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
     # Create and fit a new model with the same random state
-    model_with_constants = TabPFNClassifier(n_estimators=2, random_state=42)
+    model_with_constants = TabPFNClassifier(
+        n_estimators=2,
+        random_state=42,
+        inference_config={"POLYNOMIAL_FEATURES": polynomial_features},
+    )
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
