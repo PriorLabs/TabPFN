@@ -53,27 +53,32 @@ _FA4_MAX_BATCH_PER_CALL = 65_535
 
 
 @functools.cache
-def _load_fa4_func() -> Callable | None:
-    """Lazily import ``flash_attn.cute.flash_attn_func``; ``None`` if missing."""
+def _load_fa4_funcs() -> tuple[Callable, Callable] | None:
+    """Lazily import FA4's ``flash_attn_func`` and ``flash_attn_varlen_func``.
+
+    Both are needed (the varlen one for uneven split-KV chunks), so the backend
+    is available only if both import; ``None`` otherwise.
+    """
     try:
         from flash_attn.cute import (  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
             flash_attn_func,
-        )
-    except ImportError:
-        return None
-    return flash_attn_func
-
-
-@functools.cache
-def _load_fa4_varlen_func() -> Callable | None:
-    """``flash_attn.cute.flash_attn_varlen_func``; ``None`` if missing."""
-    try:
-        from flash_attn.cute import (  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
             flash_attn_varlen_func,
         )
     except ImportError:
         return None
-    return flash_attn_varlen_func
+    return flash_attn_func, flash_attn_varlen_func
+
+
+def _require_fa4_funcs() -> tuple[Callable, Callable]:
+    """The FA4 entry points, or a clear error if the package is missing."""
+    funcs = _load_fa4_funcs()
+    if funcs is None:
+        raise RuntimeError(
+            "FA4 path requested but flash_attn.cute is not importable; "
+            "install it with `pip install 'tabpfn[fa4]'` "
+            "(see fa4_setup.md next to this file)."
+        )
+    return funcs
 
 
 @functools.cache
@@ -216,7 +221,8 @@ def _fa4_split_kv_varlen(
         .expand(batch, splits, seq_q, n_heads, head_dim)
         .reshape(n_seqs * seq_q, n_heads, head_dim)
     )
-    out, lse = _load_fa4_varlen_func()(
+    _, varlen_fn = _require_fa4_funcs()
+    out, lse = varlen_fn(
         q_rep,
         k.reshape(batch * seq_kv, n_kv_heads, head_dim),
         v.reshape(batch * seq_kv, n_kv_heads, head_dim),
@@ -256,13 +262,7 @@ def fa4_attn_func(
     / long-KV inference calls. Batches above ``_FA4_MAX_BATCH_PER_CALL`` run
     in chunks.
     """
-    fn = _load_fa4_func()
-    if fn is None:
-        raise RuntimeError(
-            "FA4 path requested but flash_attn.cute is not importable; "
-            "install it with `pip install 'tabpfn[fa4]'` "
-            "(see fa4_setup.md next to this file)."
-        )
+    fn, _ = _require_fa4_funcs()
     batch = q.shape[0]
     if num_splits is None:
         num_splits = _num_splits_for(q.device)
@@ -295,7 +295,7 @@ class FA4Backend(AttentionBackend):
     @staticmethod
     def is_available() -> bool:
         """Whether ``flash-attn-4`` is installed (checked once, at registration)."""
-        return _load_fa4_func() is not None
+        return _load_fa4_funcs() is not None
 
     def is_preferred(self, spec: AttentionSpec) -> bool:
         """Eligibility alone: FA4 has no measured short-sequence penalty."""
