@@ -208,6 +208,24 @@ def test__fa4_eligibility_head_dim_range_per_arch() -> None:
     assert is_fa4_eligible(device, torch.float16, head_dim=16)
 
 
+def test__fa4_unavailable_without_varlen_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backend needs ``flash_attn_varlen_func`` as well as
+    ``flash_attn_func``; with either missing it declines at registration
+    instead of failing inside a forward pass.
+    """
+    cute = pytest.importorskip("flash_attn.cute")
+    monkeypatch.delattr(cute, "flash_attn_varlen_func")
+    fa4_backend._load_fa4_funcs.cache_clear()
+    try:
+        assert not FA4_BACKEND.is_available()
+    finally:
+        monkeypatch.undo()
+        fa4_backend._load_fa4_funcs.cache_clear()
+    assert FA4_BACKEND.is_available()
+
+
 def test__fa4_split_kv_plan() -> None:
     """Split-KV outside the kernel triggers only for short Q against long KV at
     small batch, never below the chunk minimum, and never past 32 chunks.
