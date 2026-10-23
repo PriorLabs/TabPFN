@@ -95,7 +95,7 @@ ci = [
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = {torch = false}
+exclude-newer-package = {torch = false, certifi = "0 days", uv = "0 days"}
 
 [tool.setuptools.package-data]
 "tabpfn.architectures.shared" = ["tabpfn_col_embedding.pt"]
