@@ -86,17 +86,18 @@ def _forward_on_batch(
     estimator: TabPFNClassifier | TabPFNRegressor,
     batch: ClassifierBatch | RegressorBatch,
 ) -> list[torch.Tensor]:
-    """Run one step of a user-written fine-tuning loop and return its outputs.
-
-    This is all a custom loop does before `forward`. A change that needs more
-    steps here breaks every such loop outside this repository.
-    """
+    """Run one step of a custom fine-tuning loop with the batch's target frame."""
     estimator.fit_from_preprocessed(
         batch.X_context,
         batch.y_context,
         batch.cat_indices,
         batch.configs,
         performance_options=PerformanceOptions(),
+        **(
+            {"y_train_mean": batch.y_train_mean, "y_train_std": batch.y_train_std}
+            if isinstance(batch, RegressorBatch)
+            else {}
+        ),
     )
     if isinstance(estimator, TabPFNClassifier):
         return [estimator.forward(batch.X_query).detach()]

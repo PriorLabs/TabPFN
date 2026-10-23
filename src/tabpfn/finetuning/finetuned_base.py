@@ -1175,6 +1175,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     rank_batch.cat_indices,
                     rank_batch.configs,
                     performance_options=finetuning_performance_options,
+                    **(
+                        {
+                            "y_train_mean": rank_batch.y_train_mean,
+                            "y_train_std": rank_batch.y_train_std,
+                        }
+                        if isinstance(rank_batch, RegressorBatch)
+                        else {}
+                    ),
                 )
 
                 if using_ddp:

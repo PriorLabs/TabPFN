@@ -21,6 +21,8 @@ from tabpfn.downsample_correction import (
     temper_and_correct_logits,
 )
 from tabpfn.finetuning.data_util import (
+    ClassifierBatch,
+    RegressorBatch,
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
@@ -608,6 +610,7 @@ def test__classifier__fit_from_preprocessed_clears_stale_correction():
     fresh = _downsampling_classifier()
 
     batch = _finetuning_batch(stale, X, y, "classifier")
+    assert isinstance(batch, ClassifierBatch)
     cat_indices = batch.cat_indices
     outputs = []
     for clf in (stale, fresh):
@@ -630,6 +633,7 @@ def test__regressor__fit_from_preprocessed_clears_stale_correction():
     fresh = _downsampling_regressor()
 
     batch = _finetuning_batch(stale, X, y, "regressor")
+    assert isinstance(batch, RegressorBatch)
     outputs = []
     for reg in (stale, fresh):
         reg.fit_from_preprocessed(
@@ -638,11 +642,39 @@ def test__regressor__fit_from_preprocessed_clears_stale_correction():
             batch.cat_indices,
             batch.configs,
             performance_options=PerformanceOptions(),
+            y_train_mean=batch.y_train_mean,
+            y_train_std=batch.y_train_std,
         )
-        # The finetuning loop hands the batch's bar distributions to the estimator.
+        # Custom loops provide both bar distributions before forward().
         reg.znorm_space_bardist_ = batch.znorm_space_bardist
         reg.raw_space_bardist_ = batch.raw_space_bardist
+        assert reg.y_train_mean_ == batch.y_train_mean
+        assert reg.y_train_std_ == batch.y_train_std
         assert reg.downsample_correction_log_weights_ is None
         out = reg.forward(batch.X_query)
         outputs.append((out[0] if isinstance(out, tuple) else out).detach())
     torch.testing.assert_close(outputs[0], outputs[1])
+
+
+@pytest.mark.parametrize("scale", [1e-10, 1e-12])
+def test__regression_batch_frame_matches_member_for_near_constant_targets(
+    scale: float,
+) -> None:
+    X, y = _zero_inflated_regression(n_zeros=180, n_nonzero=20)
+    y = y * scale
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=0,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)},
+    )
+    batch = _finetuning_batch(reg, X, y, "regressor")
+    assert isinstance(batch, RegressorBatch)
+    standardize = batch.configs[0][0].target_transform.named_steps["standardize_target"]
+    assert batch.y_train_mean == standardize.mean_
+    assert batch.y_train_std == standardize.std_
+    np.testing.assert_allclose(
+        batch.y_query.numpy(),
+        (batch.y_query_raw.numpy() - standardize.mean_) / standardize.std_,
+        rtol=1e-6,
+    )
