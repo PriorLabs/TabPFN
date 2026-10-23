@@ -191,7 +191,7 @@ def _mixed_dataframe(
 
 def _schema_from_dataframe(df: pd.DataFrame) -> tuple[np.ndarray, FeatureSchema]:
     X = df.to_numpy(dtype=np.float64)
-    schema = detect_feature_modalities(
+    schema, _ = detect_feature_modalities(
         X=X,
         feature_names=list(df.columns),
         min_samples_for_inference=1,
