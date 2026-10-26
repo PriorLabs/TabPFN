@@ -60,10 +60,10 @@ class PreprocessorConfig:
             can have to be one-hot encoded. Features with higher cardinality are passed
             through unchanged to ordinal encoding. If None, all categorical features
             are one-hot encoded.
-        random_sign_flip: Randomly negate each numerical output column with probability
-            0.5 after all other preprocessing. Each ensemble member reuses its signs
-            for all rows and predictions. Includes generated numerical features and
-            categorical features treated as numeric. Disabled by default.
+        random_sign_flip_numericals: Randomly negate each numerical output column
+            with probability 0.5 after preprocessing. Each ensemble member reuses
+            its signs for all rows and predictions. Includes generated numerical
+            features and categorical features treated as numeric. Disabled by default.
     """
 
     name: Literal[
@@ -135,7 +135,7 @@ class PreprocessorConfig:
     ) = None
     max_onehot_cardinality: int | None = None
     differentiable: bool = False
-    random_sign_flip: bool = False
+    random_sign_flip_numericals: bool = False
 
     @override
     def __str__(self) -> str:
@@ -143,7 +143,11 @@ class PreprocessorConfig:
             f"{self.name}_cat:{self.categorical_name}"
             + ("_and_none" if self.append_original else "")
             + (f"_max_feats_per_est_{self.max_features_per_estimator}")
-            + ("_random_sign_flip" if self.random_sign_flip else "")
+            + (
+                "_random_sign_flip_numericals"
+                if self.random_sign_flip_numericals
+                else ""
+            )
             + (
                 f"_global_transformer_{self.global_transformer_name}"
                 if self.global_transformer_name is not None

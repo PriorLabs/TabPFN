@@ -148,7 +148,7 @@ def create_gpu_preprocessing_pipeline(
             )
         )
 
-    if pconfig.random_sign_flip:
+    if pconfig.random_sign_flip_numericals:
         steps.append(
             (
                 TorchRandomSignFlipStep(random_state=random_state),

@@ -69,7 +69,9 @@ def test_sign_flip_preserves_gradients() -> None:
 
 def _make_config(*, enabled: bool) -> ClassifierEnsembleConfig:
     return ClassifierEnsembleConfig(
-        preprocess_config=PreprocessorConfig("none", random_sign_flip=enabled),
+        preprocess_config=PreprocessorConfig(
+            "none", random_sign_flip_numericals=enabled
+        ),
         add_fingerprint_feature=False,
         polynomial_features="no",
         feature_shift_count=0,
@@ -83,11 +85,13 @@ def _make_config(*, enabled: bool) -> ClassifierEnsembleConfig:
 
 def test_sign_flip_is_opt_in() -> None:
     config = _make_config(enabled=False)
-    assert not PreprocessorConfig("none").random_sign_flip
+    assert not PreprocessorConfig("none").random_sign_flip_numericals
     assert create_gpu_preprocessing_pipeline(config) is None
     enabled = replace(
         config,
-        preprocess_config=replace(config.preprocess_config, random_sign_flip=True),
+        preprocess_config=replace(
+            config.preprocess_config, random_sign_flip_numericals=True
+        ),
     )
     assert create_gpu_preprocessing_pipeline(enabled) is not None
     assert str(config.preprocess_config) != str(enabled.preprocess_config)

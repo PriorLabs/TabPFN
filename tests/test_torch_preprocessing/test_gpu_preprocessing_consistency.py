@@ -259,13 +259,15 @@ def test_random_sign_flip_after_other_transforms(
             name,
             categorical_name=categorical_name,
             append_original=True,
-            random_sign_flip=True,
+            random_sign_flip_numericals=True,
         ),
         fingerprint=False,
     )
     baseline_config = replace(
         config,
-        preprocess_config=replace(config.preprocess_config, random_sign_flip=False),
+        preprocess_config=replace(
+            config.preprocess_config, random_sign_flip_numericals=False
+        ),
     )
     for run in (_run_cpu_only, _run_cpu_plus_gpu):
         flipped, output_schema = run(X, schema, config, 42)
