@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
-from multiprocessing.pool import ThreadPool
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Generic, Protocol, TypeVar
 
 import torch
@@ -109,14 +110,29 @@ def _execute_with_multithreading(
     for device_index, _ in enumerate(devices):
         free_devices.put(device_index, block=False)
 
-    with ThreadPool(processes=len(devices)) as pool:
-        async_results = [
-            pool.apply_async(_execute_function_in_thread, (devices, free_devices, func))
-            for func in functions
-        ]
-        for async_result in async_results:
-            sync_and_get_output = async_result.get()
-            yield sync_and_get_output()
+    # Callers create a function's inputs as it is taken, so we take a function only
+    # while at most one per device is unfinished: every device stays busy and one
+    # more is ready to start. Outputs are yielded in order, even though functions
+    # finish in any order.
+    pending: deque[Future[Callable[[], R_co]]] = deque()  # taken, not yielded
+    pool = ThreadPoolExecutor(max_workers=len(devices))
+    try:
+        for function in functions:
+            pending.append(
+                pool.submit(
+                    _execute_function_in_thread, devices, free_devices, function
+                )
+            )
+            # Make room before the loop takes the next function.
+            while len(running := [f for f in pending if not f.done()]) > len(devices):
+                if pending[0].done():
+                    yield pending.popleft().result()()
+                else:
+                    wait(running, return_when=FIRST_COMPLETED)
+        while pending:
+            yield pending.popleft().result()()
+    finally:
+        pool.shutdown(cancel_futures=True)
 
 
 def _execute_function_in_thread(
