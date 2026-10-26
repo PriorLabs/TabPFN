@@ -11,6 +11,7 @@ floating-point tolerance) so the change is behaviour-preserving.
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from typing import Literal
 
 import numpy as np
@@ -106,6 +107,7 @@ def _run_cpu_only(
         config,
         keep_fitted_cache=False,
         enable_gpu_preprocessing=False,
+        random_state=static_seed,
     )
     if gpu_pipe is not None:
         t = torch.from_numpy(cpu_res.X.astype(np_dtype)).unsqueeze(1)
@@ -242,6 +244,42 @@ def sample_data() -> _DataWithSchema:
     X[:, :n_cat] = rng.integers(0, 5, (n, n_cat)).astype(np.float64)
     schema = _make_schema(f, n_cat)
     return X, schema
+
+
+@pytest.mark.parametrize(
+    "name", ["none", "quantile_uni_coarse", "squashing_scaler_default"]
+)
+@pytest.mark.parametrize("categorical_name", ["ordinal", "onehot", "numeric"])
+def test_random_sign_flip_after_other_transforms(
+    sample_data: _DataWithSchema, name: str, categorical_name: str
+) -> None:
+    X, schema = sample_data
+    config = _make_config(
+        PreprocessorConfig(
+            name,
+            categorical_name=categorical_name,
+            append_original=True,
+            random_sign_flip=True,
+        ),
+        fingerprint=False,
+    )
+    baseline_config = replace(
+        config,
+        preprocess_config=replace(config.preprocess_config, random_sign_flip=False),
+    )
+    for run in (_run_cpu_only, _run_cpu_plus_gpu):
+        flipped, output_schema = run(X, schema, config, 42)
+        baseline, _ = run(X, schema, baseline_config, 42)
+        np.testing.assert_allclose(np.abs(flipped), np.abs(baseline))
+        categorical = output_schema.indices_for(FeatureModality.CATEGORICAL)
+        np.testing.assert_array_equal(flipped[:, categorical], baseline[:, categorical])
+        numerical = output_schema.indices_for(FeatureModality.NUMERICAL)
+        assert np.any(flipped[:, numerical] != baseline[:, numerical])
+        for idx in numerical:
+            assert np.allclose(flipped[:, idx], baseline[:, idx], equal_nan=True) or (
+                np.allclose(flipped[:, idx], -baseline[:, idx], equal_nan=True)
+            )
+    _assert_paths_match(X, schema, config)
 
 
 @pytest.fixture

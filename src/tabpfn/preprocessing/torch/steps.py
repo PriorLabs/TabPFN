@@ -33,6 +33,27 @@ from tabpfn.preprocessing.torch.torch_svd import (
 from tabpfn.utils import infer_random_state
 
 
+class TorchRandomSignFlipStep(TorchPreprocessingStep):
+    """Randomly negate columns with signs shared across rows."""
+
+    def __init__(self, random_state: int | np.random.Generator | None) -> None:
+        super().__init__()
+        # A fixed seed also preserves signs when inference recomputes preprocessing.
+        self.seed, _ = infer_random_state(random_state)
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        rng = np.random.default_rng(self.seed)
+        signs = 1 - 2 * rng.integers(0, 2, size=(1, x.shape[1], x.shape[2]))
+        return {"signs": torch.as_tensor(signs, dtype=x.dtype, device=x.device)}
+
+    @override
+    def _transform(
+        self, x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, None, None]:
+        return x * fitted_cache["signs"].to(x), None, None
+
+
 class TorchQuantileTransformerStep(TorchPreprocessingStep):
     """Pipeline step wrapper for TorchQuantileTransformer."""
 
