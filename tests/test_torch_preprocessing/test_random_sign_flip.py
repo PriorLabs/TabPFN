@@ -67,6 +67,56 @@ def test_sign_flip_preserves_gradients() -> None:
     torch.testing.assert_close(x.grad, result.x)
 
 
+@pytest.mark.parametrize("indices", [list(range(64)), list(range(0, 64, 2))])
+def test_sign_flip_allocates_only_one_table(indices: list[int]) -> None:
+    x = torch.ones(10_000, 1, 64)
+    with torch.autograd.profiler.profile(
+        profile_memory=True, use_kineto=False
+    ) as profile:
+        result = TorchRandomSignFlipStep(42).fit_transform(x, indices, 5_000)
+
+    allocated = sum(
+        max(0, event.self_cpu_memory_usage) for event in profile.key_averages()
+    )
+    table_bytes = x.numel() * x.element_size()
+    column_bytes = x.shape[1] * x.shape[2] * x.element_size()
+    assert allocated <= table_bytes + 2 * column_bytes
+    assert result.fitted_cache["signs"].dtype == torch.int8
+    assert result.fitted_cache["signs"].numel() == len(indices)
+
+
+@pytest.mark.parametrize("indices", [[3, 0, 2], [0, 1, 2, 3], []])
+@pytest.mark.parametrize("strided", [False, True])
+def test_selected_columns_preserve_values_gradients_and_input(
+    indices: list[int], strided: bool
+) -> None:
+    x = torch.arange(24, dtype=torch.float64).reshape(3, 2, 4)
+    if strided:
+        x = x.transpose(0, 1)
+    x.requires_grad_()
+    original = x.detach().clone()
+    rng = np.random.default_rng(42)
+    signs = torch.from_numpy(1 - 2 * rng.integers(0, 2, (1, x.shape[1], len(indices))))
+    expected = original.clone()
+    expected[..., indices] *= signs
+
+    result = TorchRandomSignFlipStep(42).fit_transform(x, indices, 1)
+    torch.testing.assert_close(result.x, expected, rtol=0, atol=0)
+    torch.testing.assert_close(x, original, rtol=0, atol=0)
+    assert result.x.data_ptr() != x.data_ptr()
+    result.x.sum().backward()
+    expected_gradient = torch.ones_like(x)
+    expected_gradient[..., indices] *= signs
+    torch.testing.assert_close(x.grad, expected_gradient, rtol=0, atol=0)
+
+
+def test_categorical_nan_bits_are_unchanged() -> None:
+    bits = torch.tensor([0x7F800001, 0x7FC00001], dtype=torch.int32)
+    x = bits.view(torch.float32).reshape(1, 1, 2)
+    result = TorchRandomSignFlipStep(42).fit_transform(x, [1], 1)
+    assert result.x.view(torch.int32)[0, 0, 0] == bits[0]
+
+
 def _make_config(*, enabled: bool) -> ClassifierEnsembleConfig:
     return ClassifierEnsembleConfig(
         preprocess_config=PreprocessorConfig(
