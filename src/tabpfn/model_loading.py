@@ -214,6 +214,7 @@ class ModelSource:  # noqa: D101
         filenames = [
             "tabpfn-v3.5-20260909.safetensors",
             "tabpfn-v3.5-20260909_multiclass.safetensors",
+            "tabpfn-v3.5-20261020_timeseries.safetensors",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3_5",

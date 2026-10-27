@@ -410,6 +410,7 @@ def test__load_v3_5_multitask_ckpt__backs_both_estimator_types(
     [
         ("tabpfn-v3.5-fast-20260909.safetensors", ModelVersion.V3_5_FAST),
         ("tabpfn-v3.5-20260909.safetensors", ModelVersion.V3_5),
+        ("tabpfn-v3.5-20261020_timeseries.safetensors", ModelVersion.V3_5),
         ("tabpfn-v3-classifier-v3_default.ckpt", ModelVersion.V3),
         ("tabpfn-v2.6-regressor-v2.6_default.ckpt", ModelVersion.V2_6),
         ("tabpfn-v2.5-classifier-v2.5_default.ckpt", ModelVersion.V2_5),
