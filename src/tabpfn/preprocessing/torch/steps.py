@@ -33,6 +33,66 @@ from tabpfn.preprocessing.torch.torch_svd import (
 from tabpfn.utils import infer_random_state
 
 
+class TorchRandomSignFlipStep(TorchPreprocessingStep):
+    """Randomly negate columns with signs shared across rows."""
+
+    def __init__(self, random_state: int | np.random.Generator | None) -> None:
+        super().__init__()
+        # A fixed seed also preserves signs when inference recomputes preprocessing.
+        self.seed, _ = infer_random_state(random_state)
+
+    @override
+    def fit_transform(
+        self,
+        x: torch.Tensor,
+        column_indices: list[int],
+        num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None = None,
+    ) -> TorchPreprocessingStepResult:
+        if fitted_cache is None:
+            # Fitting needs only the shape; slicing avoids gathering the table.
+            fitted_cache = self._fit(x[:0, :, : len(column_indices)])
+
+        if column_indices == list(range(x.shape[-1])):
+            transformed, _, _ = self._transform(x, fitted_cache)
+        else:
+            transformed = x.clone()
+            signs = fitted_cache["signs"].to(x)
+            start = 0
+            while start < len(column_indices):
+                end = start + 1
+                stride = (
+                    max(1, column_indices[end] - column_indices[start])
+                    if end < len(column_indices)
+                    else 1
+                )
+                while (
+                    end < len(column_indices)
+                    and column_indices[end] == column_indices[end - 1] + stride
+                ):
+                    end += 1
+                transformed[
+                    ..., column_indices[start] : column_indices[end - 1] + 1 : stride
+                ].mul_(signs[..., start:end])
+                start = end
+
+        return TorchPreprocessingStepResult(x=transformed, fitted_cache=fitted_cache)
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        rng = np.random.default_rng(self.seed)
+        signs = rng.integers(0, 2, size=(1, x.shape[1], x.shape[2])).astype(np.int8)
+        signs *= -2
+        signs += 1
+        return {"signs": torch.as_tensor(signs, device=x.device)}
+
+    @override
+    def _transform(
+        self, x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, None, None]:
+        return x * fitted_cache["signs"].to(x), None, None
+
+
 class TorchQuantileTransformerStep(TorchPreprocessingStep):
     """Pipeline step wrapper for TorchQuantileTransformer."""
 

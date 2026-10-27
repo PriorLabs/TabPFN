@@ -21,6 +21,7 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
 from tabpfn.preprocessing.torch.steps import (
     TorchAddFingerprintFeaturesStep,
     TorchAddSVDFeaturesStep,
+    TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
     TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
@@ -54,7 +55,7 @@ def create_gpu_preprocessing_pipeline(
         feature_schema: Feature schema from the CPU preprocessing output.
             Used to read ``scheduled_gpu_transform`` column annotations.
         n_train_samples: Number of training samples (after subsampling).
-        random_state: Random state for the SVD and shuffle steps.
+        random_state: Random state for SVD, shuffle, and random sign flips.
     """
     steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]] = []
     pconfig = config.preprocess_config
@@ -138,12 +139,19 @@ def create_gpu_preprocessing_pipeline(
             )
         )
 
-    # Outlier removal runs LAST to match the CPU-only execution order where
-    # it is the only GPU step and runs after all CPU preprocessing.
+    # Outlier removal runs after distribution transforms in both execution paths.
     if config.outlier_removal_std is not None:
         steps.append(
             (
                 TorchSoftClipOutliersStep(n_sigma=config.outlier_removal_std),
+                {FeatureModality.NUMERICAL},
+            )
+        )
+
+    if pconfig.random_sign_flip_numericals:
+        steps.append(
+            (
+                TorchRandomSignFlipStep(random_state=random_state),
                 {FeatureModality.NUMERICAL},
             )
         )

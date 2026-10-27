@@ -335,15 +335,14 @@ class TabPFNEnsemblePreprocessor:
         )
 
         if not self.enable_gpu_preprocessing:
-            # Legacy path: create GPU pipelines upfront (before CPU
-            # preprocessing) since they only contain the outlier removal step
-            # and don't need CPU metadata.
+            # These tensor steps do not need the CPU output schema at construction.
             gpu_preprocessors = [
                 create_gpu_preprocessing_pipeline(
                     config=config,
                     keep_fitted_cache=self.keep_fitted_cache,
+                    random_state=int(self.pipeline_seeds[config_index]),
                 )
-                for config in self.configs
+                for config_index, config in enumerate(self.configs)
             ]
 
         for (
