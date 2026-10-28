@@ -38,6 +38,7 @@ from sklearn.base import (
     check_is_fitted,
     clone,
 )
+from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
@@ -124,7 +125,6 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
     from tabpfn.architectures.interface import (
@@ -1020,11 +1020,44 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_examples=y.shape[0],  # Use length of validated y
             random_state=random_state,  # Use the provided rng
         )
+        for preset in self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS:
+            if preset == "log" and np.any(y <= 0):
+                raise ValueError(
+                    "The 'log' regression target transform requires strictly positive "
+                    "raw targets (y > 0). Use 'safepower' or None for "
+                    "nonpositive targets."
+                )
+            if preset == "1_plus_log" and np.any(y <= -1):
+                raise ValueError(
+                    "The '1_plus_log' regression target transform requires raw targets "
+                    "greater than -1. Use 'safepower' or None for targets <= -1."
+                )
+            if preset == "exp":
+                overflow_threshold = np.log(np.finfo(np.float32).max)
+                overflow_count = np.count_nonzero(y >= overflow_threshold)
+                if overflow_count:
+                    warnings.warn(
+                        f"The 'exp' regression target transform would make "
+                        f"{overflow_count} of {y.size} raw targets overflow "
+                        "in float32. "
+                        "Even one infinite value makes target standardization invalid. "
+                        "Rescale the targets or use 'safepower' or None.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+        # Yeo-Johnson depends on units and offset; fit it on standardized targets.
+        for preset in ("power", "safepower"):
+            possible_target_transforms[preset] = Pipeline(
+                steps=[
+                    ("standardize_input", StandardizeTarget()),
+                    (preset, possible_target_transforms[preset]),
+                ]
+            )
         # Each member fits its target pipeline on raw targets.
         target_preprocessors: list[Pipeline] = [
             make_target_transform(
                 None
-                if y_target_preprocessor is None
+                if y_target_preprocessor in (None, "none")
                 else possible_target_transforms[y_target_preprocessor]
             )
             for y_target_preprocessor in (

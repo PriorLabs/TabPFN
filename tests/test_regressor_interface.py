@@ -6,6 +6,7 @@ import io
 import itertools
 import os
 import typing
+import warnings
 from collections.abc import Callable
 from fractions import Fraction
 from functools import partial
@@ -1500,6 +1501,111 @@ def test__fit__member_target_is_the_znormalized_target() -> None:
     assert np.array_equal(member_y, (y - np.mean(y)) / (np.std(y) + 1e-20))
 
 
+def _mk_skewed_reg_dataset(
+    seed: int, n: int = 200, f: int = 5
+) -> tuple[np.ndarray, np.ndarray]:
+    """A strictly positive, right-skewed target -- the log-transform case."""
+    r = np.random.RandomState(seed)
+    X = r.randn(n, f)
+    y = np.exp(1.5 + X @ np.array([1.0, -0.5, 0.3, 0.0, 0.2]) + 0.3 * r.randn(n))
+    return X, y
+
+
+def test__fit__target_transform__applied_to_the_unnormalized_target() -> None:
+    """Apply log1p to raw targets before standardizing model inputs."""
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("1_plus_log",)},
+    )
+    reg.fit(X, y)
+
+    expected = np.log1p(y)
+    expected = (expected - expected.mean()) / expected.std()
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    np.testing.assert_allclose(member_y, expected, rtol=1e-8)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+@pytest.mark.parametrize("transform", ["power", "safepower"])
+def test__fit__power_standardizes_before_fitting(
+    dtype: type[np.floating], offset: float, transform: str
+) -> None:
+    X, y = _mk_skewed_reg_dataset(0)
+    y = (y + offset).astype(dtype)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X, y)
+
+    preset = reg.executor_.ensemble_members[0].config.target_transform.named_steps[
+        "target_transform"
+    ]
+    standardized = (y - float(np.mean(y))) / (float(np.std(y)) + 1e-20)
+    np.testing.assert_array_equal(
+        preset.named_steps["standardize_input"].transform(y.reshape(-1, 1)).ravel(),
+        standardized,
+    )
+    expected = regressor_module.get_all_reshape_feature_distribution_preprocessors(
+        num_examples=len(y), random_state=42
+    )[transform].fit_transform(standardized.reshape(-1, 1))
+    np.testing.assert_array_equal(preset.transform(y.reshape(-1, 1)), expected)
+    pipeline = reg.executor_.ensemble_members[0].config.target_transform
+    np.testing.assert_allclose(
+        pipeline.inverse_transform(pipeline.transform(y.reshape(-1, 1))).ravel(),
+        y,
+        rtol=1e-5,
+    )
+
+
+def test__fit__none_preset_is_resolved_to_no_transform() -> None:
+    """`"none"` is the identity, so it must not cost an extra pass."""
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("none",)},
+    )
+    reg.fit(X, y)
+
+    pipeline = reg.executor_.ensemble_members[0].config.target_transform
+    assert list(pipeline.named_steps) == ["standardize_target"]
+    assert np.array_equal(
+        np.asarray(reg.executor_.ensemble_members[0].y_train),
+        (y - np.mean(y)) / (np.std(y) + 1e-20),
+    )
+
+
+@pytest.mark.parametrize("transform", ["1_plus_log", "log", "safepower"])
+def test__predict__target_transform__predictions_are_finite_and_accurate(
+    transform: str,
+) -> None:
+    """Target transformation and inverse border mapping preserve prediction quality."""
+    X, y = _mk_skewed_reg_dataset(0)
+    X_train, X_test, y_train, y_test = X[:150], X[150:], y[:150], y[150:]
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        # Keep transform accuracy independent of CPU bfloat16 support.
+        inference_precision=torch.float32,
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X_train, y_train)
+    pred = reg.predict(X_test)
+
+    assert np.isfinite(pred).all()
+    assert r2_score(y_test, pred) > 0.7
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test__fit__target_frame_is_independent_of_the_target_units(dtype: str) -> None:
     """Rescaling the target changes its frame but preserves standardized inputs."""
@@ -2194,3 +2300,56 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
     round_tripped = TabPFNRegressor().set_params(**params)
     assert round_tripped.eval_metric == eval_metric
     assert round_tripped.tuning_config == tuning_config
+
+
+@pytest.mark.parametrize(
+    ("transform", "minimum", "domain"),
+    [
+        ("log", 0.0, "strictly positive"),
+        ("log", -1.0, "strictly positive"),
+        ("1_plus_log", -1.0, "greater than -1"),
+        ("1_plus_log", -2.0, "greater than -1"),
+    ],
+)
+def test__fit__invalid_log_target__raises_clear_error(
+    transform: str, minimum: float, domain: str
+) -> None:
+    X, y = _mk_skewed_reg_dataset(0)
+    y[0] = minimum
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    with pytest.raises(ValueError, match=f"{transform}.*{domain}"):
+        reg.fit(X, y)
+
+
+@pytest.mark.parametrize(
+    ("maximum", "warns"),
+    [
+        (1.0, False),
+        (88.0, False),
+        (np.nextafter(np.log(np.finfo(np.float32).max), np.float32(-np.inf)), False),
+        (np.log(np.finfo(np.float32).max), True),
+        (90.0, True),
+    ],
+)
+def test__fit__exp_target__warns_only_for_float32_overflow(
+    maximum: float, warns: bool
+) -> None:
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("exp",)},
+    )
+    y = y / y.max()
+    y[-1] = maximum
+    if warns:
+        with pytest.warns(UserWarning, match="exp.*1 of .*overflow in float32"):
+            reg.fit(X, y)
+    else:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=".*exp.*", category=UserWarning)
+            reg.fit(X, y)
