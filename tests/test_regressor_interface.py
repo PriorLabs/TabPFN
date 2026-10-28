@@ -1594,6 +1594,8 @@ def test__predict__target_transform__predictions_are_finite_and_accurate(
     reg = TabPFNRegressor(
         n_estimators=2,
         device="cpu",
+        # Keep transform accuracy independent of CPU bfloat16 support.
+        inference_precision=torch.float32,
         random_state=42,
         inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
     )
