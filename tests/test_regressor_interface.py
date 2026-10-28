@@ -6,6 +6,7 @@ import io
 import itertools
 import os
 import typing
+import warnings
 from collections.abc import Callable
 from fractions import Fraction
 from functools import partial
@@ -2322,12 +2323,20 @@ def test__fit__invalid_log_target__raises_clear_error(
         reg.fit(X, y)
 
 
-def test__fit__exp_target__warns_about_numerical_risks() -> None:
+@pytest.mark.parametrize("maximum", [1.0, 88.0, 90.0])
+def test__fit__exp_target__warns_only_for_float32_overflow(maximum: float) -> None:
     X, y = _mk_skewed_reg_dataset(0)
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
         inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("exp",)},
     )
-    with pytest.warns(UserWarning, match="exp.*raw targets.*overflow"):
-        reg.fit(X, y / y.max())
+    y = y / y.max()
+    y[-1] = maximum
+    if maximum > 88.0:
+        with pytest.warns(UserWarning, match="exp.*1 of .*overflow in float32"):
+            reg.fit(X, y)
+    else:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=".*exp.*", category=UserWarning)
+            reg.fit(X, y)

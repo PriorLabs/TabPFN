@@ -1033,14 +1033,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     "greater than -1. Use 'safepower' or None for targets <= -1."
                 )
             if preset == "exp":
-                warnings.warn(
-                    "The 'exp' regression target transform acts on raw targets and can "
-                    "overflow, underflow, or lose distinctions between target values "
-                    "during standardization. Predictions may be invalid even when "
-                    "fit succeeds. Prefer 'safepower' or None for numerical stability.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+                with np.errstate(over="ignore"):
+                    overflow_count = np.count_nonzero(
+                        np.isinf(np.exp(np.asarray(y, dtype=np.float32)))
+                    )
+                if overflow_count:
+                    warnings.warn(
+                        f"The 'exp' regression target transform would make "
+                        f"{overflow_count} of {y.size} raw targets overflow "
+                        "in float32. "
+                        "Even one infinite value makes target standardization invalid. "
+                        "Rescale the targets or use 'safepower' or None.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
         # Yeo-Johnson depends on units and offset; fit it on standardized targets.
         for preset in ("power", "safepower"):
             possible_target_transforms[preset] = Pipeline(
