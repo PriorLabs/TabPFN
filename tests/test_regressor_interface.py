@@ -2323,8 +2323,19 @@ def test__fit__invalid_log_target__raises_clear_error(
         reg.fit(X, y)
 
 
-@pytest.mark.parametrize("maximum", [1.0, 88.0, 90.0])
-def test__fit__exp_target__warns_only_for_float32_overflow(maximum: float) -> None:
+@pytest.mark.parametrize(
+    ("maximum", "warns"),
+    [
+        (1.0, False),
+        (88.0, False),
+        (np.nextafter(np.log(np.finfo(np.float32).max), np.float32(-np.inf)), False),
+        (np.log(np.finfo(np.float32).max), True),
+        (90.0, True),
+    ],
+)
+def test__fit__exp_target__warns_only_for_float32_overflow(
+    maximum: float, warns: bool
+) -> None:
     X, y = _mk_skewed_reg_dataset(0)
     reg = TabPFNRegressor(
         n_estimators=1,
@@ -2333,7 +2344,7 @@ def test__fit__exp_target__warns_only_for_float32_overflow(maximum: float) -> No
     )
     y = y / y.max()
     y[-1] = maximum
-    if maximum > 88.0:
+    if warns:
         with pytest.warns(UserWarning, match="exp.*1 of .*overflow in float32"):
             reg.fit(X, y)
     else:

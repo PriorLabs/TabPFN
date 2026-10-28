@@ -1033,10 +1033,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     "greater than -1. Use 'safepower' or None for targets <= -1."
                 )
             if preset == "exp":
-                with np.errstate(over="ignore"):
-                    overflow_count = np.count_nonzero(
-                        np.isinf(np.exp(np.asarray(y, dtype=np.float32)))
-                    )
+                overflow_threshold = np.log(np.finfo(np.float32).max)
+                overflow_count = np.count_nonzero(y >= overflow_threshold)
                 if overflow_count:
                     warnings.warn(
                         f"The 'exp' regression target transform would make "
