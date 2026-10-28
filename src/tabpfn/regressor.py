@@ -1020,13 +1020,35 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_examples=y.shape[0],  # Use length of validated y
             random_state=random_state,  # Use the provided rng
         )
+        for preset in self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS:
+            if preset == "log" and np.any(y <= 0):
+                raise ValueError(
+                    "The 'log' regression target transform requires strictly positive "
+                    "raw targets (y > 0). Use 'safepower' or None for "
+                    "nonpositive targets."
+                )
+            if preset == "1_plus_log" and np.any(y <= -1):
+                raise ValueError(
+                    "The '1_plus_log' regression target transform requires raw targets "
+                    "greater than -1. Use 'safepower' or None for targets <= -1."
+                )
+            if preset == "exp":
+                warnings.warn(
+                    "The 'exp' regression target transform acts on raw targets and can "
+                    "overflow, underflow, or lose distinctions between target values "
+                    "during standardization. Predictions may be invalid even when "
+                    "fit succeeds. Prefer 'safepower' or None for numerical stability.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         # Yeo-Johnson depends on units and offset; fit it on standardized targets.
-        possible_target_transforms["safepower"] = Pipeline(
-            steps=[
-                ("standardize_input", StandardizeTarget()),
-                ("safepower", possible_target_transforms["safepower"]),
-            ]
-        )
+        for preset in ("power", "safepower"):
+            possible_target_transforms[preset] = Pipeline(
+                steps=[
+                    ("standardize_input", StandardizeTarget()),
+                    (preset, possible_target_transforms[preset]),
+                ]
+            )
         # Each member fits its target pipeline on raw targets.
         target_preprocessors: list[Pipeline] = [
             make_target_transform(

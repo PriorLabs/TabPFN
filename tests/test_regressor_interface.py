@@ -1530,8 +1530,9 @@ def test__fit__target_transform__applied_to_the_unnormalized_target() -> None:
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
-def test__fit__safepower_standardizes_before_fitting(
-    dtype: type[np.floating], offset: float
+@pytest.mark.parametrize("transform", ["power", "safepower"])
+def test__fit__power_standardizes_before_fitting(
+    dtype: type[np.floating], offset: float, transform: str
 ) -> None:
     X, y = _mk_skewed_reg_dataset(0)
     y = (y + offset).astype(dtype)
@@ -1539,7 +1540,7 @@ def test__fit__safepower_standardizes_before_fitting(
         n_estimators=1,
         device="cpu",
         random_state=42,
-        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("safepower",)},
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
     )
     reg.fit(X, y)
 
@@ -1553,7 +1554,7 @@ def test__fit__safepower_standardizes_before_fitting(
     )
     expected = regressor_module.get_all_reshape_feature_distribution_preprocessors(
         num_examples=len(y), random_state=42
-    )["safepower"].fit_transform(standardized.reshape(-1, 1))
+    )[transform].fit_transform(standardized.reshape(-1, 1))
     np.testing.assert_array_equal(preset.transform(y.reshape(-1, 1)), expected)
     pipeline = reg.executor_.ensemble_members[0].config.target_transform
     np.testing.assert_allclose(
@@ -2296,3 +2297,37 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
     round_tripped = TabPFNRegressor().set_params(**params)
     assert round_tripped.eval_metric == eval_metric
     assert round_tripped.tuning_config == tuning_config
+
+
+@pytest.mark.parametrize(
+    ("transform", "minimum", "domain"),
+    [
+        ("log", 0.0, "strictly positive"),
+        ("log", -1.0, "strictly positive"),
+        ("1_plus_log", -1.0, "greater than -1"),
+        ("1_plus_log", -2.0, "greater than -1"),
+    ],
+)
+def test__fit__invalid_log_target__raises_clear_error(
+    transform: str, minimum: float, domain: str
+) -> None:
+    X, y = _mk_skewed_reg_dataset(0)
+    y[0] = minimum
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    with pytest.raises(ValueError, match=f"{transform}.*{domain}"):
+        reg.fit(X, y)
+
+
+def test__fit__exp_target__warns_about_numerical_risks() -> None:
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("exp",)},
+    )
+    with pytest.warns(UserWarning, match="exp.*raw targets.*overflow"):
+        reg.fit(X, y / y.max())
