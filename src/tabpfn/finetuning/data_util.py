@@ -18,6 +18,7 @@ from sklearn.model_selection import StratifiedKFold
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.target_transform import StandardizeTarget
 from tabpfn.utils import infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
@@ -66,6 +67,8 @@ class RegressorBatch:
         znorm_space_bardist: Bar distribution in z-normalized target space.
         X_query_raw: Original unprocessed test features.
         y_query_raw: Original unprocessed test targets.
+        y_train_mean: Training-target mean defining the shared aggregation frame.
+        y_train_std: Standard deviation of this split's training target.
     """
 
     X_context: list[torch.Tensor]
@@ -79,6 +82,8 @@ class RegressorBatch:
     znorm_space_bardist: FullSupportBarDistribution
     X_query_raw: torch.Tensor
     y_query_raw: torch.Tensor
+    y_train_mean: float
+    y_train_std: float
 
 
 Batch = TypeVar("Batch", ClassifierBatch, RegressorBatch)
@@ -366,7 +371,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         return len(self.configs)
 
     @override
-    def __getitem__(self, index: int) -> ClassifierBatch | RegressorBatch:  # noqa: C901, PLR0912
+    def __getitem__(self, index: int) -> ClassifierBatch | RegressorBatch:  # noqa: C901
         """Retrieves, splits, and preprocesses the dataset config at the index.
 
         Performs train/test splitting and applies potentially multiple
@@ -438,22 +443,10 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         # This however makes also sense when considering that
         # this attribute changes on every dataset
         if is_regression_task:
-            train_mean = np.mean(y_train_raw)
-            train_std = np.std(y_train_raw)
-
-            eps = 1e-8
-            if train_std < eps:
-                warnings.warn(
-                    f"Target variable has constant or near-constant values "
-                    f"(std={train_std:.2e}). Adding epsilon={eps} to prevent "
-                    f"division by zero in standardization.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                train_std = eps
+            frame = StandardizeTarget().fit(y_train_raw)
+            train_mean, train_std = frame.mean_, frame.std_
 
             y_test_standardized = (y_test_raw - train_mean) / train_std
-            y_train_standardized = (y_train_raw - train_mean) / train_std
             znorm_borders = znorm_space_bardist_.borders
             raw_space_bardist_ = (
                 FullSupportBarDistribution(
@@ -463,9 +456,6 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 .float()
                 .to(znorm_borders.device)
             )
-            y_train = y_train_standardized
-        else:
-            y_train = y_train_raw
 
         num_columns = x_train_raw.shape[1]
         feature_schema = FeatureSchema.from_only_categorical_indices(
@@ -480,7 +470,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         )
         ensemble_members = ensemble_preprocessor.fit_transform_ensemble_members(
             X_train=x_train_raw,
-            y_train=y_train,
+            y_train=y_train_raw,
         )
         X_trains_preprocessed = [m.X_train for m in ensemble_members]
         y_trains_preprocessed = [m.y_train for m in ensemble_members]
@@ -535,6 +525,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 znorm_space_bardist=znorm_space_bardist_,
                 X_query_raw=x_test_raw,
                 y_query_raw=y_test_raw,
+                y_train_mean=float(train_mean),
+                y_train_std=float(train_std),
             )
 
         return ClassifierBatch(
@@ -700,6 +692,9 @@ def meta_dataset_collator(
         znorm_space_bardist=first_item.znorm_space_bardist,
         X_query_raw=_collate_tensor_field(batch, "X_query_raw", padding_val),
         y_query_raw=_collate_tensor_field(batch, "y_query_raw", padding_val),
+        # The target frame belongs to the bar distributions above.
+        y_train_mean=first_item.y_train_mean,
+        y_train_std=first_item.y_train_std,
     )
 
 
