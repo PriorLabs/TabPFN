@@ -1606,6 +1606,28 @@ def test__predict__target_transform__predictions_are_finite_and_accurate(
     assert r2_score(y_test, pred) > 0.7
 
 
+def test__predict__quantile_gap__members_are_clamped_at_zero() -> None:
+    """No member puts mass below raw 0, so the aggregated mean is not negative."""
+    r = np.random.RandomState(0)
+    X = r.randn(300, 3)
+    y = np.where(X[:, 0] < 0.5, 0.0, np.exp(4.0 + X[:, 1] + 0.3 * r.randn(300)))
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        inference_precision=torch.float32,
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("quantile_gap",)},
+    )
+    reg.fit(X[:200], y[:200])
+    full = reg.predict(X[200:], output_type="full")
+
+    borders = full["criterion"].borders.cpu().numpy()
+    probs = full["logits"].softmax(-1).cpu().numpy()
+    below_zero = probs[:, borders[1:] <= 0].sum(-1)
+    assert below_zero.max() == 0
+    assert (full["mean"] >= 0).all()
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test__fit__target_frame_is_independent_of_the_target_units(dtype: str) -> None:
     """Rescaling the target changes its frame but preserves standardized inputs."""
@@ -2309,6 +2331,7 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
         ("log", -1.0, "strictly positive"),
         ("1_plus_log", -1.0, "greater than -1"),
         ("1_plus_log", -2.0, "greater than -1"),
+        ("quantile_gap", -1.0, "nonnegative"),
     ],
 )
 def test__fit__invalid_log_target__raises_clear_error(
