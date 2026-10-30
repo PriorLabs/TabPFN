@@ -38,6 +38,8 @@ from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     RegressorEvalMetrics,
     RegressorTuningConfig,
+    find_mean_recalibration_scale,
+    get_tuning_splits,
     get_tuning_temperatures,
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
@@ -2300,6 +2302,113 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
     round_tripped = TabPFNRegressor().set_params(**params)
     assert round_tripped.eval_metric == eval_metric
     assert round_tripped.tuning_config == tuning_config
+
+
+def _make_non_negative_tuning_sized_regression_data() -> tuple[np.ndarray, np.ndarray]:
+    X, y = _make_tuning_sized_regression_data()
+    return X, np.abs(y)
+
+
+@pytest.mark.parametrize("calibrate_temperature", [False, True])
+@pytest.mark.parametrize("power", [1.0, 1.5])
+def test__fit__with_recalibrate_mean__scales_the_mean_by_the_holdout_fit(
+    power: float, calibrate_temperature: bool
+) -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    # One model for every regressor below: each dummy model has its own random weights.
+    kwargs = _tuning_regressor_kwargs()
+    tuning_config = {
+        "recalibrate_mean": True,
+        "mean_recalibration_power": power,
+        "calibrate_temperature": calibrate_temperature,
+        "tuning_holdout_frac": 0.5,
+        "tuning_n_folds": 2,
+    }
+    recalibrated = TabPFNRegressor(tuning_config=tuning_config, **kwargs).fit(X, y)
+
+    # Rebuild the holdout means the scale must be fitted on: one tuning regressor
+    # per split, predicting the mean of its own holdout rows with the calibrated
+    # temperature.
+    temperature = recalibrated.ensemble_softmax_temperature_
+    y_holdout, mean_holdout = [], []
+    for X_train, X_holdout, y_train, y_hold in get_tuning_splits(
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        fold_regressor = TabPFNRegressor(**kwargs).fit(X_train, y_train)
+        fold_regressor.ensemble_softmax_temperature_ = temperature
+        y_holdout.append(y_hold)
+        mean_holdout.append(fold_regressor.predict(X_holdout))
+    expected_scale = find_mean_recalibration_scale(
+        y_true=np.concatenate(y_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=power,
+    )
+    assert recalibrated.mean_recalibration_scale_ != 1.0
+    np.testing.assert_allclose(
+        recalibrated.mean_recalibration_scale_, expected_scale, rtol=1e-5
+    )
+
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    plain.ensemble_softmax_temperature_ = temperature
+    X_test = X[:20]
+    scale = recalibrated.mean_recalibration_scale_
+    np.testing.assert_allclose(
+        recalibrated.predict(X_test), scale * plain.predict(X_test), rtol=1e-6
+    )
+    main_recalibrated = recalibrated.predict(X_test, output_type="main")
+    main_plain = plain.predict(X_test, output_type="main")
+    np.testing.assert_allclose(
+        main_recalibrated["mean"], scale * main_plain["mean"], rtol=1e-6
+    )
+    # Only the mean is rescaled.
+    np.testing.assert_array_equal(main_recalibrated["median"], main_plain["median"])
+    np.testing.assert_array_equal(
+        recalibrated.predict(X_test, output_type="quantiles", quantiles=[0.9])[0],
+        plain.predict(X_test, output_type="quantiles", quantiles=[0.9])[0],
+    )
+
+
+@pytest.mark.parametrize(
+    "tuning_config",
+    [
+        None,
+        {"calibrate_temperature": True, "tuning_holdout_frac": 0.5},
+    ],
+)
+def test__fit__without_recalibrate_mean__leaves_the_mean_unchanged(
+    tuning_config: dict | None,
+) -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config=tuning_config, **_tuning_regressor_kwargs()
+    ).fit(X, y)
+
+    assert regressor.mean_recalibration_scale_ == 1.0
+    X_test = X[:20]
+    unscaled_mean = regressor_module._logits_to_output(
+        output_type="mean",
+        logits=regressor._compute_aggregated_logits(
+            ensure_compatible_predict_input_sklearn(X_test, regressor)
+        ),
+        znorm_space_bardist=regressor.znorm_space_bardist_,
+        y_mean=regressor.y_train_mean_,
+        y_std=regressor.y_train_std_,
+        quantiles=[],
+    )
+    np.testing.assert_array_equal(regressor.predict(X_test), unscaled_mean)
+    np.testing.assert_array_equal(
+        regressor.predict(X_test, output_type="main")["mean"], unscaled_mean
+    )
+
+
+def test__fit__recalibrate_mean_with_negative_targets__raises() -> None:
+    X, y = _make_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config={"recalibrate_mean": True}, **_tuning_regressor_kwargs()
+    )
+
+    with pytest.raises(ValueError, match="non-negative targets"):
+        regressor.fit(X, y)
 
 
 @pytest.mark.parametrize(
