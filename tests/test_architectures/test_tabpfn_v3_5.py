@@ -11,15 +11,18 @@ against every train row, so the inference cache stops growing with the table.
 from __future__ import annotations
 
 import ast
+import contextlib
 import dataclasses
 import functools
 import inspect
 import sys
+from collections.abc import Iterator
 from typing import Literal
 
 import numpy as np
 import pytest
 import torch
+from torch.torch_version import TorchVersion
 
 from tabpfn import TabPFNClassifier
 from tabpfn.architectures import tabpfn_v3_5
@@ -1366,6 +1369,197 @@ def test__rmsnorm__fp16_input_with_large_values__matches_fp32() -> None:
     actual = norm(x.to(torch.float16))
     assert actual.dtype == torch.float16
     torch.testing.assert_close(actual.float(), expected, rtol=1e-2, atol=1e-2)
+
+
+_requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="The short-row RMSNorm path is CUDA only"
+)
+_short_row_devices = [pytest.param("cpu"), pytest.param("cuda", marks=_requires_cuda)]
+
+
+def _short_row_norm_and_input(
+    size: int,
+    device: str,
+    *,
+    scale: float = 30.0,
+    rows: int = tabpfn_v3_5._SHORT_ROW_MIN_ROWS,
+) -> tuple[tabpfn_v3_5._DtypeMatchingRMSNorm, torch.Tensor]:
+    generator = torch.Generator().manual_seed(67)
+    norm = tabpfn_v3_5._DtypeMatchingRMSNorm(size, device=device)
+    with torch.no_grad():
+        norm.weight.copy_(torch.rand(size, generator=generator) + 0.5)
+    x = torch.randn(rows // 64, 8, 8, size, generator=generator) * scale
+    return norm, x.to(device=device, dtype=torch.float16)
+
+
+def _rms_norm_with_fp32_upcast(
+    norm: tabpfn_v3_5._DtypeMatchingRMSNorm, x: torch.Tensor
+) -> torch.Tensor:
+    """The orig path replaced by `_rms_norm_short_rows` for short rows on fp16 CUDA."""
+    return torch.nn.functional.rms_norm(
+        x.float(), norm.normalized_shape, norm.weight.float(), norm.eps
+    ).to(x.dtype)
+
+
+@pytest.fixture
+def short_row_calls(monkeypatch: pytest.MonkeyPatch) -> list[torch.Size]:
+    """The input shapes `_DtypeMatchingRMSNorm` hands to `_rms_norm_short_rows`."""
+    calls: list[torch.Size] = []
+    short_rows = tabpfn_v3_5._rms_norm_short_rows
+
+    def recording_short_rows(
+        x: torch.Tensor, weight: torch.Tensor | None, eps: float | None
+    ) -> torch.Tensor:
+        calls.append(x.shape)
+        return short_rows(x, weight, eps)
+
+    monkeypatch.setattr(tabpfn_v3_5, "_rms_norm_short_rows", recording_short_rows)
+    return calls
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("device", _short_row_devices)
+@pytest.mark.parametrize("size", [16, 64])
+@pytest.mark.parametrize("contiguous", [True, False])
+def test__rms_norm_short_rows__matches_the_fp32_upcast(
+    device: str, size: int, *, contiguous: bool
+) -> None:
+    """The helper computes what the fp32 upcast computes, on any memory layout."""
+    norm, x = _short_row_norm_and_input(size, device)
+    if not contiguous:
+        x = x.transpose(1, 2)
+    actual = tabpfn_v3_5._rms_norm_short_rows(x, norm.weight, norm.eps)
+    assert actual.dtype == torch.float16
+    # Both accumulate in fp32 and round to fp16 once, but the summation
+    # order differs, which moves a result by at most one fp16 rounding step.
+    torch.testing.assert_close(actual, _rms_norm_with_fp32_upcast(norm, x))
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("device", _short_row_devices)
+def test__rms_norm_short_rows__large_values__matches_fp32(device: str) -> None:
+    """The squares overflow fp16, the short-row path must not return zeros."""
+    norm, x = _short_row_norm_and_input(64, device, scale=300.0)
+    expected = torch.nn.functional.rms_norm(
+        x.float(), norm.normalized_shape, norm.weight, norm.eps
+    )
+    actual = tabpfn_v3_5._rms_norm_short_rows(x, norm.weight, norm.eps)
+    torch.testing.assert_close(actual.float(), expected, rtol=1e-2, atol=1e-2)
+
+
+@_requires_cuda
+@torch.no_grad()
+@pytest.mark.usefixtures("fake_cutedsl_registry")  # empty: torch's CuTeDSL norm is off
+def test__rmsnorm__short_fp16_rows_on_cuda__take_the_short_row_path(
+    short_row_calls: list[torch.Size],
+) -> None:
+    """A large batch of short fp16 rows on CUDA must use the short-row path."""
+    norm, x = _short_row_norm_and_input(16, "cuda")
+    norm(x)
+    assert short_row_calls == [x.shape]
+
+
+@_requires_cuda
+def test__rmsnorm__short_rows_with_autograd__keep_the_fp32_upcast(
+    short_row_calls: list[torch.Size],
+) -> None:
+    """Fine-tuning must keep the fp32 upcast, with the same output and gradients."""
+    norm, x = _short_row_norm_and_input(16, "cuda", scale=3.0)
+    x.requires_grad_()
+    upstream = torch.randn(x.shape, device="cuda", dtype=torch.float16)
+
+    def output_and_gradients(out: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        return (out, *torch.autograd.grad(out, (x, norm.weight), upstream))
+
+    actual = output_and_gradients(norm(x))
+    expected = output_and_gradients(_rms_norm_with_fp32_upcast(norm, x))
+    for a, e in zip(actual, expected, strict=True):
+        assert torch.equal(a, e)
+    assert not short_row_calls
+
+
+@pytest.fixture
+def fake_cutedsl_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """Replace torch's list of CuTeDSL overrides with a list the test fills in.
+    Torch before 2.14 has no such list, so `_torch_uses_cutedsl_rms_norm` is False.
+    """
+    ops: list[str] = []
+    with contextlib.suppress(ImportError):
+        from torch._native import registry  # noqa: PLC0415
+
+        monkeypatch.setattr(registry, "get_dsl_operations", lambda _dsl_name: ops)
+    monkeypatch.setattr(torch.version, "hip", None)
+    tabpfn_v3_5._torch_uses_cutedsl_rms_norm.cache_clear()
+    yield ops
+    tabpfn_v3_5._torch_uses_cutedsl_rms_norm.cache_clear()
+
+
+_requires_torch_native = pytest.mark.skipif(
+    torch.__version__ < TorchVersion("2.14"), reason="torch._native is new in 2.14"
+)
+
+
+@_requires_torch_native
+@pytest.mark.parametrize(
+    ("capability_major", "registered", "expected"),
+    [
+        (9, ["_fused_rms_norm"], True),
+        (12, ["_fused_rms_norm"], False),
+        (9, [], False),
+    ],
+)
+def test__torch_uses_cutedsl_rms_norm__follows_torch_registry_and_gpu(
+    capability_major: int,
+    registered: list[str],
+    *,
+    expected: bool,
+    fake_cutedsl_registry: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a Hopper or Blackwell GPU with the CuTeDSL RMSNorm registered counts.
+    The True case also fails if torch moves the private registry API.
+    """
+    fake_cutedsl_registry.extend(registered)
+    monkeypatch.setattr(
+        torch.cuda, "get_device_capability", lambda _device: (capability_major, 0)
+    )
+    assert tabpfn_v3_5._torch_uses_cutedsl_rms_norm(torch.device("cuda", 0)) is expected
+
+
+@_requires_cuda
+@_requires_torch_native
+@torch.no_grad()
+def test__rmsnorm__torch_uses_cutedsl__keeps_the_fp32_upcast(
+    fake_cutedsl_registry: list[str],
+    short_row_calls: list[torch.Size],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Where torch's CuTeDSL RMSNorm runs, the short-row path must not be used."""
+    fake_cutedsl_registry.append("_fused_rms_norm")
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device: (9, 0))
+    norm, x = _short_row_norm_and_input(16, "cuda")
+    assert torch.equal(norm(x), _rms_norm_with_fp32_upcast(norm, x))
+    assert not short_row_calls
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    ("size", "device", "rows"),
+    [
+        pytest.param(
+            128, "cuda", tabpfn_v3_5._SHORT_ROW_MIN_ROWS, marks=_requires_cuda
+        ),
+        pytest.param(16, "cuda", 1024, marks=_requires_cuda),
+        pytest.param(16, "cpu", tabpfn_v3_5._SHORT_ROW_MIN_ROWS),
+    ],
+)
+def test__rmsnorm__fp16_outside_the_short_row_path__is_unchanged(
+    size: int, device: str, rows: int, short_row_calls: list[torch.Size]
+) -> None:
+    """Input failing any one condition must keep the fp32 upcast, bit for bit."""
+    norm, x = _short_row_norm_and_input(size, device, rows=rows)
+    assert torch.equal(norm(x), _rms_norm_with_fp32_upcast(norm, x))
+    assert not short_row_calls
 
 
 @torch.no_grad()
