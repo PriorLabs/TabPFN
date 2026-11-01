@@ -625,9 +625,12 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
         if input.dtype == torch.float16:
             # Inference only: `_rms_norm_short_rows` uses `out=` which is not supported
             # by autograd, and its gradients would be rounded slightly differently.
+            # Skipped under torch.compile: inductor generates its own norm kernel,
+            # and Dynamo would trace through the cached CuTeDSL check with a warning.
             if (
                 input.is_cuda
                 and not torch.is_grad_enabled()
+                and not torch.compiler.is_compiling()
                 and len(self.normalized_shape) == 1
                 and self.normalized_shape[0] <= _SHORT_ROW_MAX_SIZE
                 and input.numel() >= _SHORT_ROW_MIN_ROWS * self.normalized_shape[0]

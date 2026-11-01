@@ -1460,6 +1460,19 @@ def test__rmsnorm__short_fp16_rows_on_cuda__take_the_short_row_path(
 
 
 @_requires_cuda
+@torch.no_grad()
+@pytest.mark.usefixtures("fake_cutedsl_registry")  # empty: torch's CuTeDSL norm is off
+def test__rmsnorm__short_fp16_rows_under_torch_compile__trace_as_one_graph() -> None:
+    """Compiled inference must not graph-break on the short-row path checks.
+    `fullgraph=True` raises on any graph break.
+    """
+    norm, x = _short_row_norm_and_input(16, "cuda")
+    torch._dynamo.reset()
+    compiled = torch.compile(norm, backend="eager", fullgraph=True)
+    assert torch.equal(compiled(x), _rms_norm_with_fp32_upcast(norm, x))
+
+
+@_requires_cuda
 def test__rmsnorm__short_rows_with_autograd__keep_the_fp32_upcast(
     short_row_calls: list[torch.Size],
 ) -> None:
