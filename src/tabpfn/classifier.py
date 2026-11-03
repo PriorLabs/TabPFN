@@ -439,6 +439,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 - If `"auto"`, we determine whether to use autocast or not depending on
                   the device type.
 
+                A row's prediction does not depend on the other rows predicted with it,
+                but only `torch.float64` makes this exact. In lower precisions, the
+                kernels chosen for different batch sizes round differently, so
+                predicting a row alone or in a batch can differ by about 1e-5 to 1e-3.
+
             fit_mode:
                 Determine how the TabPFN model is "fitted". The mode determines how the
                 data is preprocessed and cached for inference. This is unique to an
