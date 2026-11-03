@@ -415,7 +415,8 @@ def test__predict__single_row_vs_batch__equal_in_float64(
 
     The model treats test rows independently, but matrix products are summed in an
     order that depends on the batch size. In float64 this changes results by about
-    1e-16, in lower precisions by up to about 1e-3, so this test forces float64.
+    1e-15 relative, in lower precisions by up to about 1e-3, so this test forces
+    float64. The tolerance is relative because predictions can be large.
     """
     X, y = X_y
     tabpfn = TabPFNRegressor.create_default_for_version(
@@ -430,7 +431,7 @@ def test__predict__single_row_vs_batch__equal_in_float64(
     batch_preds = tabpfn.predict(X)
     single_preds = np.concatenate([tabpfn.predict(X[i : i + 1]) for i in range(len(X))])
 
-    np.testing.assert_allclose(single_preds, batch_preds, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(single_preds, batch_preds, rtol=1e-12, atol=1e-12)
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))
