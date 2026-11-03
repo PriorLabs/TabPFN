@@ -2509,7 +2509,11 @@ def _logits_to_output(
     #   "pi": criterion.pi(logits, np.max(self.y)),
     #   "ei": criterion.ei(logits),
     if output_type == "mean":
-        output = criterion.mean(logits)
+        # The mean is a softmax-weighted sum over the buckets. In float32 its
+        # rounding depends on the batch size, so a row's mean would change with the
+        # rows predicted alongside it. MPS has no float64 and stays in float32.
+        mean_dtype = torch.float32 if logits.device.type == "mps" else torch.float64
+        output = criterion.mean(logits.to(mean_dtype))
     elif output_type == "median":
         output = criterion.median(logits)
     elif output_type == "mode":
