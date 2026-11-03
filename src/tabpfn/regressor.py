@@ -469,8 +469,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   the device type.
 
                 A row's prediction does not depend on the other rows predicted with it,
-                but only `torch.float64` makes this exact. In lower precisions, the
-                kernels chosen for different batch sizes round differently, so
+                but only `torch.float64` makes this exact. Matrix products are summed
+                in an order that depends on the batch size, so in lower precisions
                 predicting a row alone or in a batch can differ by about 1e-5 to 1e-3.
 
             fit_mode:
