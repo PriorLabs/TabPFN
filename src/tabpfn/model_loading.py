@@ -1360,6 +1360,15 @@ def _json_safe_device(device: DevicesSpecification) -> str | list[str]:
     return [str(d) for d in device]
 
 
+def _json_safe_model_path(model_path: Any) -> Any:
+    """Render path-like model paths as strings because `Path` is not JSON serializable."""
+    if isinstance(model_path, os.PathLike):
+        return os.fspath(model_path)
+    if isinstance(model_path, (list, tuple)):
+        return [os.fspath(p) if isinstance(p, os.PathLike) else p for p in model_path]
+    return model_path
+
+
 def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None:
     """Persist a fitted TabPFN estimator to ``path``.
 
@@ -1390,6 +1399,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
             for k, v in params.items()
         }
         params["device"] = _json_safe_device(params["device"])
+        params["model_path"] = _json_safe_model_path(params["model_path"])
         params["__class_name__"] = estimator.__class__.__name__
         with (tmp / "init_params.json").open("w") as f:
             json.dump(params, f)

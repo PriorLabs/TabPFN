@@ -22,9 +22,11 @@ from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
 from tabpfn.model_loading import (
     load_fitted_tabpfn_model,
+    resolve_model_path,
     save_fitted_tabpfn_model,
     save_tabpfn_model,
 )
+from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
@@ -573,6 +575,28 @@ def test__save_fitted_tabpfn_model__torch_device_init_param__serializes(
 
     reloaded = load_fitted_tabpfn_model(path, device="cpu")
     assert len(reloaded.predict(X)) == len(X)
+
+
+@pytest.mark.parametrize("as_list", [False, True], ids=["path", "list_of_path"])
+def test__save_fitted_tabpfn_model__path_model_path__round_trips(
+    as_list: bool,
+    tmp_path: Path,
+) -> None:
+    """A `pathlib.Path` passed as `model_path` must not break saving."""
+    version = settings.tabpfn.model_version.value
+    (checkpoint_path,), _, _, _ = resolve_model_path(None, "regressor", version=version)
+    model_path = [checkpoint_path] if as_list else checkpoint_path
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(
+        model_path=model_path, device="cpu", n_estimators=2, random_state=42
+    )
+    model.fit(X, y)
+    path = tmp_path / "model.tabpfn_fit"
+
+    save_fitted_tabpfn_model(model, path)
+    loaded = load_fitted_tabpfn_model(path, device="cpu")
+
+    _assert_roundtrip_predictions(model, loaded, X, cross_device=False)
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNClassifier, TabPFNRegressor])
