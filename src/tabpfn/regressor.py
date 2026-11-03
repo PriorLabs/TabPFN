@@ -2275,7 +2275,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         for output, config in self.executor_.iter_outputs(
             X, autocast=self.use_autocast_, task_type="regression"
         ):
-            output = output.float()  # noqa: PLW2901
+            # Widen half-precision autocast output, but keep float64 when
+            # `inference_precision=torch.float64` asked for it.
+            if output.dtype in (torch.float16, torch.bfloat16):
+                output = output.float()  # noqa: PLW2901
             if temperature != 1:
                 output = output / temperature  # noqa: PLW2901
 
@@ -2509,11 +2512,7 @@ def _logits_to_output(
     #   "pi": criterion.pi(logits, np.max(self.y)),
     #   "ei": criterion.ei(logits),
     if output_type == "mean":
-        # The mean is a softmax-weighted sum over the buckets. In float32 its
-        # rounding depends on the batch size, so a row's mean would change with the
-        # rows predicted alongside it. MPS has no float64 and stays in float32.
-        mean_dtype = torch.float32 if logits.device.type == "mps" else torch.float64
-        output = criterion.mean(logits.to(mean_dtype))
+        output = criterion.mean(logits)
     elif output_type == "median":
         output = criterion.median(logits)
     elif output_type == "mode":
