@@ -413,9 +413,9 @@ def test__predict__single_row_vs_batch__equal_in_float64(
 ) -> None:
     """Predicting a row alone must give the same result as predicting it in a batch.
 
-    The model treats test rows independently, so the two agree up to float64
-    rounding. Lower precisions pick batch-size-dependent kernels that differ by up
-    to about 1e-3, which is why this test forces float64.
+    The model treats test rows independently, but matrix products are summed in an
+    order that depends on the batch size. In float64 this changes results by about
+    1e-16, in lower precisions by up to about 1e-3, so this test forces float64.
     """
     X, y = X_y
     tabpfn = TabPFNRegressor.create_default_for_version(
