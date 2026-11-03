@@ -1361,7 +1361,10 @@ def _json_safe_device(device: DevicesSpecification) -> str | list[str]:
 
 
 def _json_safe_model_path(model_path: Any) -> Any:
-    """Render path-like model paths as strings because `Path` is not JSON serializable."""
+    """Render path-like model paths as strings.
+
+    `Path` is not JSON serializable, so `init_params.json` stores them as strings.
+    """
     if isinstance(model_path, os.PathLike):
         return os.fspath(model_path)
     if isinstance(model_path, (list, tuple)):
