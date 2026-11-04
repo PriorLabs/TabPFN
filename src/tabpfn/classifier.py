@@ -439,10 +439,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 - If `"auto"`, we determine whether to use autocast or not depending on
                   the device type.
 
-                A row's prediction does not depend on the other rows predicted with it,
-                but only `torch.float64` makes this exact. Matrix products are summed
-                in an order that depends on the batch size, so in lower precisions
-                predicting a row alone or in a batch can differ by about 1e-5 to 1e-3.
+                Only `torch.float64` makes a row's prediction exactly independent of the
+                other rows predicted with it, because matrix products are summed in an
+                order that depends on the batch size. Otherwise its probabilities can
+                change by about 1e-6 (`torch.float32`) or 1e-3 (autocast).
 
             fit_mode:
                 Determine how the TabPFN model is "fitted". The mode determines how the
