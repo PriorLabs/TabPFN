@@ -468,6 +468,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - If `"auto"`, we determine whether to use autocast or not depending on
                   the device type.
 
+                Only `torch.float64` makes a row's prediction exactly independent of the
+                other rows predicted with it, because matrix products are summed in an
+                order that depends on the batch size. Otherwise it can change by a
+                relative 1e-6 (`torch.float32`) or 1e-3 (autocast).
+
             fit_mode:
                 Determine how the TabPFN model is "fitted". The mode determines how the
                 data is preprocessed and cached for inference. This is unique to an
