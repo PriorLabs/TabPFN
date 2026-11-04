@@ -2275,7 +2275,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         for output, config in self.executor_.iter_outputs(
             X, autocast=self.use_autocast_, task_type="regression"
         ):
-            output = output.float()  # noqa: PLW2901
+            # Widen half-precision autocast output, but keep float64 when
+            # `inference_precision=torch.float64` asked for it.
+            if output.dtype in (torch.float16, torch.bfloat16):
+                output = output.float()  # noqa: PLW2901
             if temperature != 1:
                 output = output / temperature  # noqa: PLW2901
 

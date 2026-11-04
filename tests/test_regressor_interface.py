@@ -406,6 +406,35 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))
+# Disable MPS as it doesn't support float64.
+@pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
+def test__predict__single_row_vs_batch__equal_in_float64(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
+) -> None:
+    """Predicting a row alone must give the same result as predicting it in a batch.
+
+    The model treats test rows independently, but matrix products are summed in an
+    order that depends on the batch size. In float64 this changes results by about
+    1e-15 relative, in lower precisions by up to about 1e-3, so this test forces
+    float64. The tolerance is relative because predictions can be large.
+    """
+    X, y = X_y
+    tabpfn = TabPFNRegressor.create_default_for_version(
+        version=model_version,
+        n_estimators=2,
+        inference_precision=torch.float64,
+        random_state=0,
+        device=device,
+    )
+    tabpfn.fit(X, y)
+
+    batch_preds = tabpfn.predict(X)
+    single_preds = np.concatenate([tabpfn.predict(X[i : i + 1]) for i in range(len(X))])
+
+    np.testing.assert_allclose(single_preds, batch_preds, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("model_version", list(ModelVersion))
 def test__fit_and_predict__on_demo_dataset__r2_reasonable(
     model_version: ModelVersion,
 ) -> None:
