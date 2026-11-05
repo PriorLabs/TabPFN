@@ -485,6 +485,21 @@ def expand_dates_and_text(
     )
 
 
+def group_feature_index(
+    estimator: TabPFNRegressor | TabPFNClassifier,
+    feature_names: list[str] | None,
+) -> int | None:
+    """Where the encoded group feature sits in the expanded fit input, if anywhere.
+
+    A tuning clone fits on its outer model's cleaned array, where `group_col`
+    names no column any more, so the outer model hands it the position instead.
+    """
+    handed_down = getattr(estimator, "_outer_group_feature_index", None)
+    if handed_down is not None:
+        return handed_down
+    return estimator.group_encoder_.feature_index(feature_names)
+
+
 def reject_categoricals_for_differentiable_input(
     categorical_features_indices: Sequence[int] | None,
 ) -> None:
@@ -724,6 +739,7 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     check_input_shape_matches(X, estimator=model)
+    X = model.group_encoder_.transform(X)
     X = model.date_transformer_.transform(X)
     X = model.text_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)

@@ -40,6 +40,7 @@ from tabpfn.base import (
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
+    group_feature_index,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
@@ -95,7 +96,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.group_ids import GroupIdEncoder
+from tabpfn.preprocessing.group_ids import GroupIdEncoder, with_modality
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.text import TextTransformer
@@ -229,6 +230,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     group_encoder_: GroupIdEncoder
     """The encoder that replaced the `group_col` columns with one categorical
     feature, holding the key-to-code mapping fitted on the training rows."""
+
+    group_feature_index_: int | None
+    """Where the encoded group feature sits in the cleaned input, or `None`
+    without `group_col`."""
 
     categorical_features_indices_: list[int] | None
     """Declared categorical column positions after date/text expansion, including
@@ -797,6 +802,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.date_transformer_ = DateTransformer().fit(X)
         self.text_transformer_ = TextTransformer().fit(X)
         self.group_encoder_ = GroupIdEncoder().fit(X)
+        self.group_feature_index_ = None
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -874,13 +880,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
         )
+        # Numerical through cleaning, so neither the ordinal encoder nor the
+        # constant-column restore rewrites an unseen group's NaN; categorical
+        # after it, whatever the number of groups.
+        self.group_feature_index_ = group_feature_index(self, feature_names)
+        feature_schema = with_modality(
+            feature_schema, self.group_feature_index_, FeatureModality.NUMERICAL
+        )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
-        feature_schema = self.group_encoder_.mark_categorical(
-            feature_schema, feature_names
+        feature_schema = with_modality(
+            feature_schema, self.group_feature_index_, FeatureModality.CATEGORICAL
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -989,7 +1002,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         params.update(forced)
         params.update(overwrite_kwargs)
 
-        return TabPFNClassifier(**params)
+        tuning_estimator = TabPFNClassifier(**params)
+        tuning_estimator._outer_group_feature_index = self.group_feature_index_
+        return tuning_estimator
 
     @config_context(transform_output="default")  # type: ignore
     def fit(self, X: XType, y: YType) -> Self:
@@ -1142,6 +1157,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
         self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
         self.group_encoder_ = GroupIdEncoder().fit(X_preprocessed[0])
+        self.group_feature_index_ = None
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(

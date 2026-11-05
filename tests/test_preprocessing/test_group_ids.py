@@ -163,6 +163,22 @@ class TestEncoding:
 
         np.testing.assert_array_equal(out["group_id"], [1.0, np.nan, 0.0])
 
+    @pytest.mark.parametrize(
+        ("fit_keys", "predict_keys"),
+        [([1.0, np.nan], [np.nan]), (["a", None], [None])],
+        ids=["nan", "none"],
+    )
+    def test__missing_key__is_one_group_coded_alike_at_fit_and_predict(
+        self, fit_keys: list, predict_keys: list
+    ) -> None:
+        encoder = GroupIdEncoder("g")
+        out = encoder.fit_transform(_frame(fit_keys))
+
+        predicted = encoder.transform(_frame(predict_keys))
+
+        np.testing.assert_array_equal(out["group_id"], [0.0, 1.0])
+        np.testing.assert_array_equal(predicted["group_id"], [1.0])
+
     def test__predict__leaves_the_fitted_mapping_alone(self) -> None:
         encoder = GroupIdEncoder("g")
         encoder.fit_transform(_frame(["a", "b"]))
@@ -300,25 +316,70 @@ class TestEstimators:
 
         assert estimator.group_encoder_.keys_.tolist() == [("x",), ("y",), ("z",)]
 
-    def test__model_input__carries_the_codes_and_misses_unseen_groups(self) -> None:
-        """The encoded feature reaches the forward pass, unseen keys as NaN."""
-        estimator, X, _ = _fitted(
-            TabPFNClassifier, ["a", "b"] * 15, group_col="g", fit_mode="low_memory"
-        )
-        index, _ = _group_feature(estimator)
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    @pytest.mark.parametrize(
+        ("groups", "with_string_column"),
+        [
+            # Few enough distinct codes that detection alone calls them categorical.
+            (["a", "b"] * 51, False),
+            # Another string column, so cleaning runs its ordinal encoder.
+            (["a", "b"] * 51, True),
+            # A single group, which detection calls constant.
+            (["a"] * 30, False),
+        ],
+        ids=["detected_categorical", "next_to_a_string_column", "single_group"],
+    )
+    def test__model_input__carries_the_codes_and_misses_unseen_groups(
+        self, estimator_cls: type, groups: list[str], with_string_column: bool
+    ) -> None:
+        """The codes reach the model untouched by cleaning, unseen keys as NaN."""
+        X, y = _estimator_data(estimator_cls, groups)
+        if with_string_column:
+            X["colour"] = ["red", "blue"] * (len(groups) // 2)
+        estimator = estimator_cls(n_estimators=1, group_col="g", fit_mode="low_memory")
+        estimator.fit(X, y)
 
-        X_predict = X.iloc[:3].copy()
-        X_predict["g"] = ["a", "b", "unseen"]
+        X_predict = X.iloc[:2].copy()
+        X_predict["g"] = ["a", "unseen"]
         seen: list[np.ndarray] = []
-        forward = estimator.forward
+        iter_outputs = estimator.executor_.iter_outputs
 
         def spy(X: np.ndarray, **kwargs: Any) -> Any:
-            seen.append(X)
-            return forward(X, **kwargs)
+            seen.append(np.asarray(X))
+            return iter_outputs(X, **kwargs)
 
-        with patch.object(estimator, "forward", spy):
-            estimator.predict_proba(X_predict)
+        with patch.object(estimator.executor_, "iter_outputs", spy):
+            estimator.predict(X_predict)
 
-        codes = np.asarray(seen[0])[:, index]
-        assert codes[0] != codes[1]
-        assert np.isnan(codes[2])
+        codes = seen[0][:, estimator.group_feature_index_]
+        assert codes[0] == 0.0
+        assert np.isnan(codes[1])
+
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    def test__get_embeddings__encodes_the_groups_first(
+        self, estimator_cls: type
+    ) -> None:
+        estimator, X, _ = _fitted(estimator_cls, ["a", "b", "c"] * 10, group_col="g")
+
+        assert estimator.get_embeddings(X).shape[1] == 30
+
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    def test__tuning_clone__keeps_the_group_feature_categorical(
+        self, estimator_cls: type
+    ) -> None:
+        """The clone fits on the cleaned array, past the numeric cardinality cap."""
+        groups = [f"p{i % 40}" for i in range(80)]
+        estimator, _, y = _fitted(estimator_cls, groups, group_col="g")
+        index = estimator.group_feature_index_
+        X_cleaned = np.zeros((80, 3))
+        X_cleaned[:, index] = np.arange(80) % 40
+
+        tuning = (
+            estimator._get_tuning_classifier()
+            if estimator_cls is TabPFNClassifier
+            else estimator._get_tuning_regressor()
+        )
+        tuning.fit(X_cleaned, y)
+
+        feature = tuning.inferred_feature_schema_.features[index]
+        assert feature.modality is FeatureModality.CATEGORICAL

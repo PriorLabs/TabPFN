@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
     from tabpfn.constants import XType
 
-__all__ = ["GROUP_FEATURE_NAME", "GroupIdEncoder"]
+__all__ = ["GROUP_FEATURE_NAME", "GroupIdEncoder", "with_modality"]
 
 #: Label of the feature the group columns are replaced with, made unique against
 #: the labels that stay.
@@ -118,8 +118,8 @@ class GroupIdEncoder:
 
         A kept column shifts down by however many group columns sat ahead of it.
         A selected position is dropped rather than moved: its column is gone. The
-        encoded feature is not added either, since the one caller passes declared
-        categoricals and `mark_categorical` settles that feature's modality.
+        encoded feature is not added either: the estimator sets its modality
+        itself, around cleaning.
         """
         self._check_is_fitted()
         if indices is None:
@@ -133,36 +133,13 @@ class GroupIdEncoder:
             if i not in dropped
         ]
 
-    def mark_categorical(
-        self,
-        feature_schema: FeatureSchema,
-        feature_names: Sequence[str] | None,
-    ) -> FeatureSchema:
-        """Make the encoded feature categorical, whatever its cardinality.
-
-        The codes are labels, never magnitudes, so modality detection's cap on
-        how many distinct values a numeric category may hold is overruled here.
-
-        Call this once the data is cleaned, so a code never reaches the cleaning
-        step's ordinal encoder: it is an ordinal encoding already, and a second
-        one would read an unseen group's missing code as an unknown category
-        rather than as a missing value.
-
-        Args:
-            feature_schema: The detected schema of the frame the encoded feature
-                sits in.
-            feature_names: That frame's column labels, in order.
-        """
+    def feature_index(self, feature_names: Sequence[str] | None) -> int | None:
+        """The encoded feature's position among `feature_names`, `None` if none."""
         self._check_is_fitted()
         if self.feature_name_ is None:
-            return feature_schema
+            return None
         assert feature_names is not None, "the fit input was not a DataFrame"
-        index = list(feature_names).index(self.feature_name_)
-        features = list(feature_schema.features)
-        features[index] = dataclasses.replace(
-            features[index], modality=FeatureModality.CATEGORICAL
-        )
-        return FeatureSchema(features=features)
+        return list(feature_names).index(self.feature_name_)
 
     def _check_is_fitted(self) -> None:
         # By hand: sklearn's `check_is_fitted` requires a `BaseEstimator`.
@@ -209,6 +186,17 @@ class GroupIdEncoder:
         # the frame's own index holds.
         out.insert(out.shape[1], self.feature_name_, codes)
         return out
+
+
+def with_modality(
+    feature_schema: FeatureSchema, index: int | None, modality: FeatureModality
+) -> FeatureSchema:
+    """`feature_schema` with the feature at `index` set to `modality`."""
+    if index is None:
+        return feature_schema
+    features = list(feature_schema.features)
+    features[index] = dataclasses.replace(features[index], modality=modality)
+    return FeatureSchema(features=features)
 
 
 def _resolve_group_col(group_col: str | Sequence[str] | None) -> list[str]:
