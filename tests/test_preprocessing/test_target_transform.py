@@ -13,10 +13,12 @@ from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.preprocessing.target_transform import (
+    NEGATE_STEP,
     STANDARDIZE_STEP,
     TARGET_TRANSFORM_STEP,
     StandardizeTarget,
     make_target_transform,
+    negate_target,
 )
 from tabpfn.utils import transform_borders_one
 
@@ -174,3 +176,37 @@ def test__transform_borders_one__guard_is_applied_in_the_znorm_frame() -> None:
 
     assert logit_cancel_mask is None
     np.testing.assert_allclose(borders_t, borders, atol=1e-6)
+
+
+@pytest.mark.parametrize("name", [None, "safepower"])
+def test__negate_target__standardizes_the_negated_target(name: str | None) -> None:
+    y = _target()
+    transform = None if name is None else _get_transform(name, len(y))
+    pipeline = negate_target(make_target_transform(transform))
+    reference = make_target_transform(transform)
+
+    assert next(iter(pipeline.named_steps)) == NEGATE_STEP
+    np.testing.assert_array_equal(
+        pipeline.fit_transform(y.reshape(-1, 1)),
+        reference.fit_transform(-y.reshape(-1, 1)),
+    )
+
+
+def test__negate_target__inverse_restores_the_original_sign() -> None:
+    y = _target()
+    pipeline = negate_target(make_target_transform(None))
+    pipeline.fit(y.reshape(-1, 1))
+    # Inside the guard limits, which would otherwise cancel the outermost bucket.
+    borders = np.linspace(-3.0, 3.0, 61, dtype=np.float32)
+
+    _, descending, borders_t = transform_borders_one(
+        borders,
+        target_transform=pipeline,
+        znorm_mean=float(np.mean(y)),
+        znorm_std=float(np.std(y)) + StandardizeTarget.EPSILON,
+        repair_nan_borders_after_transform=True,
+    )
+
+    # Reported as descending, and handed back reversed to ascending order.
+    assert descending
+    np.testing.assert_allclose(borders_t, -borders[::-1], atol=1e-6)

@@ -1090,6 +1090,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 estimator_type=self.estimator_type
             ),
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
+            target_sign_flip=self.inference_config_.REGRESSION_TARGET_SIGN_FLIP,
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -2171,7 +2172,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
         )
         if descending_borders:
-            borders_t = borders_t.flip(-1)  # type: ignore
+            # The borders come back reversed to ascending; reverse the buckets too.
+            out_d = out_d.flip(-1)
         if logit_cancel_mask is not None:
             out_d = out_d.clone()
             out_d[..., logit_cancel_mask] = float("-inf")
@@ -2324,7 +2326,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                         )
                     )
                     if descending_borders:
-                        borders_t = borders_t.flip(-1)  # type: ignore
+                        # The borders come back reversed to ascending; reverse
+                        # the buckets too.
+                        output = output.flip(-1)  # noqa: PLW2901
 
                 if logit_cancel_mask is not None:
                     output = output.clone()  # noqa: PLW2901

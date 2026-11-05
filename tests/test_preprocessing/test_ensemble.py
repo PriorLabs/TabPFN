@@ -41,6 +41,10 @@ from tabpfn.preprocessing.ensemble import (
     _subsample_rows_stratified,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.target_transform import (
+    NEGATE_STEP,
+    make_target_transform,
+)
 from tabpfn.preprocessing.torch import FeatureSchema
 
 skip_on_macos = pytest.mark.skipif(
@@ -1947,3 +1951,36 @@ def test__generate_regression_ensemble_configs__target_transforms_not_shared():
         "Ensemble configs share target_transform instances; fitting one member "
         "would clobber the fitted state of the others."
     )
+
+
+def _regression_configs(*, target_sign_flip: bool, target_transforms: list) -> list:
+    return generate_regression_ensemble_configs(
+        num_estimators=4,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[PreprocessorConfig("none", categorical_name="numeric")],
+        target_transforms=target_transforms,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+        target_sign_flip=target_sign_flip,
+    )
+
+
+@pytest.mark.parametrize("target_sign_flip", [False, True])
+def test__generate_regression_ensemble_configs__target_sign_flip_on_odd_members(
+    target_sign_flip: bool,
+):
+    configs = _regression_configs(
+        target_sign_flip=target_sign_flip,
+        target_transforms=[make_target_transform(None)],
+    )
+
+    negated = [NEGATE_STEP in config.target_transform.named_steps for config in configs]
+    assert negated == [False, target_sign_flip, False, target_sign_flip]
+
+
+def test__generate_regression_ensemble_configs__target_sign_flip_needs_a_pipeline():
+    with pytest.raises(ValueError, match="target_sign_flip"):
+        _regression_configs(target_sign_flip=True, target_transforms=[None])
