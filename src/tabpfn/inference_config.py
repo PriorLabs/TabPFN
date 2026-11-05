@@ -328,6 +328,10 @@ class InferenceConfig:
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
     """
 
+    REGRESSION_TARGET_SIGN_FLIP: bool = False
+    """If True, every second regression ensemble member is fit on the negated
+    target, and its predictions are negated back. Ignored for classification."""
+
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
     """Whether to round the probabilities to float 16 to match the precision of
      scikit-learn. This can help with reproducibility and compatibility with

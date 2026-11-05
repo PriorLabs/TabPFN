@@ -629,15 +629,17 @@ def transform_borders_one(
                 broken_mask=broken_mask,
             )
 
-    _repair_borders(borders_t, inplace=True)
-
     reversed_order = np.arange(len(borders_t) - 1, -1, -1)
     descending_borders = (np.argsort(borders_t) == reversed_order).all()
     if descending_borders:
-        borders_t = borders_t[::-1]
+        # Copies, not views: torch rejects the negative strides of a reversed view.
+        borders_t = borders_t[::-1].copy()
         logit_cancel_mask = (
-            logit_cancel_mask[::-1] if logit_cancel_mask is not None else None
+            logit_cancel_mask[::-1].copy() if logit_cancel_mask is not None else None
         )
+
+    # After the reversal: the repair assumes ascending borders.
+    _repair_borders(borders_t, inplace=True)
 
     return logit_cancel_mask, descending_borders, borders_t
 

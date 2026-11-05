@@ -1530,6 +1530,57 @@ def test__fit__member_target_is_the_znormalized_target() -> None:
     assert np.array_equal(member_y, (y - np.mean(y)) / (np.std(y) + 1e-20))
 
 
+def test__fit__target_sign_flip__odd_members_see_the_negated_target() -> None:
+    X, y = _mk_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=4,
+        device="cpu",
+        random_state=42,
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,),
+            "REGRESSION_TARGET_SIGN_FLIP": True,
+        },
+    )
+    reg.fit(X, y)
+
+    member_y = [np.asarray(m.y_train) for m in reg.executor_.ensemble_members]
+    standardized = (y - np.mean(y)) / (np.std(y) + 1e-20)
+    for i, target in enumerate(member_y):
+        np.testing.assert_allclose(
+            target, -standardized if i % 2 else standardized, rtol=1e-12
+        )
+
+
+def test__predict__target_sign_flip__predicts_in_the_original_sign() -> None:
+    """Negating y swaps which members see the negated target.
+
+    So the difference of the two fits must match the same difference without the
+    option.
+    """
+    X, y = _mk_reg_dataset(0)
+    X_train, X_test, y_train = X[:45], X[45:], y[:45]
+
+    def predict(target: np.ndarray, *, flip: bool) -> np.ndarray:
+        return (
+            TabPFNRegressor(
+                n_estimators=2,
+                device="cpu",
+                random_state=42,
+                inference_config={
+                    "REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,),
+                    "REGRESSION_TARGET_SIGN_FLIP": flip,
+                },
+            )
+            .fit(X_train, target)
+            .predict(X_test)
+        )
+
+    flipped = predict(y_train, flip=True) - predict(-y_train, flip=True)
+    plain = predict(y_train, flip=False) - predict(-y_train, flip=False)
+
+    np.testing.assert_allclose(flipped, plain, atol=1e-2 * np.abs(plain).max())
+
+
 def _mk_skewed_reg_dataset(
     seed: int, n: int = 200, f: int = 5
 ) -> tuple[np.ndarray, np.ndarray]:
