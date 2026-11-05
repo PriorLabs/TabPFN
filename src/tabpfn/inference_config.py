@@ -326,6 +326,8 @@ class InferenceConfig:
         - None: no preprocessing is done.
         - One of the options from
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
+        - "quantile_gap": log(y) for nonnegative targets, with the zeros in a gap
+          below the positive logs. Members with it are clamped at 0.
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False

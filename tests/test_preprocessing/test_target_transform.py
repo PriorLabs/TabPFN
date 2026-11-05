@@ -15,6 +15,7 @@ from tabpfn.preprocessing.steps import (
 from tabpfn.preprocessing.target_transform import (
     STANDARDIZE_STEP,
     TARGET_TRANSFORM_STEP,
+    QuantileGapTransformer,
     StandardizeTarget,
     make_target_transform,
 )
@@ -174,3 +175,78 @@ def test__transform_borders_one__guard_is_applied_in_the_znorm_frame() -> None:
 
     assert logit_cancel_mask is None
     np.testing.assert_allclose(borders_t, borders, atol=1e-6)
+
+
+def _zero_inflated_target(n: int = 400) -> np.ndarray:
+    """Mostly zeros, and right-skewed positive amounts."""
+    rng = np.random.default_rng(0)
+    return np.where(rng.random(n) < 0.7, 0.0, np.exp(rng.normal(5.0, 1.0, size=n)))
+
+
+def test__quantile_gap__encodes_zeros_one_sd_below_the_one_percent_quantile() -> None:
+    y = _zero_inflated_target()
+    logs = np.log(y[y > 0])
+    zero = np.quantile(logs, 0.01) - logs.std()
+
+    transformed = QuantileGapTransformer().fit_transform(y.reshape(-1, 1)).ravel()
+
+    np.testing.assert_allclose(transformed[y == 0], zero, rtol=1e-12)
+    np.testing.assert_allclose(transformed[y > 0], logs, rtol=1e-12)
+
+
+def test__quantile_gap__decodes_below_the_middle_of_the_gap_to_zero() -> None:
+    y = _zero_inflated_target()
+    step = QuantileGapTransformer().fit(y.reshape(-1, 1))
+    logs = np.log(y[y > 0])
+    threshold = np.quantile(logs, 0.01) - logs.std() / 2
+    t = np.array([step.zero_, np.nextafter(threshold, -np.inf), threshold, 6.0])
+
+    decoded = step.inverse_transform(t.reshape(-1, 1)).ravel()
+
+    np.testing.assert_array_equal(decoded[:2], 0.0)
+    np.testing.assert_allclose(decoded[2:], np.exp(t[2:]), rtol=1e-12)
+    # Positives deep in the lower tail fall below the threshold and decode to 0.
+    kept = (y == 0) | (np.log(np.where(y > 0, y, 1.0)) >= threshold)
+    assert not kept.all()
+    np.testing.assert_allclose(
+        step.inverse_transform(step.transform(y[kept].reshape(-1, 1))).ravel(),
+        y[kept],
+        rtol=1e-12,
+    )
+
+
+@pytest.mark.parametrize(
+    ("y", "message"),
+    [
+        (np.array([0.0, 1.0, 2.0, -0.5]), "nonnegative"),
+        (np.array([0.0, 0.0, 3.0, 3.0]), "two distinct positive"),
+    ],
+)
+def test__quantile_gap__rejects_targets_without_a_gap(
+    y: np.ndarray, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        QuantileGapTransformer().fit(y.reshape(-1, 1))
+
+
+def test__transform_borders_one__clamps_quantile_gap_members_at_zero() -> None:
+    """The outer bucket must not reach below raw 0 after border repair."""
+    y = _zero_inflated_target()
+    pipeline = make_target_transform(QuantileGapTransformer())
+    pipeline.fit(y.reshape(-1, 1))
+    borders = np.linspace(-5.0, 5.0, 101, dtype=np.float32)
+    znorm_mean = float(np.mean(y))
+    znorm_std = float(np.std(y)) + StandardizeTarget.EPSILON
+
+    _, _, borders_t = transform_borders_one(
+        borders,
+        target_transform=pipeline,
+        znorm_mean=znorm_mean,
+        znorm_std=znorm_std,
+        repair_nan_borders_after_transform=True,
+    )
+
+    zero = np.float32(-znorm_mean / znorm_std)
+    # Several buckets decode to 0, so they and the outer bucket are point masses.
+    assert (borders_t[:3] == zero).all()
+    assert borders_t.min() == zero

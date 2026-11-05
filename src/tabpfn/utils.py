@@ -23,6 +23,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.target_transform import uses_quantile_gap
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -591,7 +592,8 @@ def transform_borders_one(
     """Transforms the borders used for the bar distribution for regression.
 
     The inverse returns raw target units; map them into the shared standardized
-    frame before applying sanity limits and aggregating predictions.
+    frame before applying sanity limits and aggregating predictions. A member
+    with `QuantileGapTransformer` gets no borders below raw 0.
 
     Args:
         borders: The borders to transform.
@@ -638,6 +640,12 @@ def transform_borders_one(
         logit_cancel_mask = (
             logit_cancel_mask[::-1] if logit_cancel_mask is not None else None
         )
+
+    if uses_quantile_gap(target_transform):
+        # The repair above widens the collapsed outer bucket below raw 0, and
+        # its tail would carry mass at negative targets. Clamp it onto 0.
+        zero = np.asarray((0.0 - znorm_mean) / znorm_std).astype(borders_t.dtype)
+        borders_t = np.maximum(borders_t, zero)
 
     return logit_cancel_mask, descending_borders, borders_t
 
