@@ -6,6 +6,9 @@
 patient or a site. Their joint value is one composite key, encoded as an integer
 code fitted on the training rows: a key `fit` did not see becomes `NaN`.
 
+A key is a value to look up, never a number to compare: keys match by equality,
+not by closeness, so two floats that differ in the last bit are two groups.
+
 Only `TabPFNClassifier` and `TabPFNRegressor` run this, before `DateTransformer`,
 so a group column is read as the caller passed it. Columns are selected by label
 here, unlike everywhere else in the preprocessing, because that is what
