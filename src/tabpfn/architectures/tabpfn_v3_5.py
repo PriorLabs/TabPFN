@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import logging as _logging
 import math
 from collections.abc import Callable, Sequence
@@ -557,6 +558,61 @@ class RotaryEmbedding(nn.Module):
         return apply_rope(t_BHSD, self.freqs, interleaved=self.interleaved)
 
 
+_SHORT_ROW_MAX_SIZE = 64
+"""Largest normalized size that `_rms_norm_short_rows` takes over, which covers
+the 16 and 64 entry wide q/k norms to avoid idle threads when processing short rows."""
+
+_SHORT_ROW_MIN_ROWS = 65_536
+"""Fewest rows for which `_rms_norm_short_rows` takes over. It launches more kernels
+than torch's fused one, so on fewer rows the launch cost outweighs the gain."""
+
+
+def _rms_norm_short_rows(
+    x: torch.Tensor, weight: torch.Tensor | None, eps: float | None
+) -> torch.Tensor:
+    """RMSNorm over the last dim of fp16 `x`, for many short rows on CUDA.
+
+    Replaces the usual fp16 path of `_DtypeMatchingRMSNorm`,
+    `F.rms_norm(x.float(), ..., weight.float(), eps).to(x.dtype)`,
+    whose fused kernel runs one 128-thread block per row and leaves
+    most threads idle when processing short rows.
+
+    Sums the squares and computes `x * rstd * weight` in fp32, then rounds to
+    `x.dtype` once, so the result is within one fp16 rounding step of the
+    replaced path. `eps=None` means fp32 epsilon, as in the replaced path.
+    Not differentiable, as it writes with `out=`.
+    """
+    if eps is None:
+        eps = torch.finfo(torch.float32).eps
+    norm = torch.linalg.vector_norm(x, dim=-1, keepdim=True, dtype=torch.float32)
+    rstd = torch.addcmul(
+        torch.full((), eps, device=x.device), norm, norm, value=1.0 / x.shape[-1]
+    ).rsqrt_()
+    return torch.mul(x * rstd, weight.float(), out=torch.empty_like(x))
+
+
+@functools.cache
+def _torch_uses_cutedsl_rms_norm(device: torch.device) -> bool:
+    """Whether torch runs `F.rms_norm` on `device` with its CuTeDSL kernel.
+
+    From torch >=2.14, with `nvidia-cutlass-dsl` installed at a version torch accepts,
+    Hopper and Blackwell GPUs get a CuTeDSL RMSNorm that is faster than
+    `_rms_norm_short_rows`, so it is not used in these cases.
+    Asks torch's own registry, which already covers the installed version and the
+    `TORCH_DISABLE_NATIVE_JIT` switch. Any other torch keeps the short-row path.
+    """
+    try:
+        from torch._native.registry import get_dsl_operations  # noqa: PLC0415
+    except ImportError:
+        return False
+    if torch.version.hip is not None:
+        return False
+    # torch only routes Hopper (9.x) and Blackwell (10.x) to the CuTeDSL kernel.
+    if torch.cuda.get_device_capability(device)[0] not in (9, 10):
+        return False
+    return "_fused_rms_norm" in get_dsl_operations("cutedsl")
+
+
 class _DtypeMatchingRMSNorm(nn.RMSNorm):
     """RMSNorm that casts weight to match the input dtype.
 
@@ -567,6 +623,20 @@ class _DtypeMatchingRMSNorm(nn.RMSNorm):
     @override
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.dtype == torch.float16:
+            # Inference only: `_rms_norm_short_rows` uses `out=` which is not supported
+            # by autograd, and its gradients would be rounded slightly differently.
+            # Skipped under torch.compile: inductor generates its own norm kernel,
+            # and Dynamo would trace through the cached CuTeDSL check with a warning.
+            if (
+                input.is_cuda
+                and not torch.is_grad_enabled()
+                and not torch.compiler.is_compiling()
+                and len(self.normalized_shape) == 1
+                and self.normalized_shape[0] <= _SHORT_ROW_MAX_SIZE
+                and input.numel() >= _SHORT_ROW_MIN_ROWS * self.normalized_shape[0]
+                and not _torch_uses_cutedsl_rms_norm(input.device)
+            ):
+                return _rms_norm_short_rows(input, self.weight, self.eps)
             # The squares of the residual stream exceed the fp16 range, and the
             # kernels of torch releases before 2.14 take the mean in fp16, on CPU
             # and on CUDA alike, so the variance is inf and the output all zeros.
