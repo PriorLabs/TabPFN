@@ -8,15 +8,18 @@ import warnings
 import numpy as np
 import pytest
 import torch
+from sklearn.metrics import mean_tweedie_deviance
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.inference_tuning import (
+    MEAN_RECALIBRATION_MIN_MEAN,
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
     RegressorEvalMetrics,
     RegressorTuningConfig,
     compute_regression_metric_to_minimize,
+    find_mean_recalibration_scale,
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
@@ -611,6 +614,64 @@ def test__regressor_tuning_config__has_no_classification_only_fields() -> None:
     assert RegressorTuningConfig().calibrate_temperature is False
 
 
+def test__regressor_tuning_config__mean_recalibration_is_off_by_default() -> None:
+    assert RegressorTuningConfig().recalibrate_mean is False
+
+
+@pytest.mark.parametrize("power", [0.0, 0.99, 2.01])
+def test__regressor_tuning_config__rejects_mean_recalibration_power_outside_1_2(
+    power: float,
+) -> None:
+    with pytest.raises(ValueError, match="must be in \\[1, 2\\]"):
+        RegressorTuningConfig(recalibrate_mean=True, mean_recalibration_power=power)
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_recalibration_scale__recovers_a_known_scale(power: float) -> None:
+    rng = np.random.default_rng(0)
+    mean = rng.gamma(shape=2.0, scale=3.0, size=10_000)
+    # Zero-inflated, multiplicative noise with mean 1: E[y] = 2.5 * mean.
+    y = 2.5 * mean * rng.binomial(1, 0.2, size=mean.size) * 5.0
+
+    scale = find_mean_recalibration_scale(y_true=y, mean=mean, power=power)
+
+    assert scale == pytest.approx(2.5, rel=0.1)
+    # Without noise every power recovers the scale exactly.
+    assert find_mean_recalibration_scale(
+        y_true=2.5 * mean, mean=mean, power=power
+    ) == pytest.approx(2.5, rel=1e-12)
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_recalibration_scale__minimizes_the_tweedie_deviance(
+    power: float,
+) -> None:
+    rng = np.random.default_rng(1)
+    mean = rng.gamma(shape=2.0, scale=1.0, size=500)
+    # Not proportional to `mean`, so each power has a different minimizer.
+    y = rng.poisson(mean**2) + 1.0
+
+    scale = find_mean_recalibration_scale(y_true=y, mean=mean, power=power)
+
+    def deviance(c: float) -> float:
+        return mean_tweedie_deviance(y, c * mean, power=power)
+
+    assert deviance(scale) < deviance(scale * 0.99)
+    assert deviance(scale) < deviance(scale * 1.01)
+
+
+def test__find_mean_recalibration_scale__floors_non_positive_means() -> None:
+    y = np.array([0.0, 0.0, 4.0])
+    mean = np.array([-0.5, 0.0, 2.0])
+    floor = MEAN_RECALIBRATION_MIN_MEAN
+
+    # p = 1 is sum(y) / sum(m) with the floored means.
+    assert find_mean_recalibration_scale(
+        y_true=y, mean=mean, power=1.0
+    ) == pytest.approx(4.0 / (2.0 + 2 * floor))
+    assert np.isfinite(find_mean_recalibration_scale(y_true=y, mean=mean, power=1.5))
+
+
 def test__regressor_eval_metrics__round_trips_from_string() -> None:
     # Constructed from a string the same way `eval_metric` arguments will be.
     assert RegressorEvalMetrics("nll") is RegressorEvalMetrics.NLL
@@ -664,7 +725,10 @@ def test__resolve_tuning_config__keeps_a_config_instance_over_config_cls() -> No
             ClassifierTuningConfig(),
             "`calibrate_temperature=True` or `tune_decision_thresholds=True`",
         ),
-        (RegressorTuningConfig(), "`calibrate_temperature=True`"),
+        (
+            RegressorTuningConfig(),
+            "`calibrate_temperature=True` or `recalibrate_mean=True`",
+        ),
     ],
 )
 def test__resolve_tuning_config__warns_about_the_options_the_config_has(
@@ -704,7 +768,8 @@ def test__get_tuning_feature_flags__lists_only_the_boolean_feature_fields() -> N
         ClassifierTuningConfig(calibrate_temperature=True, tuning_n_folds=3)
     ) == {"calibrate_temperature": True, "tune_decision_thresholds": False}
     assert get_tuning_feature_flags(RegressorTuningConfig()) == {
-        "calibrate_temperature": False
+        "calibrate_temperature": False,
+        "recalibrate_mean": False,
     }
 
 
