@@ -21,6 +21,7 @@ from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNClassifier
+from tabpfn.analytics import log_usage
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 
@@ -396,6 +397,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         self.finetuned_inference_classifier_.fit(self.X_, self.y_)  # type: ignore
 
     @override
+    @log_usage("fit", main_process_only=True)
     def fit(
         self,
         X: XType,
@@ -424,6 +426,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         super().fit(X, y, X_val=X_val, y_val=y_val, output_dir=output_dir)
         return self
 
+    @log_usage("predict")
     def predict_proba(self, X: XType, **kwargs) -> np.ndarray:
         """Predict class probabilities for X.
 
@@ -441,6 +444,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         return self.finetuned_inference_classifier_.predict_proba(X, **kwargs)  # type: ignore
 
     @override
+    @log_usage("predict")
     def predict(self, X: XType, **kwargs) -> np.ndarray:
         """Predict the class for X.
 
