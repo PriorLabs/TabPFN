@@ -1399,3 +1399,31 @@ def test__cell_embedder__fp64_input__computes_in_fp64() -> None:
     actual = embedder(x)
     assert actual.dtype == torch.float64
     torch.testing.assert_close(actual, expected, rtol=1e-13, atol=1e-13)
+
+
+@torch.no_grad()
+@pytest.mark.skipif(
+    sys.platform == "win32" and not torch.cuda.is_available(),
+    reason=(
+        "bf16 CPU kernels crash with STATUS_ILLEGAL_INSTRUCTION (0xc000001d) on "
+        "Windows CI runners"
+    ),
+)
+@pytest.mark.parametrize("stage", ["col", "icl"])
+def test__embed_y__regression_bf16_autocast__target_not_rounded_to_bf16(
+    stage: str,
+) -> None:
+    """The embedding matches an fp32 one; the target is not rounded to bf16."""
+    arch = _get_model()
+    embed = arch._embed_col_y if stage == "col" else arch._embed_icl_y
+    encoder = getattr(arch, f"{stage}_y_encoder")["regression"]
+    norm = getattr(arch, f"{stage}_y_layernorm")
+    # 1.2345 and 1.2355, like 123.456789 and 123.5, round to the same bf16 value.
+    y_BN = torch.tensor([[1.2345, 1.2355, 123.456789, 123.5, -0.0123456]])
+    assert y_BN[0, 0].bfloat16() == y_BN[0, 1].bfloat16()
+    assert y_BN[0, 2].bfloat16() == y_BN[0, 3].bfloat16()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        y_emb = embed(y_BN, task_type="regression")
+    assert not torch.equal(y_emb[0, 0], y_emb[0, 1])
+    reference = norm(encoder(y_BN.unsqueeze(-1)))
+    torch.testing.assert_close(y_emb, reference, rtol=2e-2, atol=2e-2)

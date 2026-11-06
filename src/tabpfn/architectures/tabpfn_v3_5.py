@@ -2596,26 +2596,22 @@ class TabPFNV3p5(Architecture):
     def _embed_col_y(self, y_BN: torch.Tensor, *, task_type: TaskType) -> torch.Tensor:
         """Embed y_train for the col stage → (B, T, E)."""
         if task_type == "multiclass":
-            y_emb = self.col_y_encoder["multiclass"](y_BN)
-        elif task_type == "regression":
-            # A 2D projection avoids eager Triton BMM and its C compiler requirement.
-            y_emb = self.col_y_encoder["regression"](y_BN.reshape(-1, 1))
-            y_emb = y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
-        else:
-            raise ValueError(f"Unsupported task type: {task_type}")
-        return self.col_y_layernorm(y_emb)
+            return self.col_y_layernorm(self.col_y_encoder["multiclass"](y_BN))
+        if task_type == "regression":
+            return _embed_regression_y(
+                self.col_y_encoder["regression"], self.col_y_layernorm, y_BN
+            )
+        raise ValueError(f"Unsupported task type: {task_type}")
 
     def _embed_icl_y(self, y_BN: torch.Tensor, *, task_type: TaskType) -> torch.Tensor:
         """Embed y_train for the ICL stage → (B, T, D)."""
         if task_type == "multiclass":
-            y_emb = self.icl_y_encoder["multiclass"](y_BN)
-        elif task_type == "regression":
-            # A 2D projection avoids eager Triton BMM and its C compiler requirement.
-            y_emb = self.icl_y_encoder["regression"](y_BN.reshape(-1, 1))
-            y_emb = y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
-        else:
-            raise ValueError(f"Unsupported task type: {task_type}")
-        return self.icl_y_layernorm(y_emb)
+            return self.icl_y_layernorm(self.icl_y_encoder["multiclass"](y_BN))
+        if task_type == "regression":
+            return _embed_regression_y(
+                self.icl_y_encoder["regression"], self.icl_y_layernorm, y_BN
+            )
+        raise ValueError(f"Unsupported task type: {task_type}")
 
     def _preprocess_raw(
         self,
@@ -3083,6 +3079,37 @@ def get_architecture(config: ArchitectureConfig) -> TabPFNV3p5:
 # ---------------------------------------------------------------------------
 # Private data utilities
 # ---------------------------------------------------------------------------
+
+
+def _embed_regression_y(
+    encoder: nn.Linear, norm: nn.LayerNorm, y_BN: torch.Tensor
+) -> torch.Tensor:
+    """Project and norm regression targets at fp32 or above, with autocast off.
+
+    bf16 autocast would otherwise round the target to ~3 significant digits before
+    the model sees it. The result has the dtype of `y_BN`.
+    """
+    compute = _at_least_fp32(y_BN.dtype)
+    with torch.autocast(y_BN.device.type, enabled=False):
+        # A 2D projection avoids eager Triton BMM and its C compiler requirement.
+        y_M1 = y_BN.reshape(-1, 1).to(compute)
+        if encoder.weight.dtype == compute:
+            # Call the module so its forward hooks fire.
+            y_emb = encoder(y_M1)
+        else:
+            y_emb = F.linear(y_M1, encoder.weight.to(compute), encoder.bias.to(compute))
+        y_emb = y_emb.reshape(*y_BN.shape, y_emb.shape[-1])
+        if norm.weight.dtype == compute:
+            y_emb = norm(y_emb)
+        else:
+            y_emb = F.layer_norm(
+                y_emb,
+                norm.normalized_shape,
+                norm.weight.to(compute),
+                norm.bias.to(compute),
+                norm.eps,
+            )
+    return y_emb.to(y_BN.dtype)
 
 
 def _prepare_targets(
