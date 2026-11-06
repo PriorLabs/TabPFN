@@ -14,7 +14,7 @@ from tabpfn.architectures.shared.attention_backends import (
     register_attention_backend,
 )
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
-from tabpfn.architectures.shared.fa3_backend import FA3_BACKEND
+from tabpfn.architectures.shared.fa4_backend import FA4_BACKEND
 from tabpfn.architectures.shared.mlx_backend import MLX_BACKEND
 from tabpfn.architectures.shared.torch_mps_backend import TORCH_MPS_BACKEND
 
@@ -27,7 +27,7 @@ register_attention_backend(
     # Backends whose dependency is missing are left out entirely.
     *(
         backend
-        for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND)
+        for backend in (FA4_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND)
         if backend.is_available()
     )
 )
