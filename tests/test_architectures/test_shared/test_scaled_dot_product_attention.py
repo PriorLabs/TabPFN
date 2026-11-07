@@ -9,7 +9,9 @@ from typing import Any, TypedDict
 import pytest
 import torch
 from torch.nn.attention import SDPBackend
+from torch.torch_version import TorchVersion
 
+from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     _FLASH_BACKWARD_MAX_ELEMENTS,
     _FLASH_MIN_HEAD_DIM,
@@ -242,3 +244,63 @@ def test__torch_sdpa__query_over_flash_index_range__backward_runs_on_cuda() -> N
     torch.cuda.synchronize()
 
     assert q.grad is not None
+
+
+@pytest.mark.skipif(
+    not gqa_is_supported(torch.device("cpu")),
+    reason="needs CPU GQA on Torch 2.9+",
+)
+def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPU MQA passes the single K/V head to SDPA instead of copying it per head."""
+    q = torch.randn(2, 7, 4, 8)
+    k = torch.randn(2, 37, 1, 8)
+    v = torch.randn_like(k)
+    with torch.inference_mode():
+        # K/V expanded to all 4 query heads takes the path that copies K/V.
+        expected = _torch_sdpa(q, k.expand(-1, -1, 4, -1), v.expand(-1, -1, 4, -1))
+
+    original_sdpa = torch.nn.functional.scaled_dot_product_attention
+    calls: list[tuple[torch.Tensor, dict[str, Any]]] = []
+
+    def record(
+        query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, **kwargs: Any
+    ) -> torch.Tensor:
+        calls.append((key, kwargs))
+        return original_sdpa(query, key, value, **kwargs)
+
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", record)
+    with torch.inference_mode():
+        actual = _torch_sdpa(q, k, v)
+
+    [(key, kwargs)] = calls
+    assert kwargs.get("enable_gqa") is True
+    assert key.untyped_storage().data_ptr() == k.untyped_storage().data_ptr()
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("device", "version", "expected"),
+    [
+        ("cpu", "2.8.0", False),
+        ("cpu", "2.9.0", True),
+        ("cuda:0", "2.9.0", False),
+        ("cuda:1", "2.9.0", True),
+        ("meta", "2.9.0", False),
+    ],
+)
+def test__gqa_is_supported__per_device__follows_version_and_capability(
+    monkeypatch: pytest.MonkeyPatch, device: str, version: str, *, expected: bool
+) -> None:
+    """CPU depends on the Torch version, CUDA on the capability of that GPU."""
+    capabilities = {0: (7, 5), 1: (8, 0)}
+    monkeypatch.setattr(torch, "__version__", TorchVersion(version))
+    monkeypatch.setattr(
+        torch.cuda, "get_device_capability", lambda gpu: capabilities[gpu.index]
+    )
+    gqa_is_supported.cache_clear()
+    try:
+        assert gqa_is_supported(torch.device(device)) is expected
+    finally:
+        gqa_is_supported.cache_clear()
