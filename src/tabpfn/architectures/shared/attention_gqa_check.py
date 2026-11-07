@@ -11,22 +11,19 @@ from torch.torch_version import TorchVersion
 
 
 @functools.cache
-def gqa_is_supported() -> bool:
-    """Check if PyTorch's scaled_dot_product_attention supports enable_gqa parameter.
+def gqa_is_supported(device: torch.device) -> bool:
+    """Check if scaled_dot_product_attention supports enable_gqa on ``device``.
 
-    This checks whether torch.nn.functional.scaled_dot_product_attention has a
-    kwarg enable_gqa and if we have sufficient NVIDIA compute capability.
-    PyTorch 2.5+ includes enable_gqa support.
+    This checks whether the installed PyTorch has the enable_gqa kwarg and whether
+    the device has kernels that run it efficiently. CUDA needs PyTorch 2.5+ and
+    compute capability 8.0+. CPU needs PyTorch 2.9+. Other devices return False.
     """
-    if not torch.cuda.is_available():
-        return False
-
-    has_enable_gqa = torch.__version__ >= TorchVersion("2.5")
-    if not has_enable_gqa:
-        return False
-
-    # Check compute capability only if CUDA is available
-    # We need compute capability >= 8.0 for efficient GQA
-    device = torch.cuda.current_device()
-    nvidia_compute_capability = torch.cuda.get_device_capability(device)
-    return nvidia_compute_capability[0] >= 8
+    if device.type == "cpu":
+        return torch.__version__ >= TorchVersion("2.9")
+    if device.type == "cuda":
+        return (
+            # We need compute capability >= 8.0 for efficient GQA
+            torch.__version__ >= TorchVersion("2.5")
+            and torch.cuda.get_device_capability(device)[0] >= 8
+        )
+    return False

@@ -151,7 +151,9 @@ def _torch_sdpa(
         keys = k_BJSD
         values = v_BJSD
         enable_gqa = {}
-    elif gqa_is_supported() and dtype_supports_gqa:
+    elif gqa_is_supported(q_BHSD.device) and (
+        q_BHSD.device.type == "cpu" or dtype_supports_gqa
+    ):
         keys = k_BJSD
         values = v_BJSD
         enable_gqa = {"enable_gqa": True}
