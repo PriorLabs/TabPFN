@@ -201,6 +201,27 @@ def test__torch_sdpa__grad_disabled__does_not_chunk(
     assert len(shapes) == 1
 
 
+def test__torch_sdpa__passes_views_of_the_inputs_without_copying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storages: list[int] = []
+
+    def fake_sdpa(
+        query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, **_kwargs: Any
+    ) -> torch.Tensor:
+        storages.extend(t.untyped_storage().data_ptr() for t in (query, key, value))
+        return torch.empty_like(query)
+
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", fake_sdpa)
+    q = torch.randn(2, 5, 4, 8)
+    k = torch.randn(2, 7, 4, 8)
+    v = torch.randn(2, 7, 4, 8)
+
+    _torch_sdpa(q, k, v)
+
+    assert storages == [t.untyped_storage().data_ptr() for t in (q, k, v)]
+
+
 def _cuda_bytes_available() -> int:
     if not torch.cuda.is_available():
         return 0

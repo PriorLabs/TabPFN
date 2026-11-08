@@ -180,14 +180,17 @@ def _torch_sdpa(
         )
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
+    # The permuted views go in as they are. The fused kernels need only the last
+    # dim to be contiguous, and a copy of a KV over a large train set costs as
+    # much memory as the KV itself.
     with sdpa_kernel(backends=backends):
         outputs = []
         for i in range(num_iterations):
             outputs.append(
                 torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch].contiguous(),
-                    keys[i * sub_batch : (i + 1) * sub_batch].contiguous(),
-                    values[i * sub_batch : (i + 1) * sub_batch].contiguous(),
+                    q_BHSD[i * sub_batch : (i + 1) * sub_batch],
+                    keys[i * sub_batch : (i + 1) * sub_batch],
+                    values[i * sub_batch : (i + 1) * sub_batch],
                     attn_mask=None,
                     **enable_gqa,
                 )
