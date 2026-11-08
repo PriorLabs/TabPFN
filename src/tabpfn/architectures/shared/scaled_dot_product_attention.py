@@ -180,11 +180,9 @@ def _torch_sdpa(
         )
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
-    # On CUDA and CPU the permuted views go in as they are: the fused kernels need
-    # only the last dim to be contiguous, and a copy of a KV over a large train set
-    # costs as much memory as the KV itself. MPS SDPA returns wrong values for
-    # permuted inputs on older torch (pytorch#181133), and on ROCm the copy makes
-    # long sequences faster, so those keep it.
+    # SDPA takes the permuted views; only the last dim must be contiguous. MPS SDPA
+    # returns wrong values for permuted inputs on older torch (pytorch#181133), and
+    # ROCm runs long sequences faster on contiguous inputs, so both copy.
     copy_inputs = q_BHSD.device.type == "mps" or torch.version.hip is not None
 
     def batch_slice(t: torch.Tensor, i: int) -> torch.Tensor:
