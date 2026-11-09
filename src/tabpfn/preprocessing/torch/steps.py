@@ -255,6 +255,7 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
             fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
 
         transformed = self._qt.transform(target_x, fitted_cache=fitted_cache)
+        del target_x  # free before the full-size clone below
 
         if run_on_cpu:
             transformed = transformed.to(orig_device)
