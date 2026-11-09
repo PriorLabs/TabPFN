@@ -98,8 +98,7 @@ class TorchQuantileTransformer:
             0, 1, n_quantiles_effective, device=x.device, dtype=compute_dtype
         )
 
-        x_compute = x.to(compute_dtype)
-        quantiles = self._nanquantile_chunked(x_compute, references)
+        quantiles = self._nanquantile_chunked(x, references)
 
         # Ensure monotonicity (handle floating point issues)
         # Use cumulative maximum along the quantile dimension
@@ -129,12 +128,13 @@ class TorchQuantileTransformer:
         process_all_at_once = n_features <= chunk_cols
 
         if process_all_at_once:
-            quantiles = torch.nanquantile(x, references, dim=0)
+            quantiles = torch.nanquantile(x.to(references.dtype), references, dim=0)
         else:
             chunks = []
             for col_start in range(0, n_features, chunk_cols):
+                x_chunk = x_flat[:, col_start : col_start + chunk_cols]
                 q_chunk = torch.nanquantile(
-                    x_flat[:, col_start : col_start + chunk_cols], references, dim=0
+                    x_chunk.to(references.dtype), references, dim=0
                 )
                 chunks.append(q_chunk)
             quantiles = torch.cat(chunks, dim=-1)
@@ -153,7 +153,8 @@ class TorchQuantileTransformer:
         while 1M-row datasets stay bounded at ~2 GB of workspace per chunk.
         """
         n_samples = x_flat.shape[0]
-        element_size = x_flat.element_size()
+        # Computed in at least float32.
+        element_size = max(x_flat.element_size(), 4)
         overhead_factor = 10
         target_bytes = 2 * 1024**3  # 2 GB
         bytes_per_col = n_samples * element_size * overhead_factor
@@ -185,24 +186,16 @@ class TorchQuantileTransformer:
         references = fitted_cache["references"]
 
         # The cache may be in float32 (from fit) while input is float16.
-        # Compute in the cache dtype, then cast back.
-        orig_dtype = x.dtype
-        compute_dtype = quantiles.dtype
-        x_compute = x.to(compute_dtype)
-
-        chunk_size = self._get_transform_chunk_size(x_compute)
-        n_samples = x_compute.shape[0]
-
-        if n_samples <= chunk_size:
-            result = self._transform_chunk(x_compute, quantiles, references)
-        else:
-            chunks = []
-            for start in range(0, n_samples, chunk_size):
-                chunk = x_compute[start : start + chunk_size]
-                chunks.append(self._transform_chunk(chunk, quantiles, references))
-            result = torch.cat(chunks, dim=0)
-
-        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+        # Compute each chunk in the cache dtype and write it into the output.
+        out = torch.empty_like(x)
+        chunk_size = self._get_transform_chunk_size(x)
+        for start in range(0, x.shape[0], chunk_size):
+            out[start : start + chunk_size] = self._transform_chunk(
+                x[start : start + chunk_size].to(quantiles.dtype),
+                quantiles,
+                references,
+            )
+        return out
 
     def _transform_chunk(
         self,
@@ -223,8 +216,9 @@ class TorchQuantileTransformer:
         ~2 GB of intermediates so that even very large datasets stay within
         reasonable GPU memory.
         """
-        n_features = x.shape[-1] if x.ndim > 1 else 1
-        element_size = x.element_size()
+        n_features = x[0].numel() if x.shape[0] else 1
+        # Computed in at least float32.
+        element_size = max(x.element_size(), 4)
         overhead_factor = 15
         target_bytes = 2 * 1024**3  # 2 GB
         bytes_per_row = n_features * element_size * overhead_factor
