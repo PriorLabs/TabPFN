@@ -388,6 +388,7 @@ class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
             fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
 
         transformed = self._transformer.transform(target_x, fitted_cache=fitted_cache)
+        del target_x  # free before the full-size clone below
 
         x = x.clone()
         x[:, :, self._target_column_indices] = transformed.to(orig_device)

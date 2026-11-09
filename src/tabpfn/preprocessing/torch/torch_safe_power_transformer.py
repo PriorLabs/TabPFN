@@ -15,9 +15,9 @@ _XTOL = 1.48e-8
 _EPS = torch.finfo(torch.float64).eps
 # Float64 working set of one fit or transform chunk, including temporaries.
 _CHUNK_TARGET_BYTES = 1024**3
-# Peak float64 tensors per chunk element, with margin over the measured peak.
-_FIT_OVERHEAD_FACTOR = 8
-_TRANSFORM_OVERHEAD_FACTOR = 8
+# Float64 tensors alive per chunk element at peak: measured about 4.3 on CUDA
+# for both fit and transform, rounded up for margin.
+_OVERHEAD_FACTOR = 6
 
 
 class TorchSafePowerTransformer:
@@ -34,7 +34,7 @@ class TorchSafePowerTransformer:
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit lambdas and scaler statistics on ``x`` of shape [n_rows, ...]."""
         x = x.reshape(x.shape[0], -1)
-        bytes_per_col = 8 * _FIT_OVERHEAD_FACTOR * max(x.shape[0], 1)
+        bytes_per_col = 8 * _OVERHEAD_FACTOR * max(x.shape[0], 1)
         n_cols = max(1, _CHUNK_TARGET_BYTES // bytes_per_col)
         caches = [
             _fit_chunk(x[:, i : i + n_cols].to(torch.float64))
@@ -49,7 +49,7 @@ class TorchSafePowerTransformer:
         shape = x.shape
         x = x.reshape(shape[0], -1)
         out = torch.empty_like(x)
-        bytes_per_row = 8 * _TRANSFORM_OVERHEAD_FACTOR * max(x.shape[1], 1)
+        bytes_per_row = 8 * _OVERHEAD_FACTOR * max(x.shape[1], 1)
         n_rows = max(1, _CHUNK_TARGET_BYTES // bytes_per_row)
         for i in range(0, x.shape[0], n_rows):
             out[i : i + n_rows] = _transform_chunk(
