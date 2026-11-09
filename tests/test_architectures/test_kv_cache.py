@@ -22,6 +22,7 @@ from tabpfn.architectures.kv_cache import (
     _quantize_tensor,
 )
 from tabpfn.inference import _resolve_kv_cache_precision
+from tests.utils import get_pytest_devices
 
 
 @pytest.mark.parametrize(
@@ -135,6 +136,23 @@ def test_entry_quantize_to_fp8_and_back() -> None:
     restored = entry.dequantize(torch.float32)
     assert (restored.key - k).norm() / k.norm() < 0.05
     assert (restored.value - v).norm() / v.norm() < 0.05
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("per_batch_element", [False, True])
+def test__dequantize_tensor__int8_matches_cast_then_scale(
+    device: str, out_dtype: torch.dtype, per_batch_element: bool
+) -> None:
+    q, scale = _quantize_tensor(
+        _kv_tensor(), torch.int8, per_batch_element=per_batch_element
+    )
+    q, scale = q.to(device), scale.to(device)
+    out = _dequantize_tensor(q, scale, out_dtype)
+    assert out.dtype == out_dtype
+    torch.testing.assert_close(
+        out, q.to(out_dtype) * scale.to(out_dtype), rtol=0, atol=0
+    )
 
 
 class _FakeArchitecture:

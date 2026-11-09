@@ -86,6 +86,11 @@ def _quantize_tensor(
 
 def _dequantize_tensor(t: Tensor, scale: Tensor, dtype: torch.dtype) -> Tensor:
     """Dequantize a quantized tensor back to floating-point *dtype*."""
+    if t.dtype == torch.int8:
+        # One kernel instead of a cast then a multiply; exact, since every int8
+        # value fits in any float dtype.
+        return t * scale.to(dtype)
+    # Type promotion does not support float8, so cast first.
     return t.to(dtype) * scale.to(dtype)
 
 
