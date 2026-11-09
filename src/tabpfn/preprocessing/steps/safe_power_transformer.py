@@ -196,6 +196,10 @@ class SafePowerTransformer(PowerTransformer):
         # the computation of lambda is influenced by NaNs so we need to
         # get rid of them
         x = x[~np.isnan(x)]
+        # sklearn skips the search only for constant columns without NaNs. On a
+        # constant column the search optimises rounding noise, so do the same here.
+        if x.size and np.all(x == x[0]):
+            return 1.0
         _, lmbda = _yeojohnson(x, lmbda=None)
         return lmbda  # type: ignore
 

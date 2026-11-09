@@ -295,9 +295,17 @@ class TorchPreprocessingPipeline:
 def _move_cache_to_device(
     cache: dict[str, torch.Tensor], device: torch.device
 ) -> dict[str, torch.Tensor]:
-    return {
-        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in cache.items()
-    }
+    """Move cache tensors to ``device``, keeping float64 on CPU for MPS.
+
+    MPS has no float64; steps that need it fall back to CPU themselves.
+    """
+
+    def move(v: torch.Tensor) -> torch.Tensor:
+        if device.type == "mps" and v.dtype == torch.float64:
+            return v.cpu()
+        return v.to(device)
+
+    return {k: move(v) if isinstance(v, torch.Tensor) else v for k, v in cache.items()}
 
 
 def _extract_inf_masks(

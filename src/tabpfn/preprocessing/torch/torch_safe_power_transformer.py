@@ -27,8 +27,10 @@ class TorchSafePowerTransformer:
     then ``make_scaler_safe(StandardScaler())``. Each column's lambda maximises the
     Yeo-Johnson log-likelihood within scipy's overflow-safe bounds, found by a
     batched golden-section search. Computes in float64, so it cannot run on MPS.
-    Fit runs on column chunks and transform on row chunks, so the float64
-    working set stays near ``_CHUNK_TARGET_BYTES`` for any number of rows.
+    Fit runs on column chunks and transform on row chunks to keep the float64
+    working set near ``_CHUNK_TARGET_BYTES``. A fit chunk holds at least one
+    whole column, so beyond about 22M rows the fit working set grows with the
+    row count.
     """
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -90,6 +92,9 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     n_valid = x.shape[0] - invalid.sum(dim=0)
     abs_max = x.abs().nan_to_num_(nan=0.0).amax(dim=0)
     n_neg = (x < 0).sum(dim=0)
+    obs_min = x.nan_to_num(nan=torch.inf).amin(dim=0)
+    obs_max = x.nan_to_num(nan=-torch.inf).amax(dim=0)
+    observed_constant = obs_min == obs_max  # False for all-NaN columns
     any_neg, all_neg = n_neg > 0, n_neg == n_valid
 
     finfo = torch.finfo(torch.float64)
@@ -104,7 +109,7 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     )
 
     # Columns without a search get finite dummy bounds and are overwritten below.
-    skip = (abs_max == 0) | (n_valid == 0)
+    skip = observed_constant | (n_valid == 0)
     lb = torch.where(skip, 0.0, lb)
     ub = torch.where(skip, 1.0, ub)
 
@@ -122,7 +127,7 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
         return torch.where(var < finfo.tiny, torch.inf, -llf)
 
     lambdas = _golden_section_search(neg_llf, lb, ub)
-    lambdas = torch.where(abs_max == 0, 1.0, lambdas)
+    lambdas = torch.where(observed_constant, 1.0, lambdas)
     lambdas = torch.where(n_valid == 0, torch.nan, lambdas)
     # sklearn checks constant columns with NaN-propagating statistics.
     mean, var = x.mean(dim=0), x.var(dim=0, correction=0)
