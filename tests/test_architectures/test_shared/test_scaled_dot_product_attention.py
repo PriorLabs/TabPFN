@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+import io
+import os
 from typing import Any, TypedDict
 
 import pytest
 import torch
 from torch.nn.attention import SDPBackend
+from torch.torch_version import TorchVersion
 
+from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     _FLASH_BACKWARD_MAX_ELEMENTS,
     _FLASH_MIN_HEAD_DIM,
@@ -288,3 +292,97 @@ def test__torch_sdpa__query_over_flash_index_range__backward_runs_on_cuda() -> N
     torch.cuda.synchronize()
 
     assert q.grad is not None
+
+
+@pytest.mark.skipif(
+    not gqa_is_supported(torch.device("cpu"), torch.float32),
+    reason="needs CPU GQA on Torch >=2.9",
+)
+def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPU MQA passes the single K/V head to SDPA instead of copying it per head."""
+    q = torch.randn(2, 7, 4, 8)
+    k = torch.randn(2, 37, 1, 8)
+    v = torch.randn_like(k)
+    with torch.inference_mode():
+        # K/V expanded to all 4 query heads takes the path that copies K/V.
+        expected = _torch_sdpa(q, k.expand(-1, -1, 4, -1), v.expand(-1, -1, 4, -1))
+
+    original_sdpa = torch.nn.functional.scaled_dot_product_attention
+    calls: list[tuple[torch.Tensor, dict[str, Any]]] = []
+
+    def record(
+        query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, **kwargs: Any
+    ) -> torch.Tensor:
+        calls.append((key, kwargs))
+        return original_sdpa(query, key, value, **kwargs)
+
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", record)
+    with torch.inference_mode():
+        actual = _torch_sdpa(q, k, v)
+
+    [(key, kwargs)] = calls
+    assert kwargs.get("enable_gqa") is True
+    assert key.untyped_storage().data_ptr() == k.untyped_storage().data_ptr()
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.skipif(
+    not gqa_is_supported(torch.device("cpu"), torch.float32),
+    reason="needs CPU GQA on Torch >=2.9",
+)
+@pytest.mark.skipif(os.name == "nt", reason="onnx export is not tested on windows")
+def test__torch_sdpa__cpu_mqa_onnx_export__exports_without_enable_gqa() -> None:
+    """The TorchScript ONNX exporter cannot convert SDPA with enable_gqa."""
+    pytest.importorskip("onnx")
+
+    class Attention(torch.nn.Module):
+        def forward(
+            self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor
+        ) -> torch.Tensor:
+            return _torch_sdpa(q, k, v)
+
+    q = torch.randn(2, 7, 4, 8)
+    k = torch.randn(2, 37, 1, 8)
+    v = torch.randn_like(k)
+
+    torch.onnx.export(Attention(), (q, k, v), io.BytesIO(), dynamo=False)
+
+
+@pytest.mark.parametrize(
+    ("device", "dtype", "version", "expected"),
+    [
+        ("cpu", torch.float32, "2.8.0", False),
+        ("cpu", torch.float32, "2.9.0", True),
+        ("cpu", torch.float32, "2.9.0a0", True),
+        ("cpu", torch.float32, "2.9.0.dev20250801+cpu", True),
+        ("cpu", torch.float64, "2.9.0", True),
+        ("cuda:0", torch.float16, "2.9.0", False),
+        ("cuda:1", torch.float16, "2.4.0", False),
+        ("cuda:1", torch.float16, "2.5.0rc1", True),
+        ("cuda:1", torch.float16, "2.9.0", True),
+        ("cuda:1", torch.bfloat16, "2.9.0", True),
+        ("cuda:1", torch.float32, "2.9.0", False),
+        ("meta", torch.float16, "2.9.0", False),
+    ],
+)
+def test__gqa_is_supported__per_device__follows_version_capability_and_dtype(
+    monkeypatch: pytest.MonkeyPatch,
+    device: str,
+    dtype: torch.dtype,
+    version: str,
+    *,
+    expected: bool,
+) -> None:
+    """CPU depends on the Torch version, CUDA also on the GPU and the dtype."""
+    capabilities = {0: (7, 5), 1: (8, 0)}
+    monkeypatch.setattr(torch, "__version__", TorchVersion(version))
+    monkeypatch.setattr(
+        torch.cuda, "get_device_capability", lambda gpu: capabilities[gpu.index]
+    )
+    gqa_is_supported.cache_clear()
+    try:
+        assert gqa_is_supported(torch.device(device), dtype) is expected
+    finally:
+        gqa_is_supported.cache_clear()
