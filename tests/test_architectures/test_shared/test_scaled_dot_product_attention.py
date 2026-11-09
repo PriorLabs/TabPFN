@@ -247,7 +247,7 @@ def test__torch_sdpa__query_over_flash_index_range__backward_runs_on_cuda() -> N
 
 
 @pytest.mark.skipif(
-    not gqa_is_supported(torch.device("cpu")),
+    not gqa_is_supported(torch.device("cpu"), torch.float32),
     reason="needs CPU GQA on Torch 2.9+",
 )
 def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
@@ -281,19 +281,28 @@ def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
 
 
 @pytest.mark.parametrize(
-    ("device", "version", "expected"),
+    ("device", "dtype", "version", "expected"),
     [
-        ("cpu", "2.8.0", False),
-        ("cpu", "2.9.0", True),
-        ("cuda:0", "2.9.0", False),
-        ("cuda:1", "2.9.0", True),
-        ("meta", "2.9.0", False),
+        ("cpu", torch.float32, "2.8.0", False),
+        ("cpu", torch.float32, "2.9.0", True),
+        ("cpu", torch.float64, "2.9.0", True),
+        ("cuda:0", torch.float16, "2.9.0", False),
+        ("cuda:1", torch.float16, "2.4.0", False),
+        ("cuda:1", torch.float16, "2.9.0", True),
+        ("cuda:1", torch.bfloat16, "2.9.0", True),
+        ("cuda:1", torch.float32, "2.9.0", False),
+        ("meta", torch.float16, "2.9.0", False),
     ],
 )
-def test__gqa_is_supported__per_device__follows_version_and_capability(
-    monkeypatch: pytest.MonkeyPatch, device: str, version: str, *, expected: bool
+def test__gqa_is_supported__per_device__follows_version_capability_and_dtype(
+    monkeypatch: pytest.MonkeyPatch,
+    device: str,
+    dtype: torch.dtype,
+    version: str,
+    *,
+    expected: bool,
 ) -> None:
-    """CPU depends on the Torch version, CUDA on the capability of that GPU."""
+    """CPU depends on the Torch version, CUDA also on the GPU and the dtype."""
     capabilities = {0: (7, 5), 1: (8, 0)}
     monkeypatch.setattr(torch, "__version__", TorchVersion(version))
     monkeypatch.setattr(
@@ -301,6 +310,6 @@ def test__gqa_is_supported__per_device__follows_version_and_capability(
     )
     gqa_is_supported.cache_clear()
     try:
-        assert gqa_is_supported(torch.device(device)) is expected
+        assert gqa_is_supported(torch.device(device), dtype) is expected
     finally:
         gqa_is_supported.cache_clear()

@@ -146,14 +146,11 @@ def _torch_sdpa(
     num_q_heads = q_BHSD.shape[-3]
     num_kv_heads = k_BJSD.shape[-3]
 
-    dtype_supports_gqa = q_BHSD.dtype in {torch.float16, torch.bfloat16}
     if num_q_heads == num_kv_heads:
         keys = k_BJSD
         values = v_BJSD
         enable_gqa = {}
-    elif gqa_is_supported(q_BHSD.device) and (
-        q_BHSD.device.type == "cpu" or dtype_supports_gqa
-    ):
+    elif gqa_is_supported(q_BHSD.device, q_BHSD.dtype):
         keys = k_BJSD
         values = v_BJSD
         enable_gqa = {"enable_gqa": True}
