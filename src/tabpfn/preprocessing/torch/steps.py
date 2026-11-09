@@ -219,11 +219,13 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         n_quantiles: int,
         target_column_indices: list[int],
         extrapolate_ratio: float | None = None,
+        output_distribution: Literal["uniform", "normal"] = "uniform",
     ) -> None:
         super().__init__()
         self._qt = TorchQuantileTransformer(
             n_quantiles=n_quantiles,
             extrapolate_ratio=extrapolate_ratio,
+            output_distribution=output_distribution,
         )
         self._target_column_indices = target_column_indices
 

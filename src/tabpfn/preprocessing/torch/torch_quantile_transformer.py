@@ -4,23 +4,38 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+import numpy as np
 import torch
+
+# Same as sklearn's QuantileTransformer: inputs this close to the fitted range
+# boundaries map to the clipped tails of the normal output.
+_BOUNDS_THRESHOLD = 1e-7
+_NORMAL_CLIP_MAX = float(
+    torch.special.ndtri(
+        torch.tensor(1 - (_BOUNDS_THRESHOLD - np.spacing(1)), dtype=torch.float64)
+    )
+)
+_NORMAL_CLIP_MIN = float(
+    torch.special.ndtri(
+        torch.tensor(_BOUNDS_THRESHOLD - np.spacing(1), dtype=torch.float64)
+    )
+)
 
 
 class TorchQuantileTransformer:
     """Quantile transformer for PyTorch tensors with NaN handling.
 
     Similar to sklearn's QuantileTransformer but without any implicit state.
-    The state is returned explicitly. Only supports uniform output distribution.
-
-    This transformer maps the data to a uniform distribution in [0, 1] using
-    quantile information from the training data.
+    The state is returned explicitly.
     """
 
     def __init__(
         self,
         n_quantiles: int = 1_000,
         extrapolate_ratio: float | None = None,
+        output_distribution: Literal["uniform", "normal"] = "uniform",
     ) -> None:
         """Initialize the quantile transformer.
 
@@ -32,12 +47,19 @@ class TorchQuantileTransformer:
                 ``-ratio`` / ``1 + ratio`` instead of being clamped at the
                 boundary quantile. Mirrors the
                 :class:`AdaptiveQuantileTransformer` mode-1 behaviour.
+            output_distribution: Marginal distribution of the output, as in
+                sklearn's ``QuantileTransformer``.
         """
         super().__init__()
         if extrapolate_ratio is not None and extrapolate_ratio < 0:
             raise ValueError("extrapolate_ratio must be non-negative.")
+        if extrapolate_ratio is not None and output_distribution != "uniform":
+            raise ValueError(
+                "extrapolate_ratio is only supported for output_distribution='uniform'."
+            )
         self.n_quantiles = n_quantiles
         self.extrapolate_ratio = extrapolate_ratio
+        self.output_distribution = output_distribution
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the quantiles from the training data.
@@ -142,7 +164,7 @@ class TorchQuantileTransformer:
         x: torch.Tensor,
         fitted_cache: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Transform the data to uniform distribution using fitted quantiles.
+        """Transform the data to the output distribution using fitted quantiles.
 
         Automatically processes in row-chunks when the data is large to keep
         peak intermediate memory bounded (~2 GB of temporaries).
@@ -152,7 +174,7 @@ class TorchQuantileTransformer:
             fitted_cache: Cache returned by fit.
 
         Returns:
-            Transformed tensor with values in [0, 1].
+            Transformed tensor.
         """
         if "quantiles" not in fitted_cache or "references" not in fitted_cache:
             raise ValueError(
@@ -229,7 +251,7 @@ class TorchQuantileTransformer:
             references: Reference positions [n_quantiles].
 
         Returns:
-            Interpolated values in [0, 1].
+            Values in the output distribution.
         """
         original_shape = x.shape
         n_quantiles = quantiles.shape[0]
@@ -262,7 +284,9 @@ class TorchQuantileTransformer:
         result = 0.5 * (interp_forward - interp_backward)  # [n_features, n_samples]
         result = result.t()  # [n_samples, n_features]
 
-        if self.extrapolate_ratio is None:
+        if self.output_distribution == "normal":
+            result = self._to_normal(result, x_flat, quantiles_flat)
+        elif self.extrapolate_ratio is None:
             result = torch.clamp(result, 0.0, 1.0)
         else:
             result = self._apply_extrapolation(result, x_flat, quantiles_flat)
@@ -273,6 +297,23 @@ class TorchQuantileTransformer:
             result = result.squeeze(-1)
 
         return result
+
+    def _to_normal(
+        self,
+        result: torch.Tensor,
+        x: torch.Tensor,
+        quantiles: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map uniform values to a clipped standard normal, as sklearn does.
+
+        Inputs within ``_BOUNDS_THRESHOLD`` of the fitted min/max go to the clip
+        bounds; the min side wins for constant features.
+        """
+        at_max = (quantiles[-1] - x) < _BOUNDS_THRESHOLD
+        at_min = (x - quantiles[0]) < _BOUNDS_THRESHOLD
+        result = torch.where(at_max, 1.0, result)
+        result = torch.where(at_min, 0.0, result)
+        return torch.special.ndtri(result).clamp(_NORMAL_CLIP_MIN, _NORMAL_CLIP_MAX)
 
     def _apply_extrapolation(
         self,
@@ -389,7 +430,7 @@ class TorchQuantileTransformer:
                 quantiles are computed from all data.
 
         Returns:
-            Transformed tensor with values in [0, 1].
+            Transformed tensor.
         """
         # Determine which data to use for fitting
         if num_train_rows is not None and num_train_rows > 0:

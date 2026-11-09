@@ -400,6 +400,39 @@ class TestTorchQuantileTransformerExtrapolation:
         )
 
 
+class TestTorchQuantileTransformerNormalOutput:
+    """Tests for ``output_distribution="normal"``."""
+
+    @pytest.mark.parametrize("n_quantiles", [10, 60, 300])
+    def test__transform__matches_sklearn(self, n_quantiles: int):
+        """Matches sklearn on NaNs, ties, constant columns and out-of-range rows."""
+        rng = np.random.default_rng(0)
+        x_train = rng.standard_normal((300, 4))
+        x_train[:, 1] = 3.0
+        x_train[:, 2] = np.round(x_train[:, 2])
+        x_train[rng.random(x_train.shape) < 0.05] = np.nan
+        x_test = np.concatenate([x_train, 4 * rng.standard_normal((50, 4))])
+
+        sklearn_qt = AdaptiveQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        ).fit(x_train)
+        expected = sklearn_qt.transform(x_test)
+
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        )
+        cache = torch_qt.fit(torch.from_numpy(x_train))
+        result = torch_qt.transform(torch.from_numpy(x_test), fitted_cache=cache)
+
+        np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
+
+    def test__init__extrapolate_ratio_raises(self):
+        with pytest.raises(ValueError, match="extrapolate_ratio"):
+            TorchQuantileTransformer(
+                extrapolate_ratio=1.0, output_distribution="normal"
+            )
+
+
 def _make_schema(
     *,
     num_numericals: int = 0,
