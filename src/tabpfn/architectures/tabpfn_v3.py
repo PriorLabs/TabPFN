@@ -2076,7 +2076,7 @@ class TabPFNV3(Architecture):
                 highest_target=highest_target,
             )
         else:
-            test_out = self.output_projection(test_emb.transpose(0, 1))
+            test_out = self.output_projection(test_emb).transpose(0, 1)
 
         if self._nan_safe_output:
             test_out = torch.nan_to_num(test_out, nan=0.0)
