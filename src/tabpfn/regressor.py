@@ -98,7 +98,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.group_ids import GroupIdEncoder, with_modality
+from tabpfn.preprocessing.group_ids import GroupIdEncoder, as_group_feature
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -1043,7 +1043,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # constant-column restore rewrites an unseen group's NaN; categorical
         # after it, whatever the number of groups.
         self.group_feature_index_ = group_feature_index(self, feature_names)
-        feature_schema = with_modality(
+        feature_schema = as_group_feature(
             feature_schema, self.group_feature_index_, FeatureModality.NUMERICAL
         )
         X, ordinal_encoder, feature_schema = clean_data(
@@ -1051,7 +1051,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
-        feature_schema = with_modality(
+        feature_schema = as_group_feature(
             feature_schema, self.group_feature_index_, FeatureModality.CATEGORICAL
         )
         self.inferred_feature_schema_ = feature_schema

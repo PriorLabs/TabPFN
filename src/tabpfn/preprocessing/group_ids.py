@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
     from tabpfn.constants import XType
 
-__all__ = ["GROUP_FEATURE_NAME", "GroupIdEncoder", "with_modality"]
+__all__ = ["GROUP_FEATURE_NAME", "GroupIdEncoder", "as_group_feature"]
 
 #: Label of the feature the group columns are replaced with, made unique against
 #: the labels that stay.
@@ -188,14 +188,16 @@ class GroupIdEncoder:
         return out
 
 
-def with_modality(
+def as_group_feature(
     feature_schema: FeatureSchema, index: int | None, modality: FeatureModality
 ) -> FeatureSchema:
-    """`feature_schema` with the feature at `index` set to `modality`."""
+    """`feature_schema` with the feature at `index` marked as the group feature."""
     if index is None:
         return feature_schema
     features = list(feature_schema.features)
-    features[index] = dataclasses.replace(features[index], modality=modality)
+    features[index] = dataclasses.replace(
+        features[index], modality=modality, is_group_id=True
+    )
     return FeatureSchema(features=features)
 
 

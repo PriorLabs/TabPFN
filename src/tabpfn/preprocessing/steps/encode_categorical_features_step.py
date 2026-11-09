@@ -163,7 +163,34 @@ def _carry_over_input_feature_metadata(
             **{attr: getattr(in_feat, attr) for attr in _CARRIED_FEATURE_FIELDS},
         )
 
+    if column_transformer is not None:
+        _carry_over_group_flag(input_schema, new_features, column_transformer)
+
     return FeatureSchema(features=new_features)
+
+
+def _carry_over_group_flag(
+    input_schema: FeatureSchema,
+    new_features: list[Feature],
+    column_transformer: ColumnTransformer,
+) -> None:
+    """Keep `is_group_id` on the columns a transformer maps one-to-one, in place.
+
+    An ordinal-encoded column is still the same feature; the other carried fields
+    describe the raw values it no longer holds.
+    """
+    all_positions = list(range(len(new_features)))
+    for name, _transformer, cols in column_transformer.transformers_:
+        if name == "remainder" or name not in column_transformer.output_indices_:
+            continue
+        out_positions = all_positions[column_transformer.output_indices_[name]]
+        if not isinstance(cols, list) or len(out_positions) != len(cols):
+            continue
+        for in_idx, out_idx in zip(cols, out_positions, strict=True):
+            new_features[out_idx] = dataclasses.replace(
+                new_features[out_idx],
+                is_group_id=input_schema.features[in_idx].is_group_id,
+            )
 
 
 class EncodeCategoricalFeaturesStep(PreprocessingStep):

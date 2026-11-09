@@ -374,6 +374,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             names=_build_reshape_output_names(feature_schema, layout),
         )
         self._set_ancestors(new_schema, feature_schema, layout)
+        self._keep_group_flag(new_schema, feature_schema, layout)
 
         # A transform scheduled onto the GPU leaves "none" behind on this side, which
         # the registry maps to the identity `FunctionTransformer`. Then the only thing
@@ -416,6 +417,20 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 )
 
         return self.transformer_, new_schema
+
+    def _keep_group_flag(
+        self,
+        new_schema: FeatureSchema,
+        old_schema: FeatureSchema,
+        layout: list[_ReshapeColumn],
+    ) -> None:
+        """Keep `is_group_id` on the columns passed through unchanged, in place."""
+        for idx, column in enumerate(layout):
+            if column.is_passthrough:
+                source = old_schema.features[column.source_ix]
+                new_schema.features[idx] = dataclasses.replace(
+                    new_schema.features[idx], is_group_id=source.is_group_id
+                )
 
     def _set_ancestors(
         self,

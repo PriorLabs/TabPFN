@@ -266,9 +266,30 @@ class TestEstimators:
         # unchanged; the model sees one encoded feature in place of them.
         assert estimator.n_features_in_ == 3
         assert estimator.inferred_feature_schema_.num_columns == n_schema_columns
-        _, feature = _group_feature(estimator)
+        index, feature = _group_feature(estimator)
         assert feature.modality is FeatureModality.CATEGORICAL
+        flagged = [
+            i
+            for i, f in enumerate(estimator.inferred_feature_schema_.features)
+            if f.is_group_id
+        ]
+        assert flagged == [index]
         assert estimator.predict(X).shape == (30,)
+
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    def test__ensemble_members__keep_one_group_feature(
+        self, estimator_cls: type
+    ) -> None:
+        """Through the distribution reshaping and the ordinal encoding."""
+        X, y = _estimator_data(estimator_cls, [f"p{i % 4}" for i in range(40)])
+        X["colour"] = ["red", "blue"] * 20
+        estimator = estimator_cls(n_estimators=4, group_col="g").fit(X, y)
+
+        for member in estimator.executor_.ensemble_members:
+            schema = member.cpu_preprocessor.final_feature_schema_
+            flagged = [f for f in schema.features if f.is_group_id]
+            assert len(flagged) == 1
+            assert flagged[0].modality is FeatureModality.CATEGORICAL
 
     @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
     def test__numeric_group_ids__are_categorical_however_many_there_are(
@@ -383,3 +404,4 @@ class TestEstimators:
 
         feature = tuning.inferred_feature_schema_.features[index]
         assert feature.modality is FeatureModality.CATEGORICAL
+        assert feature.is_group_id
