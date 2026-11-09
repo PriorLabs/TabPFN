@@ -285,9 +285,12 @@ def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
     [
         ("cpu", torch.float32, "2.8.0", False),
         ("cpu", torch.float32, "2.9.0", True),
+        ("cpu", torch.float32, "2.9.0a0", True),
+        ("cpu", torch.float32, "2.9.0.dev20250801+cpu", True),
         ("cpu", torch.float64, "2.9.0", True),
         ("cuda:0", torch.float16, "2.9.0", False),
         ("cuda:1", torch.float16, "2.4.0", False),
+        ("cuda:1", torch.float16, "2.5.0rc1", True),
         ("cuda:1", torch.float16, "2.9.0", True),
         ("cuda:1", torch.bfloat16, "2.9.0", True),
         ("cuda:1", torch.float32, "2.9.0", False),
