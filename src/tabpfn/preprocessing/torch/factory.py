@@ -24,6 +24,7 @@ from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
     TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveSafePowerStep,
     TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
     TorchSoftClipOutliersStep,
@@ -50,9 +51,9 @@ def create_gpu_preprocessing_pipeline(
     Args:
         config: Ensemble configuration.
         keep_fitted_cache: Whether to keep fitted state for cache reuse.
-        enable_gpu_preprocessing: When True, adds quantile transform, SVD, and
-            shuffle steps.  Requires ``feature_schema`` (to read GPU quantile
-            target annotations) and ``n_train_samples``.
+        enable_gpu_preprocessing: When True, adds the scheduled reshape
+            transform, SVD, and shuffle steps.  Requires ``feature_schema`` (to
+            read GPU transform annotations) and ``n_train_samples``.
         feature_schema: Feature schema from the CPU preprocessing output.
             Used to read ``scheduled_gpu_transform`` column annotations.
         n_train_samples: Number of training samples (after subsampling).
@@ -99,6 +100,19 @@ def create_gpu_preprocessing_pipeline(
                     TorchSelectiveSquashingScalerStep(
                         max_absolute_value=max_absolute_value,
                         target_column_indices=squashing_scaler_target_indices,
+                    ),
+                    None,  # operates on explicit indices, receives full tensor
+                )
+            )
+
+        safe_power_target_indices = (
+            feature_schema.get_indices_marked_for_gpu_safe_power_transform()
+        )
+        if safe_power_target_indices:
+            steps.append(
+                (
+                    TorchSelectiveSafePowerStep(
+                        target_column_indices=safe_power_target_indices
                     ),
                     None,  # operates on explicit indices, receives full tensor
                 )
