@@ -96,7 +96,11 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.group_ids import GroupIdEncoder, as_group_feature
+from tabpfn.preprocessing.group_ids import (
+    GroupIdEncoder,
+    as_group_feature,
+    mask_unseen_groups,
+)
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.text import TextTransformer
@@ -1628,6 +1632,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         holdout_weights: list[np.ndarray] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
+            X_holdout_NhF = mask_unseen_groups(  # noqa: PLW2901
+                X_train_NtF, X_holdout_NhF, self.group_feature_index_
+            )
             holdout_y_true.append(y_holdout_Nh)
             calibration_classifier = self._get_tuning_classifier()
             with warnings.catch_warnings():

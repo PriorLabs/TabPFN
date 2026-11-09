@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import numpy as np
@@ -551,6 +552,27 @@ class TestCarryOverGpuTransformMarks:
 
         marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
         assert marked == []
+
+
+@pytest.mark.parametrize(
+    ("transform_name", "flagged"),
+    [("ordinal", [0]), ("onehot", [])],
+)
+def test__group_flag__kept_by_ordinal_encoding_only(
+    transform_name: str, flagged: list[int]
+) -> None:
+    """A binary one-hot column is as wide as its input, yet not the feature."""
+    rng = np.random.default_rng(42)
+    X = _make_test_data(rng, 50, 3, [1])
+    X[:, 1] = rng.integers(0, 2, size=50).astype(float)
+    schema = _make_feature_schema(3, [1])
+    schema.features[1] = dataclasses.replace(schema.features[1], is_group_id=True)
+
+    result = EncodeCategoricalFeaturesStep(transform_name).fit_transform(X, schema)
+
+    assert result.X.shape[1] == 3
+    features = result.feature_schema.features
+    assert [i for i, f in enumerate(features) if f.is_group_id] == flagged
 
 
 # ---------------------------------------------------------------------------

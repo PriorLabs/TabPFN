@@ -98,7 +98,11 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.group_ids import GroupIdEncoder, as_group_feature
+from tabpfn.preprocessing.group_ids import (
+    GroupIdEncoder,
+    as_group_feature,
+    mask_unseen_groups,
+)
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -1724,6 +1728,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples,
         # B=num buckets
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
+            X_holdout_NhF = mask_unseen_groups(  # noqa: PLW2901
+                X_train_NtF, X_holdout_NhF, self.group_feature_index_
+            )
             tuning_regressor = self._get_tuning_regressor()
             with warnings.catch_warnings():
                 # Filter expected warnings during tuning

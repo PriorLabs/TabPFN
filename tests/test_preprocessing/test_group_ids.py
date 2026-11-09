@@ -16,7 +16,7 @@ from sklearn.exceptions import NotFittedError
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.group_ids import GroupIdEncoder
+from tabpfn.preprocessing.group_ids import GroupIdEncoder, mask_unseen_groups
 
 ESTIMATORS = [TabPFNClassifier, TabPFNRegressor]
 
@@ -224,6 +224,18 @@ class TestEncoding:
         assert encoder.output_indices([1, 2, 3]) == [1, 2]
         assert encoder.output_indices(None) is None
 
+    def test__mask_unseen_groups__sets_codes_absent_from_training_to_nan(
+        self,
+    ) -> None:
+        X_train = np.array([[5.0, 0.0], [6.0, 1.0], [7.0, np.nan]])
+        X_holdout = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, np.nan]])
+
+        masked = mask_unseen_groups(X_train, X_holdout, 1)
+
+        np.testing.assert_array_equal(masked[:, 0], [1.0, 2.0, 3.0])
+        np.testing.assert_array_equal(masked[:, 1], [1.0, np.nan, np.nan])
+        assert X_holdout[1, 1] == 2.0
+
 
 class TestEstimators:
     """Both estimators expose `group_col` and feed the encoded feature to the model."""
@@ -405,3 +417,57 @@ class TestEstimators:
         feature = tuning.inferred_feature_schema_.features[index]
         assert feature.modality is FeatureModality.CATEGORICAL
         assert feature.is_group_id
+
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    def test__tuning_fold__sees_holdout_only_groups_as_unseen(
+        self, estimator_cls: type
+    ) -> None:
+        """As a model fitted on the fold's training rows alone would."""
+        estimator, _, _ = _fitted(estimator_cls, ["a", "b", "c"] * 10, group_col="g")
+        index = estimator.group_feature_index_
+        rng = np.random.default_rng(seed=0)
+        X_train = rng.normal(size=(20, 3))
+        X_train[:, index] = np.arange(20) % 2
+        X_holdout = rng.normal(size=(2, 3))
+        X_holdout[:, index] = [0.0, 2.0]
+        if estimator_cls is TabPFNClassifier:
+            y_train, y_holdout = np.arange(20) % 2, np.array([0, 1])
+            make_tuning = "_get_tuning_classifier"
+        else:
+            y_train, y_holdout = rng.normal(size=20), rng.normal(size=2)
+            make_tuning = "_get_tuning_regressor"
+        split = (X_train, X_holdout, y_train, y_holdout)
+
+        seen: list[np.ndarray] = []
+        make = getattr(estimator, make_tuning)
+
+        def make_and_spy(**kwargs: Any) -> Any:
+            tuning = make(**kwargs)
+            fit = tuning.fit
+
+            def fit_and_spy(X: np.ndarray, y: np.ndarray) -> Any:
+                fit(X, y)
+                iter_outputs = tuning.executor_.iter_outputs
+
+                def spy(X: np.ndarray, **kwargs: Any) -> Any:
+                    seen.append(np.asarray(X))
+                    return iter_outputs(X, **kwargs)
+
+                tuning.executor_.iter_outputs = spy
+                return tuning
+
+            tuning.fit = fit_and_spy
+            return tuning
+
+        module = estimator_cls.__module__
+        with (
+            patch(f"{module}.get_tuning_splits", return_value=[split]),
+            patch.object(estimator, make_tuning, make_and_spy),
+        ):
+            estimator._compute_holdout_validation_data(
+                X=X_train, y=y_train, holdout_frac=0.1, n_folds=1
+            )
+
+        codes = seen[0][:, index]
+        assert codes[0] == 0.0
+        assert np.isnan(codes[1])

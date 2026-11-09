@@ -36,7 +36,12 @@ if TYPE_CHECKING:
 
     from tabpfn.constants import XType
 
-__all__ = ["GROUP_FEATURE_NAME", "GroupIdEncoder", "as_group_feature"]
+__all__ = [
+    "GROUP_FEATURE_NAME",
+    "GroupIdEncoder",
+    "as_group_feature",
+    "mask_unseen_groups",
+]
 
 #: Label of the feature the group columns are replaced with, made unique against
 #: the labels that stay.
@@ -199,6 +204,24 @@ def as_group_feature(
         features[index], modality=modality, is_group_id=True
     )
     return FeatureSchema(features=features)
+
+
+def mask_unseen_groups(
+    X_train: np.ndarray, X_holdout: np.ndarray, index: int | None
+) -> np.ndarray:
+    """`X_holdout` with the group codes `X_train` does not hold set to `NaN`.
+
+    For a tuning fold, cut from rows already encoded: a group only in the holdout
+    rows becomes unseen, as it would for a model fitted on the training rows.
+    """
+    if index is None:
+        return X_holdout
+    unseen = ~np.isin(X_holdout[:, index], X_train[:, index])
+    if not unseen.any():
+        return X_holdout
+    X_holdout = X_holdout.copy()
+    X_holdout[unseen, index] = np.nan
+    return X_holdout
 
 
 def _resolve_group_col(group_col: str | Sequence[str] | None) -> list[str]:
