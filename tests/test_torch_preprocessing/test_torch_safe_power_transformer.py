@@ -65,3 +65,28 @@ def test__transform__keeps_shape_and_dtype_of_3d_input():
     result = torch_pt.transform(x, fitted_cache=torch_pt.fit(x))
     assert result.shape == x.shape
     assert result.dtype == torch.float32
+
+
+def test__fit_transform__chunking_matches_single_chunk(monkeypatch):
+    """Column-chunked fit and row-chunked transform match one chunk."""
+    rng = np.random.default_rng(0)
+    x_np = _make_columns(rng, 300)
+    x_np[:, :7][rng.random((300, 7)) < 0.1] = np.nan
+    x = torch.from_numpy(x_np)
+
+    torch_pt = TorchSafePowerTransformer()
+    cache = torch_pt.fit(x)
+    expected = torch_pt.transform(x, fitted_cache=cache)
+
+    monkeypatch.setattr(
+        "tabpfn.preprocessing.torch.torch_safe_power_transformer._CHUNK_TARGET_BYTES",
+        1,
+    )
+    chunked_cache = torch_pt.fit(x)
+    chunked = torch_pt.transform(x, fitted_cache=chunked_cache)
+
+    # Reductions over chunks of different widths sum in a different order, so
+    # the lambda search may stop at a different point within its tolerance.
+    for key, value in cache.items():
+        torch.testing.assert_close(chunked_cache[key], value, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(chunked, expected, rtol=1e-6, atol=1e-6)
