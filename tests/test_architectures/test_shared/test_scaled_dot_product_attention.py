@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import io
+import os
 from typing import Any, TypedDict
 
 import pytest
@@ -248,7 +250,7 @@ def test__torch_sdpa__query_over_flash_index_range__backward_runs_on_cuda() -> N
 
 @pytest.mark.skipif(
     not gqa_is_supported(torch.device("cpu"), torch.float32),
-    reason="needs CPU GQA on Torch 2.9+",
+    reason="needs CPU GQA on Torch >=2.9",
 )
 def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
     monkeypatch: pytest.MonkeyPatch,
@@ -278,6 +280,28 @@ def test__torch_sdpa__cpu_mqa__shares_kv_and_matches_copied_kv(
     assert kwargs.get("enable_gqa") is True
     assert key.untyped_storage().data_ptr() == k.untyped_storage().data_ptr()
     torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.skipif(
+    not gqa_is_supported(torch.device("cpu"), torch.float32),
+    reason="needs CPU GQA on Torch >=2.9",
+)
+@pytest.mark.skipif(os.name == "nt", reason="onnx export is not tested on windows")
+def test__torch_sdpa__cpu_mqa_onnx_export__exports_without_enable_gqa() -> None:
+    """The TorchScript ONNX exporter cannot convert SDPA with enable_gqa."""
+    pytest.importorskip("onnx")
+
+    class Attention(torch.nn.Module):
+        def forward(
+            self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor
+        ) -> torch.Tensor:
+            return _torch_sdpa(q, k, v)
+
+    q = torch.randn(2, 7, 4, 8)
+    k = torch.randn(2, 37, 1, 8)
+    v = torch.randn_like(k)
+
+    torch.onnx.export(Attention(), (q, k, v), io.BytesIO(), dynamo=False)
 
 
 @pytest.mark.parametrize(

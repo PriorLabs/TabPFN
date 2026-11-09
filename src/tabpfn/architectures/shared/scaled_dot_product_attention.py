@@ -150,7 +150,11 @@ def _torch_sdpa(
         keys = k_BJSD
         values = v_BJSD
         enable_gqa = {}
-    elif gqa_is_supported(q_BHSD.device, q_BHSD.dtype):
+    # The TorchScript ONNX exporter cannot convert enable_gqa, so exports copy K/V.
+    # This check stays out of the cached gqa_is_supported, since it changes per call.
+    elif not torch.onnx.is_in_onnx_export() and gqa_is_supported(
+        q_BHSD.device, q_BHSD.dtype
+    ):
         keys = k_BJSD
         values = v_BJSD
         enable_gqa = {"enable_gqa": True}
