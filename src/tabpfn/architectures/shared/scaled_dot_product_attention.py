@@ -180,14 +180,23 @@ def _torch_sdpa(
         )
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
+    # SDPA takes the permuted views; only the last dim must be contiguous. MPS SDPA
+    # returns wrong values for permuted inputs on older torch (pytorch#181133), and
+    # ROCm runs long sequences faster on contiguous inputs, so both copy.
+    copy_inputs = q_BHSD.device.type == "mps" or torch.version.hip is not None
+
+    def batch_slice(t: torch.Tensor, i: int) -> torch.Tensor:
+        sliced = t[i * sub_batch : (i + 1) * sub_batch]
+        return sliced.contiguous() if copy_inputs else sliced
+
     with sdpa_kernel(backends=backends):
         outputs = []
         for i in range(num_iterations):
             outputs.append(
                 torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch].contiguous(),
-                    keys[i * sub_batch : (i + 1) * sub_batch].contiguous(),
-                    values[i * sub_batch : (i + 1) * sub_batch].contiguous(),
+                    batch_slice(q_BHSD, i),
+                    batch_slice(keys, i),
+                    batch_slice(values, i),
                     attn_mask=None,
                     **enable_gqa,
                 )

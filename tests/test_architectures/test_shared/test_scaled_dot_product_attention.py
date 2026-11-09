@@ -201,6 +201,52 @@ def test__torch_sdpa__grad_disabled__does_not_chunk(
     assert len(shapes) == 1
 
 
+def _sdpa_input_storages(
+    monkeypatch: pytest.MonkeyPatch, device: str
+) -> tuple[list[int], list[int]]:
+    """Storages SDPA receives, and the storages of the inputs to `_torch_sdpa`."""
+    received: list[int] = []
+
+    def fake_sdpa(
+        query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, **_kwargs: Any
+    ) -> torch.Tensor:
+        received.extend(t.untyped_storage().data_ptr() for t in (query, key, value))
+        return torch.empty_like(query)
+
+    monkeypatch.setattr(torch.nn.functional, "scaled_dot_product_attention", fake_sdpa)
+    q = torch.randn(2, 5, 4, 8, device=device)
+    k = torch.randn(2, 7, 4, 8, device=device)
+    v = torch.randn(2, 7, 4, 8, device=device)
+
+    _torch_sdpa(q, k, v)
+
+    return received, [t.untyped_storage().data_ptr() for t in (q, k, v)]
+
+
+def test__torch_sdpa__passes_views_of_the_inputs_without_copying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.version, "hip", None)
+    received, inputs = _sdpa_input_storages(monkeypatch, "cpu")
+    assert received == inputs
+
+
+def test__torch_sdpa__on_rocm__copies_the_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.version, "hip", "6.4")
+    received, inputs = _sdpa_input_storages(monkeypatch, "cpu")
+    assert not set(received) & set(inputs)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+def test__torch_sdpa__on_mps__copies_the_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received, inputs = _sdpa_input_storages(monkeypatch, "mps")
+    assert not set(received) & set(inputs)
+
+
 def _cuda_bytes_available() -> int:
     if not torch.cuda.is_available():
         return 0
