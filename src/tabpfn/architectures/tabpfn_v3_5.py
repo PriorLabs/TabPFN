@@ -2107,7 +2107,7 @@ class MultiTaskHeads(nn.Module):
         """
         if task_type == "regression":
             test_emb = self.mlp_regression(test_emb)
-            return self.output_projection(test_emb.transpose(0, 1))
+            return self.output_projection(test_emb).transpose(0, 1)
         if task_type == "multiclass":
             assert num_present_classes is not None
             assert train_keys_BNHD is not None, (
