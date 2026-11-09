@@ -1047,7 +1047,11 @@ def test__kv_cache__adaptive__several_cached_heads__falls_back_to_int8() -> None
 def test__forward__quantized_kv_cache__equals_the_dequantized_cache(
     task_type: TaskType,
 ) -> None:
-    """Quantizing must add nothing but the dequantize on the way back in."""
+    """Quantizing must add nothing but the dequantize on the way back in.
+
+    The quantized path folds the scales into q and the output instead of
+    scaling the cache, which changes the rounding but not the math.
+    """
     arch = _get_model()
     x, y = _inputs(task_type)
     _, cache = arch(x, y, task_type=task_type, return_kv_cache=True)
@@ -1059,7 +1063,9 @@ def test__forward__quantized_kv_cache__equals_the_dequantized_cache(
     predict = functools.partial(
         arch, x[NUM_TRAIN:], y, task_type=task_type, x_is_test_only=True
     )
-    assert torch.equal(predict(kv_cache=quantized), predict(kv_cache=dequantized))
+    torch.testing.assert_close(
+        predict(kv_cache=quantized), predict(kv_cache=dequantized), rtol=1e-5, atol=1e-5
+    )
 
 
 @torch.no_grad()
