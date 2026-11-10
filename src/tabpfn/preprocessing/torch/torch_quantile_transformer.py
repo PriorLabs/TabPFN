@@ -4,23 +4,41 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+import numpy as np
 import torch
+
+# Same as sklearn's QuantileTransformer: inputs this close to the fitted range
+# boundaries map to the clipped tails of the normal output.
+_BOUNDS_THRESHOLD = 1e-7
+_NORMAL_CLIP_MAX = float(
+    torch.special.ndtri(
+        torch.tensor(1 - (_BOUNDS_THRESHOLD - np.spacing(1)), dtype=torch.float64)
+    )
+)
+_NORMAL_CLIP_MIN = float(
+    torch.special.ndtri(
+        torch.tensor(_BOUNDS_THRESHOLD - np.spacing(1), dtype=torch.float64)
+    )
+)
+# sklearn tests ``x - 1e-7 < q_min`` and ``x + 1e-7 > q_max`` in float64. From
+# |x| = 2**30 on, 1e-7 is below half an ulp, so ``x +- 1e-7`` rounds back to x.
+_TIE_LIMIT = 2.0**30
 
 
 class TorchQuantileTransformer:
     """Quantile transformer for PyTorch tensors with NaN handling.
 
     Similar to sklearn's QuantileTransformer but without any implicit state.
-    The state is returned explicitly. Only supports uniform output distribution.
-
-    This transformer maps the data to a uniform distribution in [0, 1] using
-    quantile information from the training data.
+    The state is returned explicitly.
     """
 
     def __init__(
         self,
         n_quantiles: int = 1_000,
         extrapolate_ratio: float | None = None,
+        output_distribution: Literal["uniform", "normal"] = "uniform",
     ) -> None:
         """Initialize the quantile transformer.
 
@@ -32,12 +50,19 @@ class TorchQuantileTransformer:
                 ``-ratio`` / ``1 + ratio`` instead of being clamped at the
                 boundary quantile. Mirrors the
                 :class:`AdaptiveQuantileTransformer` mode-1 behaviour.
+            output_distribution: Marginal distribution of the output, as in
+                sklearn's ``QuantileTransformer``.
         """
         super().__init__()
         if extrapolate_ratio is not None and extrapolate_ratio < 0:
             raise ValueError("extrapolate_ratio must be non-negative.")
+        if extrapolate_ratio is not None and output_distribution != "uniform":
+            raise ValueError(
+                "extrapolate_ratio is only supported for output_distribution='uniform'."
+            )
         self.n_quantiles = n_quantiles
         self.extrapolate_ratio = extrapolate_ratio
+        self.output_distribution = output_distribution
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the quantiles from the training data.
@@ -52,32 +77,32 @@ class TorchQuantileTransformer:
         """
         n_samples = x.shape[0]
 
-        if n_samples <= 1:
-            # Not enough data to compute meaningful quantiles.
-            # Return a degenerate cache that makes transform return 0.5
-            # for all non-NaN values (identity-like behaviour).
-            references = torch.tensor([0.0, 1.0], device=x.device, dtype=x.dtype)
-            if n_samples == 0:
-                val = torch.zeros(x.shape[1:], device=x.device, dtype=x.dtype)
-            else:
-                val = x[0]
-            quantiles = torch.stack([val, val], dim=0)
-            return {"quantiles": quantiles, "references": references}
-
-        n_quantiles_effective = min(self.n_quantiles, n_samples)
-
-        # torch.nanquantile requires float32 or float64; cast up if needed
+        # torch.nanquantile and ndtri need float32 or float64; cast up if needed
         # (e.g. when inference_precision is float16).
         compute_dtype = x.dtype
         if x.dtype not in (torch.float32, torch.float64):
             compute_dtype = torch.float32
 
+        # The normal output assumes references == linspace(0, 1, n) and does
+        # not read them.
+        if n_samples <= 1:
+            # Not enough data to compute meaningful quantiles. With the
+            # degenerate cache, uniform output is 0.5 for every non-NaN value
+            # and normal output is a clip bound.
+            references = torch.tensor([0.0, 1.0], device=x.device, dtype=compute_dtype)
+            if n_samples == 0:
+                val = torch.zeros(x.shape[1:], device=x.device, dtype=compute_dtype)
+            else:
+                val = x[0].to(compute_dtype)
+            quantiles = torch.stack([val, val], dim=0)
+            return {"quantiles": quantiles, "references": references}
+
+        n_quantiles_effective = min(self.n_quantiles, n_samples)
         references = torch.linspace(
             0, 1, n_quantiles_effective, device=x.device, dtype=compute_dtype
         )
 
-        x_compute = x.to(compute_dtype)
-        quantiles = self._nanquantile_chunked(x_compute, references)
+        quantiles = self._nanquantile_chunked(x, references)
 
         # Ensure monotonicity (handle floating point issues)
         # Use cumulative maximum along the quantile dimension
@@ -107,12 +132,13 @@ class TorchQuantileTransformer:
         process_all_at_once = n_features <= chunk_cols
 
         if process_all_at_once:
-            quantiles = torch.nanquantile(x, references, dim=0)
+            quantiles = torch.nanquantile(x.to(references.dtype), references, dim=0)
         else:
             chunks = []
             for col_start in range(0, n_features, chunk_cols):
+                x_chunk = x_flat[:, col_start : col_start + chunk_cols]
                 q_chunk = torch.nanquantile(
-                    x_flat[:, col_start : col_start + chunk_cols], references, dim=0
+                    x_chunk.to(references.dtype), references, dim=0
                 )
                 chunks.append(q_chunk)
             quantiles = torch.cat(chunks, dim=-1)
@@ -131,7 +157,8 @@ class TorchQuantileTransformer:
         while 1M-row datasets stay bounded at ~2 GB of workspace per chunk.
         """
         n_samples = x_flat.shape[0]
-        element_size = x_flat.element_size()
+        # Computed in at least float32.
+        element_size = max(x_flat.element_size(), 4)
         overhead_factor = 10
         target_bytes = 2 * 1024**3  # 2 GB
         bytes_per_col = n_samples * element_size * overhead_factor
@@ -142,7 +169,7 @@ class TorchQuantileTransformer:
         x: torch.Tensor,
         fitted_cache: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Transform the data to uniform distribution using fitted quantiles.
+        """Transform the data to the output distribution using fitted quantiles.
 
         Automatically processes in row-chunks when the data is large to keep
         peak intermediate memory bounded (~2 GB of temporaries).
@@ -152,7 +179,7 @@ class TorchQuantileTransformer:
             fitted_cache: Cache returned by fit.
 
         Returns:
-            Transformed tensor with values in [0, 1].
+            Transformed tensor.
         """
         if "quantiles" not in fitted_cache or "references" not in fitted_cache:
             raise ValueError(
@@ -163,24 +190,20 @@ class TorchQuantileTransformer:
         references = fitted_cache["references"]
 
         # The cache may be in float32 (from fit) while input is float16.
-        # Compute in the cache dtype, then cast back.
-        orig_dtype = x.dtype
-        compute_dtype = quantiles.dtype
-        x_compute = x.to(compute_dtype)
-
-        chunk_size = self._get_transform_chunk_size(x_compute)
-        n_samples = x_compute.shape[0]
-
-        if n_samples <= chunk_size:
-            result = self._transform_chunk(x_compute, quantiles, references)
-        else:
-            chunks = []
-            for start in range(0, n_samples, chunk_size):
-                chunk = x_compute[start : start + chunk_size]
-                chunks.append(self._transform_chunk(chunk, quantiles, references))
-            result = torch.cat(chunks, dim=0)
-
-        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+        # Compute each chunk in the cache dtype and write it into the output.
+        chunk_size = self._get_transform_chunk_size(x)
+        if x.shape[0] <= chunk_size:
+            return self._transform_chunk(
+                x.to(quantiles.dtype), quantiles, references
+            ).to(x.dtype)
+        out = torch.empty_like(x)
+        for start in range(0, x.shape[0], chunk_size):
+            out[start : start + chunk_size] = self._transform_chunk(
+                x[start : start + chunk_size].to(quantiles.dtype),
+                quantiles,
+                references,
+            )
+        return out
 
     def _transform_chunk(
         self,
@@ -201,8 +224,9 @@ class TorchQuantileTransformer:
         ~2 GB of intermediates so that even very large datasets stay within
         reasonable GPU memory.
         """
-        n_features = x.shape[-1] if x.ndim > 1 else 1
-        element_size = x.element_size()
+        n_features = x[0].numel() if x.shape[0] else 1
+        # Computed in at least float32.
+        element_size = max(x.element_size(), 4)
         overhead_factor = 15
         target_bytes = 2 * 1024**3  # 2 GB
         bytes_per_row = n_features * element_size * overhead_factor
@@ -229,7 +253,7 @@ class TorchQuantileTransformer:
             references: Reference positions [n_quantiles].
 
         Returns:
-            Interpolated values in [0, 1].
+            Values in the output distribution.
         """
         original_shape = x.shape
         n_quantiles = quantiles.shape[0]
@@ -247,6 +271,12 @@ class TorchQuantileTransformer:
         # Transpose to [n_features, ...] for batched searchsorted
         x_t = x_flat.t().contiguous()  # [n_features, n_samples]
         q_t = quantiles_flat.t().contiguous()  # [n_features, n_quantiles]
+
+        if self.output_distribution == "normal":
+            result = self._to_normal(x_t, q_t).t()
+            if len(original_shape) > 1:
+                return result.reshape(original_shape)
+            return result.squeeze(-1)
 
         # Forward interpolation: interp(x, quantiles, references)
         refs = references.unsqueeze(0).expand_as(q_t)  # [n_features, n_quantiles]
@@ -273,6 +303,46 @@ class TorchQuantileTransformer:
             result = result.squeeze(-1)
 
         return result
+
+    def _to_normal(self, x: torch.Tensor, xp: torch.Tensor) -> torch.Tensor:
+        """Map ``x`` [n_features, n_samples] to sklearn's clipped normal output.
+
+        ``references`` is always ``linspace(0, 1, n)``, so grid positions replace
+        it. ``u`` and ``1 - u`` are each built from small terms, which keeps
+        float32 precise in both tails. Inputs within ``_BOUNDS_THRESHOLD`` of the
+        fitted min/max go to the clip bounds; the min side wins for constant
+        features.
+        """
+        n = xp.shape[1]
+        p_fwd, c_fwd = _interp_positions(x, xp)
+        p_bwd, c_bwd = _interp_positions(-x, torch.flip(-xp, dims=[1]))
+        # sklearn averages forward and backward np.interp; ties get the midpoint.
+        lower = p_fwd.add_(c_bwd)  # 2 * (n - 1) * u
+        upper = c_fwd.add_(p_bwd)  # 2 * (n - 1) * (1 - u)
+        del c_bwd, p_bwd
+        # ndtri of the smaller tail is <= 0; flip it for the upper half.
+        result = torch.special.ndtri(torch.minimum(lower, upper).div_(2 * (n - 1)))
+        result.copysign_(lower.sub_(upper))
+        del lower, upper
+
+        q_min, q_max = xp[:, :1], xp[:, -1:]
+        if x.dtype == torch.float64:
+            # sklearn's own test, in the dtype it runs in.
+            above = (x + _BOUNDS_THRESHOLD) > q_max
+            below = (x - _BOUNDS_THRESHOLD) < q_min
+        else:
+            # Per-feature thresholds; 0 where sklearn's float64 test misses ties.
+            thr_min = torch.where(
+                (q_min > -_TIE_LIMIT) & (q_min <= _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
+            )
+            thr_max = torch.where(
+                (q_max >= -_TIE_LIMIT) & (q_max < _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
+            )
+            above = (q_max - x) < thr_max
+            below = (x - q_min) < thr_min
+        result = torch.where(above, _NORMAL_CLIP_MAX, result)
+        result = torch.where(below, _NORMAL_CLIP_MIN, result)
+        return result.clamp_(_NORMAL_CLIP_MIN, _NORMAL_CLIP_MAX)
 
     def _apply_extrapolation(
         self,
@@ -389,7 +459,7 @@ class TorchQuantileTransformer:
                 quantiles are computed from all data.
 
         Returns:
-            Transformed tensor with values in [0, 1].
+            Transformed tensor.
         """
         # Determine which data to use for fitting
         if num_train_rows is not None and num_train_rows > 0:
@@ -399,3 +469,28 @@ class TorchQuantileTransformer:
 
         fitted_cache = self.fit(fit_data)
         return self.transform(x, fitted_cache=fitted_cache)
+
+
+def _interp_positions(
+    x: torch.Tensor, xp: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``np.interp`` position ``p`` of ``x`` in each row of ``xp``, and ``n - 1 - p``.
+
+    Both are a whole number plus a fraction in [0, 1], so neither cancels.
+    """
+    n = xp.shape[1]
+    idx = torch.searchsorted(xp, x, right=True).clamp_(1, n - 1)
+    x_high = torch.gather(xp, 1, idx)
+    idx.sub_(1)
+    x_low = torch.gather(xp, 1, idx)
+    # xp[idx] <= x < xp[idx + 1] inside the range. Below it, p < 0 and
+    # c > n - 1, so clamping fixes them. At or above it, set p and c directly:
+    # a tie at the top gives 0 / 0.
+    dx = x_high - x_low
+    p = (x - x_low).div_(dx).add_(idx)
+    c = (x_high - x).div_(dx).add_(torch.rsub(idx, n - 2))
+    del idx, x_low, x_high, dx
+    above = x >= xp[:, -1:]
+    p = torch.where(above, n - 1.0, p).clamp_(min=0.0)
+    c = torch.where(above, 0.0, c).clamp_(max=n - 1.0)
+    return p, c

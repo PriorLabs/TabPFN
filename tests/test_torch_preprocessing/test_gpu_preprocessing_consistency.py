@@ -306,12 +306,14 @@ class TestGpuQuantileEligibility:
         assert is_gpu_quantile_eligible("quantile_uni_coarse")
         assert is_gpu_quantile_eligible("quantile_uni_fine")
         assert is_gpu_quantile_eligible("quantile_uni_extrapolate")
+        assert is_gpu_quantile_eligible("quantile_norm")
+        assert is_gpu_quantile_eligible("quantile_norm_coarse")
+        assert is_gpu_quantile_eligible("quantile_norm_fine")
 
     def test_not_eligible(self) -> None:
         assert not is_gpu_quantile_eligible("squashing_scaler_default")
         assert not is_gpu_quantile_eligible("none")
         assert not is_gpu_quantile_eligible("power")
-        assert not is_gpu_quantile_eligible("quantile_norm")
 
     def test_effective_n_quantiles(self) -> None:
         assert compute_effective_n_quantiles("quantile_uni", 200) == 40
@@ -365,6 +367,17 @@ class TestPipelineConsistency:
         categorical_name="numeric",
         max_features_per_estimator=680,
     )
+    QUANTILE_NORM_NUMERIC = PreprocessorConfig(
+        "quantile_norm",
+        categorical_name="numeric",
+        max_features_per_estimator=680,
+    )
+    QUANTILE_NORM_COARSE_APPEND_ORIGINAL = PreprocessorConfig(
+        "quantile_norm_coarse",
+        categorical_name="onehot",
+        append_original=True,
+        max_features_per_estimator=680,
+    )
     # v2.5 classifier configs (non-quantile)
     V25_SQUASHING_SVD = PreprocessorConfig(
         name="squashing_scaler_default",
@@ -414,6 +427,8 @@ class TestPipelineConsistency:
             V26_QUANTILE_NUMERIC_APPEND_ORIGINAL,
             V26_QUANTILE_ONEHOT,
             V26_QUANTILE_EXTRAPOLATE,
+            QUANTILE_NORM_NUMERIC,
+            QUANTILE_NORM_COARSE_APPEND_ORIGINAL,
             pytest.param(V26_QUANTILE_SVD, marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT),
             pytest.param(V25_SQUASHING_SVD, marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT),
             V25_SQUASHING_NO_SVD,
@@ -424,6 +439,8 @@ class TestPipelineConsistency:
             "v26_quantile_numeric_append_original",
             "v26_quantile_onehot",
             "v26_quantile_extrapolate",
+            "quantile_norm_numeric",
+            "quantile_norm_coarse_append_original",
             "v26_quantile_svd",
             "v25_squashing_svd",
             "v25_squashing_no_svd",

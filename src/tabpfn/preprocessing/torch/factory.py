@@ -12,6 +12,7 @@ from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
 )
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     compute_effective_n_quantiles,
+    get_quantile_output_distribution,
     get_squashing_scaler_max_absolute_value,
 )
 from tabpfn.preprocessing.torch.pipeline_interface import (
@@ -77,6 +78,9 @@ def create_gpu_preprocessing_pipeline(
                         n_quantiles=n_quantiles,
                         target_column_indices=quantile_target_indices,
                         extrapolate_ratio=extrapolate_ratio,
+                        output_distribution=get_quantile_output_distribution(
+                            pconfig.name
+                        ),
                     ),
                     None,  # operates on explicit indices, receives full tensor
                 )

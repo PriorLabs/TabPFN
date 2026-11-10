@@ -400,6 +400,121 @@ class TestTorchQuantileTransformerExtrapolation:
         )
 
 
+class TestTorchQuantileTransformerNormalOutput:
+    """Tests for ``output_distribution="normal"``."""
+
+    @pytest.mark.parametrize("n_quantiles", [10, 60, 300])
+    def test__transform__matches_sklearn(self, n_quantiles: int):
+        """Matches sklearn on NaNs, ties, constant columns and out-of-range rows."""
+        rng = np.random.default_rng(0)
+        x_train = rng.standard_normal((300, 4))
+        x_train[:, 1] = 3.0
+        x_train[:, 2] = np.round(x_train[:, 2])
+        x_train[rng.random(x_train.shape) < 0.05] = np.nan
+        x_test = np.concatenate([x_train, 4 * rng.standard_normal((50, 4))])
+
+        sklearn_qt = AdaptiveQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        ).fit(x_train)
+        expected = sklearn_qt.transform(x_test)
+
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        )
+        cache = torch_qt.fit(torch.from_numpy(x_train))
+        result = torch_qt.transform(torch.from_numpy(x_test), fitted_cache=cache)
+
+        np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
+
+    @pytest.mark.parametrize("scale", [1.0, 1.6e9, 2.0**30, -(2.0**30)])
+    def test__transform__ties_at_fitted_bounds_match_sklearn(self, scale: float):
+        """Ties at the fitted min/max match sklearn, including when |x| >= 2**30."""
+        rng = np.random.default_rng(0)
+        base = np.concatenate(
+            [rng.uniform(1, 1.0625, 500), np.full(50, 1.0), np.full(50, 1.0625)]
+        )
+        x = (base * scale)[:, None]
+
+        expected = (
+            AdaptiveQuantileTransformer(n_quantiles=600, output_distribution="normal")
+            .fit(x)
+            .transform(x)
+        )
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=600, output_distribution="normal"
+        )
+        x_t = torch.from_numpy(x)
+        result = torch_qt.transform(x_t, fitted_cache=torch_qt.fit(x_t))
+
+        np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
+
+    @pytest.mark.parametrize(
+        "x",
+        [
+            np.arange(300) % 30 * 1e-7,
+            1.5 * 2.0**27 + np.arange(300) % 30 * 2.0**-25,
+        ],
+        ids=["1e-7_grid", "near_1.5*2**27"],
+    )
+    def test__transform__float64_near_bounds_match_sklearn(self, x: np.ndarray):
+        """Float64 inputs about 1e-7 inside a fitted bound match sklearn."""
+        x = x[:, None]
+        expected = (
+            AdaptiveQuantileTransformer(n_quantiles=60, output_distribution="normal")
+            .fit(x)
+            .transform(x)
+        )
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=60, output_distribution="normal"
+        )
+        x_t = torch.from_numpy(x)
+        result = torch_qt.transform(x_t, fitted_cache=torch_qt.fit(x_t))
+
+        np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
+
+    def test__transform__float32_tails_match_sklearn(self):
+        """Float32 keeps precision in both tails, not only near 0."""
+        rng = np.random.default_rng(0)
+        x = rng.standard_normal((50_000, 2))
+        n_quantiles = 10_000
+        sklearn_qt = AdaptiveQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        ).fit(x)
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        )
+        cache = torch_qt.fit(torch.from_numpy(x).float())
+
+        lo, hi = x.min(0), x.max(0)
+        for grid in (
+            np.linspace(lo, lo + 0.01 * (hi - lo), 2000),
+            np.linspace(hi - 0.01 * (hi - lo), hi, 2000),
+        ):
+            expected = sklearn_qt.transform(grid)
+            result = torch_qt.transform(
+                torch.from_numpy(grid).float(), fitted_cache=cache
+            )
+            # The float32 quantiles alone account for about 1.5e-4.
+            np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=5e-4)
+
+    @pytest.mark.parametrize("n_train", [0, 1])
+    def test__transform__float16_degenerate_fit(self, n_train: int):
+        """Fitting on at most one float16 row still transforms."""
+        x = torch.randn(300, 3).half()
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=60, output_distribution="normal"
+        )
+        result = torch_qt.transform(x, fitted_cache=torch_qt.fit(x[:n_train]))
+        assert result.dtype == torch.float16
+        assert result.shape == x.shape
+
+    def test__init__extrapolate_ratio_raises(self):
+        with pytest.raises(ValueError, match="extrapolate_ratio"):
+            TorchQuantileTransformer(
+                extrapolate_ratio=1.0, output_distribution="normal"
+            )
+
+
 def _make_schema(
     *,
     num_numericals: int = 0,
