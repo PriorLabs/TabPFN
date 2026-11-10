@@ -92,9 +92,10 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     n_valid = x.shape[0] - invalid.sum(dim=0)
     abs_max = x.abs().nan_to_num_(nan=0.0).amax(dim=0)
     n_neg = (x < 0).sum(dim=0)
-    obs_min = x.nan_to_num(nan=torch.inf).amin(dim=0)
-    obs_max = x.nan_to_num(nan=-torch.inf).amax(dim=0)
-    observed_constant = obs_min == obs_max  # False for all-NaN columns
+    # Near-constant observed values, as in SafePowerTransformer; False when all-NaN.
+    obs_mean = x.nansum(dim=0) / n_valid
+    obs_var = (x - obs_mean).square_().nansum(dim=0) / n_valid
+    constant = _is_constant(obs_var, obs_mean, n_valid)
     any_neg, all_neg = n_neg > 0, n_neg == n_valid
 
     finfo = torch.finfo(torch.float64)
@@ -109,7 +110,7 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     )
 
     # Columns without a search get finite dummy bounds and are overwritten below.
-    skip = observed_constant | (n_valid == 0)
+    skip = constant | (n_valid == 0)
     lb = torch.where(skip, 0.0, lb)
     ub = torch.where(skip, 1.0, ub)
 
@@ -127,11 +128,8 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
         return torch.where(var < finfo.tiny, torch.inf, -llf)
 
     lambdas = _golden_section_search(neg_llf, lb, ub)
-    lambdas = torch.where(observed_constant, 1.0, lambdas)
-    lambdas = torch.where(n_valid == 0, torch.nan, lambdas)
-    # sklearn checks constant columns with NaN-propagating statistics.
-    mean, var = x.mean(dim=0), x.var(dim=0, correction=0)
-    return torch.where(_is_constant(var, mean, x.shape[0]), 1.0, lambdas)
+    lambdas = torch.where(constant, 1.0, lambdas)
+    return torch.where(n_valid == 0, torch.nan, lambdas)
 
 
 def _yeo_johnson(
@@ -178,6 +176,8 @@ def _golden_section_search(
     return (a + b) / 2
 
 
-def _is_constant(var: torch.Tensor, mean: torch.Tensor, n: int) -> torch.Tensor:
+def _is_constant(
+    var: torch.Tensor, mean: torch.Tensor, n: int | torch.Tensor
+) -> torch.Tensor:
     """Sklearn's ``_is_constant_feature`` near-zero variance test."""
     return var <= n * _EPS * var + (n * mean * _EPS) ** 2

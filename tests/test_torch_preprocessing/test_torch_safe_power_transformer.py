@@ -95,12 +95,19 @@ def test__fit_transform__chunking_matches_single_chunk(monkeypatch):
 def test__fit_transform__constant_observed_values__lambda_one_and_finite(
     dtype: torch.dtype,
 ):
-    """Columns whose observed values are all equal get lambda 1 on CPU and torch."""
-    nan = np.nan
+    """Near-constant observed values get lambda 1 on CPU and torch."""
+    nan, one_up = np.nan, np.nextafter(1.0, 2.0)
     x_train = np.array(
-        [[1.0, -3.0, nan], [1.0, -3.0, 5.0], [nan, nan, nan], [1.0, -3.0, nan]]
+        [
+            [1.0, -3.0, nan, 1.0],
+            [1.0, -3.0, 5.0, one_up],
+            [nan, nan, nan, nan],
+            [1.0, -3.0, nan, 1.0],
+        ]
     )
-    x_test = np.array([[1.0, -3.0, 5.0], [2.0, -1.0, 7.0], [nan, nan, nan]])
+    x_test = np.array(
+        [[1.0, -3.0, 5.0, 1.0], [2.0, -1.0, 7.0, 2.0], [nan, nan, nan, nan]]
+    )
 
     cpu = get_all_reshape_feature_distribution_preprocessors(4)["safepower"]
     cpu.fit(x_train)
@@ -110,8 +117,8 @@ def test__fit_transform__constant_observed_values__lambda_one_and_finite(
     cache = torch_pt.fit(torch.from_numpy(x_train).to(dtype))
     result = torch_pt.transform(torch.from_numpy(x_test).to(dtype), fitted_cache=cache)
 
-    np.testing.assert_array_equal(cpu.steps[0][1].lambdas_, [1.0, 1.0, 1.0])
-    np.testing.assert_array_equal(cache["lambdas"].numpy(), [1.0, 1.0, 1.0])
+    np.testing.assert_array_equal(cpu.steps[0][1].lambdas_, [1.0, 1.0, 1.0, 1.0])
+    np.testing.assert_array_equal(cache["lambdas"].numpy(), [1.0, 1.0, 1.0, 1.0])
     assert torch.isfinite(result).all()
     np.testing.assert_allclose(result.numpy(), expected, rtol=1e-6, atol=1e-6)
 

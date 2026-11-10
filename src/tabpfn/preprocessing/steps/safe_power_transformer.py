@@ -174,6 +174,12 @@ def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
     return x_inv
 
 
+def _is_constant_feature(var: float, mean: float, n_samples: int) -> bool:
+    """Near-zero variance test of sklearn's ``_is_constant_feature``."""
+    eps = np.finfo(np.float64).eps
+    return var <= n_samples * eps * var + (n_samples * mean * eps) ** 2
+
+
 class SafePowerTransformer(PowerTransformer):
     """Variant of PowerTransformer that uses the scipy yeo-johnson functions
     which have been fixed to avoid overflow issues.
@@ -196,9 +202,10 @@ class SafePowerTransformer(PowerTransformer):
         # the computation of lambda is influenced by NaNs so we need to
         # get rid of them
         x = x[~np.isnan(x)]
-        # sklearn skips the search only for constant columns without NaNs. On a
-        # constant column the search optimises rounding noise, so do the same here.
-        if x.size and np.all(x == x[0]):
+        # sklearn >= 1.3 skips the search only for constant columns without NaNs.
+        # On a constant column the search optimises rounding noise, so apply
+        # sklearn's test to the observed values here, for every sklearn version.
+        if x.size and _is_constant_feature(x.var(), x.mean(), x.size):
             return 1.0
         _, lmbda = _yeojohnson(x, lmbda=None)
         return lmbda  # type: ignore
