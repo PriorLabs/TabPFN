@@ -854,7 +854,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Before the expansion below, so each group key is read as the caller
         # passed it rather than as the features a date or text column becomes.
         self.group_encoder_ = GroupIdEncoder(group_col=self.group_col)
-        X = self.group_encoder_.fit_transform(X)
+        X = self.group_encoder_.fit_transform(X, categorical_indices)
         categorical_indices = self.group_encoder_.output_indices(categorical_indices)
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
