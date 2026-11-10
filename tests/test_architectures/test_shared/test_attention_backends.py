@@ -173,7 +173,8 @@ def test_folded_scales_match_attention_over_the_dequantized_entry(
     dequant = entry.dequantize(compute_dtype)
     reference = scaled_dot_product_attention(q, dequant.key, dequant.value)
 
-    tol = {torch.float32: 1e-5, torch.float16: 2e-3, torch.bfloat16: 2e-2}[compute_dtype]
+    tolerances = {torch.float32: 1e-5, torch.float16: 2e-3, torch.bfloat16: 2e-2}
+    tol = tolerances[compute_dtype]
     torch.testing.assert_close(
         folded / magnitude, reference / magnitude, rtol=tol, atol=tol
     )
