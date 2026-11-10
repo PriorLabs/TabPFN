@@ -62,8 +62,8 @@ def scaled_dot_product_attention(
         )
     record_attention_backend(backend)
 
-    if quantized_kv is not None and not (
-        backend is not None and getattr(backend, "consumes_quantized_kv", False)
+    if quantized_kv is not None and not getattr(
+        backend, "consumes_quantized_kv", False
     ):
         return _attend_to_quantized_kv(
             q_BSHD, quantized_kv, backend, _backends_override
@@ -91,6 +91,10 @@ def _attend_to_quantized_kv(
     assert quantized_kv.value is not None
     assert quantized_kv.key_scale is not None
     assert quantized_kv.value_scale is not None
+    # Per-head or per-token scales would broadcast silently into a wrong result.
+    batch_scale = (q_BSHD.shape[0], 1, 1, 1)
+    for scale in (quantized_kv.key_scale, quantized_kv.value_scale):
+        assert scale.ndim == 0 or scale.shape == batch_scale, scale.shape
     q_BSHD = q_BSHD * quantized_kv.key_scale.to(dtype)
     k_BSJD = quantized_kv.key.to(dtype)
     v_BSJD = quantized_kv.value.to(dtype)

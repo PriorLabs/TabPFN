@@ -126,7 +126,7 @@ class FA3Backend(AttentionBackend):
         The threshold compares ``max(seq_q, seq_kv)`` so cross-attention with
         small Q against a large K (test queries vs train cache) still routes
         through FA3; unknown (None) lengths count as 0, i.e. never argue for
-        FA3. A quantized KV cache entry is fine: the SDPA wrapper dequantizes
+        FA3. A quantized KV cache entry is fine: the SDPA wrapper casts it
         to q's dtype, which is what the eligibility check validates.
         """
         max_seq_len = max(spec.seq_len_q or 0, spec.seq_len_kv or 0)
@@ -142,7 +142,7 @@ class FA3Backend(AttentionBackend):
         v_BSJD: torch.Tensor | None,
         **_informational: Any,  # forward-compat context; safe to ignore
     ) -> torch.Tensor:
-        """Run FA3 (k/v arrive dense; the SDPA wrapper dequantizes)."""
+        """Run FA3 (k/v arrive dense from the SDPA wrapper)."""
         assert k_BSJD is not None
         assert v_BSJD is not None
         return fa3_attn_func(

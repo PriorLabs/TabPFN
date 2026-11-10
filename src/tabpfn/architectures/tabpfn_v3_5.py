@@ -1073,7 +1073,8 @@ def _batched_scaled_dot_product_attention(
         _backends_override (list[SDPBackend] | None): Optional list of SDP backends.
         quantized_kv (QuantizedKVCacheEntry | None): Keys and values as a
             quantized cache entry, in place of `k_BSJD`/`v_BSJD`. The dispatcher
-            dequantizes it unless the backend it picks consumes it as stored.
+            casts it and folds its scales into q and the output, unless the
+            backend it picks consumes it as stored.
 
     Returns:
         torch.Tensor: Attention output, shape (B, S, H, D).
@@ -1315,7 +1316,7 @@ class ICLAttention(nn.Module):
                 assert k.shape[2] == nh_test_heads, "cached key has wrong num heads"
                 assert v.shape[2] == nh_test_heads, "cached value has wrong num heads"
             if isinstance(cached_kv, QuantizedKVCacheEntry):
-                # The SDPA wrapper dequantizes unless a backend takes it as is.
+                # The SDPA wrapper folds the scales unless a backend takes it as is.
                 out = _batched_scaled_dot_product_attention(
                     q,
                     None,

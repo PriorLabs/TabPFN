@@ -80,8 +80,11 @@ class AttentionBackend(Protocol):
 
     All tensors use the ``(B, S, H, D)`` layout of
     ``shared.scaled_dot_product_attention``. Backends receive dense
-    ``k``/``v`` — the SDPA wrapper dequantizes a quantized KV cache entry
-    exactly once, before dispatch. A backend that wants the entry *as
+    ``k``/``v``. For a quantized KV cache entry, ``k``/``v`` are the stored
+    values cast to q's dtype, q is multiplied by the key scale, and the
+    wrapper multiplies the output by the value scale. So ``run`` must depend
+    on q and k only through ``q @ k^T`` and be linear in v, as standard
+    softmax attention is. A backend that wants the entry *as
     stored* (to feed its kernel without materializing a dense copy) sets
     the class attribute ``consumes_quantized_kv = True``; it then receives
     ``quantized_kv`` with ``k``/``v`` as ``None`` whenever the call carries

@@ -16,6 +16,7 @@ from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
 from tabpfn.architectures.shared.torch_mps_backend import TORCH_MPS_BACKEND
+from tests.utils import get_pytest_devices
 
 
 class _RecordingBackend:
@@ -140,19 +141,12 @@ def test_quantized_kv_is_passed_on_or_cast_with_scales_folded(
         torch.testing.assert_close(call["v"], entry.value.to(q.dtype))
 
 
-def _sdpa_devices() -> list[str]:
-    devices = ["cpu"]
-    if torch.cuda.is_available():
-        devices.append("cuda")
-    if torch.backends.mps.is_available():
-        devices.append("mps")
-    return devices
-
-
 @pytest.mark.usefixtures("registry_sandbox")
-@pytest.mark.parametrize("device", _sdpa_devices())
+@pytest.mark.parametrize("device", get_pytest_devices())
 @pytest.mark.parametrize("quant_dtype", [torch.int8, FP8_KV_DTYPE])
-@pytest.mark.parametrize("compute_dtype", [torch.float32, torch.float16])
+@pytest.mark.parametrize(
+    "compute_dtype", [torch.float32, torch.float16, torch.bfloat16]
+)
 @pytest.mark.parametrize("batch", [1, 3])
 @pytest.mark.parametrize("magnitude", [1.0, 1e-4])
 def test_folded_scales_match_attention_over_the_dequantized_entry(
@@ -179,7 +173,7 @@ def test_folded_scales_match_attention_over_the_dequantized_entry(
     dequant = entry.dequantize(compute_dtype)
     reference = scaled_dot_product_attention(q, dequant.key, dequant.value)
 
-    tol = 1e-5 if compute_dtype == torch.float32 else 2e-3
+    tol = {torch.float32: 1e-5, torch.float16: 2e-3, torch.bfloat16: 2e-2}[compute_dtype]
     torch.testing.assert_close(
         folded / magnitude, reference / magnitude, rtol=tol, atol=tol
     )
