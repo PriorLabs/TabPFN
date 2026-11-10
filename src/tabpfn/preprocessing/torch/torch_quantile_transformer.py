@@ -77,26 +77,27 @@ class TorchQuantileTransformer:
         """
         n_samples = x.shape[0]
 
-        if n_samples <= 1:
-            # Not enough data to compute meaningful quantiles.
-            # Return a degenerate cache that makes transform return 0.5
-            # for all non-NaN values (identity-like behaviour).
-            references = torch.tensor([0.0, 1.0], device=x.device, dtype=x.dtype)
-            if n_samples == 0:
-                val = torch.zeros(x.shape[1:], device=x.device, dtype=x.dtype)
-            else:
-                val = x[0]
-            quantiles = torch.stack([val, val], dim=0)
-            return {"quantiles": quantiles, "references": references}
-
-        n_quantiles_effective = min(self.n_quantiles, n_samples)
-
-        # torch.nanquantile requires float32 or float64; cast up if needed
+        # torch.nanquantile and ndtri need float32 or float64; cast up if needed
         # (e.g. when inference_precision is float16).
         compute_dtype = x.dtype
         if x.dtype not in (torch.float32, torch.float64):
             compute_dtype = torch.float32
 
+        # The normal output assumes references == linspace(0, 1, n) and does
+        # not read them.
+        if n_samples <= 1:
+            # Not enough data to compute meaningful quantiles.
+            # Return a degenerate cache that makes transform return 0.5
+            # for all non-NaN values (identity-like behaviour).
+            references = torch.tensor([0.0, 1.0], device=x.device, dtype=compute_dtype)
+            if n_samples == 0:
+                val = torch.zeros(x.shape[1:], device=x.device, dtype=compute_dtype)
+            else:
+                val = x[0].to(compute_dtype)
+            quantiles = torch.stack([val, val], dim=0)
+            return {"quantiles": quantiles, "references": references}
+
+        n_quantiles_effective = min(self.n_quantiles, n_samples)
         references = torch.linspace(
             0, 1, n_quantiles_effective, device=x.device, dtype=compute_dtype
         )

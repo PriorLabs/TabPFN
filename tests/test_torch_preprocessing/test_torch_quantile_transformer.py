@@ -440,7 +440,9 @@ class TestTorchQuantileTransformerNormalOutput:
             .fit(x)
             .transform(x)
         )
-        torch_qt = TorchQuantileTransformer(n_quantiles=600, output_distribution="normal")
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=600, output_distribution="normal"
+        )
         x_t = torch.from_numpy(x)
         result = torch_qt.transform(x_t, fitted_cache=torch_qt.fit(x_t))
 
@@ -470,6 +472,17 @@ class TestTorchQuantileTransformerNormalOutput:
             )
             # The float32 quantiles alone account for about 1.5e-4.
             np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=5e-4)
+
+    @pytest.mark.parametrize("n_train", [0, 1])
+    def test__transform__float16_degenerate_fit(self, n_train: int):
+        """Fitting on at most one float16 row still transforms."""
+        x = torch.randn(300, 3).half()
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=60, output_distribution="normal"
+        )
+        result = torch_qt.transform(x, fitted_cache=torch_qt.fit(x[:n_train]))
+        assert result.dtype == torch.float16
+        assert result.shape == x.shape
 
     def test__init__extrapolate_ratio_raises(self):
         with pytest.raises(ValueError, match="extrapolate_ratio"):
