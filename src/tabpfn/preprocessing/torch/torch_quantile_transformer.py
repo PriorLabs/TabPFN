@@ -22,6 +22,9 @@ _NORMAL_CLIP_MIN = float(
         torch.tensor(_BOUNDS_THRESHOLD - np.spacing(1), dtype=torch.float64)
     )
 )
+# sklearn tests ``x - 1e-7 < q_min`` and ``x + 1e-7 > q_max`` in float64. From
+# |x| = 2**30 on, 1e-7 is below half an ulp, so ``x +- 1e-7`` rounds back to x.
+_TIE_LIMIT = 2.0**30
 
 
 class TorchQuantileTransformer:
@@ -187,8 +190,12 @@ class TorchQuantileTransformer:
 
         # The cache may be in float32 (from fit) while input is float16.
         # Compute each chunk in the cache dtype and write it into the output.
-        out = torch.empty_like(x)
         chunk_size = self._get_transform_chunk_size(x)
+        if x.shape[0] <= chunk_size:
+            return self._transform_chunk(
+                x.to(quantiles.dtype), quantiles, references
+            ).to(x.dtype)
+        out = torch.empty_like(x)
         for start in range(0, x.shape[0], chunk_size):
             out[start : start + chunk_size] = self._transform_chunk(
                 x[start : start + chunk_size].to(quantiles.dtype),
@@ -264,6 +271,12 @@ class TorchQuantileTransformer:
         x_t = x_flat.t().contiguous()  # [n_features, n_samples]
         q_t = quantiles_flat.t().contiguous()  # [n_features, n_quantiles]
 
+        if self.output_distribution == "normal":
+            result = self._to_normal(x_t, q_t).t()
+            if len(original_shape) > 1:
+                return result.reshape(original_shape)
+            return result.squeeze(-1)
+
         # Forward interpolation: interp(x, quantiles, references)
         refs = references.unsqueeze(0).expand_as(q_t)  # [n_features, n_quantiles]
         interp_forward = self._interp_batched(x_t, q_t, refs)
@@ -278,9 +291,7 @@ class TorchQuantileTransformer:
         result = 0.5 * (interp_forward - interp_backward)  # [n_features, n_samples]
         result = result.t()  # [n_samples, n_features]
 
-        if self.output_distribution == "normal":
-            result = self._to_normal(result, x_flat, quantiles_flat)
-        elif self.extrapolate_ratio is None:
+        if self.extrapolate_ratio is None:
             result = torch.clamp(result, 0.0, 1.0)
         else:
             result = self._apply_extrapolation(result, x_flat, quantiles_flat)
@@ -292,22 +303,38 @@ class TorchQuantileTransformer:
 
         return result
 
-    def _to_normal(
-        self,
-        result: torch.Tensor,
-        x: torch.Tensor,
-        quantiles: torch.Tensor,
-    ) -> torch.Tensor:
-        """Map uniform values to a clipped standard normal, as sklearn does.
+    def _to_normal(self, x: torch.Tensor, xp: torch.Tensor) -> torch.Tensor:
+        """Map ``x`` [n_features, n_samples] to sklearn's clipped normal output.
 
-        Inputs within ``_BOUNDS_THRESHOLD`` of the fitted min/max go to the clip
-        bounds; the min side wins for constant features.
+        ``references`` is always ``linspace(0, 1, n)``, so grid positions replace
+        it. ``u`` and ``1 - u`` are each built from small terms, which keeps
+        float32 precise in both tails. Inputs within ``_BOUNDS_THRESHOLD`` of the
+        fitted min/max go to the clip bounds; the min side wins for constant
+        features.
         """
-        at_max = (quantiles[-1] - x) < _BOUNDS_THRESHOLD
-        at_min = (x - quantiles[0]) < _BOUNDS_THRESHOLD
-        result = torch.where(at_max, 1.0, result)
-        result = torch.where(at_min, 0.0, result)
-        return torch.special.ndtri(result).clamp(_NORMAL_CLIP_MIN, _NORMAL_CLIP_MAX)
+        n = xp.shape[1]
+        p_fwd, c_fwd = _interp_positions(x, xp)
+        p_bwd, c_bwd = _interp_positions(-x, torch.flip(-xp, dims=[1]))
+        # sklearn averages forward and backward np.interp; ties get the midpoint.
+        lower = p_fwd.add_(c_bwd)  # 2 * (n - 1) * u
+        upper = c_fwd.add_(p_bwd)  # 2 * (n - 1) * (1 - u)
+        del c_bwd, p_bwd
+        # ndtri of the smaller tail is <= 0; flip it for the upper half.
+        result = torch.special.ndtri(torch.minimum(lower, upper).div_(2 * (n - 1)))
+        result.copysign_(lower.sub_(upper))
+        del lower, upper
+
+        # Per-feature thresholds; 0 where sklearn's float64 test misses ties.
+        q_min, q_max = xp[:, :1], xp[:, -1:]
+        thr_min = torch.where(
+            (q_min > -_TIE_LIMIT) & (q_min <= _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
+        )
+        thr_max = torch.where(
+            (q_max >= -_TIE_LIMIT) & (q_max < _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
+        )
+        result = torch.where((q_max - x) < thr_max, _NORMAL_CLIP_MAX, result)
+        result = torch.where((x - q_min) < thr_min, _NORMAL_CLIP_MIN, result)
+        return result.clamp_(_NORMAL_CLIP_MIN, _NORMAL_CLIP_MAX)
 
     def _apply_extrapolation(
         self,
@@ -434,3 +461,28 @@ class TorchQuantileTransformer:
 
         fitted_cache = self.fit(fit_data)
         return self.transform(x, fitted_cache=fitted_cache)
+
+
+def _interp_positions(
+    x: torch.Tensor, xp: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``np.interp`` position ``p`` of ``x`` in each row of ``xp``, and ``n - 1 - p``.
+
+    Both are a whole number plus a fraction in [0, 1], so neither cancels.
+    """
+    n = xp.shape[1]
+    idx = torch.searchsorted(xp, x, right=True).clamp_(1, n - 1)
+    x_high = torch.gather(xp, 1, idx)
+    idx.sub_(1)
+    x_low = torch.gather(xp, 1, idx)
+    # xp[idx] <= x < xp[idx + 1] inside the range. Below it, p < 0 and
+    # c > n - 1, so clamping fixes them. At or above it, set p and c directly:
+    # a tie at the top gives 0 / 0.
+    dx = x_high - x_low
+    p = (x - x_low).div_(dx).add_(idx)
+    c = (x_high - x).div_(dx).add_(torch.rsub(idx, n - 2))
+    del idx, x_low, x_high, dx
+    above = x >= xp[:, -1:]
+    p = torch.where(above, n - 1.0, p).clamp_(min=0.0)
+    c = torch.where(above, 0.0, c).clamp_(max=n - 1.0)
+    return p, c

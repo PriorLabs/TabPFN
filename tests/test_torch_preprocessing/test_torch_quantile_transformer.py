@@ -426,6 +426,51 @@ class TestTorchQuantileTransformerNormalOutput:
 
         np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
 
+    @pytest.mark.parametrize("scale", [1.0, 1.6e9, 2.0**30, -(2.0**30)])
+    def test__transform__ties_at_fitted_bounds_match_sklearn(self, scale: float):
+        """Ties at the fitted min/max match sklearn, including when |x| >= 2**30."""
+        rng = np.random.default_rng(0)
+        base = np.concatenate(
+            [rng.uniform(1, 1.0625, 500), np.full(50, 1.0), np.full(50, 1.0625)]
+        )
+        x = (base * scale)[:, None]
+
+        expected = (
+            AdaptiveQuantileTransformer(n_quantiles=600, output_distribution="normal")
+            .fit(x)
+            .transform(x)
+        )
+        torch_qt = TorchQuantileTransformer(n_quantiles=600, output_distribution="normal")
+        x_t = torch.from_numpy(x)
+        result = torch_qt.transform(x_t, fitted_cache=torch_qt.fit(x_t))
+
+        np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
+
+    def test__transform__float32_tails_match_sklearn(self):
+        """Float32 keeps precision in both tails, not only near 0."""
+        rng = np.random.default_rng(0)
+        x = rng.standard_normal((50_000, 2))
+        n_quantiles = 10_000
+        sklearn_qt = AdaptiveQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        ).fit(x)
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=n_quantiles, output_distribution="normal"
+        )
+        cache = torch_qt.fit(torch.from_numpy(x).float())
+
+        lo, hi = x.min(0), x.max(0)
+        for grid in (
+            np.linspace(lo, lo + 0.01 * (hi - lo), 2000),
+            np.linspace(hi - 0.01 * (hi - lo), hi, 2000),
+        ):
+            expected = sklearn_qt.transform(grid)
+            result = torch_qt.transform(
+                torch.from_numpy(grid).float(), fitted_cache=cache
+            )
+            # The float32 quantiles alone account for about 1.5e-4.
+            np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=5e-4)
+
     def test__init__extrapolate_ratio_raises(self):
         with pytest.raises(ValueError, match="extrapolate_ratio"):
             TorchQuantileTransformer(
