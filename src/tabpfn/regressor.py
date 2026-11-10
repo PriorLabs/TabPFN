@@ -100,6 +100,7 @@ from tabpfn.preprocessing.ensemble import (
 from tabpfn.preprocessing.group_ids import (
     GroupIdEncoder,
     as_group_feature,
+    reject_group_col,
 )
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
@@ -397,7 +398,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 keeping its own; a key `fit` did not see becomes a missing
                 value. When set, `fit` and `predict` take a DataFrame holding
                 those columns and raise `ValueError` otherwise.
-                Combining it with `tuning_config` raises `ValueError` too.
+                Combining it with `tuning_config`, `differentiable_input=True`
+                or `fit_from_preprocessed` raises `ValueError` too.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -936,6 +938,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Minimal preprocessing for prompt tuning: no categorical features,
         # all-numerical schema, identity preprocessor that preserves grads.
         reject_categoricals_for_differentiable_input(self.categorical_features_indices)
+        reject_group_col(self.group_col, "differentiable_input=True")
         n_features = X.shape[1]
         # One Feature instance per column — list multiplication would share
         # the same dataclass and any later in-place update would leak across
@@ -1232,6 +1235,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
+        reject_group_col(self.group_col, "fit_from_preprocessed")
         self.y_train_mean_ = y_train_mean
         self.y_train_std_ = y_train_std
         if self.fit_mode != "batched":

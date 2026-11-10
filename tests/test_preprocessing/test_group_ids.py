@@ -10,6 +10,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from sklearn.base import clone
 from sklearn.exceptions import NotFittedError
 
@@ -397,3 +398,32 @@ class TestEstimators:
 
         with pytest.raises(ValueError, match="cannot be combined with `group_col`"):
             estimator.fit(X, y)
+
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    def test__differentiable_input__is_refused_with_group_col(
+        self, estimator_cls: type
+    ) -> None:
+        estimator = estimator_cls(
+            n_estimators=1, device="cpu", differentiable_input=True, group_col="g"
+        )
+        X = torch.randn(20, 3)
+        y = (
+            torch.arange(20) % 2
+            if estimator_cls is TabPFNClassifier
+            else torch.randn(20)
+        )
+
+        with pytest.raises(ValueError, match="not supported with differentiable"):
+            estimator.fit_with_differentiable_input(X, y)
+
+    @pytest.mark.parametrize("estimator_cls", ESTIMATORS)
+    def test__fit_from_preprocessed__is_refused_with_group_col(
+        self, estimator_cls: type
+    ) -> None:
+        estimator = estimator_cls(n_estimators=1, group_col="g")
+        kwargs: dict[str, Any] = {"performance_options": None}
+        if estimator_cls is TabPFNRegressor:
+            kwargs |= {"y_train_mean": 0.0, "y_train_std": 1.0}
+
+        with pytest.raises(ValueError, match="not supported with fit_from_prep"):
+            estimator.fit_from_preprocessed([], [], [], [], **kwargs)

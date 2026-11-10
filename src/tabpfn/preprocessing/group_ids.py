@@ -40,6 +40,7 @@ __all__ = [
     "GROUP_FEATURE_NAME",
     "GroupIdEncoder",
     "as_group_feature",
+    "reject_group_col",
 ]
 
 #: Label of the feature the group columns are replaced with, made unique against
@@ -203,6 +204,14 @@ def as_group_feature(
         features[index], modality=modality, is_group_id=True
     )
     return FeatureSchema(features=features)
+
+
+def reject_group_col(group_col: str | Sequence[str] | None, path: str) -> None:
+    """Raise if `group_col` selects a column, for a `path` that does not encode it."""
+    if _resolve_group_col(group_col):
+        raise TabPFNValidationError(
+            f"`group_col` is not supported with {path}; set `group_col=None`."
+        )
 
 
 def _resolve_group_col(group_col: str | Sequence[str] | None) -> list[str]:
