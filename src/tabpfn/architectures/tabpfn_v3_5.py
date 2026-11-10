@@ -633,7 +633,7 @@ class ManyClassDecoder(nn.Module):
         train_keys_BNHD: torch.Tensor,
         test_embeddings_BME: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Project test rows to per-head queries, and match the keys' dtype to them.
+        """Project test rows to scaled per-head queries, and match the keys' dtype.
 
         Mirrors the dtype guard in ICLAttention's cached path: keys built under
         autocast, or read back from the cache, may not match the query dtype.
@@ -643,6 +643,8 @@ class ManyClassDecoder(nn.Module):
         q_BMHD = q_BME.view(B, M, self.num_heads, self.head_dim).contiguous()
         if train_keys_BNHD.dtype != q_BMHD.dtype:
             train_keys_BNHD = train_keys_BNHD.to(q_BMHD.dtype)
+        if self.softmax_scaling_layer is not None:
+            q_BMHD = self.softmax_scaling_layer(q_BMHD, train_keys_BNHD.shape[1])
         return q_BMHD, train_keys_BNHD
 
     @override
@@ -674,7 +676,6 @@ class ManyClassDecoder(nn.Module):
             train_keys_BNHD,
             targets_BN,
             num_classes=num_present_classes,
-            softmax_scaling_layer=self.softmax_scaling_layer,
         )
         test_output_BMT = test_output_BMHT.mean(2)  # average over heads
 
@@ -705,8 +706,6 @@ class ManyClassDecoder(nn.Module):
         q_BMHD, train_keys_BNHD = self._project_queries(
             train_keys_BNHD, test_embeddings_BME
         )
-        if self.softmax_scaling_layer is not None:
-            q_BMHD = self.softmax_scaling_layer(q_BMHD, train_keys_BNHD.shape[1])
         scores_BHMN = torch.einsum("bmhd,bnhd->bhmn", q_BMHD, train_keys_BNHD).float()
         scores_BHMN /= math.sqrt(self.head_dim)
         return torch.softmax(scores_BHMN, dim=-1).mean(dim=1)
@@ -718,14 +717,13 @@ def _class_attention(
     targets_BN: torch.Tensor,
     *,
     num_classes: int,
-    softmax_scaling_layer: nn.Module | None = None,
 ) -> torch.Tensor:
     """Attention of test rows over the one-hot train targets: `(B, M, H, num_classes)`.
 
     Runs one attention call per head_dim classes. Each call's values are the
-    one-hot columns of its classes, expanded over the heads and not copied, so
-    the values never take more than one `(B, N, head_dim)` tensor, whatever the
-    class count.
+    one-hot columns of its classes, a `(B, N, head_dim)` tensor expanded over the
+    heads, so their size does not grow with the class count. Backends that need
+    contiguous inputs copy them over the heads, one chunk at a time.
 
     Args:
         q_BMHD: Queries of the test rows.
@@ -733,10 +731,7 @@ def _class_attention(
         targets_BN: Integer class of each train row. A row that matches no
             class id in `[0, num_classes)` gets no vote.
         num_classes: Width of the class axis of the output.
-        softmax_scaling_layer: Optional module that scales the queries.
     """
-    if softmax_scaling_layer is not None:
-        q_BMHD = softmax_scaling_layer(q_BMHD, k_BNHD.shape[1])
     head_dim, num_heads = q_BMHD.shape[-1], k_BNHD.shape[2]
     chunks_BMHD = []
     for first_class in range(0, num_classes, head_dim):
