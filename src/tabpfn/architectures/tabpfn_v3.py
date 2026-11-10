@@ -541,10 +541,9 @@ class ManyClassDecoder(nn.Module):
     """Attention-based retrieval decoder for many-class classification.
 
     Computes weighted (by attention score) average over one-hot encoded
-    train targets, then takes the log to obtain logits.  Supports arbitrary
-    class counts by chunking the value (one-hot) dimension into head_dim-sized
-    pieces and folding them into the batch dimension for a single flash-attention
-    call.
+    train targets, then takes the log to obtain logits. Supports any class
+    count by running one attention call per head_dim classes (see
+    `_class_attention`).
     """
 
     def __init__(
@@ -609,17 +608,11 @@ class ManyClassDecoder(nn.Module):
 
         if highest_target is None:
             highest_target = int(targets.max())
-        one_hot_targets_BNHT = (
-            F.one_hot(targets.long(), num_classes=highest_target + 1)
-            .to(dtype=q_BMHD.dtype)
-            .unsqueeze(2)
-            .expand(-1, -1, self.num_heads, -1)
-            .contiguous()
-        )
-        test_output_BMHT = _chunked_class_attention(
+        test_output_BMHT = _class_attention(
             q_BMHD,
             k_BNHD,
-            one_hot_targets_BNHT,
+            targets.long(),
+            num_classes=highest_target + 1,
             softmax_scaling_layer=self.softmax_scaling_layer,
         )
         test_output_BMT = test_output_BMHT.mean(2)  # average over heads
@@ -645,8 +638,8 @@ class ManyClassDecoder(nn.Module):
         Collapsing by training label recovers the pre-log class average that
         `forward` turns into logits.
 
-        `forward` fuses this into a single attention kernel to avoid
-        materializing an O(N*M) tensor.
+        `forward` fuses this into attention kernels to avoid materializing
+        an O(N*M) tensor.
         """
         q_BMHD, k_BNHD = self._project_q(train_keys_BNHD, test_embeddings)
         if self.softmax_scaling_layer is not None:
@@ -656,72 +649,43 @@ class ManyClassDecoder(nn.Module):
         return torch.softmax(scores_BHMN, dim=-1).mean(dim=1)  # over heads -> (B, M, N)
 
 
-def _chunked_class_attention(
-    q_BSHD: torch.Tensor,
-    k_BJHD: torch.Tensor,
-    v_BJHT: torch.Tensor,
+def _class_attention(
+    q_BMHD: torch.Tensor,
+    k_BNHD: torch.Tensor,
+    targets_BN: torch.Tensor,
+    *,
+    num_classes: int,
     softmax_scaling_layer: nn.Module | None = None,
 ) -> torch.Tensor:
-    """Run retrieval attention where the value dimension C may exceed head_dim D.
+    """Attention of test rows over the one-hot train targets: `(B, M, H, num_classes)`.
 
-    Splits V into head_dim-sized chunks along the class axis, folds the chunk
-    index into the batch dimension, and dispatches a single flash-attention call.
-    This avoids the O(N*M) memory cost of the math backend for any class count.
+    Runs one attention call per head_dim classes. Each call's values are the
+    one-hot columns of its classes, expanded over the heads and not copied, so
+    the values never take more than one `(B, N, head_dim)` tensor, whatever the
+    class count.
 
     Args:
-        q_BSHD: Query tensor of shape (B, S, H, D) for test points.
-        k_BJHD: Key tensor of shape (B, J, H, D) for train points.
-        v_BJHT: Value tensor of shape (B, J, H, T) holding one-hot class
-            encodings; T may be larger than D.
-        softmax_scaling_layer: Optional scaling module to scale queries before SDPA.
-
-    Returns:
-        Output tensor of shape (B, S, H, T).
+        q_BMHD: Queries of the test rows.
+        k_BNHD: Keys of the train rows.
+        targets_BN: Integer class of each train row. A row that matches no
+            class id in `[0, num_classes)` gets no vote.
+        num_classes: Width of the class axis of the output.
+        softmax_scaling_layer: Optional module that scales the queries.
     """
-    B, S, H, D = q_BSHD.shape
-    T = v_BJHT.shape[-1]
-    num_chunks = math.ceil(T / D)
-
-    # Pad V to a multiple of D along the class axis
-    pad = num_chunks * D - T
-    if pad > 0:
-        v_BJHT = F.pad(v_BJHT, (0, pad))
-
-    # Fold chunk index into batch dimension
-    J = v_BJHT.shape[1]
-    v_folded = (
-        v_BJHT.reshape(B, J, H, num_chunks, D)
-        .permute(0, 3, 1, 2, 4)
-        .reshape(B * num_chunks, J, H, D)
-        .contiguous()
-    )
-    q_folded = (
-        q_BSHD.unsqueeze(1)
-        .expand(-1, num_chunks, -1, -1, -1)
-        .reshape(B * num_chunks, S, H, D)
-        .contiguous()
-    )
-    k_folded = (
-        k_BJHD.unsqueeze(1)
-        .expand(-1, num_chunks, -1, -1, -1)
-        .reshape(B * num_chunks, J, H, D)
-        .contiguous()
-    )
-
-    # Single flash-attention call across all chunks
-    out_folded = _batched_scaled_dot_product_attention(
-        q_folded,
-        k_folded,
-        v_folded,
-        softmax_scaling_layer=softmax_scaling_layer,
-    )
-
-    # Unfold and trim padding: (B*K, S, H, D) -> (B, S, H, T)
-    return (
-        out_folded.reshape(B, num_chunks, S, H, D)
-        .permute(0, 2, 3, 1, 4)
-        .reshape(B, S, H, num_chunks * D)[..., :T]
-    )
+    if softmax_scaling_layer is not None:
+        q_BMHD = softmax_scaling_layer(q_BMHD, k_BNHD.shape[1])
+    head_dim, num_heads = q_BMHD.shape[-1], k_BNHD.shape[2]
+    chunks_BMHD = []
+    for first_class in range(0, num_classes, head_dim):
+        class_ids = torch.arange(
+            first_class, first_class + head_dim, device=targets_BN.device
+        )
+        v_BND = (targets_BN.unsqueeze(-1) == class_ids).to(q_BMHD.dtype)
+        v_BNHD = v_BND.unsqueeze(2).expand(-1, -1, num_heads, -1)
+        chunks_BMHD.append(
+            _batched_scaled_dot_product_attention(q_BMHD, k_BNHD, v_BNHD)
+        )
+    return torch.cat(chunks_BMHD, dim=-1)[..., :num_classes]
 
 
 class TrainableOrthogonalEmbedding(nn.Module):
