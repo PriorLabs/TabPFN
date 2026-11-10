@@ -58,7 +58,7 @@ from tabpfn.downsample_correction import (
     context_class_prior,
     downsample_class_weights,
 )
-from tabpfn.errors import handle_oom_errors
+from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -94,6 +94,11 @@ from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
+)
+from tabpfn.preprocessing.group_ids import (
+    GroupIdEncoder,
+    as_group_feature,
+    reject_group_col,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
@@ -225,6 +230,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     text_transformer_: TextTransformer
     """The transformer that expanded every text column before validation."""
 
+    group_encoder_: GroupIdEncoder
+    """The encoder that replaced the `group_col` columns with one categorical
+    feature, holding the key-to-code mapping fitted on the training rows."""
+
+    group_feature_index_: int | None
+    """Where the encoded group feature sits in the cleaned input, or `None`
+    without `group_col`."""
+
     categorical_features_indices_: list[int] | None
     """Declared categorical column positions after date/text expansion, including
     columns declared through pandas `category` dtype. Expanded source columns are
@@ -258,6 +271,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
+        group_col: str | list[str] | None = None,
         softmax_temperature: float | Literal["auto"] = "auto",
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
@@ -342,6 +356,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     model and the `.fit()`, consider setting the
                     `.categorical_features_indices` attribute after the model was
                     initialized and before `.fit()`.
+
+            group_col:
+                The label of the column that says which group a row belongs to,
+                e.g. a patient, or a list of labels whose joint value is one
+                composite key. The selected columns are replaced by one
+                categorical feature holding that key's integer code.
+
+                The codes are fitted on the training rows alone, every group
+                keeping its own; a key `fit` did not see becomes a missing
+                value. When set, `fit` and `predict` take a DataFrame holding
+                those columns and raise `ValueError` otherwise.
+                Combining it with `tuning_config`, `differentiable_input=True`
+                or `fit_from_preprocessed` raises `ValueError` too.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -590,6 +617,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_estimators = n_estimators
         self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
+        self.group_col = group_col
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
         self.average_before_softmax = average_before_softmax
@@ -767,16 +795,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # Minimal preprocessing for prompt tuning
         reject_categoricals_for_differentiable_input(self.categorical_features_indices)
+        reject_group_col(self.group_col, "differentiable_input=True")
         n_features = X.shape[1]
         features = [
             Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
             for i in range(n_features)
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
-        # A tensor holds no dates or strings, so these fit nothing; set anyway, so
-        # every predict path converts through them without first checking.
+        # A tensor holds no dates, strings or named columns, so these fit nothing;
+        # set anyway, so every predict path converts through them without first
+        # checking.
         self.date_transformer_ = DateTransformer().fit(X)
         self.text_transformer_ = TextTransformer().fit(X)
+        self.group_encoder_ = GroupIdEncoder().fit(X)
+        self.group_feature_index_ = None
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -819,6 +851,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
         )
+        # Before the expansion below, so each group key is read as the caller
+        # passed it rather than as the features a date or text column becomes.
+        self.group_encoder_ = GroupIdEncoder(group_col=self.group_col)
+        X = self.group_encoder_.fit_transform(X)
+        categorical_indices = self.group_encoder_.output_indices(categorical_indices)
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
                 X,
@@ -849,10 +886,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
         )
+        # Numerical through cleaning, so neither the ordinal encoder nor the
+        # constant-column restore rewrites an unseen group's NaN; categorical
+        # after it, whatever the number of groups.
+        self.group_feature_index_ = self.group_encoder_.feature_index(feature_names)
+        feature_schema = as_group_feature(
+            feature_schema, self.group_feature_index_, FeatureModality.NUMERICAL
+        )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
+        )
+        feature_schema = as_group_feature(
+            feature_schema, self.group_feature_index_, FeatureModality.CATEGORICAL
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -1072,6 +1119,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
+        reject_group_col(self.group_col, "fit_from_preprocessed")
         if self.fit_mode != "batched":
             logging.warning(
                 "The model was not in 'batched' mode. "
@@ -1110,6 +1158,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # duration, like any fitted one.
         self.date_transformer_ = DateTransformer().fit(X_preprocessed[0])
         self.text_transformer_ = TextTransformer().fit(X_preprocessed[0])
+        self.group_encoder_ = GroupIdEncoder().fit(X_preprocessed[0])
+        self.group_feature_index_ = None
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
@@ -1278,6 +1328,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             check_input_shape_matches(X_test, estimator=worker)
+            X_test = worker.group_encoder_.transform(X_test)  # noqa: PLW2901
             X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = worker.text_transformer_.transform(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
@@ -1475,6 +1526,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
+        if self.group_encoder_.group_columns_:
+            raise TabPFNValidationError(
+                "`tuning_config` cannot be combined with `group_col` yet: tuning "
+                "holds out random rows, not whole groups. Set `tuning_config=None` "
+                "or drop `group_col`."
+            )
+
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
             if tuning_config_resolved.tune_decision_thresholds:
                 raise ValueError(
@@ -1634,6 +1692,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             check_input_shape_matches(X, estimator=self)
+            X = self.group_encoder_.transform(X)
             X = self.date_transformer_.transform(X)
             X = self.text_transformer_.transform(X)
             X = ensure_compatible_predict_input_sklearn(X, self)

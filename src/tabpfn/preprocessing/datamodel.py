@@ -133,6 +133,7 @@ class Feature:
             the steps run but which carry more than one distinct non-finite
             value (so they are genuinely non-constant once restored). Honoured by
             :class:`RemoveConstantFeaturesStep`.
+        is_group_id: Whether this is the feature that ``group_col`` encodes.
     """
 
     name: str
@@ -140,6 +141,7 @@ class Feature:
     scheduled_gpu_transform: GPUTransformType | None = None
     ancestor: str | None = None
     non_constant_with_inf: bool = False
+    is_group_id: bool = False
 
 
 @dataclasses.dataclass

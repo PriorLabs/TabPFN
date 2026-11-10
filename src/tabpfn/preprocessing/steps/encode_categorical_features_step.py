@@ -28,6 +28,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
 from tabpfn.utils import infer_random_state
 
 ONE_HOT_ENCODER_NAME = "one_hot_encoder"
+ORDINAL_ENCODER_NAME = "ordinal_encoder"
 
 # Per-column ``Feature`` metadata carried onto columns that map 1:1 from input to
 # output. ``name`` and ``modality`` are excluded: the rebuilt output schema sets
@@ -163,7 +164,36 @@ def _carry_over_input_feature_metadata(
             **{attr: getattr(in_feat, attr) for attr in _CARRIED_FEATURE_FIELDS},
         )
 
+    if column_transformer is not None:
+        _carry_over_group_flag(input_schema, new_features, column_transformer)
+
     return FeatureSchema(features=new_features)
+
+
+def _carry_over_group_flag(
+    input_schema: FeatureSchema,
+    new_features: list[Feature],
+    column_transformer: ColumnTransformer,
+) -> None:
+    """Keep `is_group_id` on the ordinal-encoded columns, in place.
+
+    An ordinal-encoded column is still the same feature; the other carried fields
+    describe the raw values it no longer holds. One-hot columns are not the
+    feature, even a binary one's single column, so they drop the flag.
+    """
+    if ORDINAL_ENCODER_NAME not in column_transformer.output_indices_:
+        return
+    cols = next(
+        c for n, _, c in column_transformer.transformers_ if n == ORDINAL_ENCODER_NAME
+    )
+    out_positions = range(len(new_features))[
+        column_transformer.output_indices_[ORDINAL_ENCODER_NAME]
+    ]
+    for in_idx, out_idx in zip(cols, out_positions, strict=True):
+        new_features[out_idx] = dataclasses.replace(
+            new_features[out_idx],
+            is_group_id=input_schema.features[in_idx].is_group_id,
+        )
 
 
 class EncodeCategoricalFeaturesStep(PreprocessingStep):
@@ -237,7 +267,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             ct = EfficientColumnTransformer(
                 [
                     (
-                        "ordinal_encoder",
+                        ORDINAL_ENCODER_NAME,
                         OrdinalEncoder(
                             handle_unknown="use_encoded_value",
                             unknown_value=np.nan,
@@ -314,7 +344,9 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             if self.categorical_transform_name.endswith("_shuffled"):
                 for col_ix in categorical_features:
                     col_cats = len(
-                        ct.named_transformers_["ordinal_encoder"].categories_[col_ix],
+                        ct.named_transformers_[ORDINAL_ENCODER_NAME].categories_[
+                            col_ix
+                        ],
                     )
                     perm = rng.permutation(col_cats)
                     self.random_mappings_[col_ix] = perm
@@ -377,7 +409,9 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             if self.categorical_transform_name.endswith("_shuffled"):
                 for col_ix in categorical_features:
                     col_cats = len(
-                        ct.named_transformers_["ordinal_encoder"].categories_[col_ix],
+                        ct.named_transformers_[ORDINAL_ENCODER_NAME].categories_[
+                            col_ix
+                        ],
                     )
                     perm = rng.permutation(col_cats)
                     self.random_mappings_[col_ix] = perm

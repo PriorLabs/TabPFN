@@ -724,6 +724,7 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     check_input_shape_matches(X, estimator=model)
+    X = model.group_encoder_.transform(X)
     X = model.date_transformer_.transform(X)
     X = model.text_transformer_.transform(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
