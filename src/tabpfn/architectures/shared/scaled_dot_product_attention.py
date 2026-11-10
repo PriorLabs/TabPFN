@@ -51,8 +51,9 @@ def scaled_dot_product_attention(
     ``quantized_kv`` supplies the keys/values as a quantized cache entry
     instead of ``k_BSJD``/``v_BSJD``.
 
-    Dequantization happens exactly once, here: whoever takes the call
-    receives dense ``k``/``v`` — unless it is a backend declaring
+    A quantized entry is handled exactly once, here: whoever takes the call
+    receives dense ``k``/``v`` cast to q's dtype, with the scales folded into
+    q and the output — unless it is a backend declaring
     ``consumes_quantized_kv = True``, which receives the entry as stored.
     """
     if isinstance(backend, str):  # "auto"
@@ -61,16 +62,47 @@ def scaled_dot_product_attention(
         )
     record_attention_backend(backend)
 
-    if quantized_kv is not None and not (
-        backend is not None and getattr(backend, "consumes_quantized_kv", False)
+    if quantized_kv is not None and not getattr(
+        backend, "consumes_quantized_kv", False
     ):
-        entry = quantized_kv.dequantize(q_BSHD.dtype)
-        k_BSJD, v_BSJD = entry.key, entry.value
-        quantized_kv = None
+        return _attend_to_quantized_kv(
+            q_BSHD, quantized_kv, backend, _backends_override
+        )
 
     if backend is not None:
         return backend.run(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
     return _torch_sdpa(q_BSHD, k_BSJD, v_BSJD, _backends_override)
+
+
+def _attend_to_quantized_kv(
+    q_BSHD: torch.Tensor,
+    quantized_kv: QuantizedKVCacheEntry,
+    backend: AttentionBackend | None,
+    _backends_override: list[SDPBackend] | None,
+) -> torch.Tensor:
+    """Attention over a quantized entry, with its scales folded into q and the output.
+
+    ``softmax((q * s_k) k_q^T) (v_q) * s_v`` equals attention over the dequantized
+    keys and values, so the cache is only cast to q's dtype, never scaled. The
+    scales are scalars or ``(B, 1, 1, 1)``, which broadcast over ``(B, S, H, D)``.
+    """
+    dtype = q_BSHD.dtype
+    assert quantized_kv.key is not None
+    assert quantized_kv.value is not None
+    assert quantized_kv.key_scale is not None
+    assert quantized_kv.value_scale is not None
+    # Per-head or per-token scales would broadcast silently into a wrong result.
+    batch_scale = (q_BSHD.shape[0], 1, 1, 1)
+    for scale in (quantized_kv.key_scale, quantized_kv.value_scale):
+        assert scale.ndim == 0 or scale.shape == batch_scale, scale.shape
+    q_BSHD = q_BSHD * quantized_kv.key_scale.to(dtype)
+    k_BSJD = quantized_kv.key.to(dtype)
+    v_BSJD = quantized_kv.value.to(dtype)
+    if backend is not None:
+        out_BSHD = backend.run(q_BSHD, k_BSJD, v_BSJD)
+    else:
+        out_BSHD = _torch_sdpa(q_BSHD, k_BSJD, v_BSJD, _backends_override)
+    return out_BSHD * quantized_kv.value_scale.to(dtype)
 
 
 # MATH is the reference implementation. Keeping it as a final fallback

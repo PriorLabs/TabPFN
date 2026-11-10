@@ -16,6 +16,7 @@ from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
 from tabpfn.architectures.shared.torch_mps_backend import TORCH_MPS_BACKEND
+from tests.utils import get_pytest_devices
 
 
 class _RecordingBackend:
@@ -114,11 +115,12 @@ def test_reregistration_is_reentrant_but_conflicts_raise() -> None:
 
 @pytest.mark.usefixtures("registry_sandbox")
 @pytest.mark.parametrize("consumes_quantized_kv", [True, False])
-def test_quantized_kv_is_passed_on_or_dequantized_once(
+def test_quantized_kv_is_passed_on_or_cast_with_scales_folded(
     consumes_quantized_kv: bool,
 ) -> None:
     """The entry is passed on only to a backend that declares it consumes
-    one; otherwise the SDPA wrapper dequantizes, once.
+    one; otherwise the backend gets the cast keys and values and the key scale
+    folded into q.
     """
     backend = _RecordingBackend()
     backend.consumes_quantized_kv = consumes_quantized_kv
@@ -134,9 +136,48 @@ def test_quantized_kv_is_passed_on_or_dequantized_once(
         assert call["k"] is None
     else:
         assert call["quantized_kv"] is None
-        dequant = entry.dequantize(q.dtype)
-        torch.testing.assert_close(call["k"], dequant.key)
-        torch.testing.assert_close(call["v"], dequant.value)
+        torch.testing.assert_close(call["q"], q * entry.key_scale)
+        torch.testing.assert_close(call["k"], entry.key.to(q.dtype))
+        torch.testing.assert_close(call["v"], entry.value.to(q.dtype))
+
+
+@pytest.mark.usefixtures("registry_sandbox")
+@pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize("quant_dtype", [torch.int8, FP8_KV_DTYPE])
+@pytest.mark.parametrize(
+    "compute_dtype", [torch.float32, torch.float16, torch.bfloat16]
+)
+@pytest.mark.parametrize("batch", [1, 3])
+@pytest.mark.parametrize("magnitude", [1.0, 1e-4])
+def test_folded_scales_match_attention_over_the_dequantized_entry(
+    device: str,
+    quant_dtype: torch.dtype,
+    compute_dtype: torch.dtype,
+    batch: int,
+    magnitude: float,
+) -> None:
+    """Folding the scales into q and the output equals dequantizing first.
+
+    Batch 1 gives a scalar scale and batch 3 one scale per batch element. The
+    small magnitude puts ``q * key_scale`` near the fp16 subnormal range.
+    """
+    if device == "mps" and quant_dtype == FP8_KV_DTYPE:
+        pytest.skip("MPS cannot cast float8.")
+    torch.manual_seed(0)
+    q, k, v = _qkv(b=batch, s=16, h=4, j=1, d=8)  # GQA: 4 query heads, 1 kv head
+    entry = KVCacheEntry(key=k * magnitude, value=v * magnitude).quantize(quant_dtype)
+    entry = entry.to(device)
+    q = q.to(device, compute_dtype)
+
+    folded = scaled_dot_product_attention(q, None, None, quantized_kv=entry)
+    dequant = entry.dequantize(compute_dtype)
+    reference = scaled_dot_product_attention(q, dequant.key, dequant.value)
+
+    tolerances = {torch.float32: 1e-5, torch.float16: 2e-3, torch.bfloat16: 2e-2}
+    tol = tolerances[compute_dtype]
+    torch.testing.assert_close(
+        folded / magnitude, reference / magnitude, rtol=tol, atol=tol
+    )
 
 
 @pytest.mark.usefixtures("registry_sandbox")
