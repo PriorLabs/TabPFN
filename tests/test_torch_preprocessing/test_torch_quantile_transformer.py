@@ -448,6 +448,30 @@ class TestTorchQuantileTransformerNormalOutput:
 
         np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
 
+    @pytest.mark.parametrize(
+        "x",
+        [
+            np.arange(300) % 30 * 1e-7,
+            1.5 * 2.0**27 + np.arange(300) % 30 * 2.0**-25,
+        ],
+        ids=["1e-7_grid", "near_1.5*2**27"],
+    )
+    def test__transform__float64_near_bounds_match_sklearn(self, x: np.ndarray):
+        """Float64 inputs about 1e-7 inside a fitted bound match sklearn."""
+        x = x[:, None]
+        expected = (
+            AdaptiveQuantileTransformer(n_quantiles=60, output_distribution="normal")
+            .fit(x)
+            .transform(x)
+        )
+        torch_qt = TorchQuantileTransformer(
+            n_quantiles=60, output_distribution="normal"
+        )
+        x_t = torch.from_numpy(x)
+        result = torch_qt.transform(x_t, fitted_cache=torch_qt.fit(x_t))
+
+        np.testing.assert_allclose(result.numpy(), expected, rtol=0, atol=1e-12)
+
     def test__transform__float32_tails_match_sklearn(self):
         """Float32 keeps precision in both tails, not only near 0."""
         rng = np.random.default_rng(0)

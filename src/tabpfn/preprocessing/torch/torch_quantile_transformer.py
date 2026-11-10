@@ -86,9 +86,9 @@ class TorchQuantileTransformer:
         # The normal output assumes references == linspace(0, 1, n) and does
         # not read them.
         if n_samples <= 1:
-            # Not enough data to compute meaningful quantiles.
-            # Return a degenerate cache that makes transform return 0.5
-            # for all non-NaN values (identity-like behaviour).
+            # Not enough data to compute meaningful quantiles. With the
+            # degenerate cache, uniform output is 0.5 for every non-NaN value
+            # and normal output is a clip bound.
             references = torch.tensor([0.0, 1.0], device=x.device, dtype=compute_dtype)
             if n_samples == 0:
                 val = torch.zeros(x.shape[1:], device=x.device, dtype=compute_dtype)
@@ -325,16 +325,23 @@ class TorchQuantileTransformer:
         result.copysign_(lower.sub_(upper))
         del lower, upper
 
-        # Per-feature thresholds; 0 where sklearn's float64 test misses ties.
         q_min, q_max = xp[:, :1], xp[:, -1:]
-        thr_min = torch.where(
-            (q_min > -_TIE_LIMIT) & (q_min <= _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
-        )
-        thr_max = torch.where(
-            (q_max >= -_TIE_LIMIT) & (q_max < _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
-        )
-        result = torch.where((q_max - x) < thr_max, _NORMAL_CLIP_MAX, result)
-        result = torch.where((x - q_min) < thr_min, _NORMAL_CLIP_MIN, result)
+        if x.dtype == torch.float64:
+            # sklearn's own test, in the dtype it runs in.
+            above = (x + _BOUNDS_THRESHOLD) > q_max
+            below = (x - _BOUNDS_THRESHOLD) < q_min
+        else:
+            # Per-feature thresholds; 0 where sklearn's float64 test misses ties.
+            thr_min = torch.where(
+                (q_min > -_TIE_LIMIT) & (q_min <= _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
+            )
+            thr_max = torch.where(
+                (q_max >= -_TIE_LIMIT) & (q_max < _TIE_LIMIT), _BOUNDS_THRESHOLD, 0.0
+            )
+            above = (q_max - x) < thr_max
+            below = (x - q_min) < thr_min
+        result = torch.where(above, _NORMAL_CLIP_MAX, result)
+        result = torch.where(below, _NORMAL_CLIP_MIN, result)
         return result.clamp_(_NORMAL_CLIP_MIN, _NORMAL_CLIP_MAX)
 
     def _apply_extrapolation(
