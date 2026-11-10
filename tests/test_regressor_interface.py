@@ -2041,10 +2041,9 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
         device="cpu",
         model_path=_create_dummy_regressor_model_specs(),
     )
-    # The tuning regressors take their categorical indices and group feature from
-    # these attributes, which `fit` sets before it reaches this method.
+    # The tuning regressors take their categorical indices from this attribute,
+    # which `fit` sets before it reaches this method.
     regressor.categorical_features_indices_ = None
-    regressor.group_feature_index_ = None
 
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2
@@ -2087,10 +2086,9 @@ def test__compute_holdout_validation_data__skips_constant_training_targets() -> 
         device="cpu",
         model_path=_create_dummy_regressor_model_specs(),
     )
-    # The tuning regressors take their categorical indices and group feature from
-    # these attributes, which `fit` sets before it reaches this method.
+    # The tuning regressors take their categorical indices from this attribute,
+    # which `fit` sets before it reaches this method.
     regressor.categorical_features_indices_ = None
-    regressor.group_feature_index_ = None
 
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2

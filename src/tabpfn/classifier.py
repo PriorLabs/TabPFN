@@ -40,7 +40,6 @@ from tabpfn.base import (
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
-    group_feature_index,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
@@ -59,7 +58,7 @@ from tabpfn.downsample_correction import (
     context_class_prior,
     downsample_class_weights,
 )
-from tabpfn.errors import handle_oom_errors
+from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -99,7 +98,6 @@ from tabpfn.preprocessing.ensemble import (
 from tabpfn.preprocessing.group_ids import (
     GroupIdEncoder,
     as_group_feature,
-    mask_unseen_groups,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
@@ -368,6 +366,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 keeping its own; a key `fit` did not see becomes a missing
                 value. When set, `fit` and `predict` take a DataFrame holding
                 those columns and raise `ValueError` otherwise.
+                Combining it with `tuning_config` raises `ValueError` too.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -887,7 +886,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Numerical through cleaning, so neither the ordinal encoder nor the
         # constant-column restore rewrites an unseen group's NaN; categorical
         # after it, whatever the number of groups.
-        self.group_feature_index_ = group_feature_index(self, feature_names)
+        self.group_feature_index_ = self.group_encoder_.feature_index(feature_names)
         feature_schema = as_group_feature(
             feature_schema, self.group_feature_index_, FeatureModality.NUMERICAL
         )
@@ -998,17 +997,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Fit on the already-expanded array, where a declared column may
             # have moved down past an expanded date or text column.
             "categorical_features_indices": self.categorical_features_indices_,
-            # That array already carries the encoded group feature, and no
-            # longer the group columns themselves.
-            "group_col": None,
         }
 
         params.update(forced)
         params.update(overwrite_kwargs)
 
-        tuning_estimator = TabPFNClassifier(**params)
-        tuning_estimator._outer_group_feature_index = self.group_feature_index_
-        return tuning_estimator
+        return TabPFNClassifier(**params)
 
     @config_context(transform_output="default")  # type: ignore
     def fit(self, X: XType, y: YType) -> Self:
@@ -1528,6 +1522,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
+        if self.group_encoder_.group_columns_:
+            raise TabPFNValidationError(
+                "`tuning_config` cannot be combined with `group_col` yet: tuning "
+                "holds out random rows, not whole groups. Set `tuning_config=None` "
+                "or drop `group_col`."
+            )
+
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
             if tuning_config_resolved.tune_decision_thresholds:
                 raise ValueError(
@@ -1632,9 +1633,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         holdout_weights: list[np.ndarray] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
-            X_holdout_NhF = mask_unseen_groups(  # noqa: PLW2901
-                X_train_NtF, X_holdout_NhF, self.group_feature_index_
-            )
             holdout_y_true.append(y_holdout_Nh)
             calibration_classifier = self._get_tuning_classifier()
             with warnings.catch_warnings():
