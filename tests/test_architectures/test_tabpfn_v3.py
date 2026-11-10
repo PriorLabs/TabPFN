@@ -126,10 +126,12 @@ def test__many_class_decoder_attention_weights_matches_forward(
     """attention_weights is a proper distribution and matches the fused forward.
 
     Collapsing the per-train-row weights by class label must reproduce, up to the
-    head's log-clamping, the logits the fused decoder returns.
+    head's log-clamping, the logits the fused decoder returns. 40 classes over
+    head_dim 16 make forward run three attention calls, the last one on a
+    partial chunk of classes.
     """
     torch.manual_seed(0)
-    B, N, M, E, max_num_classes = 2, 40, 7, 48, 10
+    B, N, M, E, max_num_classes = 2, 40, 7, 48, 40
     head_dim, num_heads = 16, 3
     scaling = (
         tabpfn_v3.SoftmaxScalingMLP(num_heads=num_heads, head_dim=head_dim)
