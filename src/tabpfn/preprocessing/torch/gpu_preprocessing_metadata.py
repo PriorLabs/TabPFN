@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from tabpfn.preprocessing.datamodel import GPUTransformType
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     compute_effective_n_quantiles as _compute_effective_n_quantiles,
     get_user_n_quantiles_for_preset,
@@ -47,6 +48,17 @@ def get_quantile_output_distribution(
 def is_gpu_squashing_scaler_eligible(transform_name: str) -> bool:
     """Check if a squashing-scaler transform name can be accelerated on GPU."""
     return transform_name in _GPU_ELIGIBLE_SQUASHING_SCALER_TRANSFORMS
+
+
+def get_gpu_transform_type(transform_name: str) -> GPUTransformType | None:
+    """Return the GPU transform that replaces a reshape preset, if any."""
+    if is_gpu_quantile_eligible(transform_name):
+        return GPUTransformType.QUANTILE
+    if is_gpu_squashing_scaler_eligible(transform_name):
+        return GPUTransformType.SQUASHING_SCALER
+    if transform_name == "safepower":
+        return GPUTransformType.SAFE_POWER
+    return None
 
 
 def get_squashing_scaler_max_absolute_value(transform_name: str) -> float:

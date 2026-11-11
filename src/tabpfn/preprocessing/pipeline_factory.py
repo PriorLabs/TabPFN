@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from tabpfn.preprocessing.datamodel import GPUTransformType
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingPipeline,
     PreprocessingStep,
@@ -23,8 +22,7 @@ from tabpfn.preprocessing.steps import (
     ShuffleFeaturesStep,
 )
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
-    is_gpu_quantile_eligible,
-    is_gpu_squashing_scaler_eligible,
+    get_gpu_transform_type,
 )
 
 if TYPE_CHECKING:
@@ -57,7 +55,7 @@ def create_preprocessing_pipeline(
     Args:
         config: Ensemble configuration.
         random_state: Random state for reproducibility.
-        enable_gpu_preprocessing: When True, the quantile transform (if GPU-
+        enable_gpu_preprocessing: When True, the reshape transform (if GPU-
             eligible), SVD, and shuffle steps are omitted from the CPU pipeline
             because they will run on GPU instead.
     """
@@ -83,12 +81,9 @@ def create_preprocessing_pipeline(
     # still runs on CPU (handling categorical reclassification,
     # append_to_original) but uses "none" (identity) as the transform so the
     # actual work happens on GPU.
-    schedule_gpu_transform: GPUTransformType | None = None
-    if enable_gpu_preprocessing:
-        if is_gpu_quantile_eligible(pconfig.name):
-            schedule_gpu_transform = GPUTransformType.QUANTILE
-        elif is_gpu_squashing_scaler_eligible(pconfig.name):
-            schedule_gpu_transform = GPUTransformType.SQUASHING_SCALER
+    schedule_gpu_transform = (
+        get_gpu_transform_type(pconfig.name) if enable_gpu_preprocessing else None
+    )
 
     if pconfig.differentiable:
         steps.append(DifferentiableZNormStep())
