@@ -616,29 +616,31 @@ def transform_borders_one(
     ).squeeze()
     borders_t = ((borders_t - znorm_mean) / znorm_std).astype(borders.dtype)
 
-    logit_cancel_mask: npt.NDArray[np.bool_] | None = None
+    broken_mask: npt.NDArray[np.bool_] | None = None
     if repair_nan_borders_after_transform:
         broken_mask = (
             ~np.isfinite(borders_t)
             | (borders_t > REGRESSION_NAN_BORDER_LIMIT_UPPER)
             | (borders_t < REGRESSION_NAN_BORDER_LIMIT_LOWER)
         )
-        if broken_mask.any():
-            borders_t, logit_cancel_mask = _cancel_nan_borders(
-                borders=borders_t,
-                broken_mask=broken_mask,
-            )
 
-    reversed_order = np.arange(len(borders_t) - 1, -1, -1)
-    descending_borders = (np.argsort(borders_t) == reversed_order).all()
+    # An order-reversing transform returns descending borders. Read the order off
+    # the usable borders and reverse first: the cancelling and the repair below
+    # both assume ascending borders.
+    usable = borders_t if broken_mask is None else borders_t[~broken_mask]
+    descending_borders = len(usable) > 1 and bool((np.diff(usable) < 0).all())
     if descending_borders:
         # Copies, not views: torch rejects the negative strides of a reversed view.
         borders_t = borders_t[::-1].copy()
-        logit_cancel_mask = (
-            logit_cancel_mask[::-1].copy() if logit_cancel_mask is not None else None
+        broken_mask = broken_mask[::-1].copy() if broken_mask is not None else None
+
+    logit_cancel_mask: npt.NDArray[np.bool_] | None = None
+    if broken_mask is not None and broken_mask.any():
+        borders_t, logit_cancel_mask = _cancel_nan_borders(
+            borders=borders_t,
+            broken_mask=broken_mask,
         )
 
-    # After the reversal: the repair assumes ascending borders.
     _repair_borders(borders_t, inplace=True)
 
     return logit_cancel_mask, descending_borders, borders_t

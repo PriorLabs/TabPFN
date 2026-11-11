@@ -48,6 +48,8 @@ def _targets_in_estimator_space(
     if config.target_transform is None:
         raise ValueError("A fitted target pipeline is required for regression loss.")
     y_np = config.target_transform.transform(y_Q.cpu().numpy().reshape(-1, 1))
+    if config.flip_target:
+        y_np = -y_np
     return torch.as_tensor(y_np.ravel(), device=y_Q.device)
 
 
@@ -390,6 +392,12 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         _, per_estim_logits, _ = self._training_forward(X_query_batch)
         # per_estim_logits is a list (per estimator) of tensors with shape [Q, B(=1), L]
+        # forward() mirrors the buckets of a member that saw the negated target;
+        # undo that, so its loss pairs its own buckets with its negated target.
+        per_estim_logits = [
+            logits.flip(-1) if c[0].flip_target else logits
+            for logits, c in zip(per_estim_logits, batch.configs, strict=True)
+        ]
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
         logits_QBEL = torch.stack(per_estim_logits, dim=2)

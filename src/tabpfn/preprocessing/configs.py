@@ -195,9 +195,17 @@ class ClassifierEnsembleConfig(EnsembleConfig):
 
 @dataclass
 class RegressorEnsembleConfig(EnsembleConfig):
-    """Configuration for a regression ensemble member."""
+    """Configuration for a regression ensemble member.
+
+    Attributes:
+        target_transform: Pipeline from raw targets to the standardized targets
+            the model sees, or None where the targets come standardized.
+        flip_target: Whether the member sees the negated output of
+            ``target_transform``. Its buckets are mirrored back at prediction.
+    """
 
     target_transform: TransformerMixin | Pipeline | None
+    flip_target: bool = False
 
 
 __all__ = [

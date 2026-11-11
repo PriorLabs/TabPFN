@@ -183,6 +183,21 @@ RegressionResultType = np.ndarray | list[np.ndarray] | MainOutputDict | FullOutp
 DEFAULT_REGRESSION_EVAL_METRIC = RegressorEvalMetrics.NLL
 
 
+def _unflip_member(
+    output: torch.Tensor,
+    std_borders: np.ndarray,
+    config: RegressorEnsembleConfig,
+) -> tuple[torch.Tensor, np.ndarray]:
+    """Return a member's logits and the standardized borders they belong to.
+
+    A member that saw the negated target predicts on the mirrored grid: its bucket
+    j is bucket -1 - j there.
+    """
+    if not config.flip_target:
+        return output, std_borders
+    return output.flip(-1), -std_borders[::-1]
+
+
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """TabPFN regressor with a scikit-learn-compatible interface.
 
@@ -2164,8 +2179,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raise ValueError(
                 "A fitted target pipeline is required for batched prediction."
             )
+        out_d, member_borders = _unflip_member(out_d, std_borders, config)
         logit_cancel_mask, descending_borders, borders_t = transform_borders_one(
-            std_borders,
+            member_borders,
             target_transform=config.target_transform,
             znorm_mean=znorm_mean,
             znorm_std=znorm_std,
@@ -2310,15 +2326,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 # along with the specific config the output belongs to. This is because
                 # the transformation done to the borders for a given output is dependant
                 # upon the target_transform of the config.
+                output, member_borders = _unflip_member(  # noqa: PLW2901
+                    output, std_borders, config_for_ensemble
+                )
                 if config_for_ensemble.target_transform is None:
                     # The differentiable-input path supplies standardized targets.
-                    borders_t = std_borders.copy()
+                    borders_t = member_borders.copy()
                     logit_cancel_mask = None
                     descending_borders = False
                 else:
                     logit_cancel_mask, descending_borders, borders_t = (
                         transform_borders_one(
-                            std_borders,
+                            member_borders,
                             target_transform=config_for_ensemble.target_transform,
                             znorm_mean=self.y_train_mean_,
                             znorm_std=self.y_train_std_,

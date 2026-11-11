@@ -32,7 +32,6 @@ from tabpfn.preprocessing.configs import (
 )
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-from tabpfn.preprocessing.target_transform import negate_target
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -1410,8 +1409,8 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
         num_models: Number of models to use.
         outlier_removal_std: The standard deviation to remove outliers.
         passthrough_inf: Whether to pass infinite values through to the model.
-        target_sign_flip: Whether every second member, by index, is fit on the
-            negated target. Needs a target pipeline on every member.
+        target_sign_flip: Whether about half the members, alternating within each
+            (preprocessor, target transform) combination, see the negated target.
 
     Returns:
         List of ensemble configurations.
@@ -1421,10 +1420,9 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
     featshifts = np.arange(start, start + num_estimators)
     featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore[arg-type]
 
-    if target_sign_flip and any(t is None for t in target_transforms):
-        raise ValueError("target_sign_flip needs a target pipeline on every member.")
-
-    combos = list(product(preprocessor_configs, target_transforms))
+    combos = list(
+        product(range(len(preprocessor_configs)), range(len(target_transforms)))
+    )
     balance_count = num_estimators // len(combos)
     configs_ = _balance(combos, balance_count)
     leftover = num_estimators - len(configs_)
@@ -1432,10 +1430,15 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
         configs_ += combos[:leftover]
 
     model_indices = [i % num_models for i in range(num_estimators)]
+    flips = (
+        _alternate_target_flips(configs_)
+        if target_sign_flip
+        else [False] * num_estimators
+    )
 
     return [
         RegressorEnsembleConfig(
-            preprocess_config=preprocess_config,
+            preprocess_config=preprocessor_configs[preprocess_index],
             feature_shift_count=featshift,
             add_fingerprint_feature=add_fingerprint_feature,
             polynomial_features=polynomial_features,
@@ -1443,28 +1446,37 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
             # Each config gets its own copy: the transform is later fitted in
             # place per ensemble member (see _transform_labels_one), so a
             # shared instance would end up with the last member's fitted state.
-            target_transform=(
-                negate_target(copy.deepcopy(target_transform))
-                if target_sign_flip and member % 2 == 1
-                else copy.deepcopy(target_transform)
-            ),
+            target_transform=copy.deepcopy(target_transforms[target_index]),
+            flip_target=flip,
             outlier_removal_std=outlier_removal_std,
             _model_index=model_index,
             passthrough_inf=passthrough_inf,
         )
-        for member, (
-            featshift,
-            (preprocess_config, target_transform),
-            model_index,
-        ) in enumerate(
-            zip(
-                featshifts,
-                configs_,
-                model_indices,
-                strict=True,
-            )
+        for featshift, (preprocess_index, target_index), model_index, flip in zip(
+            featshifts,
+            configs_,
+            model_indices,
+            flips,
+            strict=True,
         )
     ]
+
+
+def _alternate_target_flips(combos: Sequence[tuple[int, int]]) -> list[bool]:
+    """Alternate the target sign flip over the members of each combination.
+
+    A combination's first member flips when its preprocessor and target transform
+    indices sum to an odd number. With one member per combination the flips then
+    form a checkerboard, which no preprocessor or target transform lines up with.
+    With several models the flips can line up with the model index.
+    """
+    seen: dict[tuple[int, int], int] = {}
+    flips = []
+    for combo in combos:
+        occurrence = seen.get(combo, 0)
+        flips.append((sum(combo) + occurrence) % 2 == 1)
+        seen[combo] = occurrence + 1
+    return flips
 
 
 def _resolve_importance_top_k(

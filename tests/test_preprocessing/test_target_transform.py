@@ -5,22 +5,24 @@
 from __future__ import annotations
 
 import pickle
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
+from sklearn.preprocessing import FunctionTransformer
 
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.preprocessing.target_transform import (
-    NEGATE_STEP,
     STANDARDIZE_STEP,
     TARGET_TRANSFORM_STEP,
     StandardizeTarget,
     make_target_transform,
-    negate_target,
 )
-from tabpfn.utils import transform_borders_one
+from tabpfn.regressor import _unflip_member
+from tabpfn.utils import transform_borders_one, translate_probs_across_borders
 
 TRANSFORM_NAMES = ["1_plus_log", "safepower", "quantile_norm", "robust", "none"]
 
@@ -178,35 +180,76 @@ def test__transform_borders_one__guard_is_applied_in_the_znorm_frame() -> None:
     np.testing.assert_allclose(borders_t, borders, atol=1e-6)
 
 
-@pytest.mark.parametrize("name", [None, "safepower"])
-def test__negate_target__standardizes_the_negated_target(name: str | None) -> None:
-    y = _target()
-    transform = None if name is None else _get_transform(name, len(y))
-    pipeline = negate_target(make_target_transform(transform))
-    reference = make_target_transform(transform)
+def _odd_inverse(sign: float) -> FunctionTransformer:
+    """An odd map from model space, increasing for sign=1, that blows up past +-2."""
 
-    assert next(iter(pipeline.named_steps)) == NEGATE_STEP
-    np.testing.assert_array_equal(
-        pipeline.fit_transform(y.reshape(-1, 1)),
-        reference.fit_transform(-y.reshape(-1, 1)),
-    )
+    def inverse(z: np.ndarray) -> np.ndarray:
+        return sign * np.sinh(4.0 * z)
+
+    return FunctionTransformer(inverse_func=inverse, check_inverse=False)
 
 
-def test__negate_target__inverse_restores_the_original_sign() -> None:
-    y = _target()
-    pipeline = negate_target(make_target_transform(None))
-    pipeline.fit(y.reshape(-1, 1))
-    # Inside the guard limits, which would otherwise cancel the outermost bucket.
-    borders = np.linspace(-3.0, 3.0, 61, dtype=np.float32)
+def test__transform_borders_one__reversing_transform_with_broken_ends() -> None:
+    """A reversing transform whose outer borders pass the guard limits.
 
-    _, descending, borders_t = transform_borders_one(
+    It must give the borders and the cancelled buckets of the increasing transform
+    on the mirrored grid, reversed.
+    """
+    borders = np.linspace(-3.0, 3.0, 61)
+    kwargs = {"znorm_mean": 0.0, "znorm_std": 1.0}
+
+    mask, descending, borders_t = transform_borders_one(
         borders,
-        target_transform=pipeline,
-        znorm_mean=float(np.mean(y)),
-        znorm_std=float(np.std(y)) + StandardizeTarget.EPSILON,
+        target_transform=_odd_inverse(-1.0),
         repair_nan_borders_after_transform=True,
+        **kwargs,
+    )
+    ref_mask, ref_descending, ref_borders = transform_borders_one(
+        -borders[::-1],
+        target_transform=_odd_inverse(1.0),
+        repair_nan_borders_after_transform=True,
+        **kwargs,
     )
 
-    # Reported as descending, and handed back reversed to ascending order.
     assert descending
-    np.testing.assert_allclose(borders_t, -borders[::-1], atol=1e-6)
+    assert not ref_descending
+    assert mask is not None
+    assert mask.any()
+    # Ascending; the cancelled buckets collapse to zero width.
+    assert (np.diff(borders_t) >= 0).all()
+    np.testing.assert_array_equal(mask, ref_mask)
+    np.testing.assert_allclose(borders_t, ref_borders)
+
+
+def test__unflip_member__mirrors_the_member_distribution() -> None:
+    """A member that saw the negated target predicts the mirrored distribution.
+
+    On a symmetric target grid its bucket masses are the plain member's reversed.
+    The model's borders are asymmetric, so mirroring only the logits, and not the
+    borders, would fail.
+    """
+    rng = np.random.default_rng(0)
+    std_borders = np.sort(rng.normal(size=41)) + 0.3
+    logits = torch.as_tensor(rng.normal(size=(3, 40)))
+    target_grid = torch.linspace(-4.0, 4.0, 81, dtype=torch.float64)
+    pipeline = make_target_transform(None).fit(np.array([[-1.0], [1.0]]))
+    frame = {"znorm_mean": 0.0, "znorm_std": 1.0}
+
+    def member_probs(flip: bool) -> torch.Tensor:
+        config = SimpleNamespace(flip_target=flip)
+        out, borders = _unflip_member(logits, std_borders, config)  # type: ignore[arg-type]
+        mask, descending, borders_t = transform_borders_one(
+            borders,
+            target_transform=pipeline,
+            repair_nan_borders_after_transform=True,
+            **frame,
+        )
+        assert mask is None
+        assert not descending
+        return translate_probs_across_borders(
+            out, frm=torch.as_tensor(borders_t), to=target_grid
+        )
+
+    torch.testing.assert_close(
+        member_probs(flip=True), member_probs(flip=False).flip(-1)
+    )

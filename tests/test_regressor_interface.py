@@ -1530,24 +1530,35 @@ def test__fit__member_target_is_the_znormalized_target() -> None:
     assert np.array_equal(member_y, (y - np.mean(y)) / (np.std(y) + 1e-20))
 
 
-def test__fit__target_sign_flip__odd_members_see_the_negated_target() -> None:
+@pytest.mark.parametrize("preset", [None, "log"])
+def test__fit__target_sign_flip__members_see_the_negated_pipeline_output(
+    preset: str | None,
+) -> None:
+    """The flip comes after the pipeline, so `log` still sees the raw target."""
     X, y = _mk_reg_dataset(0)
-    reg = TabPFNRegressor(
-        n_estimators=4,
-        device="cpu",
-        random_state=42,
-        inference_config={
-            "REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,),
-            "REGRESSION_TARGET_SIGN_FLIP": True,
-        },
-    )
-    reg.fit(X, y)
+    y = np.abs(y) + 1.0
 
-    member_y = [np.asarray(m.y_train) for m in reg.executor_.ensemble_members]
-    standardized = (y - np.mean(y)) / (np.std(y) + 1e-20)
-    for i, target in enumerate(member_y):
+    def fit(*, flip: bool) -> TabPFNRegressor:
+        return TabPFNRegressor(
+            n_estimators=4,
+            device="cpu",
+            random_state=42,
+            inference_config={
+                "REGRESSION_Y_PREPROCESS_TRANSFORMS": (preset,),
+                "REGRESSION_TARGET_SIGN_FLIP": flip,
+            },
+        ).fit(X, y)
+
+    members = fit(flip=True).executor_.ensemble_members
+    plain = fit(flip=False).executor_.ensemble_members
+
+    assert {m.config.flip_target for m in members} == {False, True}
+    for member, reference in zip(members, plain, strict=True):
+        target = np.asarray(member.y_train)
+        expected = np.asarray(reference.y_train)
+        assert np.isfinite(target).all()
         np.testing.assert_allclose(
-            target, -standardized if i % 2 else standardized, rtol=1e-12
+            target, -expected if member.config.flip_target else expected
         )
 
 
