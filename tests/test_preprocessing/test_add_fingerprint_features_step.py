@@ -9,7 +9,7 @@ import torch
 
 from tabpfn.preprocessing import PreprocessingPipeline
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.steps import AddFingerprintFeaturesStep
+from tabpfn.preprocessing.steps import AddFingerprintFeaturesStep, ShuffleFeaturesStep
 
 
 def _get_schema(num_columns: int) -> FeatureSchema:
@@ -72,6 +72,29 @@ def test__transform__collision_handling_with_duplicate_rows() -> None:
     assert fingerprints_test is not None
     assert fingerprints_test[0] == fingerprints_test[1]
     assert fingerprints_test[0] != fingerprints_test[2]
+
+
+def test__transform__fingerprint_uses_original_input() -> None:
+    """Small preprocessing differences must not change the fingerprint."""
+    original = np.array([[0.1234567, 2.0], [3.0, 4.0]], dtype=np.float32)
+    transformed = original.copy()
+    transformed[0, 0] += np.float32(9.5e-7)
+    schema = _get_schema(num_columns=2)
+
+    step = AddFingerprintFeaturesStep()
+    step._fit(transformed, schema)
+    step.set_original_input(original)
+    _, fingerprints_from_transformed, _ = step._transform(transformed, is_test=True)
+
+    reference = AddFingerprintFeaturesStep()
+    reference._fit(original, schema)
+    _, fingerprints_from_original, _ = reference._transform(original, is_test=True)
+
+    assert fingerprints_from_transformed is not None
+    assert fingerprints_from_original is not None
+    np.testing.assert_array_equal(
+        fingerprints_from_transformed, fingerprints_from_original
+    )
 
 
 def test__fit_transform__returns_added_columns() -> None:
@@ -175,6 +198,28 @@ def test__in_pipeline__returns_correct_shape_and_metadata() -> None:
 
     assert result_without_modalities.feature_schema.num_columns == 4
     assert result_without_modalities.X.shape == (2, 4)
+
+
+def test__in_pipeline__fingerprint_uses_untransformed_input() -> None:
+    """A preceding feature permutation must not affect row fingerprints."""
+    data = np.array([[0.1234567, 2.0], [3.0, 4.0]], dtype=np.float32)
+    schema = _get_schema(num_columns=2)
+    fingerprint_step = AddFingerprintFeaturesStep()
+    pipeline = PreprocessingPipeline(
+        steps=[
+            ShuffleFeaturesStep(shuffle_method="rotate", shuffle_index=1),
+            fingerprint_step,
+        ]
+    )
+
+    result = pipeline.fit_transform(data, schema)
+
+    reference = AddFingerprintFeaturesStep()
+    pipeline_input = data.astype(np.float64)
+    reference._fit(pipeline_input, schema)
+    _, expected_fingerprints, _ = reference._transform(pipeline_input, is_test=False)
+    assert expected_fingerprints is not None
+    np.testing.assert_array_equal(result.X[:, -1:], expected_fingerprints)
 
 
 def test__num_added_features() -> None:

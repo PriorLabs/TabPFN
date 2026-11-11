@@ -192,6 +192,19 @@ class PreprocessingStep:
     modality_added_: FeatureModality | None
     """Modality of added columns from `_transform`. Set during first transform call."""
 
+    def set_original_input(self, X: np.ndarray | torch.Tensor) -> None:
+        """Provide the pipeline's untransformed input to steps that need it.
+
+        Most preprocessing steps only use the current intermediate data. Steps
+        whose output must be invariant to preceding numerical transforms can
+        override this hook.
+        """
+        del X
+
+    def requires_original_input(self) -> bool:
+        """Whether this step consumes the pipeline's untransformed input."""
+        return False
+
     @abstractmethod
     def _fit(
         self,
@@ -326,6 +339,29 @@ class PreprocessingStep:
                 )
 
 
+def _copy_original_input_if_needed(
+    X: np.ndarray | torch.Tensor,
+    steps: list[StepWithModalities],
+) -> np.ndarray | torch.Tensor | None:
+    """Copy the pipeline input only when a full-input step needs it."""
+    if not any(
+        step.requires_original_input() and not modalities for step, modalities in steps
+    ):
+        return None
+    return X.copy() if isinstance(X, np.ndarray) else X.clone()
+
+
+def _set_original_input_if_needed(
+    step: PreprocessingStep,
+    modalities: set[FeatureModality],
+    original_X: np.ndarray | torch.Tensor | None,
+) -> None:
+    """Pass the untransformed input to steps registered for all columns."""
+    if step.requires_original_input() and not modalities:
+        assert original_X is not None
+        step.set_original_input(original_X)
+
+
 class PreprocessingPipeline:
     """Modality-aware preprocessing pipeline that handles column slicing.
 
@@ -458,6 +494,7 @@ class PreprocessingPipeline:
             if isinstance(X, np.ndarray)
             else X.clone()
         )
+        original_X = _copy_original_input_if_needed(X, self.steps)
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
@@ -469,6 +506,7 @@ class PreprocessingPipeline:
 
         self.step_timings_ = {} if self.record_timings else None
         for step_idx, (step, modalities) in enumerate(self.steps):
+            _set_original_input_if_needed(step, modalities, original_X)
             if self.record_timings:
                 t0 = time.perf_counter()
 

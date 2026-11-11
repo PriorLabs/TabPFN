@@ -19,9 +19,9 @@ from tabpfn.preprocessing.pipeline_interface import (
 _CONSTANT = 2**64 - 1  # Use this to efficiently compute modulo 2**64
 _MAX_COLLISION_RETRIES = 100
 
-# Round to 12 decimal places before hashing to absorb floating-point
-# noise (~1e-16) that prior preprocessing steps may introduce between
-# batch and single-sample transforms.
+# Round the raw input to 12 decimal places before hashing, preserving the
+# existing normalization for tiny precision differences without making the
+# fingerprint depend on preceding preprocessing arithmetic.
 _HASH_ROUND_DECIMALS = 12
 
 
@@ -49,6 +49,15 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     def __init__(self):
         super().__init__()
         self.added_fingerprint: np.ndarray | torch.Tensor | None = None
+        self.original_input_: np.ndarray | torch.Tensor | None = None
+
+    @override
+    def requires_original_input(self) -> bool:
+        return True
+
+    @override
+    def set_original_input(self, X: np.ndarray | torch.Tensor) -> None:
+        self.original_input_ = X
 
     @override
     def _fit(
@@ -80,7 +89,12 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         Returns:
             The input X unchanged. Fingerprint is available via _get_added_columns().
         """
-        X_det = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else X
+        X_to_hash = self.original_input_ if self.original_input_ is not None else X
+        X_det = (
+            X_to_hash.detach().cpu().numpy()
+            if isinstance(X_to_hash, torch.Tensor)
+            else X_to_hash
+        )
 
         # Round once for all rows instead of per-row
         X_rounded = np.ascontiguousarray(
