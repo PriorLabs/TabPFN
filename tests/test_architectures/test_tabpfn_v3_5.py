@@ -427,12 +427,10 @@ def test__forward_many_class_head__fewer_classes_than_max__pads_absent_columns()
 
 @torch.no_grad()
 @pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-def test__many_class_decoder__unused_classes__matches_full_width_one_hot() -> None:
-    """Narrowing the one-hot to the present classes must not change the output.
+def test__many_class_decoder__narrowed_and_nonfinite__match_reference() -> None:
+    """Narrowing to the present classes must not change the output.
 
-    `head_dim` below the class count makes the full-width reference span three
-    folded attention passes where the narrowed path needs one, so a mismatch in
-    the trim, the chunking or the padding surfaces here.
+    Rows with a non-finite target must get no vote.
     """
     num_classes, input_size, num_heads, head_dim = 10, 12, 3, 4
     batch, num_train, num_test = 2, 17, 3
@@ -448,22 +446,22 @@ def test__many_class_decoder__unused_classes__matches_full_width_one_hot() -> No
     test_emb = torch.randn(batch, num_test, input_size, dtype=torch.float64)
     # Only classes 0..2 occur, so the decoder trims 10 columns down to 3.
     targets = (torch.arange(num_train) % 3).repeat(batch, 1).to(torch.float64)
+    targets[0, 1] = float("nan")
+    targets[1, 2] = float("inf")
+    targets[1, 4] = float("-inf")
+    votes_BN = torch.isfinite(targets)
 
     train_keys = decoder.project_keys(train_emb)
     actual = decoder(train_keys, test_emb, targets, num_present_classes=3)
 
     q_BMHD = decoder.q_projection(test_emb).view(batch, num_test, num_heads, head_dim)
-    one_hot_BNHT = (
-        torch.nn.functional.one_hot(targets.long(), num_classes=num_classes)
-        .to(torch.float64)
-        .unsqueeze(2)
-        .expand(-1, -1, num_heads, -1)
-        .contiguous()
-    )
-    reference_BMT = tabpfn_v3_5._chunked_class_attention(
-        q_BMHD.contiguous(), train_keys, one_hot_BNHT
-    ).mean(2)
-    expected = torch.log(torch.clamp(reference_BMT.transpose(0, 1), min=1e-5) + 3e-5)
+    scores_BHMN = torch.einsum("bmhd,bnhd->bhmn", q_BMHD, train_keys) / head_dim**0.5
+    weights_BMN = scores_BHMN.softmax(-1).mean(1)
+    classes_BN = torch.where(votes_BN, targets, 0).long()
+    one_hot_BNT = torch.nn.functional.one_hot(classes_BN, num_classes).double()
+    one_hot_BNT *= votes_BN.unsqueeze(-1)
+    class_avg_BMT = torch.einsum("bmn,bnt->bmt", weights_BMN, one_hot_BNT)
+    expected = torch.log(torch.clamp(class_avg_BMT.transpose(0, 1), min=1e-5) + 3e-5)
 
     assert actual.shape == (num_test, batch, num_classes)
     assert torch.allclose(actual, expected, atol=1e-12), (
@@ -1323,9 +1321,12 @@ def test__many_class_decoder_attention_weights__matches_forward(
 ) -> None:
     """The weights are a distribution over train rows and reproduce the fused
     forward's logits once collapsed by class label.
+
+    40 classes over head_dim 16 make forward run three attention calls, the
+    last one on a partial chunk of classes.
     """
     torch.manual_seed(0)
-    B, N, M, E, max_num_classes = 2, 40, 7, 48, 10
+    B, N, M, E, max_num_classes = 2, 40, 7, 48, 40
     head_dim, num_heads = 16, 3
     scaling = (
         tabpfn_v3_5.SoftmaxScalingMLP(num_heads=num_heads, head_dim=head_dim)
