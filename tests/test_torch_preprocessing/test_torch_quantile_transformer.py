@@ -17,6 +17,7 @@ from tabpfn.preprocessing.torch import (
     TorchPreprocessingPipeline,
     TorchQuantileTransformer,
     TorchQuantileTransformerStep,
+    TorchSelectiveQuantileTransformerStep,
 )
 
 
@@ -620,11 +621,42 @@ class TestChunkedQuantileTransformerEquivalence:
         result_full = qt.transform(x, cache)
 
         monkeypatch.setattr(
-            TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
+            TorchQuantileTransformer, "get_transform_chunk_size", lambda _, _x: 7
         )
         result_chunked = qt.transform(x, cache)
 
         assert torch.allclose(result_full, result_chunked, atol=1e-6, equal_nan=True)
+
+    @pytest.mark.parametrize(
+        ("extrapolate_ratio", "output_distribution"),
+        [(None, "uniform"), (1.0, "uniform"), (None, "normal")],
+    )
+    def test__selective_step__row_chunks_match_unchunked(
+        self, monkeypatch, extrapolate_ratio, output_distribution
+    ):
+        """Row-chunked write-back is bit-identical and leaves the input untouched."""
+        torch.manual_seed(0)
+        x = torch.randn(100, 2, 9, dtype=torch.float32)
+        x[::7, :, 2] = float("nan")
+        x_before = x.clone()
+        step = TorchSelectiveQuantileTransformerStep(
+            n_quantiles=40,
+            target_column_indices=[7, 0, 2, 4],
+            extrapolate_ratio=extrapolate_ratio,
+            output_distribution=output_distribution,
+        )
+
+        full = step.fit_transform(x, list(range(9)), num_train_rows=80)
+
+        monkeypatch.setattr(
+            TorchQuantileTransformer, "get_transform_chunk_size", lambda _, _x: 7
+        )
+        chunked = step.fit_transform(x, list(range(9)), num_train_rows=80)
+
+        torch.testing.assert_close(chunked.x, full.x, rtol=0, atol=0, equal_nan=True)
+        torch.testing.assert_close(x, x_before, rtol=0, atol=0, equal_nan=True)
+        assert not torch.equal(chunked.x[:, :, 7], x[:, :, 7])
+        assert torch.equal(chunked.x[:, :, [1, 3, 5, 6, 8]], x[:, :, [1, 3, 5, 6, 8]])
 
 
 class TestTorchQuantileTransformerCategoricalBoundary:

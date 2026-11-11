@@ -191,7 +191,7 @@ class TorchQuantileTransformer:
 
         # The cache may be in float32 (from fit) while input is float16.
         # Compute each chunk in the cache dtype and write it into the output.
-        chunk_size = self._get_transform_chunk_size(x)
+        chunk_size = self.get_transform_chunk_size(x)
         if x.shape[0] <= chunk_size:
             return self._transform_chunk(
                 x.to(quantiles.dtype), quantiles, references
@@ -216,7 +216,7 @@ class TorchQuantileTransformer:
         result = self._interpolate(x, quantiles, references)
         return torch.where(nan_mask, float("nan"), result)
 
-    def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
+    def get_transform_chunk_size(self, x: torch.Tensor) -> int:
         """Compute a row-chunk size that keeps intermediate memory bounded.
 
         ``_interpolate`` creates ~15x intermediate memory per input element
