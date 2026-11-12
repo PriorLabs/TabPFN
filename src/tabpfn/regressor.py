@@ -947,6 +947,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             preprocessor_configs=preprocessor_configs,
             auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
+        if self.inference_config_.REGRESSION_TARGET_SIGN_FLIP:
+            warnings.warn(
+                "REGRESSION_TARGET_SIGN_FLIP is ignored with differentiable input.",
+                UserWarning,
+                stacklevel=3,
+            )
         # Polynomial features go through sklearn StandardScaler on numpy and
         # are not differentiable; force "no" regardless of the runtime default
         # (the regressor config defaults to a non-zero value).

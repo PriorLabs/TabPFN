@@ -1207,6 +1207,17 @@ def test__fit_with_differentiable_input__grad_flows_to_upstream_module(
     assert grad.norm().item() > 0, "gradient norm is zero — graph was detached"
 
 
+def test__fit_with_differentiable_input__target_sign_flip__warns() -> None:
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        differentiable_input=True,
+        inference_config={"REGRESSION_TARGET_SIGN_FLIP": True},
+    )
+    with pytest.warns(UserWarning, match="REGRESSION_TARGET_SIGN_FLIP is ignored"):
+        reg.fit_with_differentiable_input(torch.randn(20, 3), torch.randn(20))
+
+
 def test__fit__differentiable_input_true__raises_helpful_error() -> None:
     """Calling .fit() (instead of fit_with_differentiable_input) when
     differentiable_input=True must raise a clear error pointing users to the
