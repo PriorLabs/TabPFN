@@ -326,6 +326,15 @@ class InferenceConfig:
         - None: no preprocessing is done.
         - One of the options from
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
+        - "raw_log_qgap": for zero-inflated nonnegative targets. log(y) for y > 0,
+          and the zeros in a gap below the positive logs, at q - sd with q the 1%
+          quantile and sd the standard deviation of the positive logs. Values
+          below q - sd / 2 decode to 0.
+        - "raw_log_fixed_atom": for zero-inflated nonnegative targets. log(y)
+          standardized on the positive targets, with the zeros at -4. Values below
+          -3.5 decode to 0, and positives below it are raised to it.
+
+        A member with "raw_log_qgap" or "raw_log_fixed_atom" puts no mass below 0.
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
