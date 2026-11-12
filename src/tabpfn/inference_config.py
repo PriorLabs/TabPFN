@@ -13,6 +13,9 @@ from typing import Literal
 import pydantic
 
 from tabpfn.constants import ModelVersion, TaskType
+from tabpfn.mean_readout import (
+    MeanReadout,  # noqa: TC001 (pydantic reads it at runtime)
+)
 from tabpfn.preprocessing import (
     PreprocessorConfig,
     v2_5_classifier_preprocessor_configs,
@@ -336,6 +339,22 @@ class InferenceConfig:
 
         A member with "raw_log_qgap" or "raw_log_fixed_atom" puts no mass below 0.
     """
+
+    REGRESSION_MEAN_READOUT: MeanReadout = "ensemble"
+    """How the regressor reads out the `"mean"` prediction. The other outputs are
+    unchanged.
+
+    The options are:
+        - "ensemble": the mean of the ensemble's averaged distribution.
+        - "single_clamp", "single_trunc", "single_pot", "single_pot_exp": the
+          average of each member's own mean of a nonnegative target, see
+          `tabpfn.mean_readout`. They need y >= 0.
+    """
+
+    REGRESSION_POT_THRESHOLD: float | None = None
+    """The threshold u above which the "single_pot" readouts use the fitted tail.
+    If None, u is the (k+1)-th largest positive training target, with
+    k = clip(round(0.05 * n_pos), 30, 500)."""
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
     """Whether to round the probabilities to float 16 to match the precision of
