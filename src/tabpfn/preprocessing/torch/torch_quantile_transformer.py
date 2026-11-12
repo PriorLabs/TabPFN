@@ -178,16 +178,26 @@ class TorchQuantileTransformer:
         Args:
             x: Input tensor to transform.
             fitted_cache: Cache returned by fit.
-            out: Tensor of ``x``'s shape that receives the result, cast to its
-                dtype. It may be ``x`` itself, which is then overwritten. If
-                None, the result is a new tensor of ``x``'s dtype.
+            out: Tensor of ``x``'s shape and device that receives the result,
+                cast to its dtype. It may be ``x`` itself, which is then
+                overwritten. If None, the result is a new tensor of ``x``'s
+                dtype. Inputs that require grad need ``out=None``.
 
         Returns:
             Transformed tensor: ``out`` when given.
+
+        Raises:
+            ValueError: If the cache is incomplete, or ``out`` differs from
+                ``x`` in shape or device.
         """
         if "quantiles" not in fitted_cache or "references" not in fitted_cache:
             raise ValueError(
                 "Invalid fitted cache. Must contain 'quantiles' and 'references'."
+            )
+        if out is not None and (out.shape != x.shape or out.device != x.device):
+            raise ValueError(
+                f"out must match x in shape and device, got {tuple(out.shape)} on "
+                f"{out.device} for x of {tuple(x.shape)} on {x.device}."
             )
 
         quantiles = fitted_cache["quantiles"]
@@ -196,6 +206,9 @@ class TorchQuantileTransformer:
         # The cache may be in float32 (from fit) while input is float16.
         # Compute each chunk in the cache dtype and cast it as it is written.
         chunk_size = self._get_transform_chunk_size(x)
+        # The ``out=`` form of ``torch.where`` neither casts nor supports
+        # autograd, so only a caller's ``out`` of the cache dtype goes through it.
+        write_into_out = out is not None and out.dtype == quantiles.dtype
         if out is None:
             if x.shape[0] <= chunk_size:
                 return self._transform_chunk(
@@ -207,10 +220,9 @@ class TorchQuantileTransformer:
             # A chunk is read in full before its rows of ``out`` are written,
             # so ``out`` may be ``x``.
             chunk = x[rows].to(quantiles.dtype)
-            if out.dtype == quantiles.dtype:
+            if write_into_out:
                 self._transform_chunk(chunk, quantiles, references, out=out[rows])
             else:
-                # ``torch.where`` cannot cast into ``out``; the copy does.
                 out[rows] = self._transform_chunk(chunk, quantiles, references)
         return out
 
