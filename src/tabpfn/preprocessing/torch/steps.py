@@ -248,61 +248,23 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         # where) that are faster on CPU than on MPS due to per-kernel launch
         # overhead.  On CUDA the GPU is preferred.
         run_on_cpu = orig_device.type == "mps"
-        # Sliced to the target columns' row size without gathering them.
-        chunk_size = self._qt.get_transform_chunk_size(
-            x[:1, :, : len(self._target_column_indices)]
-        )
-        if not run_on_cpu and x.shape[0] > chunk_size:
-            return self._fit_transform_in_row_chunks(
-                x, num_train_rows, fitted_cache, chunk_size
-            )
-
-        target_x = x[:, :, self._target_column_indices]
-        if run_on_cpu:
-            target_x = target_x.cpu()
-
+        compute_device = torch.device("cpu") if run_on_cpu else orig_device
+        target_x = x[:, :, self._target_column_indices].to(compute_device)
         if fitted_cache is None:
             fitted_cache = self._qt.fit(target_x[:num_train_rows])
         else:
-            fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
+            fitted_cache = _move_cache_to_device(fitted_cache, compute_device)
 
-        transformed = self._qt.transform(target_x, fitted_cache=fitted_cache)
-        del target_x  # free before the full-size clone below
-
-        if run_on_cpu:
-            transformed = transformed.to(orig_device)
+        # Written over its own input, so the transform's intermediates sit next
+        # to this one target-sized buffer only, and never next to the clone.
+        target_x = self._qt.transform(
+            target_x, fitted_cache=fitted_cache, out=target_x
+        ).to(orig_device)
 
         x = x.clone()
-        x[:, :, self._target_column_indices] = transformed
+        x[:, :, self._target_column_indices] = target_x
 
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
-
-    def _fit_transform_in_row_chunks(
-        self,
-        x: torch.Tensor,
-        num_train_rows: int,
-        fitted_cache: dict[str, torch.Tensor] | None,
-        chunk_size: int,
-    ) -> TorchPreprocessingStepResult:
-        """Gather, transform and write back one row chunk at a time.
-
-        No copy of all target columns is alive next to the clone.
-        """
-        # Copied to the device once rather than at every indexing below.
-        idx = torch.tensor(self._target_column_indices, device=x.device)
-        if fitted_cache is None:
-            fitted_cache = self._qt.fit(x[:num_train_rows, :, idx])
-        else:
-            fitted_cache = _move_cache_to_device(fitted_cache, x.device)
-
-        out = x.clone()
-        for start in range(0, x.shape[0], chunk_size):
-            rows = slice(start, start + chunk_size)
-            out[rows, :, idx] = self._qt.transform(
-                x[rows, :, idx], fitted_cache=fitted_cache
-            )
-
-        return TorchPreprocessingStepResult(x=out, fitted_cache=fitted_cache)
 
     @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:

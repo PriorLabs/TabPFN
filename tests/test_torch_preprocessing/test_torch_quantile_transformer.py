@@ -621,7 +621,7 @@ class TestChunkedQuantileTransformerEquivalence:
         result_full = qt.transform(x, cache)
 
         monkeypatch.setattr(
-            TorchQuantileTransformer, "get_transform_chunk_size", lambda _, _x: 7
+            TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
         )
         result_chunked = qt.transform(x, cache)
 
@@ -631,12 +631,13 @@ class TestChunkedQuantileTransformerEquivalence:
         ("extrapolate_ratio", "output_distribution"),
         [(None, "uniform"), (1.0, "uniform"), (None, "normal")],
     )
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
     def test__selective_step__row_chunks_match_unchunked(
-        self, monkeypatch, extrapolate_ratio, output_distribution
+        self, monkeypatch, extrapolate_ratio, output_distribution, dtype
     ):
-        """Row-chunked write-back is bit-identical and leaves the input untouched."""
+        """Row chunks are bit-identical, with or without a given cache."""
         torch.manual_seed(0)
-        x = torch.randn(100, 2, 9, dtype=torch.float32)
+        x = torch.randn(100, 2, 9).to(dtype)
         x[::7, :, 2] = float("nan")
         x_before = x.clone()
         step = TorchSelectiveQuantileTransformerStep(
@@ -646,14 +647,27 @@ class TestChunkedQuantileTransformerEquivalence:
             output_distribution=output_distribution,
         )
 
+        other_cache = step.fit_transform(
+            x * 3 + 1, list(range(9)), num_train_rows=80
+        ).fitted_cache
         full = step.fit_transform(x, list(range(9)), num_train_rows=80)
+        full_cached = step.fit_transform(
+            x, list(range(9)), num_train_rows=80, fitted_cache=other_cache
+        )
 
         monkeypatch.setattr(
-            TorchQuantileTransformer, "get_transform_chunk_size", lambda _, _x: 7
+            TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
         )
         chunked = step.fit_transform(x, list(range(9)), num_train_rows=80)
+        chunked_cached = step.fit_transform(
+            x, list(range(9)), num_train_rows=80, fitted_cache=other_cache
+        )
 
         torch.testing.assert_close(chunked.x, full.x, rtol=0, atol=0, equal_nan=True)
+        torch.testing.assert_close(
+            chunked_cached.x, full_cached.x, rtol=0, atol=0, equal_nan=True
+        )
+        assert not torch.equal(chunked_cached.x, chunked.x)
         torch.testing.assert_close(x, x_before, rtol=0, atol=0, equal_nan=True)
         assert not torch.equal(chunked.x[:, :, 7], x[:, :, 7])
         assert torch.equal(chunked.x[:, :, [1, 3, 5, 6, 8]], x[:, :, [1, 3, 5, 6, 8]])

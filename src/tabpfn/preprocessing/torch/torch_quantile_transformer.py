@@ -168,6 +168,7 @@ class TorchQuantileTransformer:
         self,
         x: torch.Tensor,
         fitted_cache: dict[str, torch.Tensor],
+        out: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Transform the data to the output distribution using fitted quantiles.
 
@@ -177,9 +178,12 @@ class TorchQuantileTransformer:
         Args:
             x: Input tensor to transform.
             fitted_cache: Cache returned by fit.
+            out: Tensor of ``x``'s shape that receives the result, cast to its
+                dtype. It may be ``x`` itself, which is then overwritten. If
+                None, the result is a new tensor of ``x``'s dtype.
 
         Returns:
-            Transformed tensor.
+            Transformed tensor: ``out`` when given.
         """
         if "quantiles" not in fitted_cache or "references" not in fitted_cache:
             raise ValueError(
@@ -190,19 +194,24 @@ class TorchQuantileTransformer:
         references = fitted_cache["references"]
 
         # The cache may be in float32 (from fit) while input is float16.
-        # Compute each chunk in the cache dtype and write it into the output.
-        chunk_size = self.get_transform_chunk_size(x)
-        if x.shape[0] <= chunk_size:
-            return self._transform_chunk(
-                x.to(quantiles.dtype), quantiles, references
-            ).to(x.dtype)
-        out = torch.empty_like(x)
+        # Compute each chunk in the cache dtype and cast it as it is written.
+        chunk_size = self._get_transform_chunk_size(x)
+        if out is None:
+            if x.shape[0] <= chunk_size:
+                return self._transform_chunk(
+                    x.to(quantiles.dtype), quantiles, references
+                ).to(x.dtype)
+            out = torch.empty_like(x)
         for start in range(0, x.shape[0], chunk_size):
-            out[start : start + chunk_size] = self._transform_chunk(
-                x[start : start + chunk_size].to(quantiles.dtype),
-                quantiles,
-                references,
-            )
+            rows = slice(start, start + chunk_size)
+            # A chunk is read in full before its rows of ``out`` are written,
+            # so ``out`` may be ``x``.
+            chunk = x[rows].to(quantiles.dtype)
+            if out.dtype == quantiles.dtype:
+                self._transform_chunk(chunk, quantiles, references, out=out[rows])
+            else:
+                # ``torch.where`` cannot cast into ``out``; the copy does.
+                out[rows] = self._transform_chunk(chunk, quantiles, references)
         return out
 
     def _transform_chunk(
@@ -210,13 +219,16 @@ class TorchQuantileTransformer:
         x: torch.Tensor,
         quantiles: torch.Tensor,
         references: torch.Tensor,
+        out: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Transform a single chunk, preserving NaN positions."""
         nan_mask = torch.isnan(x)
         result = self._interpolate(x, quantiles, references)
-        return torch.where(nan_mask, float("nan"), result)
+        # The ``out=`` form takes no Python scalar.
+        nan = torch.full((), float("nan"), dtype=result.dtype, device=result.device)
+        return torch.where(nan_mask, nan, result, out=out)
 
-    def get_transform_chunk_size(self, x: torch.Tensor) -> int:
+    def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
         """Compute a row-chunk size that keeps intermediate memory bounded.
 
         ``_interpolate`` creates ~15x intermediate memory per input element
