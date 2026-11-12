@@ -516,7 +516,7 @@ def test__regressor__tuning_folds_keep_logits_and_correction_separate():
     reg = _downsampling_regressor().fit(X, y)
     folds = reg._compute_holdout_validation_data(X, y, holdout_frac=0.5, n_folds=1)
     assert len(folds) == 1
-    _logits, bardist, _y_true, log_w, _member_means = folds[0]
+    _logits, bardist, _y_true, log_w, _member_means, _exposure = folds[0]
     assert log_w is not None
     assert log_w.shape == (bardist.num_bars,)
     # The fold's clone trains on 250 rows with ~25 nonzero, so its inclusion

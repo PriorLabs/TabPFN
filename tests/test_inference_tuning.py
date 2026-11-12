@@ -636,12 +636,14 @@ def test__find_mean_recalibration_scale__recovers_a_known_scale(power: float) ->
     # Zero-inflated, multiplicative noise with mean 1: E[y] = 2.5 * mean.
     y = 2.5 * mean * rng.binomial(1, 0.2, size=mean.size) * 5.0
 
-    scale = find_mean_recalibration_scale(y_true=y, mean=mean, power=power)
+    scale = find_mean_recalibration_scale(
+        y_true=y, mean=mean, power=power, exposure=None
+    )
 
     assert scale == pytest.approx(2.5, rel=0.1)
     # Without noise every power recovers the scale exactly.
     assert find_mean_recalibration_scale(
-        y_true=2.5 * mean, mean=mean, power=power
+        y_true=2.5 * mean, mean=mean, power=power, exposure=None
     ) == pytest.approx(2.5, rel=1e-12)
 
 
@@ -654,7 +656,9 @@ def test__find_mean_recalibration_scale__minimizes_the_tweedie_deviance(
     # Not proportional to `mean`, so each power has a different minimizer.
     y = rng.poisson(mean**2) + 1.0
 
-    scale = find_mean_recalibration_scale(y_true=y, mean=mean, power=power)
+    scale = find_mean_recalibration_scale(
+        y_true=y, mean=mean, power=power, exposure=None
+    )
 
     def deviance(c: float) -> float:
         return mean_tweedie_deviance(y, c * mean, power=power)
@@ -670,9 +674,40 @@ def test__find_mean_recalibration_scale__floors_non_positive_means() -> None:
 
     # p = 1 is sum(y) / sum(m) with the floored means.
     assert find_mean_recalibration_scale(
-        y_true=y, mean=mean, power=1.0
+        y_true=y, mean=mean, power=1.0, exposure=None
     ) == pytest.approx(4.0 / (2.0 + 2 * floor))
-    assert np.isfinite(find_mean_recalibration_scale(y_true=y, mean=mean, power=1.5))
+    assert np.isfinite(
+        find_mean_recalibration_scale(y_true=y, mean=mean, power=1.5, exposure=None)
+    )
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_recalibration_scale__counts_rows_by_their_exposure(
+    power: float,
+) -> None:
+    rng = np.random.default_rng(2)
+    mean = rng.gamma(shape=2.0, scale=1.0, size=500)
+    exposure = rng.uniform(0.1, 2.0, size=500)
+    rate = (rng.poisson(mean**2 * exposure) + 1.0) / exposure
+
+    scale = find_mean_recalibration_scale(
+        y_true=rate, mean=mean, power=power, exposure=exposure
+    )
+
+    def deviance(c: float) -> float:
+        per_row = [
+            mean_tweedie_deviance(rate[i : i + 1], c * mean[i : i + 1], power=power)
+            for i in range(len(rate))
+        ]
+        return float(np.dot(exposure, per_row))
+
+    assert deviance(scale) < deviance(scale * 0.99)
+    assert deviance(scale) < deviance(scale * 1.01)
+    assert scale != pytest.approx(
+        find_mean_recalibration_scale(
+            y_true=rate, mean=mean, power=power, exposure=None
+        )
+    )
 
 
 def test__regressor_eval_metrics__round_trips_from_string() -> None:

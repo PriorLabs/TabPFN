@@ -73,7 +73,7 @@ from tabpfn.inference_tuning import (
     RegressorTuningConfig,
     find_mean_recalibration_scale,
     find_regression_optimal_temperature,
-    get_tuning_splits,
+    get_tuning_split_indices,
     resolve_tuning_config,
 )
 from tabpfn.mean_readout import (
@@ -356,6 +356,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         eval_metric: str | RegressorEvalMetrics | None = None,
         tuning_config: dict | RegressorTuningConfig | None = None,
         show_progress_bar: bool = False,
+        exposure_period: float = 1.0,
     ) -> None:
         """Construct a TabPFN regressor.
 
@@ -658,6 +659,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             show_progress_bar:
                 Whether to show a progress bar during inference. Defaults to False.
+
+            exposure_period:
+                The amount of exposure a prediction is for, when `fit` is given
+                an `exposure`. With `exposure_period=1.0`, the default, `predict`
+                returns the expected target per unit of exposure.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -679,6 +685,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "batched",
         ] = fit_mode
         self.show_progress_bar = show_progress_bar
+        self.exposure_period = exposure_period
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.enable_torch_compile = enable_torch_compile
         self.keep_cache_on_device = keep_cache_on_device
@@ -1426,12 +1433,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return self
 
     @config_context(transform_output="default")  # type: ignore
-    def fit(self, X: XType, y: YType) -> Self:
+    def fit(self, X: XType, y: YType, *, exposure: Any = None) -> Self:
         """Fit the model.
 
         Args:
             X: The input data.
             y: The target variable.
+            exposure: The exposure of each row, e.g. the years a policy was in
+                force, for a target that accrues over it. If given, the model fits
+                the rate `y * exposure_period / exposure`, and `predict` returns
+                the expected target for `exposure_period` of exposure. It needs
+                no exposure at test time.
 
         Returns:
             self
@@ -1444,6 +1456,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.ensemble_softmax_temperature_ = 1.0
         self.mean_recalibration_scale_ = 1.0
         self.downsample_correction_log_weights_ = None
+
+        if exposure is not None:
+            exposure = _validate_exposure(exposure, n_samples=len(y))
+            y = np.asarray(y, dtype=np.float64) * self.exposure_period / exposure
 
         if self.differentiable_input:
             raise ValueError(
@@ -1493,7 +1509,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self._fit_mean_readout(y)
 
         # Each tuning fold must derive its target statistics from its own raw targets.
-        self._maybe_tune_on_holdout(X=X, y=y)
+        self._maybe_tune_on_holdout(X=X, y=y, exposure=exposure)
 
         y_raw = np.asarray(y, dtype=np.float64)
         # Shared aggregation frame; each member standardizes raw targets separately.
@@ -1588,7 +1604,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
-            quantiles), or a dictionary with detailed outputs.
+            quantiles), or a dictionary with detailed outputs. If `fit` was given
+            an `exposure`, the prediction is for `exposure_period` of exposure.
         """
         check_is_fitted(self)
 
@@ -1713,7 +1730,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             tail=self.pareto_tail_,
         )
 
-    def _maybe_tune_on_holdout(self, X: XType, y: YType) -> None:
+    def _maybe_tune_on_holdout(
+        self, X: XType, y: YType, exposure: np.ndarray | None
+    ) -> None:
         """If a `tuning_config` was given, calibrate on holdout folds.
 
         The regressor analogue of the classifier's
@@ -1728,7 +1747,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         `y` must be the *raw* target: each fold's regressor performs its own
         z-normalisation, and passing an already-normalised `y` would normalise
-        it twice.
+        it twice. With an `exposure`, `y` is the rate, and each holdout row
+        counts in the mean recalibration in proportion to its exposure.
 
         Unlike the classifier's counterpart there are no metric-specific
         warnings, as NLL is the only supported metric and calibrating the
@@ -1793,6 +1813,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y=y,
             holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
             n_folds=int(tuning_config_resolved.tuning_n_folds),
+            exposure=exposure,
         )
 
         if tuning_config_resolved.calibrate_temperature:
@@ -1806,9 +1827,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Keeps the unscaled tail if every fold was dropped or had no tail.
         tail_folds = [
-            member_means
-            for *_, member_means in holdout_folds
-            if member_means is not None and member_means.tail is not None
+            fold[4]
+            for fold in holdout_folds
+            if fold[4] is not None and fold[4].tail is not None
         ]
         if rescale_tail and self.pareto_tail_ is not None and tail_folds:
             tail_probability = np.concatenate(
@@ -1825,20 +1846,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if recalibrate_mean and holdout_folds:
             assert isinstance(tuning_config_resolved, RegressorTuningConfig)
             self.mean_recalibration_scale_ = find_mean_recalibration_scale(
-                y_true=torch.cat([y_fold for _, _, y_fold, *_ in holdout_folds])
-                .cpu()
-                .numpy(),
+                y_true=torch.cat([fold[2] for fold in holdout_folds]).cpu().numpy(),
                 mean=np.concatenate(
                     [self._holdout_mean(fold) for fold in holdout_folds]
                 ),
                 power=tuning_config_resolved.mean_recalibration_power,
+                exposure=None
+                if exposure is None
+                else np.concatenate([fold[5] for fold in holdout_folds]),
             )
 
     def _holdout_mean(self, fold: _HoldoutFold) -> np.ndarray:
         """The mean `predict` returns for one fold's holdout rows, before the
         mean recalibration.
         """
-        logits, raw_space_bardist, _, log_weights, member_means = fold
+        logits, raw_space_bardist, _, log_weights, member_means, _ = fold
         if member_means is None:
             return (
                 raw_space_bardist.mean(
@@ -1864,6 +1886,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         y: YType,
         holdout_frac: float,
         n_folds: int,
+        exposure: np.ndarray | None = None,
     ) -> list[_HoldoutFold]:
         """Compute holdout validation data, one entry per cross-validation fold.
 
@@ -1873,8 +1896,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         fold's own logits correctly.
 
         Returns:
-            One `(logits, raw_space_bardist, y_holdout, log_weights, member_means)`
-            tuple per usable fold. `logits` has shape
+            One `(logits, raw_space_bardist, y_holdout, log_weights, member_means,
+            exposure_holdout)` tuple per usable fold. `logits` has shape
             `[n_holdout_samples, n_buckets]` and carries no temperature and no
             downsampling correction; `log_weights` is the fold's own per-bar
             correction (or `None`), kept separate so the temperature sweep can
@@ -1882,13 +1905,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `y_holdout` has shape `[n_holdout_samples]` in the *original* units
             of the target, to match the borders of the fold's `raw_space_bardist`.
             `member_means` holds the fold's mean readout of the holdout rows, or
-            `None` for the "ensemble" readout.
+            `None` for the "ensemble" readout. `exposure_holdout` is the holdout
+            rows' `exposure`, or `None` without one.
             Folds whose training target turned out to be constant are omitted,
             so the list may be shorter than `n_folds` and may be empty.
         """
-        splits = get_tuning_splits(
-            X=copy.deepcopy(X),
-            y=copy.deepcopy(y),
+        split_indices = get_tuning_split_indices(
+            X=X,
+            y=y,
             holdout_frac=holdout_frac,
             random_state=self.random_state,
             n_splits=n_folds,
@@ -1898,7 +1922,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         holdout_folds: list[_HoldoutFold] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples,
         # B=num buckets
-        for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
+        for train_indices, holdout_indices in split_indices:
+            X_train_NtF, X_holdout_NhF = X[train_indices], X[holdout_indices]
+            y_train_Nt, y_holdout_Nh = y[train_indices], y[holdout_indices]
             tuning_regressor = self._get_tuning_regressor()
             with warnings.catch_warnings():
                 # Filter expected warnings during tuning
@@ -1919,16 +1945,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
             check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
-            X_holdout_NhF = tuning_regressor.group_encoder_.transform(  # noqa: PLW2901
-                X_holdout_NhF
-            )
-            X_holdout_NhF = tuning_regressor.date_transformer_.transform(  # noqa: PLW2901
-                X_holdout_NhF
-            )
-            X_holdout_NhF = tuning_regressor.text_transformer_.transform(  # noqa: PLW2901
-                X_holdout_NhF
-            )
-            X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
+            X_holdout_NhF = tuning_regressor.group_encoder_.transform(X_holdout_NhF)
+            X_holdout_NhF = tuning_regressor.date_transformer_.transform(X_holdout_NhF)
+            X_holdout_NhF = tuning_regressor.text_transformer_.transform(X_holdout_NhF)
+            X_holdout_NhF = ensure_compatible_predict_input_sklearn(
                 X_holdout_NhF, tuning_regressor
             )
             member_means = tuning_regressor._member_means()
@@ -1954,6 +1974,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     y_holdout_Nh_tensor,
                     tuning_regressor.downsample_correction_log_weights_,
                     member_means,
+                    None if exposure is None else exposure[holdout_indices],
                 )
             )
 
@@ -2733,9 +2754,23 @@ _HoldoutFold = tuple[
     torch.Tensor,
     torch.Tensor | None,
     MemberMeans | None,
+    np.ndarray | None,
 ]
-"""`(logits, raw_space_bardist, y_holdout, log_weights, member_means)` of one
-tuning fold, see `TabPFNRegressor._compute_holdout_validation_data`."""
+"""`(logits, raw_space_bardist, y_holdout, log_weights, member_means,
+exposure_holdout)` of one tuning fold, see
+`TabPFNRegressor._compute_holdout_validation_data`."""
+
+
+def _validate_exposure(exposure: Any, n_samples: int) -> np.ndarray:
+    exposure = np.asarray(exposure, dtype=np.float64)
+    if exposure.shape != (n_samples,):
+        raise TabPFNValidationError(
+            f"`exposure` must have shape ({n_samples},), one entry per row of y, "
+            f"got {exposure.shape}."
+        )
+    if not (np.isfinite(exposure).all() and (exposure > 0).all()):
+        raise TabPFNValidationError("`exposure` must be finite and positive.")
+    return exposure
 
 
 def _place_raw_space_bardist(

@@ -39,6 +39,7 @@ from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
     RegressorTuningConfig,
     find_mean_recalibration_scale,
+    get_tuning_split_indices,
     get_tuning_splits,
     get_tuning_temperatures,
 )
@@ -2179,9 +2180,17 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
     )
 
     assert len(folds) == 2
-    for logits, raw_space_bardist, y_holdout, log_weights, member_means in folds:
+    for (
+        logits,
+        raw_space_bardist,
+        y_holdout,
+        log_weights,
+        member_means,
+        exposure_holdout,
+    ) in folds:
         assert log_weights is None
         assert member_means is None
+        assert exposure_holdout is None
         n_holdout = len(X) // 2
         assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
         assert y_holdout.shape == (n_holdout,)
@@ -2297,6 +2306,7 @@ def test__fit__with_cstar__scales_the_mean_by_the_holdout_fit(
         y_true=np.concatenate(y_holdout),
         mean=np.concatenate(mean_holdout),
         power=power,
+        exposure=None,
     )
     assert recalibrated.mean_recalibration_scale_ != 1.0
     np.testing.assert_allclose(
@@ -2398,6 +2408,7 @@ def test__fit__with_cstar_and_a_mean_readout__scales_the_readout() -> None:
         y_true=np.concatenate(y_holdout),
         mean=np.concatenate(mean_holdout),
         power=1.5,
+        exposure=None,
     )
     np.testing.assert_allclose(
         recalibrated.mean_recalibration_scale_, expected_scale, rtol=1e-6
@@ -2430,9 +2441,7 @@ def test__fit__with_rescale_pot_tail__matches_the_tail_share_on_the_holdout() ->
     folds = regressor._compute_holdout_validation_data(
         X=X, y=y, holdout_frac=0.5, n_folds=2
     )
-    tail_probability = np.concatenate(
-        [member_means.tail_probability() for *_, member_means in folds]
-    )
+    tail_probability = np.concatenate([fold[4].tail_probability() for fold in folds])
     tail = regressor.pareto_tail_
     assert tail is not None
     assert tail.probability_scale != 1.0
@@ -2443,6 +2452,78 @@ def test__fit__with_rescale_pot_tail__matches_the_tail_share_on_the_holdout() ->
     )
     plain = TabPFNRegressor(**kwargs).fit(X, y)
     assert not np.allclose(regressor.predict(X[:20]), plain.predict(X[:20]))
+
+
+def _exposure_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    X, y = _zero_inflated_tuning_data()
+    exposure = np.random.RandomState(1).uniform(0.1, 2.0, size=len(y))
+    return X, y * exposure, exposure
+
+
+def test__fit__with_exposure__fits_the_rate_per_period() -> None:
+    X, amount, exposure = _exposure_data()
+    kwargs = {"n_estimators": 1, "device": "cpu", "random_state": 42}
+    on_rate = TabPFNRegressor(**kwargs).fit(X[:300], amount[:300] / exposure[:300])
+
+    per_unit = TabPFNRegressor(**kwargs).fit(
+        X[:300], amount[:300], exposure=exposure[:300]
+    )
+    per_year = TabPFNRegressor(**kwargs, exposure_period=12.0).fit(
+        X[:300], amount[:300], exposure=exposure[:300]
+    )
+
+    np.testing.assert_array_equal(per_unit.predict(X[300:]), on_rate.predict(X[300:]))
+    np.testing.assert_allclose(
+        per_year.predict(X[300:]), 12.0 * on_rate.predict(X[300:]), rtol=1e-4
+    )
+
+
+def test__fit__with_exposure_and_cstar__counts_holdout_rows_by_exposure() -> None:
+    X, amount, exposure = _exposure_data()
+    rate = amount / exposure
+    kwargs = _tuning_regressor_kwargs()
+    recalibrated = TabPFNRegressor(
+        tuning_config={
+            "mean_recalibration": "cstar",
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 2,
+        },
+        **kwargs,
+    ).fit(X, amount, exposure=exposure)
+
+    rate_holdout, mean_holdout, exposure_holdout = [], [], []
+    for train, holdout in get_tuning_split_indices(
+        X, rate, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        fold_regressor = TabPFNRegressor(**kwargs).fit(X[train], rate[train])
+        rate_holdout.append(rate[holdout])
+        mean_holdout.append(fold_regressor.predict(X[holdout]))
+        exposure_holdout.append(exposure[holdout])
+    expected_scale = find_mean_recalibration_scale(
+        y_true=np.concatenate(rate_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=1.5,
+        exposure=np.concatenate(exposure_holdout),
+    )
+    np.testing.assert_allclose(
+        recalibrated.mean_recalibration_scale_, expected_scale, rtol=1e-5
+    )
+
+
+@pytest.mark.parametrize(
+    ("exposure", "message"),
+    [
+        (np.ones(10), "shape"),
+        (np.zeros(20), "finite and positive"),
+        (np.full(20, np.nan), "finite and positive"),
+    ],
+)
+def test__fit__invalid_exposure__raises(exposure: np.ndarray, message: str) -> None:
+    X, y = _zero_inflated_regression_data()
+    with pytest.raises(ValueError, match=message):
+        TabPFNRegressor(n_estimators=1, device="cpu").fit(
+            X[:20], y[:20], exposure=exposure
+        )
 
 
 def test__fit__rescale_pot_tail_without_a_pot_readout__raises() -> None:
