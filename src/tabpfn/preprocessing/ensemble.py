@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
     from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
+    from tabpfn.preprocessing.row_weights import SampleWeightMode
 
 T = TypeVar("T")
 
@@ -67,6 +68,9 @@ class TabPFNEnsembleMember:
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
     feature_indices: np.ndarray | None = None
+    # `(train rows, 2)` holding `(sample_weight, label_reliability)` for the
+    # member's own train rows, or None when `fit` got no per-row weights.
+    row_weights: np.ndarray | None = None
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
@@ -106,6 +110,8 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | torch.Tensor | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
+        row_weights: np.ndarray | None = None,
+        sample_weight_mode: SampleWeightMode | None = None,
     ) -> None:
         """Init.
 
@@ -147,8 +153,19 @@ class TabPFNEnsemblePreprocessor:
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
                 ExtraTreesClassifier or ExtraTreesRegressor is used and resolves
                 task-dependent sample subsampling behavior.
+            row_weights: `(n_samples, 2)` per-row weights from
+                `validate_row_weights`, handed to each member for the rows it
+                keeps. ``None`` when `fit` got no per-row weights.
+            sample_weight_mode: How the model applies ``row_weights``. Required
+                with ``row_weights``.
         """
         super().__init__()
+        if (row_weights is None) != (sample_weight_mode is None):
+            raise ValueError(
+                "row_weights and sample_weight_mode must be given together."
+            )
+        self.row_weights = row_weights
+        self.sample_weight_mode = sample_weight_mode
         self.configs = configs
         self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs
@@ -376,7 +393,14 @@ class TabPFNEnsemblePreprocessor:
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
                 feature_indices=self.subsample_feature_indices[config_index],
+                row_weights=self._member_row_weights(config_index),
             )
+
+    def _member_row_weights(self, config_index: int) -> np.ndarray | None:
+        """The per-row weights of the train rows member `config_index` keeps."""
+        if self.row_weights is None or self.subsample_row_indices is None:
+            return self.row_weights
+        return self.row_weights[self.subsample_row_indices[config_index]]
 
     def fit_transform_ensemble_members(
         self,

@@ -308,6 +308,28 @@ def _batch_member_inputs(
     )
 
 
+def _row_weight_kwargs(
+    members: Sequence[TabPFNEnsembleMember],
+    sample_weight_mode: str | None,
+    device: torch.device,
+) -> dict[str, torch.Tensor | str]:
+    """The members' per-row weights as forward arguments, batched like their rows.
+
+    Empty when `fit` got no per-row weights, so the forward is the same call as
+    for a model that takes none.
+    """
+    if sample_weight_mode is None:
+        return {}
+    row_weights = []
+    for member in members:
+        assert member.row_weights is not None
+        row_weights.append(torch.as_tensor(member.row_weights, device=device))
+    return {
+        "row_weights": torch.stack(row_weights, dim=1).float(),
+        "sample_weight_mode": sample_weight_mode,
+    }
+
+
 class InferenceEngine(ABC):
     """Base class defining how TabPFN inference can be run.
 
@@ -708,6 +730,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             only_return_standard_out=only_return_standard_out,
             save_peak_mem=save_peak_mem,
             task_type=task_type,
+            sample_weight_mode=self.ensemble_preprocessor.sample_weight_mode,
         )
 
 
@@ -1021,6 +1044,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             only_return_standard_out=only_return_standard_out,
             save_peak_mem=save_peak_mem,
             task_type=task_type,
+            sample_weight_mode=self.ensemble_preprocessor.sample_weight_mode,
         )
 
     @override
@@ -1303,6 +1327,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                     performance_options=performance_options,
                     return_kv_cache=True,
                     **kwargs,
+                    **_row_weight_kwargs(
+                        [members[i] for i in positions],
+                        self.ensemble_preprocessor.sample_weight_mode,
+                        device,
+                    ),
                 )
             assert cache is not None
             if not self.keep_cache_on_device or stage_cache_on_cpu:
@@ -1450,6 +1479,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         kwargs = {}
         if _model_expectes_task_type_arg(model):
             kwargs["task_type"] = task_type
+        row_weight_kwargs = _row_weight_kwargs(
+            members, self.ensemble_preprocessor.sample_weight_mode, device
+        )
 
         cache_on_device = self.kv_caches[cache_index].to(device)
         if self.keep_cache_on_device:
@@ -1469,6 +1501,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                     kv_cache=cache_on_device,
                     x_is_test_only=True,
                     **kwargs,
+                    **row_weight_kwargs,
                 )
 
         n_test, batch, columns = X.shape
@@ -1566,6 +1599,7 @@ def _call_model_on_members(  # noqa: PLR0913
     only_return_standard_out: bool,
     save_peak_mem: bool,
     task_type: str,
+    sample_weight_mode: str | None,
 ) -> _MemberOutputs:
     """Forward the members, which share a model, from their train and test rows.
 
@@ -1618,6 +1652,9 @@ def _call_model_on_members(  # noqa: PLR0913
                 categorical_inds=[prepared[i][2] for i in positions],
                 performance_options=performance_options,
                 **kwargs,
+                **_row_weight_kwargs(
+                    [members[i] for i in positions], sample_weight_mode, device
+                ),
             )
         outputs.append((positions, output))
     return outputs

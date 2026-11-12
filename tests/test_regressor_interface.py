@@ -487,6 +487,12 @@ def test_sklearn_compatible_estimator(
     if any(device.type == "mps" for device in _auto_devices):
         pytest.skip("MPS does not support float64, which is required for this check.")
 
+    if "sample_weight" in check.func.__name__:  # type: ignore
+        pytest.skip(
+            "The default checkpoint takes no `sample_weight`, so `fit` raises; "
+            "see tests/test_row_weights.py."
+        )
+
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",

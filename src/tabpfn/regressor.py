@@ -103,6 +103,10 @@ from tabpfn.preprocessing.group_ids import (
     reject_group_col,
 )
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.row_weights import (
+    resolve_sample_weight_mode,
+    validate_row_weights,
+)
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -140,6 +144,7 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.row_weights import SampleWeightMode
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -870,6 +875,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         byte_size: int,
         n_preprocessing_jobs: int,
         inference_mode: bool,
+        row_weights: np.ndarray | None,
+        sample_weight_mode: SampleWeightMode | None,
     ) -> None:
         """Build ``self.ensemble_preprocessor_`` and ``self.executor_``.
 
@@ -902,6 +909,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
+            row_weights=row_weights,
+            sample_weight_mode=sample_weight_mode,
         )
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
@@ -920,6 +929,32 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             kv_cache_precision=self.kv_cache_precision,
             inference_mode=inference_mode,
         )
+
+    def _resolve_row_weights(
+        self,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
+        *,
+        n_samples: int,
+    ) -> tuple[np.ndarray | None, SampleWeightMode | None]:
+        """Validate the per-row weights of `fit` against the models."""
+        if sample_weight is None and label_reliability is None:
+            return None, None
+        mode = resolve_sample_weight_mode(
+            self.models_,
+            self.inference_config_.SAMPLE_WEIGHT_MODE,
+            uses_label_reliability=label_reliability is not None,
+            task_type="regression",
+        )
+        if self.tuning_config is not None:
+            raise TabPFNValidationError(
+                "`tuning_config` cannot be combined with `sample_weight` or "
+                "`label_reliability` yet: the tuning folds are fit without them."
+            )
+        row_weights = validate_row_weights(
+            sample_weight, label_reliability, n_samples=n_samples
+        )
+        return row_weights, mode
 
     def _initialize_for_differentiable_input(
         self,
@@ -1386,6 +1421,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             byte_size=byte_size,
             n_preprocessing_jobs=1,
             inference_mode=False,
+            row_weights=None,
+            sample_weight_mode=None,
         )
         # `y` is z-normalized by now; histogramming on the raw-space borders
         # needs the original target values.
@@ -1396,12 +1433,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return self
 
     @config_context(transform_output="default")  # type: ignore
-    def fit(self, X: XType, y: YType) -> Self:
+    def fit(
+        self,
+        X: XType,
+        y: YType,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
+    ) -> Self:
         """Fit the model.
 
         Args:
             X: The input data.
             y: The target variable.
+            sample_weight: Experimental. One non-negative weight per training row,
+                saying how many rows it stands for. Only relative values matter:
+                scaling every weight changes nothing, and a weight of 2 is not
+                the same as the row appearing twice. Rows with weight 0 stay in
+                the context. Raises unless the model supports per-row weights,
+                see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
+
+                Because `fit` accepts `sample_weight`, scikit-learn's
+                `BaggingRegressor` passes its bootstrap counts here instead of
+                fitting on a row subset. With a model that takes no per-row
+                weights, `BaggingRegressor(TabPFNRegressor())` therefore
+                raises in `fit`.
+            label_reliability: Experimental. One value in [0, 1] per training row:
+                the probability that the row's target is correct. Raises unless
+                the model supports `SAMPLE_WEIGHT_MODE="learned"`.
 
         Returns:
             self
@@ -1435,6 +1493,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
+        row_weights, sample_weight_mode = self._resolve_row_weights(
+            sample_weight, label_reliability, n_samples=len(y)
+        )
 
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -1477,6 +1538,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             # TODO: Standard fit usually uses inference_mode=True, before it was enabled
             inference_mode=True,
+            row_weights=row_weights,
+            sample_weight_mode=sample_weight_mode,
         )
         self._compute_downsample_correction(y_raw=y_raw)
 

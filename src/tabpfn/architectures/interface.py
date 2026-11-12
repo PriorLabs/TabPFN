@@ -289,6 +289,19 @@ class Architecture(nn.Module, ABC):
         """
         return ("auto",)
 
+    def get_supported_sample_weight_modes(self) -> tuple[str, ...]:
+        """The `SAMPLE_WEIGHT_MODE` values this architecture supports.
+
+        An architecture that lists any mode takes two more keyword arguments in
+        `forward`, passed only when `fit` was given per-row weights:
+        `row_weights`, a float32 tensor of shape `(train rows, batch size, 2)`
+        holding `(sample_weight, label_reliability)` per train row with 1 as
+        neutral, and `sample_weight_mode`, one of the listed modes. A cached
+        predict passes them again, for a mode that acts in the decoder.
+        Supporting `"learned"` also means taking `label_reliability`.
+        """
+        return ()
+
     @property
     def estimator_batch_budget(self) -> EstimatorBatchBudget:
         """How much one forward may carry summed over batched estimators.
