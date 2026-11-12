@@ -38,6 +38,8 @@ from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     RegressorEvalMetrics,
     RegressorTuningConfig,
+    find_mean_recalibration_scale,
+    get_tuning_splits,
     get_tuning_temperatures,
 )
 from tabpfn.mean_readout import MemberMeans
@@ -2177,8 +2179,9 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
     )
 
     assert len(folds) == 2
-    for logits, raw_space_bardist, y_holdout, log_weights in folds:
+    for logits, raw_space_bardist, y_holdout, log_weights, member_means in folds:
         assert log_weights is None
+        assert member_means is None
         n_holdout = len(X) // 2
         assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
         assert y_holdout.shape == (n_holdout,)
@@ -2254,6 +2257,202 @@ def _make_tuning_sized_regression_data(
     return sklearn.datasets.make_regression(
         n_samples=n_samples, n_features=4, noise=10.0, random_state=0
     )
+
+
+def _make_non_negative_tuning_sized_regression_data() -> tuple[np.ndarray, np.ndarray]:
+    X, y = _make_tuning_sized_regression_data()
+    return X, np.abs(y)
+
+
+@pytest.mark.parametrize("calibrate_temperature", [False, True])
+@pytest.mark.parametrize("power", [1.0, 1.5])
+def test__fit__with_cstar__scales_the_mean_by_the_holdout_fit(
+    power: float, calibrate_temperature: bool
+) -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    # One model for every regressor below: each dummy model has its own random weights.
+    kwargs = _tuning_regressor_kwargs()
+    tuning_config = {
+        "mean_recalibration": "cstar",
+        "mean_recalibration_power": power,
+        "calibrate_temperature": calibrate_temperature,
+        "tuning_holdout_frac": 0.5,
+        "tuning_n_folds": 2,
+    }
+    recalibrated = TabPFNRegressor(tuning_config=tuning_config, **kwargs).fit(X, y)
+
+    # Rebuild the holdout means c* must be fitted on: one tuning regressor per
+    # split, predicting the mean of its own holdout rows with the calibrated
+    # temperature.
+    temperature = recalibrated.ensemble_softmax_temperature_
+    y_holdout, mean_holdout = [], []
+    for X_train, X_holdout, y_train, y_hold in get_tuning_splits(
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        fold_regressor = TabPFNRegressor(**kwargs).fit(X_train, y_train)
+        fold_regressor.ensemble_softmax_temperature_ = temperature
+        y_holdout.append(y_hold)
+        mean_holdout.append(fold_regressor.predict(X_holdout))
+    expected_scale = find_mean_recalibration_scale(
+        y_true=np.concatenate(y_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=power,
+    )
+    assert recalibrated.mean_recalibration_scale_ != 1.0
+    np.testing.assert_allclose(
+        recalibrated.mean_recalibration_scale_, expected_scale, rtol=1e-5
+    )
+
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    plain.ensemble_softmax_temperature_ = temperature
+    X_test = X[:20]
+    scale = recalibrated.mean_recalibration_scale_
+    np.testing.assert_allclose(
+        recalibrated.predict(X_test), scale * plain.predict(X_test), rtol=1e-6
+    )
+    main_recalibrated = recalibrated.predict(X_test, output_type="main")
+    main_plain = plain.predict(X_test, output_type="main")
+    np.testing.assert_allclose(
+        main_recalibrated["mean"], scale * main_plain["mean"], rtol=1e-6
+    )
+    # Only the mean is rescaled.
+    np.testing.assert_array_equal(main_recalibrated["median"], main_plain["median"])
+    np.testing.assert_array_equal(
+        recalibrated.predict(X_test, output_type="quantiles", quantiles=[0.9])[0],
+        plain.predict(X_test, output_type="quantiles", quantiles=[0.9])[0],
+    )
+
+
+@pytest.mark.parametrize(
+    "tuning_config",
+    [
+        None,
+        {"calibrate_temperature": True, "tuning_holdout_frac": 0.5},
+    ],
+)
+def test__fit__without_mean_recalibration__leaves_the_mean_unchanged(
+    tuning_config: dict | None,
+) -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config=tuning_config, **_tuning_regressor_kwargs()
+    ).fit(X, y)
+
+    assert regressor.mean_recalibration_scale_ == 1.0
+    X_test = X[:20]
+    unscaled_mean = regressor_module._logits_to_output(
+        output_type="mean",
+        logits=regressor._compute_aggregated_logits(
+            ensure_compatible_predict_input_sklearn(X_test, regressor)
+        ),
+        znorm_space_bardist=regressor.znorm_space_bardist_,
+        y_mean=regressor.y_train_mean_,
+        y_std=regressor.y_train_std_,
+        quantiles=[],
+    )
+    np.testing.assert_array_equal(regressor.predict(X_test), unscaled_mean)
+    np.testing.assert_array_equal(
+        regressor.predict(X_test, output_type="main")["mean"], unscaled_mean
+    )
+
+
+def test__fit__mean_recalibration_with_negative_targets__raises() -> None:
+    X, y = _make_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config={"mean_recalibration": "cstar"}, **_tuning_regressor_kwargs()
+    )
+
+    with pytest.raises(ValueError, match="nonnegative targets"):
+        regressor.fit(X, y)
+
+
+def _zero_inflated_tuning_data() -> tuple[np.ndarray, np.ndarray]:
+    r = np.random.RandomState(0)
+    X = r.randn(MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING + 100, 3)
+    y = np.where(X[:, 0] < 0.0, 0.0, np.exp(4.0 + X[:, 1] + 0.8 * r.randn(X.shape[0])))
+    return X, y
+
+
+def test__fit__with_cstar_and_a_mean_readout__scales_the_readout() -> None:
+    X, y = _zero_inflated_tuning_data()
+    kwargs = _tuning_regressor_kwargs(
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("raw_log_qgap",),
+            "REGRESSION_MEAN_READOUT": "single_pot_exp",
+        }
+    )
+    splits = {"tuning_holdout_frac": 0.5, "tuning_n_folds": 2}
+    recalibrated = TabPFNRegressor(
+        tuning_config={"mean_recalibration": "cstar", **splits}, **kwargs
+    ).fit(X, y)
+
+    y_holdout, mean_holdout = [], []
+    for X_train, X_holdout, y_train, y_hold in get_tuning_splits(
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        y_holdout.append(y_hold)
+        mean_holdout.append(
+            TabPFNRegressor(**kwargs).fit(X_train, y_train).predict(X_holdout)
+        )
+    expected_scale = find_mean_recalibration_scale(
+        y_true=np.concatenate(y_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=1.5,
+    )
+    np.testing.assert_allclose(
+        recalibrated.mean_recalibration_scale_, expected_scale, rtol=1e-6
+    )
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    np.testing.assert_allclose(
+        recalibrated.predict(X[:20]),
+        expected_scale * plain.predict(X[:20]),
+        rtol=1e-6,
+    )
+
+
+def test__fit__with_rescale_pot_tail__matches_the_tail_share_on_the_holdout() -> None:
+    X, y = _zero_inflated_tuning_data()
+    kwargs = _tuning_regressor_kwargs(
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("raw_log_qgap",),
+            "REGRESSION_MEAN_READOUT": "single_pot",
+        }
+    )
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "rescale_pot_tail": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 2,
+        },
+        **kwargs,
+    ).fit(X, y)
+
+    folds = regressor._compute_holdout_validation_data(
+        X=X, y=y, holdout_frac=0.5, n_folds=2
+    )
+    tail_probability = np.concatenate(
+        [member_means.tail_probability() for *_, member_means in folds]
+    )
+    tail = regressor.pareto_tail_
+    assert tail is not None
+    assert tail.probability_scale != 1.0
+    np.testing.assert_allclose(
+        tail.probability_scale * tail_probability.mean(),
+        tail.n_excesses / len(y),
+        rtol=1e-10,
+    )
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    assert not np.allclose(regressor.predict(X[:20]), plain.predict(X[:20]))
+
+
+def test__fit__rescale_pot_tail_without_a_pot_readout__raises() -> None:
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(
+        tuning_config={"rescale_pot_tail": True}, **_tuning_regressor_kwargs()
+    )
+
+    with pytest.raises(ValueError, match="single_pot"):
+        regressor.fit(X, y)
 
 
 @pytest.mark.parametrize(
