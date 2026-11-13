@@ -66,6 +66,7 @@ from tabpfn.downsample_correction import (
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import (
     InferenceEngineBatchedNoPreprocessing,
+    InferenceEngineExplicitKVCache,
     _maybe_run_gpu_preprocessing,
 )
 from tabpfn.inference_tuning import (
@@ -111,6 +112,7 @@ from tabpfn.preprocessing.target_transform import (
     make_target_transform,
 )
 from tabpfn.preprocessing.text import TextTransformer
+from tabpfn.settings import settings
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -1552,6 +1554,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 quantiles are returned. The predictions per quantile match
                 the input order.
 
+        With `fit_mode="fit_with_cache"`, test sets larger than the
+        `TABPFN_MAX_REGRESSOR_PREDICT_ROWS` setting are predicted block by
+        block, so peak memory does not grow with the number of test rows.
+        `output_type="full"` always runs in one pass.
+
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
             quantiles), or a dictionary with detailed outputs.
@@ -1580,48 +1587,42 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        logits = self._compute_aggregated_logits(X)
-
-        # Determine and return intended output type
-        logit_to_output = partial(
-            _logits_to_output,
-            logits=logits,
+        decode = partial(
+            _decode_logits,
+            output_type=output_type,
+            quantiles=quantiles,
             znorm_space_bardist=self.znorm_space_bardist_,
+            raw_space_bardist=self.raw_space_bardist_,
             y_mean=self.y_train_mean_,
             y_std=self.y_train_std_,
-            quantiles=quantiles,
         )
-        if output_type in ["full", "main"]:
-            # Create a dictionary of outputs with proper typing via TypedDict
-            # Get individual outputs with proper typing
-            mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
-            median_out = typing.cast(
-                "np.ndarray", logit_to_output(output_type="median")
+        block_rows = settings.tabpfn.max_regressor_predict_rows
+        use_blocks = (
+            block_rows > 0
+            and output_type != "full"
+            and X.shape[0] > block_rows
+            and isinstance(self.executor_, InferenceEngineExplicitKVCache)
+        )
+        if not use_blocks:
+            return decode(self._compute_aggregated_logits(X))
+
+        # Each test row only attends to the cached training context, and every
+        # later step is per row, so blocks give the same result as one call.
+        # Decoding each block keeps the [rows, n_buckets] tensors block-sized.
+        X_clean = self._clean_predict_input(X)
+        parts: list[RegressionResultType] = []
+        for start in tqdm(
+            range(0, X_clean.shape[0], block_rows),
+            desc="TabPFN inference",
+            unit="block",
+            disable=not self.show_progress_bar,
+        ):
+            logits = self._aggregate_cleaned_logits(
+                X_clean[start : start + block_rows], show_progress_bar=False
             )
-            mode_out = typing.cast("np.ndarray", logit_to_output(output_type="mode"))
-            quantiles_out = typing.cast(
-                "list[np.ndarray]",
-                logit_to_output(output_type="quantiles"),
-            )
-
-            main_outputs = MainOutputDict(
-                mean=mean_out,
-                median=median_out,
-                mode=mode_out,
-                quantiles=quantiles_out,
-            )
-
-            if output_type == "full":
-                # Return full output with criterion and logits
-                return FullOutputDict(
-                    **main_outputs,
-                    criterion=self.raw_space_bardist_,
-                    logits=logits,
-                )
-
-            return main_outputs
-
-        return logit_to_output(output_type=output_type)
+            parts.append(decode(logits))
+            del logits
+        return _concat_block_outputs(parts, output_type)
 
     def _maybe_calibrate_ensemble_temperature(self, X: XType, y: YType) -> None:
         """If a `tuning_config` was given, calibrate the ensemble temperature.
@@ -1817,16 +1818,40 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
+        return self._aggregate_cleaned_logits(
+            self._clean_predict_input(X),
+            apply_downsample_correction=apply_downsample_correction,
+        )
+
+    def _clean_predict_input(self, X: XType) -> np.ndarray:
+        """Apply the fit-time dtype fixing and ordinal encoding to predict input."""
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
-        X = clean_data_transform(
+        return clean_data_transform(
             X,
             cat_indices=cat_indices,
             ord_encoder=getattr(self, "ordinal_encoder_", None),
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
+    def _aggregate_cleaned_logits(
+        self,
+        X: np.ndarray,
+        *,
+        apply_downsample_correction: bool = True,
+        show_progress_bar: bool | None = None,
+    ) -> torch.Tensor:
+        """`_compute_aggregated_logits` for input `_clean_predict_input` returned.
+
+        Args:
+            X: The cleaned input data.
+            apply_downsample_correction: As in `_compute_aggregated_logits`.
+            show_progress_bar: Show the per-estimator progress bar. `None` uses
+                `self.show_progress_bar`.
+        """
+        if show_progress_bar is None:
+            show_progress_bar = self.show_progress_bar
         n_estimators = 0
         accumulated_logits: torch.Tensor | None = None
         with handle_oom_errors(
@@ -1840,7 +1865,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 total=self.n_estimators_,
                 desc="TabPFN inference",
                 unit="estimator",
-                disable=not self.show_progress_bar,
+                disable=not show_progress_bar,
             ):
                 transformed = translate_probs_across_borders(
                     output,
@@ -2268,31 +2293,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # here is always the 1.0 no-op; the call is shared with `predict` so the
         # two reductions cannot drift apart again.
         logits = self._reduce_accumulated_logits(accumulated_logits, n_estimators)
-
-        logit_to_output = partial(
-            _logits_to_output,
-            logits=logits,
+        return _decode_logits(
+            logits,
+            output_type=output_type,
+            quantiles=quantiles,
             znorm_space_bardist=znorm_space_bardist,
+            raw_space_bardist=raw_space_bardist,
             y_mean=y_mean,
             y_std=y_std,
-            quantiles=quantiles,
         )
-        if output_type in _OUTPUT_TYPES_COMPOSITE:
-            main_outputs = MainOutputDict(
-                mean=typing.cast("np.ndarray", logit_to_output(output_type="mean")),
-                median=typing.cast("np.ndarray", logit_to_output(output_type="median")),
-                mode=typing.cast("np.ndarray", logit_to_output(output_type="mode")),
-                quantiles=typing.cast(
-                    "list[np.ndarray]", logit_to_output(output_type="quantiles")
-                ),
-            )
-            if output_type == "full":
-                return FullOutputDict(
-                    **main_outputs, criterion=raw_space_bardist, logits=logits
-                )
-            return main_outputs
-
-        return logit_to_output(output_type=output_type)
 
     def _iter_forward_executor(
         self,
@@ -2551,6 +2560,70 @@ def _place_raw_space_bardist(
     if torch.device(device).type == "mps":
         return bardist.float().to(device)
     return bardist.to(device)
+
+
+def _decode_logits(
+    logits: torch.Tensor,
+    *,
+    output_type: OutputType,
+    quantiles: list[float],
+    znorm_space_bardist: FullSupportBarDistribution,
+    raw_space_bardist: FullSupportBarDistribution,
+    y_mean: float,
+    y_std: float,
+) -> RegressionResultType:
+    """Turn aggregated log-probabilities into the output `predict` returns.
+
+    Shared by `predict` and `predict_batched`. `raw_space_bardist` is only
+    returned, as the criterion of `output_type="full"`.
+    """
+    logit_to_output = partial(
+        _logits_to_output,
+        logits=logits,
+        znorm_space_bardist=znorm_space_bardist,
+        y_mean=y_mean,
+        y_std=y_std,
+        quantiles=quantiles,
+    )
+    if output_type not in _OUTPUT_TYPES_COMPOSITE:
+        return logit_to_output(output_type=output_type)
+
+    main_outputs = MainOutputDict(
+        mean=typing.cast("np.ndarray", logit_to_output(output_type="mean")),
+        median=typing.cast("np.ndarray", logit_to_output(output_type="median")),
+        mode=typing.cast("np.ndarray", logit_to_output(output_type="mode")),
+        quantiles=typing.cast(
+            "list[np.ndarray]", logit_to_output(output_type="quantiles")
+        ),
+    )
+    if output_type == "full":
+        return FullOutputDict(
+            **main_outputs, criterion=raw_space_bardist, logits=logits
+        )
+    return main_outputs
+
+
+def _concat_block_outputs(
+    parts: list[RegressionResultType], output_type: OutputType
+) -> RegressionResultType:
+    """Join the outputs `predict` decoded for consecutive blocks of test rows."""
+    if output_type in _OUTPUT_TYPES_BASIC:
+        return np.concatenate(typing.cast("list[np.ndarray]", parts))
+    if output_type == "quantiles":
+        lists = typing.cast("list[list[np.ndarray]]", parts)
+        return [np.concatenate(per_q) for per_q in zip(*lists, strict=True)]
+    if output_type == "main":
+        dicts = typing.cast("list[MainOutputDict]", parts)
+        return MainOutputDict(
+            mean=np.concatenate([d["mean"] for d in dicts]),
+            median=np.concatenate([d["median"] for d in dicts]),
+            mode=np.concatenate([d["mode"] for d in dicts]),
+            quantiles=[
+                np.concatenate(per_q)
+                for per_q in zip(*(d["quantiles"] for d in dicts), strict=True)
+            ],
+        )
+    raise ValueError(f"Cannot join block outputs of output_type={output_type!r}.")
 
 
 def _logits_to_output(

@@ -8,6 +8,7 @@ from typing import Literal, overload
 from typing_extensions import override
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn.datasets
 import torch
@@ -42,6 +43,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.torch import FeatureSchema
+from tabpfn.regressor import _concat_block_outputs
 from tabpfn.settings import settings
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
@@ -1027,6 +1029,132 @@ def test__kv_cache__embeddings_test_only_and_chunk_safe(
 
     test_emb = get_embeddings(model, X_test, data_source="test")
     assert test_emb.shape[-2] == n_test
+
+
+def _assert_regression_outputs_close(blocked, single) -> None:
+    if isinstance(blocked, dict):
+        assert blocked.keys() == single.keys()
+        for key in blocked:
+            _assert_regression_outputs_close(blocked[key], single[key])
+    elif isinstance(blocked, list):
+        assert len(blocked) == len(single)
+        for b, s in zip(blocked, single, strict=True):
+            np.testing.assert_allclose(b, s, rtol=1e-10, atol=1e-10)
+    else:
+        assert blocked.shape == single.shape
+        np.testing.assert_allclose(blocked, single, rtol=1e-10, atol=1e-10)
+
+
+def _count_aggregations(
+    model: TabPFNRegressor, monkeypatch: pytest.MonkeyPatch
+) -> list[int]:
+    """Record the number of test rows of each `_aggregate_cleaned_logits` call."""
+    rows: list[int] = []
+    original = model._aggregate_cleaned_logits
+
+    def spy(X, **kwargs):  # noqa: ANN202
+        rows.append(len(X))
+        return original(X, **kwargs)
+
+    monkeypatch.setattr(model, "_aggregate_cleaned_logits", spy)
+    return rows
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize("mixed_input", [False, True])
+def test__regressor_predict_row_blocks__match_single_pass(
+    device: str,
+    mixed_input: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached regression predicted in row blocks must equal one pass.
+
+    Several estimators cover the sum over the ensemble and the members with a
+    target transform. The mixed input adds a string categorical column and a
+    numeric column that is NaN for a whole block.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    n_train, n_test, block = 32, 37, 8
+    X, y, _ = sklearn.datasets.make_regression(
+        n_samples=n_train + n_test, n_features=5, random_state=0, coef=True
+    )
+    if mixed_input:
+        X = pd.DataFrame(X, columns=[f"f{i}" for i in range(5)])
+        X["cat"] = np.array(["a", "b", "c"])[np.arange(len(X)) % 3]
+        X.loc[n_train : n_train + block - 1, "f0"] = np.nan
+        X.loc[::7, "f1"] = np.nan
+    model = TabPFNRegressor(
+        n_estimators=4,
+        random_state=42,
+        device=device,
+        inference_precision=torch.float64,
+        fit_mode="fit_with_cache",
+    )
+    model.fit(X[:n_train], y[:n_train])
+    X_test = X[n_train:]
+
+    for output_type in ["mean", "median", "mode", "quantiles", "main"]:
+        monkeypatch.setattr(settings.tabpfn, "max_regressor_predict_rows", 0)
+        single = model.predict(X_test, output_type=output_type)
+
+        monkeypatch.setattr(settings.tabpfn, "max_regressor_predict_rows", block)
+        rows = _count_aggregations(model, monkeypatch)
+        blocked = model.predict(X_test, output_type=output_type)
+        monkeypatch.undo()
+
+        assert rows == [8, 8, 8, 8, 5]
+        _assert_regression_outputs_close(blocked, single)
+
+
+@pytest.mark.parametrize(
+    ("fit_mode", "output_type"),
+    [("fit_preprocessors", "mean"), ("fit_with_cache", "full")],
+)
+def test__regressor_predict_row_blocks__single_pass_outside_their_scope(
+    fit_mode: str, output_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uncached fit modes and output_type="full" keep the single pass.
+
+    Uncached modes would re-encode the context per block; "full" returns the
+    logits of every row.
+    """
+    n_train, n_test = 32, 37
+    X, y = sklearn.datasets.make_regression(
+        n_samples=n_train + n_test, n_features=5, random_state=0
+    )
+    model = TabPFNRegressor(
+        n_estimators=2, random_state=42, device="cpu", fit_mode=fit_mode
+    )
+    model.fit(X[:n_train], y[:n_train])
+
+    monkeypatch.setattr(settings.tabpfn, "max_regressor_predict_rows", 8)
+    rows = _count_aggregations(model, monkeypatch)
+    out = model.predict(X[n_train:], output_type=output_type)
+
+    assert rows == [n_test]
+    if output_type == "full":
+        assert out["logits"].shape[0] == n_test
+
+
+def test__concat_block_outputs__joins_every_output_shape() -> None:
+    a, b = np.arange(3.0), np.arange(3.0, 5.0)
+    np.testing.assert_array_equal(_concat_block_outputs([a, b], "mean"), np.arange(5.0))
+
+    joined = _concat_block_outputs([[a, a + 10], [b, b + 10]], "quantiles")
+    assert len(joined) == 2
+    np.testing.assert_array_equal(joined[1], np.arange(5.0) + 10)
+
+    part = {"mean": a, "median": a, "mode": a, "quantiles": [a]}
+    other = {"mean": b, "median": b, "mode": b, "quantiles": [b]}
+    main = _concat_block_outputs([part, other], "main")
+    for key in ("mean", "median", "mode"):
+        np.testing.assert_array_equal(main[key], np.arange(5.0))
+    np.testing.assert_array_equal(main["quantiles"][0], np.arange(5.0))
+
+    with pytest.raises(ValueError, match="full"):
+        _concat_block_outputs([part, other], "full")
 
 
 class _TestModelRecordingCacheOptions(_TestModelWithKVCache):
