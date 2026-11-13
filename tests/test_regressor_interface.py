@@ -2526,6 +2526,75 @@ def test__fit__invalid_exposure__raises(exposure: np.ndarray, message: str) -> N
         )
 
 
+def test__fit__zero_inflated__sets_the_transform_readout_and_cstar() -> None:
+    X, y = _zero_inflated_tuning_data()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*zero_inflated=True.*")
+        regressor = TabPFNRegressor(
+            zero_inflated=True, **_tuning_regressor_kwargs()
+        ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("raw_log_qgap",)
+    assert config.REGRESSION_MEAN_READOUT == "single_pot_exp"
+    assert regressor.pareto_tail_ is not None
+    assert regressor.mean_recalibration_scale_ != 1.0
+    # The folds use the mode's inference settings and do not tune themselves.
+    fold_regressor = regressor._get_tuning_regressor()
+    assert fold_regressor.zero_inflated is False
+    assert fold_regressor.tuning_config is None
+    assert (
+        fold_regressor.inference_config
+        == regressor_module.ZERO_INFLATED_INFERENCE_CONFIG
+    )
+
+
+def test__fit__zero_inflated__keeps_what_the_user_set() -> None:
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(
+        zero_inflated=True,
+        inference_config={"REGRESSION_MEAN_READOUT": "single_clamp"},
+        tuning_config={"mean_recalibration": "raw"},
+        **_tuning_regressor_kwargs(),
+    ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("raw_log_qgap",)
+    assert config.REGRESSION_MEAN_READOUT == "single_clamp"
+    assert regressor.mean_recalibration_scale_ == 1.0
+
+
+@pytest.mark.parametrize(
+    ("zero_share", "minimum", "zero_inflated", "warns"),
+    [
+        (0.3, 0.0, False, True),
+        (0.2, 0.0, False, False),
+        (0.3, -1.0, False, False),
+        (0.3, 0.0, True, False),
+    ],
+)
+def test__fit__zero_inflated_target__suggests_the_zero_inflated_mode(
+    zero_share: float, minimum: float, zero_inflated: bool, warns: bool
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(100, 3))
+    y = rng.uniform(1.0, 10.0, size=100)
+    y[: int(zero_share * 100)] = 0.0
+    y[-1] = minimum if minimum < 0 else y[-1]
+    regressor = TabPFNRegressor(
+        zero_inflated=zero_inflated,
+        tuning_config={"mean_recalibration": "raw"} if zero_inflated else None,
+        **_tuning_regressor_kwargs(),
+    )
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        regressor.fit(X, y)
+
+    suggestions = [w for w in record if "zero_inflated=True" in str(w.message)]
+    assert len(suggestions) == int(warns)
+
+
 def test__fit__rescale_pot_tail_without_a_pot_readout__raises() -> None:
     X, y = _zero_inflated_tuning_data()
     regressor = TabPFNRegressor(

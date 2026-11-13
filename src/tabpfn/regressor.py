@@ -174,6 +174,20 @@ OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 """The type hint for the `output_type` parameter in `predict`."""
 
 
+ZERO_INFLATED_INFERENCE_CONFIG = {
+    "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("raw_log_qgap",),
+    "REGRESSION_MEAN_READOUT": "single_pot_exp",
+}
+"""The `inference_config` fields that `zero_inflated=True` sets."""
+
+ZERO_INFLATED_TUNING_CONFIG = {"mean_recalibration": "cstar"}
+"""The `tuning_config` fields that `zero_inflated=True` sets."""
+
+ZERO_SHARE_WARNING_THRESHOLD = 0.2
+"""`fit` suggests `zero_inflated=True` for nonnegative targets with a larger share of
+exact zeros."""
+
+
 class MainOutputDict(TypedDict):
     """Specifies the return structure for `output_type="main"`."""
 
@@ -357,6 +371,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         tuning_config: dict | RegressorTuningConfig | None = None,
         show_progress_bar: bool = False,
         exposure_period: float = 1.0,
+        zero_inflated: bool = False,
     ) -> None:
         """Construct a TabPFN regressor.
 
@@ -664,6 +679,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 The amount of exposure a prediction is for, when `fit` is given
                 an `exposure`. With `exposure_period=1.0`, the default, `predict`
                 returns the expected target per unit of exposure.
+
+            zero_inflated:
+                Whether to fit a nonnegative target with many exact zeros, such as
+                claim amounts or demand. It sets these defaults:
+
+                - `inference_config`: `REGRESSION_Y_PREPROCESS_TRANSFORMS` is
+                  `("raw_log_qgap",)` and `REGRESSION_MEAN_READOUT` is
+                  `"single_pot_exp"`.
+                - `tuning_config`: `mean_recalibration` is `"cstar"`, fitted on
+                  tuning holdout folds with the Tweedie power 1.5.
+
+                A key of an `inference_config` or `tuning_config` dict overrides
+                these defaults; a `RegressorTuningConfig` is used as given. `fit`
+                warns when it sees a nonnegative target with more than 20% zeros
+                and `zero_inflated=False`.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -686,6 +716,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ] = fit_mode
         self.show_progress_bar = show_progress_bar
         self.exposure_period = exposure_period
+        self.zero_inflated = zero_inflated
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.enable_torch_compile = enable_torch_compile
         self.keep_cache_on_device = keep_cache_on_device
@@ -870,7 +901,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             The determined byte_size.
         """
-        return initialize_model_variables_helper(self, self.estimator_type)
+        byte_size = initialize_model_variables_helper(self, self.estimator_type)
+        if self.zero_inflated:
+            self.inference_config_ = dataclasses.replace(
+                self.inference_config_, **self._zero_inflated_inference_config()
+            )
+        return byte_size
+
+    def _zero_inflated_inference_config(self) -> dict[str, Any]:
+        """The fields `zero_inflated` sets that `inference_config` does not name."""
+        if not isinstance(self.inference_config, dict | None):
+            raise TabPFNValidationError(
+                "`zero_inflated=True` needs `inference_config` as a dict or None."
+            )
+        user_config = self.inference_config or {}
+        return {
+            key: value
+            for key, value in ZERO_INFLATED_INFERENCE_CONFIG.items()
+            if key not in user_config
+        }
+
+    def _tuning_config_with_mode(self) -> dict | RegressorTuningConfig | None:
+        """`tuning_config`, with the defaults of `zero_inflated` filled in."""
+        if not self.zero_inflated or isinstance(
+            self.tuning_config, RegressorTuningConfig
+        ):
+            return self.tuning_config
+        return {**ZERO_INFLATED_TUNING_CONFIG, **(self.tuning_config or {})}
 
     def _rebuild_raw_space_bardist(self) -> None:
         """Rebuild ``raw_space_bardist_`` from current ``y_train_mean_``/std_.
@@ -1229,11 +1286,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_mode": "fit_preprocessors",
             "differentiable_input": False,
             "tuning_config": None,  # never tune inside tuning
+            "zero_inflated": False,
             # Fit on the already-expanded array, where a declared column may
             # have moved down past an expanded date or text column.
             "categorical_features_indices": self.categorical_features_indices_,
         }
 
+        if self.zero_inflated:
+            # The mode's inference settings, without the tuning it would add.
+            forced["inference_config"] = {
+                **(params["inference_config"] or {}),
+                **self._zero_inflated_inference_config(),
+            }
         params.update(forced)
         params.update(overwrite_kwargs)
 
@@ -1506,6 +1570,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # No need to create an inference engine for a constant prediction
             return self
 
+        if not self.zero_inflated:
+            _warn_if_zero_inflated(y)
         self._fit_mean_readout(y)
 
         # Each tuning fold must derive its target statistics from its own raw targets.
@@ -1763,7 +1829,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.mean_recalibration_scale_ = 1.0
 
         tuning_config_resolved = resolve_tuning_config(
-            tuning_config=self.tuning_config,
+            tuning_config=self._tuning_config_with_mode(),
             num_samples=X.shape[0],
             config_cls=RegressorTuningConfig,
         )
@@ -1932,6 +1998,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     "ignore",
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
+                )
+                warnings.filterwarnings(
+                    "ignore", message=".*zero_inflated=True.*", category=UserWarning
                 )
                 tuning_regressor.fit(X_train_NtF, y_train_Nt)
 
@@ -2759,6 +2828,19 @@ _HoldoutFold = tuple[
 """`(logits, raw_space_bardist, y_holdout, log_weights, member_means,
 exposure_holdout)` of one tuning fold, see
 `TabPFNRegressor._compute_holdout_validation_data`."""
+
+
+def _warn_if_zero_inflated(y: np.ndarray) -> None:
+    zero_share = float(np.mean(y == 0))
+    if zero_share > ZERO_SHARE_WARNING_THRESHOLD and np.min(y) >= 0:
+        warnings.warn(
+            f"{zero_share:.0%} of the training targets are exactly 0, and none is "
+            "negative. For such zero-inflated targets, consider "
+            "`TabPFNRegressor(zero_inflated=True)`, which models the zeros as a "
+            "separate point mass.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _validate_exposure(exposure: Any, n_samples: int) -> np.ndarray:
