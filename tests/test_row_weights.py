@@ -184,15 +184,18 @@ def test__resolve_sample_weight_mode__label_reliability_needs_learned() -> None:
         InferenceEngineExplicitKVCache,
     ],
 )
-def test__engines__forward_each_members_row_weights(engine_cls: type) -> None:
-    """Each member's subsampled rows arrive with their own weights."""
+@pytest.mark.parametrize("force_inference_dtype", [None, torch.float64])
+def test__engines__forward_each_members_row_weights(
+    engine_cls: type, force_inference_dtype: torch.dtype | None
+) -> None:
+    """Each member gets its own rows' weights, in the dtype of its inputs."""
     rng = default_rng(seed=0)
     n_train, n_features, n_classes = 20, 4, 3
     X_train = rng.standard_normal(size=(n_train, n_features))
     y_train = rng.integers(low=0, high=n_classes, size=n_train)
     row_weights = np.stack(
         [np.arange(1, n_train + 1), np.linspace(0, 1, n_train)], axis=1
-    )
+    ).astype(np.float32)
     row_indices = [rng.permutation(n_train)[:12] for _ in range(3)]
 
     preprocessor = TabPFNEnsemblePreprocessor(
@@ -213,7 +216,7 @@ def test__engines__forward_each_members_row_weights(engine_cls: type) -> None:
         "models": [model],
         "devices": [torch.device("cpu")],
         "dtype_byte_size": 4,
-        "force_inference_dtype": None,
+        "force_inference_dtype": force_inference_dtype,
         "save_peak_mem": False,
     }
     if engine_cls is InferenceEngineExplicitKVCache:
@@ -233,13 +236,16 @@ def test__engines__forward_each_members_row_weights(engine_cls: type) -> None:
     )
 
     assert {mode for _, mode, _ in model.calls} == {"head"}
+    assert {weights.dtype for weights, _, _ in model.calls} == {
+        force_inference_dtype or torch.float32
+    }
     expected = sorted(
-        tuple(row_weights_for_estimator(row_weights, rows).ravel())
+        tuple(row_weights_for_estimator(row_weights, rows).astype(np.float64).ravel())
         for rows in row_indices
     )
     for cached_predict in {is_cached for _, _, is_cached in model.calls}:
         received = [
-            tuple(batch[:, b].numpy().ravel())
+            tuple(batch[:, b].double().numpy().ravel())
             for batch, _, is_cached in model.calls
             if is_cached == cached_predict
             for b in range(batch.shape[1])

@@ -311,19 +311,22 @@ def _batch_member_inputs(
 def _row_weight_kwargs(
     members: Sequence[TabPFNEnsembleMember],
     sample_weight_mode: str | None,
-    device: torch.device,
+    x: torch.Tensor,
 ) -> dict[str, torch.Tensor | str]:
     """The members' per-row weights as forward arguments, batched like their rows.
 
-    Empty when `fit` got no per-row weights, so the forward is the same call as
-    for a model that takes none.
+    The weights take the device and dtype of `x`, the members' batched rows. Empty
+    when `fit` got no per-row weights, so the forward is the same call as for a
+    model that takes none.
     """
     if sample_weight_mode is None:
         return {}
     row_weights = []
     for member in members:
         assert member.row_weights is not None
-        row_weights.append(torch.as_tensor(member.row_weights, device=device))
+        row_weights.append(
+            torch.as_tensor(member.row_weights, device=x.device, dtype=x.dtype)
+        )
     return {
         "row_weights": torch.stack(row_weights, dim=1),
         "sample_weight_mode": sample_weight_mode,
@@ -1330,7 +1333,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                     **_row_weight_kwargs(
                         [members[i] for i in positions],
                         self.ensemble_preprocessor.sample_weight_mode,
-                        device,
+                        X,
                     ),
                 )
             assert cache is not None
@@ -1480,7 +1483,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         if _model_expectes_task_type_arg(model):
             kwargs["task_type"] = task_type
         row_weight_kwargs = _row_weight_kwargs(
-            members, self.ensemble_preprocessor.sample_weight_mode, device
+            members, self.ensemble_preprocessor.sample_weight_mode, X
         )
 
         cache_on_device = self.kv_caches[cache_index].to(device)
@@ -1653,7 +1656,7 @@ def _call_model_on_members(  # noqa: PLR0913
                 performance_options=performance_options,
                 **kwargs,
                 **_row_weight_kwargs(
-                    [members[i] for i in positions], sample_weight_mode, device
+                    [members[i] for i in positions], sample_weight_mode, X
                 ),
             )
         outputs.append((positions, output))

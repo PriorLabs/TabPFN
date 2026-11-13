@@ -63,7 +63,7 @@ def validate_row_weights(
     """
     if sample_weight is None and label_reliability is None:
         return None
-    row_weights = np.ones((n_samples, 2))
+    row_weights = np.ones((n_samples, 2), dtype=np.float32)
 
     if sample_weight is not None:
         weights = _per_row_values(sample_weight, "sample_weight", n_samples)
@@ -93,7 +93,7 @@ def validate_row_weights(
 def row_weights_for_estimator(
     row_weights: np.ndarray, rows: np.ndarray | None
 ) -> np.ndarray:
-    """The float32 weights of one estimator's train rows, `sample_weight` at mean 1.
+    """The weights of one estimator's train rows, `sample_weight` at mean 1.
 
     Args:
         row_weights: The output of `validate_row_weights`.
@@ -107,8 +107,8 @@ def row_weights_for_estimator(
             "Raise `SUBSAMPLE_SAMPLES` in the inference config, or give fewer rows "
             "weight 0."
         )
-    estimator_weights = selected.astype(np.float32)
-    estimator_weights[:, 0] = selected[:, 0] * (len(selected) / total)
+    estimator_weights = selected.copy()
+    estimator_weights[:, 0] *= len(selected) / total
     return estimator_weights
 
 
@@ -159,7 +159,7 @@ def resolve_sample_weight_mode(
 
 def _per_row_values(values: object, name: str, n_samples: int) -> np.ndarray:
     try:
-        array = np.asarray(values, dtype=np.float64)
+        array = np.asarray(values, dtype=np.float32)
     except (TypeError, ValueError) as e:
         raise TabPFNValidationError(f"`{name}` must be numeric.") from e
     if array.shape != (n_samples,):

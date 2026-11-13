@@ -1451,12 +1451,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 the same as the row appearing twice. Rows with weight 0 stay in
                 the context. Raises unless the model supports per-row weights,
                 see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
-
-                Because `fit` accepts `sample_weight`, scikit-learn's
-                `BaggingRegressor` passes its bootstrap counts here instead of
-                fitting on a row subset. With a model that takes no per-row
-                weights, `BaggingRegressor(TabPFNRegressor())` therefore
-                raises in `fit`.
             label_reliability: Experimental. One value in [0, 1] per training row:
                 the probability that the row's target is correct. Raises unless
                 the model supports `SAMPLE_WEIGHT_MODE="learned"`.
