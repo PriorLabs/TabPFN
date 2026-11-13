@@ -485,6 +485,17 @@ def expand_dates_and_text(
     )
 
 
+def transform_columns(model: TabPFNClassifier | TabPFNRegressor, X: XType) -> XType:
+    """Apply the group, date and text transformers fitted on the fit input."""
+    groups = model.group_encoder_.row_groups(X)
+    X = model.group_encoder_.transform(X)
+    X = model.date_transformer_.transform(X)
+    X = model.text_transformer_.transform(X)
+    if groups is None:
+        return X
+    return model.group_aggregator_.transform(X, groups)
+
+
 def reject_categoricals_for_differentiable_input(
     categorical_features_indices: Sequence[int] | None,
 ) -> None:
@@ -724,9 +735,7 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     check_input_shape_matches(X, estimator=model)
-    X = model.group_encoder_.transform(X)
-    X = model.date_transformer_.transform(X)
-    X = model.text_transformer_.transform(X)
+    X = transform_columns(model, X)
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = clean_data_transform(
         X,
