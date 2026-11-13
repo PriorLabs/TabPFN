@@ -407,14 +407,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 Combining it with `tuning_config`, `differentiable_input=True`
                 or `fit_from_preprocessed` raises `ValueError` too.
 
-                When the target is constant within every training group and
-                some group has more than one row, per-group aggregates of the
-                features are appended too: up to 50 of the mean, std, min, max
-                and last value of numeric columns, and the count, last value
-                and number of unique values of other columns, picked by their
-                variance over the training rows. They are computed from the
-                rows passed in, at predict time too, so predict all rows of a
-                group in one call.
+                If each training group has one target value, per-group
+                aggregates of the features are appended too (see
+                `GROUP_AGGREGATES` in `inference_config`). They are computed
+                from the rows passed in, so predict a group's rows in one call.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -1039,7 +1035,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.group_aggregator_ = GroupAggregator()
         X = self.group_aggregator_.fit_transform(
-            X, y, groups, exclude=self.group_encoder_.feature_name_
+            X,
+            y,
+            groups if self.inference_config_.GROUP_AGGREGATES else None,
+            exclude=self.group_encoder_.feature_name_,
         )
         if feature_names is not None:
             feature_names = [*feature_names, *self.group_aggregator_.names_]
