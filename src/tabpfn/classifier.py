@@ -96,7 +96,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.group_aggregates import GroupAggregator
+from tabpfn.preprocessing.group_aggregates import GroupAggregator, pool_rows
 from tabpfn.preprocessing.group_ids import (
     GroupIdEncoder,
     as_group_feature,
@@ -237,8 +237,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     feature, holding the key-to-code mapping fitted on the training rows."""
 
     group_aggregator_: GroupAggregator
-    """The per-group aggregates appended when each `group_col` group has one
-    label."""
+    """Detects one label per `group_col` group, and appends the per-group
+    aggregates then."""
 
     group_feature_index_: int | None
     """Where the encoded group feature sits in the cleaned input, or `None`
@@ -376,10 +376,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Combining it with `tuning_config`, `differentiable_input=True`
                 or `fit_from_preprocessed` raises `ValueError` too.
 
-                If each training group has one target value, per-group
-                aggregates of the features are appended too (see
-                `GROUP_AGGREGATES` in `inference_config`). They are computed
-                from the rows passed in, so predict a group's rows in one call.
+                With one label per group (the target is constant within every
+                training group and some group has more than one row),
+                prediction is transductive. The rows of a group in the predict
+                input all get their averaged prediction, and per-group
+                aggregates of the features, computed over those rows, are
+                appended (see `APPEND_GROUP_AGGREGATES` in `inference_config`).
+                So the other rows passed to predict change a row's prediction:
+                predict all rows of a group in one call.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -875,12 +879,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 inference_config=self.inference_config_,
             )
         )
-        self.group_aggregator_ = GroupAggregator()
+        self.group_aggregator_ = GroupAggregator(
+            append=self.inference_config_.APPEND_GROUP_AGGREGATES
+        )
         X = self.group_aggregator_.fit_transform(
-            X,
-            y,
-            groups if self.inference_config_.GROUP_AGGREGATES else None,
-            exclude=self.group_encoder_.feature_name_,
+            X, y, groups, exclude=self.group_encoder_.feature_name_
         )
         if feature_names is not None:
             feature_names = [*feature_names, *self.group_aggregator_.names_]
@@ -1349,7 +1352,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             check_input_shape_matches(X_test, estimator=worker)
-            X_test = transform_columns(worker, X_test)  # noqa: PLW2901
+            X_test, _ = transform_columns(worker, X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
@@ -1709,9 +1712,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
+        groups = None
         if not self.differentiable_input:
             check_input_shape_matches(X, estimator=self)
-            X = transform_columns(self, X)
+            X, groups = transform_columns(self, X)
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = clean_data_transform(
                 X,
@@ -1728,12 +1732,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             model_type="classifier",
             n_train_samples=getattr(self, "n_train_samples_", None),
         ):
-            return self.forward(
+            output = self.forward(
                 X,
                 use_inference_mode=True,
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
+        return pool_rows(output, groups)
 
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.
