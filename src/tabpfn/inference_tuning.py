@@ -284,6 +284,28 @@ def get_tuning_splits(
         (X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh).
         Shape suffixes: Nt=num train samples, F=num features, Nh=num holdout samples.
     """
+    return [
+        (X[train_indices], X[holdout_indices], y[train_indices], y[holdout_indices])
+        for train_indices, holdout_indices in get_tuning_split_indices(
+            X,
+            y,
+            holdout_frac=holdout_frac,
+            n_splits=n_splits,
+            random_state=random_state,
+            task_type=task_type,
+        )
+    ]
+
+
+def get_tuning_split_indices(
+    X: np.ndarray,
+    y: np.ndarray,
+    holdout_frac: float,
+    n_splits: int = 1,
+    random_state: int | np.random.RandomState | np.random.Generator | None = 0,
+    task_type: Literal["classifier", "regressor"] = "classifier",
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The `(train_indices, holdout_indices)` of the splits of `get_tuning_splits`."""
     # We want to use (Stratified)KFold to ensure that no train samples are used twice.
     # Therefore, we have to invert the holdout_frac to get the number of folds to
     # use for (Stratified)KFold. Round holdout_frac to 2 digits to avoid needing
@@ -303,18 +325,7 @@ def get_tuning_splits(
         shuffle=True,
         random_state=random_state,
     )
-
-    splits: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
-    for i, (train_indices, holdout_indices) in enumerate(splitter.split(X, y)):
-        if i >= n_splits:
-            break
-        X_train_NtF = X[train_indices]
-        X_holdout_NhF = X[holdout_indices]
-        y_train_Nt = y[train_indices]
-        y_holdout_Nh = y[holdout_indices]
-        splits.append((X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh))
-
-    return splits
+    return list(splitter.split(X, y))[:n_splits]
 
 
 def find_optimal_classification_thresholds(
@@ -519,24 +530,29 @@ def find_mean_recalibration_scale(
     y_true: np.ndarray,
     mean: np.ndarray,
     power: float,
+    exposure: np.ndarray | None,
 ) -> float:
     """Finds the constant c that minimizes the Tweedie deviance of `c * mean`.
 
-    The minimizer has the closed form c = sum(y m^(1-p)) / sum(m^(2-p)), with the
-    means m floored at `MEAN_RECALIBRATION_MIN_MEAN`. p = 1 gives
-    sum(y) / sum(m).
+    The minimizer has the closed form c = sum(e y m^(1-p)) / sum(e m^(2-p)), with
+    the means m floored at `MEAN_RECALIBRATION_MIN_MEAN` and e the exposure. p = 1
+    gives sum(e y) / sum(e m).
 
     Args:
-        y_true: The nonnegative targets, of shape [n_samples].
+        y_true: The nonnegative targets, of shape [n_samples]. Rates when
+            `exposure` is given.
         mean: The predicted means, of shape [n_samples].
         power: The Tweedie power p.
+        exposure: The exposure of each row, of shape [n_samples]. A row's
+            deviance counts in proportion to it. None counts every row once.
 
     Returns:
         The constant c.
     """
     m = np.maximum(mean.astype(np.float64), MEAN_RECALIBRATION_MIN_MEAN)
     y = y_true.astype(np.float64)
-    return float((y * m ** (1 - power)).sum() / (m ** (2 - power)).sum())
+    e = np.ones_like(m) if exposure is None else exposure.astype(np.float64)
+    return float((e * y * m ** (1 - power)).sum() / (e * m ** (2 - power)).sum())
 
 
 def find_regression_optimal_temperature(
