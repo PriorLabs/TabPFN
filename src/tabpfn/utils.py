@@ -23,6 +23,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.target_transform import decodes_zeros
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -591,7 +592,8 @@ def transform_borders_one(
     """Transforms the borders used for the bar distribution for regression.
 
     The inverse returns raw target units; map them into the shared standardized
-    frame before applying sanity limits and aggregating predictions.
+    frame before applying sanity limits and aggregating predictions. A member
+    whose transform decodes to exactly 0 gets no borders below raw 0.
 
     Args:
         borders: The borders to transform.
@@ -614,7 +616,9 @@ def transform_borders_one(
     borders_t = target_transform.inverse_transform(  # type: ignore
         borders.reshape(-1, 1).astype(np.float64)
     ).squeeze()
-    borders_t = ((borders_t - znorm_mean) / znorm_std).astype(borders.dtype)
+    # Borders beyond the dtype's range become inf, which the repair below cancels.
+    with np.errstate(over="ignore"):
+        borders_t = ((borders_t - znorm_mean) / znorm_std).astype(borders.dtype)
 
     logit_cancel_mask: npt.NDArray[np.bool_] | None = None
     if repair_nan_borders_after_transform:
@@ -630,6 +634,12 @@ def transform_borders_one(
             )
 
     _repair_borders(borders_t, inplace=True)
+
+    if decodes_zeros(target_transform):
+        # The repair above widens the collapsed outer bucket below raw 0, and
+        # its tail would carry mass at negative targets. Clamp it onto 0.
+        zero = np.asarray((0.0 - znorm_mean) / znorm_std).astype(borders_t.dtype)
+        borders_t = np.maximum(borders_t, zero)
 
     reversed_order = np.arange(len(borders_t) - 1, -1, -1)
     descending_borders = (np.argsort(borders_t) == reversed_order).all()

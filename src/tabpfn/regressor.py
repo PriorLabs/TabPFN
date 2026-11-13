@@ -107,6 +107,7 @@ from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.preprocessing.target_transform import (
+    ZERO_INFLATED_TARGET_TRANSFORMS,
     StandardizeTarget,
     make_target_transform,
 )
@@ -1084,6 +1085,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     "The '1_plus_log' regression target transform requires raw targets "
                     "greater than -1. Use 'safepower' or None for targets <= -1."
                 )
+            if preset in ZERO_INFLATED_TARGET_TRANSFORMS and np.any(y < 0):
+                raise ValueError(
+                    f"The '{preset}' regression target transform requires "
+                    "nonnegative raw targets (y >= 0). Use 'safepower' or None for "
+                    "negative targets."
+                )
             if preset == "exp":
                 overflow_threshold = np.log(np.finfo(np.float32).max)
                 overflow_count = np.count_nonzero(y >= overflow_threshold)
@@ -1105,6 +1112,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     (preset, possible_target_transforms[preset]),
                 ]
             )
+        possible_target_transforms.update(
+            {name: cls() for name, cls in ZERO_INFLATED_TARGET_TRANSFORMS.items()}
+        )
         # Each member fits its target pipeline on raw targets.
         target_preprocessors: list[Pipeline] = [
             make_target_transform(

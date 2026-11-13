@@ -15,6 +15,8 @@ from tabpfn.preprocessing.steps import (
 from tabpfn.preprocessing.target_transform import (
     STANDARDIZE_STEP,
     TARGET_TRANSFORM_STEP,
+    FixedAtomTransformer,
+    QuantileGapTransformer,
     StandardizeTarget,
     make_target_transform,
 )
@@ -174,3 +176,130 @@ def test__transform_borders_one__guard_is_applied_in_the_znorm_frame() -> None:
 
     assert logit_cancel_mask is None
     np.testing.assert_allclose(borders_t, borders, atol=1e-6)
+
+
+def _zero_inflated_target(n: int = 400) -> np.ndarray:
+    """Mostly zeros, and right-skewed positive amounts."""
+    rng = np.random.default_rng(0)
+    return np.where(rng.random(n) < 0.7, 0.0, np.exp(rng.normal(5.0, 1.0, size=n)))
+
+
+def test__quantile_gap__encodes_zeros_one_sd_below_the_one_percent_quantile() -> None:
+    y = _zero_inflated_target()
+    logs = np.log(y[y > 0])
+    zero = np.quantile(logs, 0.01) - logs.std()
+
+    transformed = QuantileGapTransformer().fit_transform(y.reshape(-1, 1)).ravel()
+
+    np.testing.assert_allclose(transformed[y == 0], zero, rtol=1e-12)
+    np.testing.assert_allclose(transformed[y > 0], logs, rtol=1e-12)
+
+
+def test__quantile_gap__decodes_below_the_middle_of_the_gap_to_zero() -> None:
+    y = _zero_inflated_target()
+    step = QuantileGapTransformer().fit(y.reshape(-1, 1))
+    logs = np.log(y[y > 0])
+    cut = np.quantile(logs, 0.01) - logs.std() / 2
+    t = np.array([step.zero_, np.nextafter(cut, -np.inf), cut, 6.0])
+
+    decoded = step.inverse_transform(t.reshape(-1, 1)).ravel()
+
+    np.testing.assert_array_equal(decoded[:2], 0.0)
+    np.testing.assert_allclose(decoded[2:], np.exp(t[2:]), rtol=1e-12)
+    # Positives deep in the lower tail fall below the cut and decode to 0.
+    kept = (y == 0) | (np.log(np.where(y > 0, y, 1.0)) >= cut)
+    assert not kept.all()
+    np.testing.assert_allclose(
+        step.inverse_transform(step.transform(y[kept].reshape(-1, 1))).ravel(),
+        y[kept],
+        rtol=1e-12,
+    )
+
+
+def test__fixed_atom__standardizes_the_positive_logs_and_puts_zeros_at_the_atom() -> (
+    None
+):
+    y = _zero_inflated_target()
+    logs = np.log(y[y > 0])
+    expected = np.maximum((logs - logs.mean()) / logs.std(), -3.5)
+
+    transformed = FixedAtomTransformer().fit_transform(y.reshape(-1, 1)).ravel()
+
+    np.testing.assert_array_equal(transformed[y == 0], -4.0)
+    np.testing.assert_allclose(transformed[y > 0], expected, rtol=1e-12)
+
+
+def test__fixed_atom__decodes_below_the_cut_to_zero_and_round_trips_above() -> None:
+    y = _zero_inflated_target()
+    step = FixedAtomTransformer().fit(y.reshape(-1, 1))
+    t = np.array([-4.0, np.nextafter(-3.5, -np.inf), -3.5, 1.0])
+
+    decoded = step.inverse_transform(t.reshape(-1, 1)).ravel()
+
+    np.testing.assert_array_equal(decoded[:2], 0.0)
+    np.testing.assert_allclose(
+        decoded[2:], np.exp(step.mean_ + step.scale_ * t[2:]), rtol=1e-12
+    )
+    # Positives below the cut are raised to it and decode to the cut's value.
+    t_y = (np.log(np.where(y > 0, y, 1.0)) - step.mean_) / step.scale_
+    raised = (y > 0) & (t_y < -3.5)
+    assert raised.any()
+    decoded = step.inverse_transform(step.transform(y.reshape(-1, 1))).ravel()
+    np.testing.assert_allclose(decoded[~raised], y[~raised], rtol=1e-12)
+    np.testing.assert_allclose(
+        decoded[raised], np.exp(step.mean_ - 3.5 * step.scale_), rtol=1e-12
+    )
+
+
+def test__make_target_transform__does_not_standardize_the_fixed_atom_again() -> None:
+    """The zeros must stay at the atom in the model's input."""
+    y = _zero_inflated_target()
+
+    transformed = (
+        make_target_transform(FixedAtomTransformer())
+        .fit_transform(y.reshape(-1, 1))
+        .ravel()
+    )
+
+    np.testing.assert_array_equal(transformed[y == 0], -4.0)
+
+
+@pytest.mark.parametrize("transform", [QuantileGapTransformer, FixedAtomTransformer])
+@pytest.mark.parametrize(
+    ("y", "message"),
+    [
+        (np.array([0.0, 1.0, 2.0, -0.5]), "nonnegative"),
+        (np.array([0.0, 0.0, 3.0, 3.0]), "two distinct positive"),
+    ],
+)
+def test__zero_inflated_transforms__reject_targets_without_two_positive_levels(
+    transform: type, y: np.ndarray, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        transform().fit(y.reshape(-1, 1))
+
+
+@pytest.mark.parametrize("transform", [QuantileGapTransformer, FixedAtomTransformer])
+def test__transform_borders_one__clamps_zero_inflated_members_at_zero(
+    transform: type,
+) -> None:
+    """The outer bucket must not reach below raw 0 after border repair."""
+    y = _zero_inflated_target()
+    pipeline = make_target_transform(transform())
+    pipeline.fit(y.reshape(-1, 1))
+    borders = np.linspace(-5.0, 5.0, 101, dtype=np.float32)
+    znorm_mean = float(np.mean(y))
+    znorm_std = float(np.std(y)) + StandardizeTarget.EPSILON
+
+    _, _, borders_t = transform_borders_one(
+        borders,
+        target_transform=pipeline,
+        znorm_mean=znorm_mean,
+        znorm_std=znorm_std,
+        repair_nan_borders_after_transform=True,
+    )
+
+    zero = np.float32(-znorm_mean / znorm_std)
+    # Several buckets decode to 0, so they and the outer bucket are point masses.
+    assert (borders_t[:3] == zero).all()
+    assert borders_t.min() == zero

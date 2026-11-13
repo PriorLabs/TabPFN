@@ -1635,6 +1635,69 @@ def test__predict__target_transform__predictions_are_finite_and_accurate(
     assert r2_score(y_test, pred) > 0.7
 
 
+def _zero_inflated_regression_data() -> tuple[np.ndarray, np.ndarray]:
+    r = np.random.RandomState(0)
+    X = r.randn(300, 3)
+    y = np.where(X[:, 0] < 0.5, 0.0, np.exp(4.0 + X[:, 1] + 0.3 * r.randn(300)))
+    return X, y
+
+
+@pytest.mark.parametrize("transform", ["raw_log_qgap", "raw_log_fixed_atom"])
+def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> None:
+    """The transform must find the exact zeros of the raw target, not a z-score."""
+    X, y = _zero_inflated_regression_data()
+    y = 1e3 * y
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X, y)
+
+    logs = np.log(y[y > 0])
+    if transform == "raw_log_qgap":
+        t = np.where(y > 0, np.log(np.where(y > 0, y, 1.0)), 0.0)
+        t[y == 0] = np.quantile(logs, 0.01) - logs.std()
+        expected = (t - t.mean()) / t.std()
+    else:
+        t = (np.log(np.where(y > 0, y, 1.0)) - logs.mean()) / logs.std()
+        expected = np.where(y > 0, np.maximum(t, -3.5), -4.0)
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    np.testing.assert_allclose(member_y, expected, rtol=1e-8)
+    zero_code = member_y[y == 0][0]
+    assert (member_y == zero_code).mean() == (y == 0).mean()
+
+
+@pytest.mark.parametrize("transform", ["raw_log_qgap", "raw_log_fixed_atom"])
+def test__predict__zero_inflated_transform__members_are_clamped_at_zero(
+    transform: str,
+) -> None:
+    """No member puts mass below raw 0.
+
+    The aggregated mean reads the mass at 0 at the middle of the grid bucket that
+    holds 0, so it can fall below 0 by at most half that bucket's width.
+    """
+    X, y = _zero_inflated_regression_data()
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        inference_precision=torch.float32,
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X[:200], y[:200])
+    full = reg.predict(X[200:], output_type="full")
+
+    borders = full["criterion"].borders.cpu().numpy()
+    probs = full["logits"].softmax(-1).cpu().numpy()
+    below_zero = probs[:, borders[1:] <= 0].sum(-1)
+    assert below_zero.max() == 0
+    i = np.searchsorted(borders, 0.0, side="right") - 1
+    assert full["mean"].min() >= -(borders[i + 1] - borders[i]) / 2
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test__fit__target_frame_is_independent_of_the_target_units(dtype: str) -> None:
     """Rescaling the target changes its frame but preserves standardized inputs."""
@@ -2338,6 +2401,8 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
         ("log", -1.0, "strictly positive"),
         ("1_plus_log", -1.0, "greater than -1"),
         ("1_plus_log", -2.0, "greater than -1"),
+        ("raw_log_qgap", -1.0, "nonnegative"),
+        ("raw_log_fixed_atom", -1.0, "nonnegative"),
     ],
 )
 def test__fit__invalid_log_target__raises_clear_error(
