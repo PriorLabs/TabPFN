@@ -69,8 +69,21 @@ def test__validate_row_weights__stacks_both_columns() -> None:
         [1.0, 3.0, 0.0, 4.0], [1.0, 0.5, 0.0, 1.0], n_samples=4
     )
     assert row_weights is not None
-    np.testing.assert_allclose(row_weights[:, 0], [1.0, 3.0, 0.0, 4.0])
+    np.testing.assert_allclose(row_weights[:, 0], [0.25, 0.75, 0.0, 1.0])
     np.testing.assert_allclose(row_weights[:, 1], [1.0, 0.5, 0.0, 1.0])
+
+
+@pytest.mark.parametrize("scale", [1e-50, 1.0, 3e38, 1e300])
+def test__row_weights__scale_to_mean_one_for_extreme_magnitudes(scale: float) -> None:
+    row_weights = validate_row_weights(
+        np.array([1.0, 1.0, 2.0] * 4) * scale, None, n_samples=12
+    )
+    assert row_weights is not None
+    np.testing.assert_allclose(
+        row_weights_for_estimator(row_weights, None)[:, 0],
+        [0.75, 0.75, 1.5] * 4,
+        rtol=1e-6,
+    )
 
 
 def test__row_weights_for_estimator__scales_its_own_rows_to_mean_one() -> None:

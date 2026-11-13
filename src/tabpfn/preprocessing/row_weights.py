@@ -58,8 +58,8 @@ def validate_row_weights(
         classes: The class labels `y_encoded` indexes, named in the error.
 
     Returns:
-        The stacked weights, `sample_weight` not yet scaled, or `None` when
-        neither argument is given.
+        The stacked float32 weights, `sample_weight` divided by its maximum, or
+        `None` when neither argument is given.
     """
     if sample_weight is None and label_reliability is None:
         return None
@@ -74,9 +74,11 @@ def validate_row_weights(
                 "`sample_weight` is zero for every row; at least one weight must "
                 "be positive."
             )
+        # Dividing by the maximum before the float32 cast keeps any finite input
+        # in range, and bounds the per-estimator sum by the number of rows.
+        row_weights[:, 0] = weights / weights.max()
         if y_encoded is not None:
-            _raise_if_a_class_has_zero_weight(weights, y_encoded, classes)
-        row_weights[:, 0] = weights
+            _raise_if_a_class_has_zero_weight(row_weights[:, 0], y_encoded, classes)
 
     if label_reliability is not None:
         reliability = _per_row_values(label_reliability, "label_reliability", n_samples)
@@ -159,7 +161,7 @@ def resolve_sample_weight_mode(
 
 def _per_row_values(values: object, name: str, n_samples: int) -> np.ndarray:
     try:
-        array = np.asarray(values, dtype=np.float32)
+        array = np.asarray(values, dtype=np.float64)
     except (TypeError, ValueError) as e:
         raise TabPFNValidationError(f"`{name}` must be numeric.") from e
     if array.shape != (n_samples,):
