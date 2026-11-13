@@ -59,7 +59,6 @@ class TabPFNEnsembleMember:
     """
 
     config: EnsembleConfig
-    estimator_id: int
     cpu_preprocessor: PreprocessingPipeline
     gpu_preprocessor: TorchPreprocessingPipeline | None
     # None once an engine has consumed it and no longer needs it, e.g. after the
@@ -371,7 +370,6 @@ class TabPFNEnsemblePreprocessor:
 
             yield TabPFNEnsembleMember(
                 config=config,
-                estimator_id=config_index,
                 cpu_preprocessor=cpu_preprocessor,
                 gpu_preprocessor=gpu_preprocessor,
                 X_train=X_train_preprocessed,
@@ -1359,6 +1357,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
 
     return [
         ClassifierEnsembleConfig(
+            estimator_id=estimator_id,
             preprocess_config=preprocesses_config,
             feature_shift_count=featshift,
             class_permutation=class_perm,
@@ -1370,11 +1369,13 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
             passthrough_inf=passthrough_inf,
         )
         for (
+            estimator_id,
             featshift,
             preprocesses_config,
             class_perm,
             model_index,
         ) in zip(
+            range(num_estimators),
             featshifts,
             configs_,
             class_permutations,
@@ -1440,6 +1441,7 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
 
     return [
         RegressorEnsembleConfig(
+            estimator_id=estimator_id,
             preprocess_config=preprocessor_configs[preprocess_index],
             feature_shift_count=featshift,
             add_fingerprint_feature=add_fingerprint_feature,
@@ -1454,7 +1456,14 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
             _model_index=model_index,
             passthrough_inf=passthrough_inf,
         )
-        for featshift, (preprocess_index, target_index), model_index, flip in zip(
+        for (
+            estimator_id,
+            featshift,
+            (preprocess_index, target_index),
+            model_index,
+            flip,
+        ) in zip(
+            range(num_estimators),
             featshifts,
             configs_,
             model_indices,

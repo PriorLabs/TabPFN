@@ -183,6 +183,7 @@ class EnsembleConfig:
     outlier_removal_std: float | None
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
+    estimator_id: int
     passthrough_inf: bool
 
 

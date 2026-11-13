@@ -806,7 +806,9 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                     model.type(self.force_inference_dtype)
 
                 kwargs = _model_forward_kwargs(
-                    model, task_type, [i] * train_x_full.shape[0]
+                    model,
+                    task_type,
+                    [config.estimator_id for config in self.ensemble_configs[i]],
                 )
                 with (
                     get_autocast_context(device, enabled=autocast),
@@ -1294,7 +1296,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 [prepared[i][1] for i in positions],
             )
             kwargs = _model_forward_kwargs(
-                model, self.task_type, [members[i].estimator_id for i in positions]
+                model,
+                self.task_type,
+                [members[i].config.estimator_id for i in positions],
             )
             with (
                 get_autocast_context(device, enabled=autocast),
@@ -1453,7 +1457,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             else None,
         )
         kwargs = _model_forward_kwargs(
-            model, task_type, [member.estimator_id for member in members]
+            model, task_type, [member.config.estimator_id for member in members]
         )
 
         cache_on_device = self.kv_caches[cache_index].to(device)
@@ -1609,7 +1613,7 @@ def _call_model_on_members(  # noqa: PLR0913
             [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
         )
         kwargs = _model_forward_kwargs(
-            model, task_type, [members[i].estimator_id for i in positions]
+            model, task_type, [members[i].config.estimator_id for i in positions]
         )
         with (
             get_autocast_context(device, enabled=autocast),

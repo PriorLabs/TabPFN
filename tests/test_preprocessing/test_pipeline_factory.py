@@ -25,6 +25,7 @@ def _fit_transform(
         feature_shift_decoder=None,
         outlier_removal_std=None,
         _model_index=0,
+        estimator_id=0,
         passthrough_inf=False,
     )
     pipeline = create_preprocessing_pipeline(config, random_state=42)

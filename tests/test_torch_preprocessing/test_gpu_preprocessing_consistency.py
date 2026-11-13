@@ -72,6 +72,7 @@ def _make_config(
         feature_shift_decoder=feature_shift_decoder,
         outlier_removal_std=outlier_removal_std,
         _model_index=0,
+        estimator_id=0,
         passthrough_inf=passthrough_inf,
     )
 
