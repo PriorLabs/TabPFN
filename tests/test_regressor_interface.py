@@ -1207,6 +1207,17 @@ def test__fit_with_differentiable_input__grad_flows_to_upstream_module(
     assert grad.norm().item() > 0, "gradient norm is zero — graph was detached"
 
 
+def test__fit_with_differentiable_input__target_sign_flip__warns() -> None:
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        differentiable_input=True,
+        inference_config={"REGRESSION_TARGET_SIGN_FLIP": True},
+    )
+    with pytest.warns(UserWarning, match="REGRESSION_TARGET_SIGN_FLIP is ignored"):
+        reg.fit_with_differentiable_input(torch.randn(20, 3), torch.randn(20))
+
+
 def test__fit__differentiable_input_true__raises_helpful_error() -> None:
     """Calling .fit() (instead of fit_with_differentiable_input) when
     differentiable_input=True must raise a clear error pointing users to the
@@ -1528,6 +1539,68 @@ def test__fit__member_target_is_the_znormalized_target() -> None:
     member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
 
     assert np.array_equal(member_y, (y - np.mean(y)) / (np.std(y) + 1e-20))
+
+
+@pytest.mark.parametrize("preset", [None, "log"])
+def test__fit__target_sign_flip__members_see_the_negated_pipeline_output(
+    preset: str | None,
+) -> None:
+    """The flip comes after the pipeline, so `log` still sees the raw target."""
+    X, y = _mk_reg_dataset(0)
+    y = np.abs(y) + 1.0
+
+    def fit(*, flip: bool) -> TabPFNRegressor:
+        return TabPFNRegressor(
+            n_estimators=4,
+            device="cpu",
+            random_state=42,
+            inference_config={
+                "REGRESSION_Y_PREPROCESS_TRANSFORMS": (preset,),
+                "REGRESSION_TARGET_SIGN_FLIP": flip,
+            },
+        ).fit(X, y)
+
+    members = fit(flip=True).executor_.ensemble_members
+    plain = fit(flip=False).executor_.ensemble_members
+
+    assert {m.config.flip_target for m in members} == {False, True}
+    for member, reference in zip(members, plain, strict=True):
+        target = np.asarray(member.y_train)
+        expected = np.asarray(reference.y_train)
+        assert np.isfinite(target).all()
+        np.testing.assert_allclose(
+            target, -expected if member.config.flip_target else expected
+        )
+
+
+def test__predict__target_sign_flip__predicts_in_the_original_sign() -> None:
+    """Negating y swaps which members see the negated target.
+
+    So the difference of the two fits must match the same difference without the
+    option.
+    """
+    X, y = _mk_reg_dataset(0)
+    X_train, X_test, y_train = X[:45], X[45:], y[:45]
+
+    def predict(target: np.ndarray, *, flip: bool) -> np.ndarray:
+        return (
+            TabPFNRegressor(
+                n_estimators=2,
+                device="cpu",
+                random_state=42,
+                inference_config={
+                    "REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,),
+                    "REGRESSION_TARGET_SIGN_FLIP": flip,
+                },
+            )
+            .fit(X_train, target)
+            .predict(X_test)
+        )
+
+    flipped = predict(y_train, flip=True) - predict(-y_train, flip=True)
+    plain = predict(y_train, flip=False) - predict(-y_train, flip=False)
+
+    np.testing.assert_allclose(flipped, plain, atol=1e-2 * np.abs(plain).max())
 
 
 def _mk_skewed_reg_dataset(

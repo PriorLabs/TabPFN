@@ -21,6 +21,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.configs import (
     FeatureSubsamplingMethod,
     PreprocessorConfig,
+    RegressorEnsembleConfig,
     SampleSubsamplingMethod,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
@@ -41,6 +42,7 @@ from tabpfn.preprocessing.ensemble import (
     _subsample_rows_stratified,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.target_transform import make_target_transform
 from tabpfn.preprocessing.torch import FeatureSchema
 
 skip_on_macos = pytest.mark.skipif(
@@ -1947,3 +1949,61 @@ def test__generate_regression_ensemble_configs__target_transforms_not_shared():
         "Ensemble configs share target_transform instances; fitting one member "
         "would clobber the fitted state of the others."
     )
+
+
+def _regression_configs(
+    *, target_sign_flip: bool, num_estimators: int, num_preprocessors: int
+) -> list:
+    return generate_regression_ensemble_configs(
+        num_estimators=num_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig("none", categorical_name="numeric"),
+            PreprocessorConfig("quantile_uni_coarse", categorical_name="numeric"),
+        ][:num_preprocessors],
+        target_transforms=[None, make_target_transform(None)],
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+        target_sign_flip=target_sign_flip,
+    )
+
+
+def test__generate_regression_ensemble_configs__no_target_sign_flip_by_default():
+    configs = _regression_configs(
+        target_sign_flip=False, num_estimators=8, num_preprocessors=2
+    )
+
+    assert not any(config.flip_target for config in configs)
+
+
+@pytest.mark.parametrize("num_preprocessors", [1, 2])
+@pytest.mark.parametrize("num_estimators", [2, 4, 6, 8, 12])
+def test__generate_regression_ensemble_configs__target_sign_flip_is_balanced(
+    num_estimators: int, num_preprocessors: int
+):
+    """No preprocessor, target transform or combination of them leans to one sign."""
+    kwargs = {"num_estimators": num_estimators, "num_preprocessors": num_preprocessors}
+    configs = _regression_configs(target_sign_flip=True, **kwargs)
+    keys = {
+        "preprocessor": lambda c: c.preprocess_config.name,
+        "target_transform": lambda c: c.target_transform is None,
+        "combination": lambda c: (c.preprocess_config.name, c.target_transform is None),
+    }
+    for name, key in keys.items():
+        balance: dict[object, int] = {}
+        for config in configs:
+            balance[key(config)] = balance.get(key(config), 0) + (
+                1 if config.flip_target else -1
+            )
+        assert all(abs(v) <= 1 for v in balance.values()), (name, balance)
+
+    # Flipping only changes the sign: the members are the ones without it.
+    plain = _regression_configs(target_sign_flip=False, **kwargs)
+
+    def member(c: RegressorEnsembleConfig) -> tuple:
+        return (*keys["combination"](c), c.feature_shift_count, c._model_index)
+
+    assert [member(c) for c in configs] == [member(c) for c in plain]
