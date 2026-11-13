@@ -118,6 +118,17 @@ class GroupIdEncoder:
         codes[indexer < 0] = np.nan
         return self._replace(X, codes)
 
+    def row_groups(self, X: XType) -> np.ndarray | None:
+        """Each row's group in `X`, coded `0..n_groups - 1` within `X` alone.
+
+        Unlike `transform`, a key `fit` did not see gets a code too. `None`
+        when no column is selected.
+        """
+        self._check_is_fitted()
+        if self.keys_ is None:
+            return None
+        return pd.factorize(self._keys(X)[1], use_na_sentinel=False)[0]
+
     def output_indices(self, indices: Sequence[int] | None) -> list[int] | None:
         """Where each of `indices`, input positions, sits in the replaced frame.
 
