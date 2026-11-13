@@ -40,6 +40,7 @@ from tabpfn.inference_tuning import (
     RegressorTuningConfig,
     get_tuning_temperatures,
 )
+from tabpfn.mean_readout import MemberMeans
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -1696,6 +1697,69 @@ def test__predict__zero_inflated_transform__members_are_clamped_at_zero(
     assert below_zero.max() == 0
     i = np.searchsorted(borders, 0.0, side="right") - 1
     assert full["mean"].min() >= -(borders[i + 1] - borders[i]) / 2
+
+
+MEAN_READOUTS = ["single_clamp", "single_trunc", "single_pot", "single_pot_exp"]
+
+
+@pytest.mark.parametrize("readout", MEAN_READOUTS)
+def test__predict__mean_readout__averages_the_member_means(readout: str) -> None:
+    X, y = _zero_inflated_regression_data()
+    config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("raw_log_qgap",)}
+    kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 42}
+    reg = TabPFNRegressor(
+        **kwargs, inference_config={**config, "REGRESSION_MEAN_READOUT": readout}
+    ).fit(X[:200], y[:200])
+    plain = TabPFNRegressor(**kwargs, inference_config=config).fit(X[:200], y[:200])
+
+    mean = reg.predict(X[200:])
+
+    member_means = MemberMeans(
+        readout,  # type: ignore[arg-type]
+        y_mean=reg.y_train_mean_,
+        y_std=reg.y_train_std_,
+        y_max=float(y[:200].max()),
+        tail=reg.pareto_tail_,
+    )
+    _, outputs, borders = reg.forward(X[200:], use_inference_mode=True)
+    for member_borders, output in zip(borders, outputs, strict=False):
+        member_means.add(member_borders, output)
+    np.testing.assert_allclose(mean, member_means.mean(), rtol=1e-12)
+    assert (mean >= 0).all()
+    assert (reg.pareto_tail_ is not None) == (
+        readout in ("single_pot", "single_pot_exp")
+    )
+    # Only the mean is read out differently.
+    main, main_plain = (r.predict(X[200:], output_type="main") for r in (reg, plain))
+    np.testing.assert_array_equal(main["mean"], mean)
+    assert not np.allclose(mean, main_plain["mean"])
+    np.testing.assert_array_equal(main["median"], main_plain["median"])
+
+
+def test__fit__mean_readout_with_negative_targets__raises() -> None:
+    X, y = _zero_inflated_regression_data()
+    y[0] = -1.0
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_MEAN_READOUT": "single_clamp"},
+    )
+
+    with pytest.raises(ValueError, match=r"single_clamp.*nonnegative"):
+        reg.fit(X, y)
+
+
+def test__fit__mean_readout_with_temperature_calibration__raises() -> None:
+    X, y = _zero_inflated_regression_data()
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_MEAN_READOUT": "single_clamp"},
+        tuning_config={"calibrate_temperature": True},
+    )
+
+    with pytest.raises(ValueError, match="calibrate_temperature=False"):
+        reg.fit(X, y)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])

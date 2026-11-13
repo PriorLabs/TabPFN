@@ -23,7 +23,7 @@ import logging
 import numbers
 import typing
 import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
@@ -74,6 +74,12 @@ from tabpfn.inference_tuning import (
     find_regression_optimal_temperature,
     get_tuning_splits,
     resolve_tuning_config,
+)
+from tabpfn.mean_readout import (
+    POT_READOUTS,
+    MemberMeans,
+    ParetoTail,
+    fit_pareto_tail,
 )
 from tabpfn.model_loading import (
     ModelSource,
@@ -298,6 +304,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     softmax_temperature_: float
     """The resolved per-estimator `softmax_temperature`, i.e. the one the checkpoint
     declares unless it was overridden."""
+
+    y_train_max_: float
+    """The largest training target, where the "single_trunc" and "single_pot" mean
+    readouts truncate each member's distribution."""
+
+    pareto_tail_: ParetoTail | None
+    """The tail the "single_pot" mean readouts add above their threshold. None for
+    the other readouts, or when there are too few positive targets to fit it."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -1469,6 +1483,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # No need to create an inference engine for a constant prediction
             return self
 
+        self._fit_mean_readout(y)
+
         # Each tuning fold must derive its target statistics from its own raw targets.
         self._maybe_calibrate_ensemble_temperature(X=X, y=y)
 
@@ -1545,7 +1561,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             output_type:
                 Determines the type of output to return.
 
-                - If `"mean"`, we return the mean over the predicted distribution.
+                - If `"mean"`, we return the mean over the predicted distribution,
+                    read out as `InferenceConfig.REGRESSION_MEAN_READOUT` says.
                 - If `"median"`, we return the median over the predicted distribution.
                 - If `"mode"`, we return the mode over the predicted distribution.
                 - If `"quantiles"`, we return the quantiles of the predicted
@@ -1590,7 +1607,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        logits = self._compute_aggregated_logits(X)
+        member_means = self._member_means()
+        logits = self._compute_aggregated_logits(
+            X, member_hook=None if member_means is None else member_means.add
+        )
 
         # Determine and return intended output type
         logit_to_output = partial(
@@ -1604,7 +1624,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if output_type in ["full", "main"]:
             # Create a dictionary of outputs with proper typing via TypedDict
             # Get individual outputs with proper typing
-            mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
+            mean_out = (
+                typing.cast("np.ndarray", logit_to_output(output_type="mean"))
+                if member_means is None
+                else member_means.mean()
+            )
             median_out = typing.cast(
                 "np.ndarray", logit_to_output(output_type="median")
             )
@@ -1631,7 +1655,50 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             return main_outputs
 
+        if output_type == "mean" and member_means is not None:
+            return member_means.mean()
         return logit_to_output(output_type=output_type)
+
+    def _mean_readout(self) -> str:
+        # `getattr` keeps models pickled before this field existed loadable.
+        return getattr(self.inference_config_, "REGRESSION_MEAN_READOUT", "ensemble")
+
+    def _fit_mean_readout(self, y: np.ndarray) -> None:
+        """Check that the mean readout applies to `y`, and fit its tail."""
+        readout = self._mean_readout()
+        self.y_train_max_ = float(np.max(y))
+        self.pareto_tail_ = None
+        if readout == "ensemble":
+            return
+        if np.any(y < 0):
+            raise TabPFNValidationError(
+                f"The '{readout}' mean readout requires nonnegative targets (y >= 0)."
+            )
+        if self._uses_majority_downsample():
+            raise TabPFNValidationError(
+                f"The '{readout}' mean readout does not apply the "
+                "SAMPLE_SUBSAMPLING_METHOD='majority_downsample' correction. Use "
+                "REGRESSION_MEAN_READOUT='ensemble' or another subsampling method."
+            )
+        if readout in POT_READOUTS:
+            self.pareto_tail_ = fit_pareto_tail(
+                y,
+                threshold=self.inference_config_.REGRESSION_POT_THRESHOLD,
+                fix_shape=readout == "single_pot_exp",
+            )
+
+    def _member_means(self) -> MemberMeans | None:
+        """A fresh accumulator for the mean readout, or None for "ensemble"."""
+        readout = self._mean_readout()
+        if readout == "ensemble":
+            return None
+        return MemberMeans(
+            typing.cast("Any", readout),
+            y_mean=self.y_train_mean_,
+            y_std=self.y_train_std_,
+            y_max=self.y_train_max_,
+            tail=self.pareto_tail_,
+        )
 
     def _maybe_calibrate_ensemble_temperature(self, X: XType, y: YType) -> None:
         """If a `tuning_config` was given, calibrate the ensemble temperature.
@@ -1668,6 +1735,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if not tuning_config_resolved.calibrate_temperature:
             return
+
+        if self._mean_readout() != "ensemble":
+            raise TabPFNValidationError(
+                f"The '{self._mean_readout()}' mean readout averages the members' "
+                "own means and does not apply a calibrated ensemble temperature. "
+                "Set `calibrate_temperature=False` or "
+                "REGRESSION_MEAN_READOUT='ensemble'."
+            )
 
         if self.group_encoder_.group_columns_:
             raise TabPFNValidationError(
@@ -1800,7 +1875,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return holdout_folds
 
     def _compute_aggregated_logits(
-        self, X: XType, *, apply_downsample_correction: bool = True
+        self,
+        X: XType,
+        *,
+        apply_downsample_correction: bool = True,
+        member_hook: Callable[[np.ndarray, torch.Tensor], None] | None = None,
     ) -> torch.Tensor:
         """Run the ensemble and aggregate it into one log-probability tensor.
 
@@ -1821,6 +1900,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
+            member_hook: Called with each member's borders and logits before
+                aggregation.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
@@ -1852,6 +1933,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 unit="estimator",
                 disable=not self.show_progress_bar,
             ):
+                if member_hook is not None:
+                    member_hook(borders_t, output)
                 transformed = translate_probs_across_borders(
                     output,
                     frm=torch.as_tensor(borders_t, device=output.device),
@@ -2005,6 +2088,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "SAMPLE_SUBSAMPLING_METHOD='majority_downsample'; its prior "
                 "correction is fitted per dataset. Score datasets individually "
                 "with predict."
+            )
+        if self.get_inference_config().REGRESSION_MEAN_READOUT != "ensemble":
+            raise NotImplementedError(
+                "predict_batched supports only REGRESSION_MEAN_READOUT='ensemble'. "
+                "Score datasets individually with predict."
             )
         if self.tuning_config is not None:
             raise NotImplementedError(
