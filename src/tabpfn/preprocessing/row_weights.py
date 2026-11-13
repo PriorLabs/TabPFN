@@ -3,9 +3,10 @@
 """Validate the per-row weights `fit` takes, and how the model applies them.
 
 `sample_weight` says how many rows a training row stands for. Only its relative
-values matter, so it is scaled to mean 1. `label_reliability` is the probability
-that a row's label is correct. The model receives both as one `(rows, 2)` array,
-`(sample_weight, label_reliability)` per row, where 1 is neutral in each column.
+values matter, so it is scaled to mean 1 over each estimator's train rows.
+`label_reliability` is the probability that a row's label is correct. The model
+receives both as one `(rows, 2)` array, `(sample_weight, label_reliability)` per
+row, where 1 is neutral in each column.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 __all__ = [
     "SampleWeightMode",
     "resolve_sample_weight_mode",
+    "row_weights_for_estimator",
     "validate_row_weights",
 ]
 
@@ -56,11 +58,12 @@ def validate_row_weights(
         classes: The class labels `y_encoded` indexes, named in the error.
 
     Returns:
-        The stacked weights, or `None` when neither argument is given.
+        The stacked weights, `sample_weight` not yet scaled, or `None` when
+        neither argument is given.
     """
     if sample_weight is None and label_reliability is None:
         return None
-    row_weights = np.ones((n_samples, 2), dtype=np.float32)
+    row_weights = np.ones((n_samples, 2))
 
     if sample_weight is not None:
         weights = _per_row_values(sample_weight, "sample_weight", n_samples)
@@ -73,7 +76,7 @@ def validate_row_weights(
             )
         if y_encoded is not None:
             _raise_if_a_class_has_zero_weight(weights, y_encoded, classes)
-        row_weights[:, 0] = weights / weights.mean()
+        row_weights[:, 0] = weights
 
     if label_reliability is not None:
         reliability = _per_row_values(label_reliability, "label_reliability", n_samples)
@@ -85,6 +88,28 @@ def validate_row_weights(
         row_weights[:, 1] = reliability
 
     return row_weights
+
+
+def row_weights_for_estimator(
+    row_weights: np.ndarray, rows: np.ndarray | None
+) -> np.ndarray:
+    """The float32 weights of one estimator's train rows, `sample_weight` at mean 1.
+
+    Args:
+        row_weights: The output of `validate_row_weights`.
+        rows: The indices of the train rows the estimator keeps, or `None` for all.
+    """
+    selected = row_weights if rows is None else row_weights[rows]
+    total = selected[:, 0].sum()
+    if total == 0:
+        raise TabPFNValidationError(
+            "Row subsampling left an estimator only rows with `sample_weight` 0. "
+            "Raise `SUBSAMPLE_SAMPLES` in the inference config, or give fewer rows "
+            "weight 0."
+        )
+    estimator_weights = selected.astype(np.float32)
+    estimator_weights[:, 0] = selected[:, 0] * (len(selected) / total)
+    return estimator_weights
 
 
 def resolve_sample_weight_mode(

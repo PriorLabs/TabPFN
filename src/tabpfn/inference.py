@@ -325,7 +325,7 @@ def _row_weight_kwargs(
         assert member.row_weights is not None
         row_weights.append(torch.as_tensor(member.row_weights, device=device))
     return {
-        "row_weights": torch.stack(row_weights, dim=1).float(),
+        "row_weights": torch.stack(row_weights, dim=1),
         "sample_weight_mode": sample_weight_mode,
     }
 

@@ -25,6 +25,7 @@ from tabpfn.inference import (
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
+    row_weights_for_estimator,
     validate_row_weights,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
@@ -63,13 +64,32 @@ class _RowWeightModel(_TestModelWithKVCache):
         return super().forward(x, y, **kwargs)
 
 
-def test__validate_row_weights__stacks_and_normalises() -> None:
+def test__validate_row_weights__stacks_both_columns() -> None:
     row_weights = validate_row_weights(
         [1.0, 3.0, 0.0, 4.0], [1.0, 0.5, 0.0, 1.0], n_samples=4
     )
     assert row_weights is not None
-    np.testing.assert_allclose(row_weights[:, 0], [0.5, 1.5, 0.0, 2.0])
+    np.testing.assert_allclose(row_weights[:, 0], [1.0, 3.0, 0.0, 4.0])
     np.testing.assert_allclose(row_weights[:, 1], [1.0, 0.5, 0.0, 1.0])
+
+
+def test__row_weights_for_estimator__scales_its_own_rows_to_mean_one() -> None:
+    row_weights = np.array([[1.0, 1.0], [3.0, 0.5], [0.0, 0.0], [4.0, 1.0]])
+    np.testing.assert_allclose(
+        row_weights_for_estimator(row_weights, None),
+        [[0.5, 1.0], [1.5, 0.5], [0.0, 0.0], [2.0, 1.0]],
+    )
+    np.testing.assert_allclose(
+        row_weights_for_estimator(row_weights, np.array([3, 1, 3])),
+        [[12 / 11, 1.0], [9 / 11, 0.5], [12 / 11, 1.0]],
+        rtol=1e-6,
+    )
+
+
+def test__row_weights_for_estimator__rejects_rows_that_all_have_weight_zero() -> None:
+    row_weights = np.array([[1.0, 1.0], [0.0, 1.0], [0.0, 1.0]])
+    with pytest.raises(TabPFNValidationError, match="SUBSAMPLE_SAMPLES"):
+        row_weights_for_estimator(row_weights, np.array([1, 2]))
 
 
 def test__validate_row_weights__missing_argument_is_neutral() -> None:
@@ -172,7 +192,7 @@ def test__engines__forward_each_members_row_weights(engine_cls: type) -> None:
     y_train = rng.integers(low=0, high=n_classes, size=n_train)
     row_weights = np.stack(
         [np.arange(1, n_train + 1), np.linspace(0, 1, n_train)], axis=1
-    ).astype(np.float32)
+    )
     row_indices = [rng.permutation(n_train)[:12] for _ in range(3)]
 
     preprocessor = TabPFNEnsemblePreprocessor(
@@ -213,7 +233,10 @@ def test__engines__forward_each_members_row_weights(engine_cls: type) -> None:
     )
 
     assert {mode for _, mode, _ in model.calls} == {"head"}
-    expected = sorted(tuple(row_weights[i].ravel()) for i in row_indices)
+    expected = sorted(
+        tuple(row_weights_for_estimator(row_weights, rows).ravel())
+        for rows in row_indices
+    )
     for cached_predict in {is_cached for _, _, is_cached in model.calls}:
         received = [
             tuple(batch[:, b].numpy().ravel())
@@ -320,6 +343,29 @@ def test__fit__forwards_row_weights_to_the_model(
         assert row_weights.shape[2] == 2
         for b in range(row_weights.shape[1]):
             np.testing.assert_allclose(row_weights[:, b].numpy(), expected, rtol=1e-6)
+
+
+@pytest.mark.parametrize("fit_mode", ["low_memory", "fit_preprocessors"])
+def test__fit__raises_when_subsampling_leaves_only_weight_zero_rows(
+    monkeypatch: pytest.MonkeyPatch, fit_mode: str
+) -> None:
+    rng = default_rng(seed=0)
+    X = rng.standard_normal((30, 3))
+    y = np.arange(30) % 2
+    sample_weight = np.zeros(30)
+    sample_weight[:2] = 1.0
+    estimator = TabPFNClassifier(
+        n_estimators=2,
+        fit_mode=fit_mode,
+        device="cpu",
+        inference_config={
+            "SAMPLE_WEIGHT_MODE": "learned",
+            "SUBSAMPLE_SAMPLES": [np.arange(10, 20)],
+        },
+    )
+    _record_row_weights(monkeypatch, estimator, X, y)
+    with pytest.raises(TabPFNValidationError, match="SUBSAMPLE_SAMPLES"):
+        estimator.fit(X, y, sample_weight=sample_weight)
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
