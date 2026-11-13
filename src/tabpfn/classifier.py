@@ -102,6 +102,10 @@ from tabpfn.preprocessing.group_ids import (
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.row_weights import (
+    resolve_sample_weight_mode,
+    validate_row_weights,
+)
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
@@ -131,6 +135,7 @@ if TYPE_CHECKING:
     )
     from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.row_weights import SampleWeightMode
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -968,6 +973,36 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             train_counts, context_prior
         )
 
+    def _resolve_row_weights(
+        self,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
+        *,
+        y: np.ndarray,
+    ) -> tuple[np.ndarray | None, SampleWeightMode | None]:
+        """Validate the per-row weights of `fit` against `y` and the models."""
+        if sample_weight is None and label_reliability is None:
+            return None, None
+        mode = resolve_sample_weight_mode(
+            self.models_,
+            self.inference_config_.SAMPLE_WEIGHT_MODE,
+            uses_label_reliability=label_reliability is not None,
+            task_type="multiclass",
+        )
+        if self.tuning_config is not None:
+            raise TabPFNValidationError(
+                "`tuning_config` cannot be combined with `sample_weight` or "
+                "`label_reliability` yet: the tuning folds are fit without them."
+            )
+        row_weights = validate_row_weights(
+            sample_weight,
+            label_reliability,
+            n_samples=len(y),
+            y_encoded=y,
+            classes=self.classes_,
+        )
+        return row_weights, mode
+
     def _uses_majority_downsample(self) -> bool:
         """Whether the configured row sampler is majority downsampling."""
         config = self.get_inference_config()
@@ -1008,12 +1043,27 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return TabPFNClassifier(**params)
 
     @config_context(transform_output="default")  # type: ignore
-    def fit(self, X: XType, y: YType) -> Self:
+    def fit(
+        self,
+        X: XType,
+        y: YType,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
+    ) -> Self:
         """Fit the model.
 
         Args:
             X: The input data.
             y: The target variable.
+            sample_weight: Experimental. One non-negative weight per training row,
+                saying how many rows it stands for. Only relative values matter:
+                scaling every weight changes nothing, and a weight of 2 is not
+                the same as the row appearing twice. Rows with weight 0 stay in
+                the context. Raises unless the model supports per-row weights,
+                see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
+            label_reliability: Experimental. One value in [0, 1] per training row:
+                the probability that the row's label is correct. Raises unless
+                the model supports `SAMPLE_WEIGHT_MODE="learned"`.
 
         Returns:
             self
@@ -1040,6 +1090,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X=X, y=y, random_state=static_seed
         )
         self.ensemble_configs_ = ensemble_configs
+        row_weights, sample_weight_mode = self._resolve_row_weights(
+            sample_weight, label_reliability, y=y
+        )
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
@@ -1063,6 +1116,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
+            row_weights=row_weights,
+            sample_weight_mode=sample_weight_mode,
         )
 
         # Needs the row sampler's context prior, and must precede the tuning

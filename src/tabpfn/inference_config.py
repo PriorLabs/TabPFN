@@ -366,6 +366,15 @@ class InferenceConfig:
     When True, +/-inf are temporarily replaced with NaN for preprocessing and restored
     afterwards; when False, infinities are rejected at input validation."""
 
+    SAMPLE_WEIGHT_MODE: Literal["learned", "head"] | None = None
+    """How the model applies the `sample_weight` passed to `fit`.
+
+    `"learned"` feeds the weights to the model as an input it was trained to read.
+    `"head"` scales each training row's vote in the decoder, for classification
+    only. `None` means the model takes no per-row weights, and `fit` raises if it
+    gets `sample_weight` or `label_reliability`. Checkpoints trained with per-row
+    weights set `"learned"`."""
+
     _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: float | None = None
     _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD: float = 12.0
 

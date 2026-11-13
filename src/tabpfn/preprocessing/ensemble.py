@@ -32,6 +32,7 @@ from tabpfn.preprocessing.configs import (
 )
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
+from tabpfn.preprocessing.row_weights import row_weights_for_estimator
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
     from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
+    from tabpfn.preprocessing.row_weights import SampleWeightMode
 
 T = TypeVar("T")
 
@@ -67,6 +69,9 @@ class TabPFNEnsembleMember:
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
     feature_indices: np.ndarray | None = None
+    # `(train rows, 2)` holding `(sample_weight, label_reliability)` for the
+    # member's own train rows, or None when `fit` got no per-row weights.
+    row_weights: np.ndarray | None = None
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
@@ -106,6 +111,8 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | torch.Tensor | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
+        row_weights: np.ndarray | None = None,
+        sample_weight_mode: SampleWeightMode | None = None,
     ) -> None:
         """Init.
 
@@ -147,8 +154,18 @@ class TabPFNEnsemblePreprocessor:
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
                 ExtraTreesClassifier or ExtraTreesRegressor is used and resolves
                 task-dependent sample subsampling behavior.
+            row_weights: The ``(n_samples, 2)`` output of
+                ``validate_row_weights``, or ``None`` when ``fit`` got no
+                per-row weights. Each member gets the rows it keeps.
+            sample_weight_mode: How the model applies ``row_weights``. Required
+                with ``row_weights``.
         """
         super().__init__()
+        if (row_weights is None) != (sample_weight_mode is None):
+            raise ValueError(
+                "row_weights and sample_weight_mode must be given together."
+            )
+        self.sample_weight_mode = sample_weight_mode
         self.configs = configs
         self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs
@@ -257,6 +274,12 @@ class TabPFNEnsemblePreprocessor:
             y=y_train,
             task_type=task_type,
         )
+        self.member_row_weights: list[np.ndarray] | None = None
+        if row_weights is not None:
+            member_rows = self.subsample_row_indices or [None] * len(self.configs)
+            self.member_row_weights = [
+                row_weights_for_estimator(row_weights, rows) for rows in member_rows
+            ]
 
         # Majority downsampling is a known target-dependent sampling design, so
         # it can report the inclusion probability of every training row and of
@@ -376,6 +399,11 @@ class TabPFNEnsemblePreprocessor:
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
                 feature_indices=self.subsample_feature_indices[config_index],
+                row_weights=(
+                    None
+                    if self.member_row_weights is None
+                    else self.member_row_weights[config_index]
+                ),
             )
 
     def fit_transform_ensemble_members(
