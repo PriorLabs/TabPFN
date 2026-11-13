@@ -114,6 +114,13 @@ class TabPFNOutOfMemoryError(TabPFNError):
             size_line += ".\n"
 
         max_batched_test_rows = settings.tabpfn.max_batched_test_rows
+        regressor_line = ""
+        if model_type == "regressor":
+            regressor_line = (
+                f"   The regressor also decodes at most\n"
+                f"   TABPFN_MAX_REGRESSOR_PREDICT_ROWS test rows at once (currently "
+                f"{settings.tabpfn.max_regressor_predict_rows}); lower it too.\n\n"
+            )
         message = (
             f"{self.device_name} out of memory{size_info}.\n\n"
             f"This is issue is usually caused by one of the following two reasons:\n\n"
@@ -128,6 +135,7 @@ class TabPFNOutOfMemoryError(TabPFNError):
             f"   automatically — lower the TABPFN_MAX_BATCHED_TEST_ROWS\n"
             f"   environment variable (currently {max_batched_test_rows}) to\n"
             f"   reduce peak memory without changing your code.\n\n"
+            f"{regressor_line}"
             f"2) Large training set — batching won't help.\n"
             f"   Subsample your training data; see https://docs.priorlabs.ai\n"
             f"   for further guidance.\n\n"
