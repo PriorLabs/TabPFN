@@ -59,6 +59,7 @@ class TabPFNEnsembleMember:
     """
 
     config: EnsembleConfig
+    estimator_id: int
     cpu_preprocessor: PreprocessingPipeline
     gpu_preprocessor: TorchPreprocessingPipeline | None
     # None once an engine has consumed it and no longer needs it, e.g. after the
@@ -370,6 +371,7 @@ class TabPFNEnsemblePreprocessor:
 
             yield TabPFNEnsembleMember(
                 config=config,
+                estimator_id=config_index,
                 cpu_preprocessor=cpu_preprocessor,
                 gpu_preprocessor=gpu_preprocessor,
                 X_train=X_train_preprocessed,

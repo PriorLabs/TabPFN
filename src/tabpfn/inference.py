@@ -83,12 +83,17 @@ class _TimedIterator(Iterator[_T]):
         return self
 
 
-def _model_expectes_task_type_arg(model: Architecture) -> bool:
-    """Check if the model's forward function expects a task_type argument.
-
-    This is a check for backwards compatibility.
-    """
-    return "task_type" in signature(model.forward).parameters
+def _model_forward_kwargs(
+    model: Architecture, task_type: str, estimator_ids: list[int]
+) -> dict[str, str | list[int]]:
+    """Return the metadata arguments accepted by the architecture."""
+    parameters = signature(model.forward).parameters
+    kwargs: dict[str, str | list[int]] = {}
+    if "task_type" in parameters:
+        kwargs["task_type"] = task_type
+    if "estimator_ids" in parameters:
+        kwargs["estimator_ids"] = estimator_ids
+    return kwargs
 
 
 def _estimator_batch_budget(model: Architecture) -> EstimatorBatchBudget:
@@ -800,9 +805,9 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                     train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
                     model.type(self.force_inference_dtype)
 
-                kwargs = {}
-                if _model_expectes_task_type_arg(model):
-                    kwargs["task_type"] = task_type
+                kwargs = _model_forward_kwargs(
+                    model, task_type, [i] * train_x_full.shape[0]
+                )
                 with (
                     get_autocast_context(device, enabled=autocast),
                     torch.inference_mode(self.inference_mode),
@@ -1282,14 +1287,14 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             ),
             kv_cache_follows_attention_grid=kv_cache_precision == "adaptive",
         )
-        kwargs = {}
-        if _model_expectes_task_type_arg(model):
-            kwargs["task_type"] = self.task_type
 
         def build(positions: list[int]) -> KVCache:
             X, y = _batch_member_inputs(
                 [prepared[i][0] for i in positions],
                 [prepared[i][1] for i in positions],
+            )
+            kwargs = _model_forward_kwargs(
+                model, self.task_type, [members[i].estimator_id for i in positions]
             )
             with (
                 get_autocast_context(device, enabled=autocast),
@@ -1447,9 +1452,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             if save_peak_mem
             else None,
         )
-        kwargs = {}
-        if _model_expectes_task_type_arg(model):
-            kwargs["task_type"] = task_type
+        kwargs = _model_forward_kwargs(
+            model, task_type, [member.estimator_id for member in members]
+        )
 
         cache_on_device = self.kv_caches[cache_index].to(device)
         if self.keep_cache_on_device:
@@ -1595,10 +1600,6 @@ def _call_model_on_members(  # noqa: PLR0913
         if save_peak_mem
         else None,
     )
-    kwargs = {}
-    if _model_expectes_task_type_arg(model):
-        kwargs["task_type"] = task_type
-
     # GPU preprocessing may have changed the members' widths, so the group is
     # refined by the prepared shapes.
     outputs: _MemberOutputs = []
@@ -1606,6 +1607,9 @@ def _call_model_on_members(  # noqa: PLR0913
     for positions in _group_equal(shapes):
         X, y = _batch_member_inputs(
             [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
+        )
+        kwargs = _model_forward_kwargs(
+            model, task_type, [members[i].estimator_id for i in positions]
         )
         with (
             get_autocast_context(device, enabled=autocast),
