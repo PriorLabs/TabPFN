@@ -90,17 +90,22 @@ def test__row_groups__codes_composite_keys_within_the_input() -> None:
     np.testing.assert_array_equal(encoder.row_groups(X_new), [0, 1, 0])
 
 
+@pytest.mark.parametrize("enabled", [True, False])
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 def test__estimator__appends_aggregates_and_keeps_the_group_feature(
-    estimator_cls: type,
+    estimator_cls: type, enabled: bool
 ) -> None:
     rng = np.random.default_rng(0)
     groups = np.repeat(np.arange(10), 4)
     X = pd.DataFrame({"num": rng.normal(size=40), "g": groups})
     y = groups % 2
-    estimator = estimator_cls(n_estimators=1, group_col="g").fit(X, y)
+    estimator = estimator_cls(
+        n_estimators=1,
+        group_col="g",
+        inference_config={"GROUP_AGGREGATES": enabled},
+    ).fit(X, y)
 
     names = [f.name for f in estimator.inferred_feature_schema_.features]
-    assert "input_num_mean" in names
+    assert ("input_num_mean" in names) is enabled
     assert estimator.group_feature_index_ is not None
     assert estimator.predict(X).shape == (40,)

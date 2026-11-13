@@ -137,6 +137,13 @@ class InferenceConfig:
     rejected. With neither, the value comes from the checkpoint, and an ensemble
     whose checkpoints declare different counts is rejected too."""
 
+    GROUP_AGGREGATES: bool = True
+    """Whether, with `group_col` set, per-group aggregates of the features are
+    appended when the target is constant within every training group and some
+    group has more than one row. Up to 50 are kept, by their variance over the
+    training rows, from the mean, std, min, max and last value of numeric columns
+    and the count, last value and number of unique values of the others."""
+
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
     or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`.
