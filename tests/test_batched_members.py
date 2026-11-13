@@ -4,15 +4,28 @@
 from __future__ import annotations
 
 import pickle
+from typing_extensions import override
 
 import numpy as np
 import pytest
 import torch
 from numpy.random import default_rng
+from torch import Tensor
 
 from tabpfn.architectures import tabpfn_v3
-from tabpfn.architectures.interface import EstimatorBatchBudget
+from tabpfn.architectures.interface import (
+    Architecture,
+    EstimatorBatchBudget,
+    PerformanceOptions,
+)
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
+from tabpfn.finetuning.data_util import ClassifierBatch
+from tabpfn.finetuning.finetuned_base import (
+    _get_estimator_shard,
+    _slice_batch_estimators,
+)
 from tabpfn.inference import (
+    InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
@@ -31,6 +44,8 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.torch import FeatureSchema
 from tabpfn.settings import settings
+
+from .test_inference import _TestModelWithKVCache
 
 N_TRAIN, N_TEST, N_FEATURES, N_CLASSES, N_MEMBERS = 40, 7, 4, 3, 5
 # The features plus the fingerprint feature the test preprocessor appends.
@@ -91,7 +106,7 @@ def _preprocessor(n_members: int = N_MEMBERS) -> TabPFNEnsemblePreprocessor:
     )
 
 
-def _engine(kind: str, model: tabpfn_v3.TabPFNV3) -> object:
+def _engine(kind: str, model: Architecture) -> object:
     X_train, y_train, _ = _data()
     common = {
         "ensemble_preprocessor": _preprocessor(),
@@ -115,6 +130,100 @@ def _engine(kind: str, model: tabpfn_v3.TabPFNV3) -> object:
 def _predict(engine: object) -> list[tuple[torch.Tensor, object]]:
     _, _, X_test = _data()
     return list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))  # type: ignore[attr-defined]
+
+
+class _TestModelWithEstimatorIds(_TestModelWithKVCache):
+    @override
+    def forward(
+        self,
+        x: Tensor | dict[str, Tensor],
+        y: Tensor | dict[str, Tensor] | None,
+        *,
+        estimator_ids: list[int] | None = None,
+        kv_cache: TabPFNV3Cache | None = None,
+        **kwargs,
+    ) -> Tensor | tuple[Tensor, TabPFNV3Cache]:
+        assert isinstance(x, Tensor)
+        assert estimator_ids is not None
+        assert len(estimator_ids) == x.shape[1]
+        samples = torch.stack(
+            [
+                torch.rand((), generator=torch.Generator().manual_seed(estimator_id))
+                for estimator_id in estimator_ids
+            ]
+        )
+        result = super().forward(x, y, kv_cache=kv_cache, **kwargs)
+        if isinstance(result, tuple):
+            output, cache = result
+            cache.decoder_keys[:] = samples.reshape(-1, 1, 1, 1)
+            return output, cache
+        if kv_cache is not None:
+            torch.testing.assert_close(kv_cache.decoder_keys[:, 0, 0, 0], samples)
+        return samples[None, :, None].expand_as(result)
+
+
+@pytest.mark.parametrize("kind", ENGINES)
+def test__iter_outputs__estimator_ids_seed_architecture(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        settings.tabpfn, "max_batched_estimator_rows", 2 * (N_TRAIN + N_TEST)
+    )
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", 2)
+    engine = _engine(kind, _TestModelWithEstimatorIds())
+    for _ in range(2):
+        outputs = _predict(engine)
+        assert len(outputs) == N_MEMBERS
+        for estimator_id, (output, _) in enumerate(outputs):
+            expected = torch.rand(
+                (), generator=torch.Generator().manual_seed(estimator_id)
+            ).expand(N_TEST, 1)
+            torch.testing.assert_close(output, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(("rank", "world_size"), [(0, 1), (1, 2)])
+def test__batched_no_preprocessing__estimator_ids_seed_architecture(
+    rank: int, world_size: int
+) -> None:
+    n_estimators, n_datasets, n_train, n_test, n_features = 4, 2, 5, 2, 4
+    configs = _preprocessor(n_estimators).configs
+    batch = ClassifierBatch(
+        X_context=[torch.zeros(n_datasets, n_train, n_features) for _ in configs],
+        X_query=[torch.zeros(n_datasets, n_test, n_features) for _ in configs],
+        y_context=[torch.zeros(n_datasets, n_train) for _ in configs],
+        y_query=torch.zeros(n_datasets, n_test),
+        cat_indices=[[[] for _ in configs] for _ in range(n_datasets)],
+        configs=[[config] * n_datasets for config in configs],
+    )
+    shard = _get_estimator_shard(n_estimators, rank, world_size)
+    batch = _slice_batch_estimators(batch, shard)
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+    engine = InferenceEngineBatchedNoPreprocessing(
+        batch.X_context,
+        batch.y_context,
+        feature_schema=[[feature_schema] * shard.size for _ in range(n_datasets)],
+        ensemble_configs=batch.configs,
+        models=[_TestModelWithEstimatorIds()],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=False,
+        inference_mode=True,
+        performance_options=PerformanceOptions(),
+    )
+    outputs = list(
+        engine.iter_outputs(
+            batch.X_query,
+            autocast=False,
+            task_type="multiclass",
+        )
+    )
+    assert len(outputs) == shard.size
+    for estimator_id, (output, _) in enumerate(outputs, start=shard.start):
+        expected = torch.rand((), generator=torch.Generator().manual_seed(estimator_id))
+        torch.testing.assert_close(
+            output, expected.expand(n_test, n_datasets, 1), rtol=0, atol=0
+        )
 
 
 @torch.no_grad()
