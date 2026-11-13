@@ -93,12 +93,35 @@ class ClassifierTuningConfig(TuningConfig):
 class RegressorTuningConfig(TuningConfig):
     """Configuration for tuning the model during fit/predict calls
     for regression tasks.
-
-    This currently adds no fields beyond the ones inherited from
-    [TuningConfig][tabpfn.inference_tuning.TuningConfig]. It exists so that the
-    task type can be recovered from the configuration alone, and so that
-    regression-only tuning options have a place to live as they are added.
     """
+
+    mean_recalibration: Literal["raw", "cstar"] = dataclasses.field(
+        default="raw", metadata={"enabled_by": "cstar"}
+    )
+    """How to rescale the predicted mean with a constant fitted on the tuning
+    holdout folds. Only the `"mean"` output is rescaled.
+
+    - "raw": no rescaling.
+    - "cstar": the constant c* that minimizes the Tweedie deviance with power
+      `mean_recalibration_power` of c* times the mean on the holdout rows. Needs
+      nonnegative targets.
+    """
+
+    mean_recalibration_power: float = 1.5
+    """The Tweedie power p of "cstar", in [1, 2]. p = 1 matches the sum of the
+    predicted means to the sum of the targets."""
+
+    rescale_pot_tail: bool = False
+    """Whether to scale the tail probability of the "single_pot" mean readouts by
+    one factor, so that its mean on the holdout rows is k / n, the share of
+    training targets the tail was fitted on. Set to True to enable."""
+
+    def __post_init__(self) -> None:
+        if not 1.0 <= self.mean_recalibration_power <= 2.0:
+            raise ValueError(
+                "`mean_recalibration_power` must be in [1, 2], got "
+                f"{self.mean_recalibration_power}."
+            )
 
 
 class ClassifierEvalMetrics(str, Enum):
@@ -487,6 +510,35 @@ RegressionHoldoutFold = (
 fold's per-bar downsampling correction log weights."""
 
 
+MEAN_RECALIBRATION_MIN_MEAN = 1e-6
+"""Floor for the means the recalibration constant is fitted on. A mean at or below
+zero has no Tweedie deviance for p > 1."""
+
+
+def find_mean_recalibration_scale(
+    y_true: np.ndarray,
+    mean: np.ndarray,
+    power: float,
+) -> float:
+    """Finds the constant c that minimizes the Tweedie deviance of `c * mean`.
+
+    The minimizer has the closed form c = sum(y m^(1-p)) / sum(m^(2-p)), with the
+    means m floored at `MEAN_RECALIBRATION_MIN_MEAN`. p = 1 gives
+    sum(y) / sum(m).
+
+    Args:
+        y_true: The nonnegative targets, of shape [n_samples].
+        mean: The predicted means, of shape [n_samples].
+        power: The Tweedie power p.
+
+    Returns:
+        The constant c.
+    """
+    m = np.maximum(mean.astype(np.float64), MEAN_RECALIBRATION_MIN_MEAN)
+    y = y_true.astype(np.float64)
+    return float((y * m ** (1 - power)).sum() / (m ** (2 - power)).sum())
+
+
 def find_regression_optimal_temperature(
     holdout_folds: list[RegressionHoldoutFold],
     metric_name: RegressorEvalMetrics,
@@ -623,9 +675,11 @@ def get_tuning_feature_flags(tuning_config: TuningConfig) -> dict[str, bool]:
     """Gets the tuning feature flags of a tuning configuration by field name.
 
     Every tuning feature is exposed as a boolean field (e.g.
-    `calibrate_temperature`); the remaining fields configure how tuning is run
-    rather than whether it happens at all. Reading them off the dataclass keeps
-    this task-agnostic, so a config without `tune_decision_thresholds` works.
+    `calibrate_temperature`), or as a field whose metadata names the value
+    `"enabled_by"` that turns it on; the remaining fields configure how tuning
+    is run rather than whether it happens at all. Reading them off the dataclass
+    keeps this task-agnostic, so a config without `tune_decision_thresholds`
+    works. Any value other than the field's default counts as enabled.
 
     Args:
         tuning_config: The tuning configuration to inspect.
@@ -634,11 +688,19 @@ def get_tuning_feature_flags(tuning_config: TuningConfig) -> dict[str, bool]:
         A mapping from feature flag name to whether it is enabled, in field
         declaration order.
     """
-    return {
-        field.name: value
-        for field in dataclasses.fields(tuning_config)
-        if isinstance(value := getattr(tuning_config, field.name), bool)
-    }
+    flags = {}
+    for field in dataclasses.fields(tuning_config):
+        value = getattr(tuning_config, field.name)
+        if "enabled_by" in field.metadata:
+            flags[field.name] = value != field.default
+        elif isinstance(value, bool):
+            flags[field.name] = value
+    return flags
+
+
+def _enable_option(tuning_config: TuningConfig, name: str) -> str:
+    field = next(f for f in dataclasses.fields(tuning_config) if f.name == name)
+    return f"`{name}={field.metadata.get('enabled_by', True)!r}`"
 
 
 def resolve_tuning_config(
@@ -674,7 +736,9 @@ def resolve_tuning_config(
 
     feature_flags = get_tuning_feature_flags(tuning_config)
     if not any(feature_flags.values()):
-        enable_options = " or ".join(f"`{name}=True`" for name in feature_flags)
+        enable_options = " or ".join(
+            _enable_option(tuning_config, name) for name in feature_flags
+        )
         warnings.warn(
             "You specified a tuning configuration but no tuning features were enabled. "
             f"Set {enable_options} to enable tuning.",

@@ -14,6 +14,9 @@ borders instead, and average the member means:
   E[Y] = E_trunc[min(Y, u)] + nu * sigma / (1 - xi), with
   nu = P(u < Y <= y_max) / P(Y <= y_max) from the member.
 - "single_pot_exp": "single_pot" with the GPD shape xi fixed at 0.
+
+`RegressorTuningConfig.rescale_pot_tail` scales nu by one factor fitted on the
+tuning holdout rows.
 """
 
 from __future__ import annotations
@@ -56,6 +59,8 @@ class ParetoTail:
     n_excesses: int
     sigma: float
     xi: float
+    probability_scale: float = 1.0
+    """The factor on the members' tail probability nu."""
 
     @property
     def mean_excess(self) -> float:
@@ -202,7 +207,17 @@ class MemberMeans:
         truncated, below_threshold, tail_probability = stats.unbind(-1)
         if self.tail is None:
             return truncated.numpy()
-        return (below_threshold + tail_probability * self.tail.mean_excess).numpy()
+        return (
+            below_threshold
+            + self.tail.probability_scale * tail_probability * self.tail.mean_excess
+        ).numpy()
+
+    def tail_probability(self) -> np.ndarray:
+        """The members' average P(u < Y <= y_max) / P(Y <= y_max), without the
+        tail's `probability_scale`.
+        """
+        assert self.readout in POT_READOUTS
+        return self._member_average()[:, 2].numpy()
 
 
 def _softmax_products(logits: torch.Tensor, columns: torch.Tensor) -> torch.Tensor:
