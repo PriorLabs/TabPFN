@@ -137,12 +137,17 @@ class InferenceConfig:
     rejected. With neither, the value comes from the checkpoint, and an ensemble
     whose checkpoints declare different counts is rejected too."""
 
-    GROUP_AGGREGATES: bool = True
-    """Whether, with `group_col` set, per-group aggregates of the features are
-    appended when the target is constant within every training group and some
-    group has more than one row. Up to 50 are kept, by their variance over the
-    training rows, from the mean, std, min, max and last value of numeric columns
-    and the count, last value and number of unique values of the others."""
+    APPEND_GROUP_AGGREGATES: bool = True
+    """Whether, with `group_col` set and one label per group, per-group aggregates
+    of the features are appended. One label per group means the target is
+    constant within every training group and some group has more than one row.
+    Up to 50 are kept, by their variance over the training rows, from the mean,
+    std, min, max and last value of numeric columns and the count, last value and
+    number of unique values of the others.
+
+    This makes prediction transductive: a test row's aggregates are computed over
+    the rows of its group in the predict input, so the rest of the predict input
+    changes its prediction. Predict all rows of a group in one call."""
 
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,

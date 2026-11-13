@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Append per-group aggregates of the features when each group has one label."""
+"""Per-group aggregates and pooled predictions, for one label per group."""
 
 from __future__ import annotations
 
@@ -8,13 +8,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import torch
 
 from tabpfn.preprocessing.datamodel import make_names_unique
 
 if TYPE_CHECKING:
     from tabpfn.constants import YType
 
-__all__ = ["GroupAggregator"]
+__all__ = ["GroupAggregator", "pool_rows"]
 
 _NUMERIC_AGGREGATES = ("mean", "std", "min", "max", "last")
 _OTHER_AGGREGATES = ("count", "last", "nunique")
@@ -27,18 +28,27 @@ class GroupAggregator:
     other columns the count, last value and number of unique values. Of these,
     the `max_features` with the largest variance over the training rows are
     kept. The aggregates are computed from the rows passed in, at fit and at
-    predict alike, so the rows of a group must be predicted in one call.
+    predict alike.
+
+    Args:
+        append: Whether to append the aggregates. Off, `fit_transform` only
+            detects one label per group.
+        max_features: How many aggregates to keep at most.
 
     Attributes:
-        aggregates_: The kept `(column, aggregate)` pairs. Empty when `y` is not
-            constant within every group, or when no group has more than one row.
+        one_label_per_group_: Whether `y` is constant within every training
+            group and some group has more than one row.
+        aggregates_: The kept `(column, aggregate)` pairs. Empty unless
+            `append` and `one_label_per_group_`.
         names_: The labels of the appended columns.
     """
 
+    one_label_per_group_: bool
     aggregates_: list[tuple[str, str]]
     names_: list[str]
 
-    def __init__(self, max_features: int = 50) -> None:
+    def __init__(self, *, append: bool, max_features: int = 50) -> None:
+        self.append = append
         self.max_features = max_features
 
     def fit_transform(
@@ -59,7 +69,10 @@ class GroupAggregator:
             exclude: A column of `X` not to aggregate.
         """
         self.aggregates_, self.names_ = [], []
-        if groups is None or not _one_label_per_group(y, groups):
+        self.one_label_per_group_ = groups is not None and _one_label_per_group(
+            y, groups
+        )
+        if not (self.append and self.one_label_per_group_):
             return X
 
         sizes = np.bincount(groups)
@@ -102,6 +115,17 @@ class GroupAggregator:
             )
         }
         return pd.concat([X, pd.DataFrame(columns, index=X.index)], axis=1)
+
+
+def pool_rows(values: torch.Tensor, groups: np.ndarray | None) -> torch.Tensor:
+    """Replace each row, along dim -2, by the mean over its group's rows."""
+    if groups is None:
+        return values
+    index = torch.as_tensor(groups, device=values.device)
+    shape = (*values.shape[:-2], int(index.max()) + 1, values.shape[-1])
+    sums = values.new_zeros(shape).index_add_(-2, index, values)
+    counts = torch.bincount(index).to(values.dtype)
+    return (sums / counts[:, None]).index_select(-2, index)
 
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
