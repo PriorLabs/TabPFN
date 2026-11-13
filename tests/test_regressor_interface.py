@@ -873,6 +873,12 @@ def test_predictions_shift_with_a_target_offset_far_above_its_spread(
     X_y: tuple[np.ndarray, np.ndarray], offset: float
 ) -> None:
     X, y = X_y
+    # Zero-mean targets on a 1/16 grid make `y + offset`, its mean and its std exact
+    # in float64, so both fits feed the model bit-identical standardized targets.
+    # Otherwise the rounding of `y + offset` moves a target by one fp32 ulp, and
+    # under bf16 autocast that can flip a near-tied mode bucket.
+    y = np.round((y - y.mean()) * 16) / 16
+    y[-1] -= y.sum()
     reference = TabPFNRegressor(n_estimators=2, random_state=42).fit(X, y)
     shifted = TabPFNRegressor(n_estimators=2, random_state=42).fit(X, y + offset)
 
