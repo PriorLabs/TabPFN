@@ -112,6 +112,7 @@ class GPUTransformType(str, Enum):
     QUANTILE = "quantile"
     SQUASHING_SCALER = "squashing_scaler"
     SAFE_POWER = "safe_power"
+    ROBUST = "robust"
 
 
 @dataclasses.dataclass
@@ -245,6 +246,14 @@ class FeatureSchema:
             i
             for i, f in enumerate(self.features)
             if f.scheduled_gpu_transform == GPUTransformType.SAFE_POWER
+        ]
+
+    def get_indices_marked_for_gpu_robust_transform(self) -> list[int]:
+        """Get column indices marked for GPU robust scaling."""
+        return [
+            i
+            for i, f in enumerate(self.features)
+            if f.scheduled_gpu_transform == GPUTransformType.ROBUST
         ]
 
     def clear_gpu_transform_marks(self) -> FeatureSchema:
