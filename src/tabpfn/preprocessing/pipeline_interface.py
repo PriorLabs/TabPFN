@@ -22,6 +22,19 @@ InfMasks: TypeAlias = dict[str, np.ndarray | torch.Tensor]
 they are NaN'd before the steps run and written back afterwards."""
 
 
+# Rows a whole-table scan reads at a time, so its masks stay a fraction of the table.
+_SCAN_ROWS = 65_536
+
+
+def _has_inf(X: np.ndarray | torch.Tensor) -> bool:
+    """Whether any cell of the 2d `X` is +/-inf, scanned a block of rows at a time."""
+    xp = torch if isinstance(X, torch.Tensor) else np
+    return any(
+        bool(xp.isinf(X[start : start + _SCAN_ROWS]).any())
+        for start in range(0, X.shape[0], _SCAN_ROWS)
+    )
+
+
 def _extract_inf_masks(
     X: np.ndarray | torch.Tensor,
     feature_schema: FeatureSchema,
@@ -32,10 +45,10 @@ def _extract_inf_masks(
     contained infinities (empty when ``X`` is finite, leaving ``X`` untouched).
     ``X`` is mutated in place.
     """
+    if not _has_inf(X):
+        return {}
     xp = torch if isinstance(X, torch.Tensor) else np
     inf_bool = xp.isinf(X)
-    if not bool(inf_bool.any()):
-        return {}
 
     masks: InfMasks = {}
     for idx, feat in enumerate(feature_schema.features):

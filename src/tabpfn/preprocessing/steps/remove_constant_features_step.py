@@ -12,6 +12,7 @@ import torch
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.pipeline_interface import (
+    _SCAN_ROWS,
     PreprocessingStep,
 )
 
@@ -38,9 +39,15 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
             if any(forced):
                 sel_ = sel_ | torch.tensor(forced, dtype=torch.bool)
         else:
-            sel_ = np.logical_and(
-                (X[0:1, :] == X).mean(axis=0) < 1.0, ~np.all(np.isnan(X), axis=0)
-            ).tolist()
+            # A column is constant if no row differs from the first; NaN differs from
+            # everything. Scanned a block of rows at a time so the masks stay small.
+            differs = np.zeros(X.shape[1], dtype=bool)
+            all_nan = np.ones(X.shape[1], dtype=bool)
+            for start in range(0, X.shape[0], _SCAN_ROWS):
+                block = X[start : start + _SCAN_ROWS]
+                differs |= (block != X[0:1, :]).any(axis=0)
+                all_nan &= np.isnan(block).all(axis=0)
+            sel_ = np.logical_and(differs, ~all_nan).tolist()
             if any(forced):
                 sel_ = [bool(keep or f) for keep, f in zip(sel_, forced, strict=False)]
 
