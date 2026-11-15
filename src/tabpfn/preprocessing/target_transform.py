@@ -85,8 +85,9 @@ class FixedAtomTransformer(TransformerMixin, BaseEstimator):
     """log(y) standardized on the positive targets, with the zeros at a fixed atom.
 
     The zeros sit at ``ATOM``. Positives below the cut ``ATOM + 1/2`` are raised to
-    it, and values below the cut decode to 0. The output is standardized already,
-    so `make_target_transform` adds no standardization after it.
+    it, and values below the cut decode to 0. Only the positive targets are
+    standardized, not all rows. `make_target_transform` adds no standardization
+    after it, because a second one would move the zeros away from ``ATOM``.
     """
 
     ATOM = -4.0
@@ -182,8 +183,9 @@ def decodes_nonnegative(target_transform: Transformer | Pipeline) -> bool:
 def make_target_transform(transform: Transformer | Pipeline | None) -> Pipeline:
     """Apply the optional preset to raw targets, then standardize.
 
-    `FixedAtomTransformer` standardizes itself and is not standardized again. The
-    inverse returns values in the target's original units.
+    `FixedAtomTransformer` standardizes its positive targets itself and gets no
+    second standardization. The inverse returns values in the target's original
+    units.
     """
     if transform is None:
         return Pipeline(steps=[(STANDARDIZE_STEP, StandardizeTarget())])
