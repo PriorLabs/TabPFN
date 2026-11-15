@@ -10,7 +10,7 @@ from typing_extensions import override
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
@@ -35,6 +35,24 @@ from tabpfn.preprocessing.torch.torch_svd import (
     TorchTruncatedSVD,
 )
 from tabpfn.utils import infer_random_state
+
+
+class TorchSelectiveStep(TorchPreprocessingStep):
+    """A step on the columns that CPU preprocessing marked for it.
+
+    The marks come with the feature schema, so the targets are fixed at construction;
+    `fit_transform` reads them instead of `column_indices`.
+    """
+
+    _target_column_indices: list[int]
+
+    @override
+    def target_columns(
+        self,
+        feature_schema: FeatureSchema,
+        modalities: set[FeatureModality] | None,
+    ) -> list[int]:
+        return list(self._target_column_indices)
 
 
 class TorchRandomSignFlipStep(TorchPreprocessingStep):
@@ -214,7 +232,7 @@ class TorchSoftClipOutliersStep(TorchPreprocessingStep):
         return self._outlier_remover.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
+class TorchSelectiveQuantileTransformerStep(TorchSelectiveStep):
     """Quantile transformer that only transforms specified column indices.
 
     This step needs to be registered with ``modalities=None`` in the GPU pipeline so it
@@ -287,7 +305,7 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         return self._qt.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
+class TorchSelectiveSquashingScalerStep(TorchSelectiveStep):
     """Squashing scaler that only transforms specified column indices.
 
     Mirrors :class:`TorchSelectiveQuantileTransformerStep`: this step needs to be
@@ -360,7 +378,7 @@ class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
         return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
+class TorchSelectiveSafePowerStep(TorchSelectiveStep):
     """Safe power transform that only transforms specified column indices.
 
     Register with ``modalities=None``, like
