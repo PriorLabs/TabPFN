@@ -267,9 +267,9 @@ class InferenceConfig:
     the model, which can be significantly faster for large datasets (>10 k rows).
     When ``False`` (default), all preprocessing runs on CPU / sklearn as before.
 
-    Only the ``quantile_uni*``, ``quantile_norm*``, ``squashing_scaler_*`` and
-    ``safepower`` transforms are accelerated.  Other transforms stay on CPU
-    regardless of this flag.  SVD and shuffle always move to GPU / torch when
+    Only the ``quantile_uni*``, ``quantile_norm*``, ``squashing_scaler_*``,
+    ``safepower`` and ``robust`` transforms are accelerated.  Other transforms stay
+    on CPU regardless of this flag.  SVD and shuffle always move to GPU / torch when
     this flag is set."""
 
     FEATURE_SUBSAMPLING_METHOD: Literal[

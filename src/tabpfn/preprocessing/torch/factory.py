@@ -24,6 +24,7 @@ from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
     TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveRobustScalerStep,
     TorchSelectiveSafePowerStep,
     TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
-def create_gpu_preprocessing_pipeline(
+def create_gpu_preprocessing_pipeline(  # noqa: C901
     config: EnsembleConfig,
     *,
     keep_fitted_cache: bool = False,
@@ -113,6 +114,19 @@ def create_gpu_preprocessing_pipeline(
                 (
                     TorchSelectiveSafePowerStep(
                         target_column_indices=safe_power_target_indices
+                    ),
+                    None,  # operates on explicit indices, receives full tensor
+                )
+            )
+
+        robust_target_indices = (
+            feature_schema.get_indices_marked_for_gpu_robust_transform()
+        )
+        if robust_target_indices:
+            steps.append(
+                (
+                    TorchSelectiveRobustScalerStep(
+                        target_column_indices=robust_target_indices
                     ),
                     None,  # operates on explicit indices, receives full tensor
                 )
