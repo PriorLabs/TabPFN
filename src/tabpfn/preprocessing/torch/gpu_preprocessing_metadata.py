@@ -58,6 +58,8 @@ def get_gpu_transform_type(transform_name: str) -> GPUTransformType | None:
         return GPUTransformType.SQUASHING_SCALER
     if transform_name == "safepower":
         return GPUTransformType.SAFE_POWER
+    if transform_name == "robust":
+        return GPUTransformType.ROBUST
     return None
 
 
