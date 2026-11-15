@@ -1792,7 +1792,7 @@ MEAN_READOUTS = ["single_clamp", "single_trunc", "single_pot", "single_pot_exp"]
 @pytest.mark.parametrize("readout", MEAN_READOUTS)
 def test__predict__mean_readout__averages_the_member_means(readout: str) -> None:
     X, y = _zero_inflated_regression_data()
-    config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("raw_log_qgap",)}
+    config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_qgap",)}
     kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 42}
     reg = TabPFNRegressor(
         **kwargs, inference_config={**config, "REGRESSION_MEAN_READOUT": readout}
