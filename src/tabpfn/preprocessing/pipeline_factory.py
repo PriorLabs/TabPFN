@@ -137,4 +137,12 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             ),
         )
-    return PreprocessingPipeline(steps)
+    # On the GPU path a GPU-scheduled or "none" reshape transform leaves the numerical
+    # values alone, and the steps above only select, reorder or encode columns.
+    keeps_values = (
+        enable_gpu_preprocessing
+        and not use_poly_features
+        and not pconfig.differentiable
+        and reshape_transform_name == "none"
+    )
+    return PreprocessingPipeline(steps, keeps_values=keeps_values)

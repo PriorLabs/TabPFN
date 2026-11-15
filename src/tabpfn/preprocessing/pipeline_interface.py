@@ -364,6 +364,8 @@ class PreprocessingPipeline:
     def __init__(
         self,
         steps: list[PreprocessingStep | StepWithModalities],
+        *,
+        keeps_values: bool = False,
     ) -> None:
         """Initialize the pipeline with preprocessing steps.
 
@@ -372,10 +374,19 @@ class PreprocessingPipeline:
                 (receives all columns) or a tuple of (PreprocessingStep,
                 set[FeatureModality]) where the step receives only columns
                 matching the specified modalities.
+            keeps_values: The steps only select, reorder and encode columns: none
+                computes on a numerical value or writes into its input. The input is
+                then not copied to float64 first, and the output keeps its dtype.
         """
         super().__init__()
         self._raw_steps = steps
         self.steps = self._validate_steps(steps)
+        if keeps_values and any(modalities for _, modalities in self.steps):
+            raise ValueError(
+                "keeps_values needs steps that receive all columns: the pipeline "
+                "writes the output of a step with modalities into its input."
+            )
+        self.keeps_values = keeps_values
 
     step_timings_: dict[str, float] | None
     """Per-step wall-clock time (seconds) from the last ``fit_transform`` or
@@ -465,12 +476,14 @@ class PreprocessingPipeline:
         """
         # Single copy to preserve immutability for the caller, avoiding N copies
         # inside the loop for steps that target specific modalities.
-        # Fuse casting with copying for performance.
-        X = (
-            X.astype(np.float64, order="C", copy=True)
-            if isinstance(X, np.ndarray)
-            else X.clone()
-        )
+        # Fuse casting with copying for performance. Steps that keep the values
+        # need neither, unless infinities are rewritten in place below.
+        if not self.keeps_values or _has_inf(X):
+            X = (
+                X.astype(np.float64, order="C", copy=True)
+                if isinstance(X, np.ndarray)
+                else X.clone()
+            )
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
