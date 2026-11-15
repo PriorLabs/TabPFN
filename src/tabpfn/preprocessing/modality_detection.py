@@ -23,6 +23,10 @@ from tabpfn.preprocessing.datamodel import (
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
 
+#: Input bytes the distinct-value count sorts at a time. Larger blocks only cost
+#: memory; smaller ones start to pay per-call overhead on short columns.
+_COUNT_BLOCK_BYTES = 256 * 1024 * 1024
+
 #: Cap on how many column names the likely-text warning lists, so a wide frame of
 #: text columns does not produce an unreadable multi-kilobyte message.
 _MAX_TEXT_COLUMNS_IN_WARNING = 10
@@ -267,8 +271,12 @@ def _numeric_n_unique_per_column(
         return _count_distinct_per_column(X)
     n_unique = _count_distinct_per_column(X[:_EARLY_EXIT_PREFIX_ROWS])
     undecided = np.flatnonzero(n_unique < decided_at)
-    if len(undecided):
-        n_unique[undecided] = _count_distinct_per_column(X[:, undecided])
+    # The count sorts a copy of its columns and keeps masks of the same size, so the
+    # columns go a block at a time; each column's count is independent of the others.
+    block = max(1, _COUNT_BLOCK_BYTES // (n_rows * X.itemsize))
+    for start in range(0, len(undecided), block):
+        columns = undecided[start : start + block]
+        n_unique[columns] = _count_distinct_per_column(X[:, columns])
     return n_unique
 
 

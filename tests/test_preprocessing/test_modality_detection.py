@@ -28,6 +28,7 @@ from tabpfn.preprocessing.modality_detection import (
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
+    _numeric_n_unique_per_column,
     _warn_on_text,
     detect_feature_modalities,
 )
@@ -982,6 +983,20 @@ def test__count_distinct_per_column__matches_nunique() -> None:
     assert _count_distinct_per_column(ints).tolist() == [1, 2]
     bools = np.array([[True], [False], [True]])
     assert _count_distinct_per_column(bools).tolist() == [2]
+
+
+def test__numeric_n_unique_per_column__column_blocks__match_one_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = np.random.default_rng(0)
+    X = np.round(rng.standard_normal((3000, 7)), 1)
+    X[rng.random(X.shape) < 0.1] = np.nan
+    X[:, 2] = 4.0
+    one_block = _numeric_n_unique_per_column(X, decided_at=10**9)
+    monkeypatch.setattr(modality_detection, "_COUNT_BLOCK_BYTES", 1)
+    blocked = _numeric_n_unique_per_column(X, decided_at=10**9)
+    expected = [pd.Series(X[:, j]).nunique(dropna=False) for j in range(X.shape[1])]
+    assert blocked.tolist() == one_block.tolist() == expected
 
 
 @pytest.mark.parametrize(
