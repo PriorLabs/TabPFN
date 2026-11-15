@@ -1715,7 +1715,7 @@ def _zero_inflated_regression_data() -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-@pytest.mark.parametrize("transform", ["raw_log_qgap", "raw_log_fixed_atom"])
+@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom"])
 def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> None:
     """The transform must find the exact zeros of the raw target, not a z-score."""
     X, y = _zero_inflated_regression_data()
@@ -1729,7 +1729,7 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
     reg.fit(X, y)
 
     logs = np.log(y[y > 0])
-    if transform == "raw_log_qgap":
+    if transform == "log_qgap":
         t = np.where(y > 0, np.log(np.where(y > 0, y, 1.0)), 0.0)
         t[y == 0] = np.quantile(logs, 0.01) - logs.std()
         expected = (t - t.mean()) / t.std()
@@ -1743,7 +1743,7 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
     assert (member_y == zero_code).mean() == (y == 0).mean()
 
 
-@pytest.mark.parametrize("transform", ["raw_log_qgap", "raw_log_fixed_atom"])
+@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom"])
 def test__predict__zero_inflated_transform__members_are_clamped_at_zero(
     transform: str,
 ) -> None:
@@ -2474,8 +2474,8 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
         ("log", -1.0, "strictly positive"),
         ("1_plus_log", -1.0, "greater than -1"),
         ("1_plus_log", -2.0, "greater than -1"),
-        ("raw_log_qgap", -1.0, "nonnegative"),
-        ("raw_log_fixed_atom", -1.0, "nonnegative"),
+        ("log_qgap", -1.0, "nonnegative"),
+        ("log_fixed_atom", -1.0, "nonnegative"),
     ],
 )
 def test__fit__invalid_log_target__raises_clear_error(

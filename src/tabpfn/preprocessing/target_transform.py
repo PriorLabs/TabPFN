@@ -61,7 +61,7 @@ class QuantileGapTransformer(TransformerMixin, BaseEstimator):
     def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> QuantileGapTransformer:
         """Place the zeros below the positive logs of the target ``X``."""
         del y
-        logs = _positive_logs(X, "raw_log_qgap")
+        logs = _positive_logs(X, "log_qgap")
         sd = float(np.std(logs))
         self.zero_ = float(np.quantile(logs, self.QUANTILE)) - sd
         self.cut_ = self.zero_ + sd / 2
@@ -95,7 +95,7 @@ class FixedAtomTransformer(TransformerMixin, BaseEstimator):
     def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> FixedAtomTransformer:
         """Learn the mean and standard deviation of the positive logs of ``X``."""
         del y
-        logs = _positive_logs(X, "raw_log_fixed_atom")
+        logs = _positive_logs(X, "log_fixed_atom")
         self.mean_ = float(np.mean(logs))
         self.scale_ = float(np.std(logs))
         return self
@@ -115,8 +115,8 @@ class FixedAtomTransformer(TransformerMixin, BaseEstimator):
 
 
 ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
-    "raw_log_qgap": QuantileGapTransformer,
-    "raw_log_fixed_atom": FixedAtomTransformer,
+    "log_qgap": QuantileGapTransformer,
+    "log_fixed_atom": FixedAtomTransformer,
 }
 """Presets of `REGRESSION_Y_PREPROCESS_TRANSFORMS` that decode a range to exactly 0."""
 
