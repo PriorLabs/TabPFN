@@ -1715,7 +1715,7 @@ def _zero_inflated_regression_data() -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom"])
+@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p"])
 def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> None:
     """The transform must find the exact zeros of the raw target, not a z-score."""
     X, y = _zero_inflated_regression_data()
@@ -1724,12 +1724,19 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
         n_estimators=1,
         device="cpu",
         random_state=42,
-        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,),
+            # Only "log1p" reads the scale.
+            "REGRESSION_LOG1P_SCALE": 1e-2,
+        },
     )
     reg.fit(X, y)
 
     logs = np.log(y[y > 0])
-    if transform == "log_qgap":
+    if transform == "log1p":
+        t = np.log1p(1e-2 * y)
+        expected = (t - t.mean()) / t.std()
+    elif transform == "log_qgap":
         t = np.where(y > 0, np.log(np.where(y > 0, y, 1.0)), 0.0)
         t[y == 0] = np.quantile(logs, 0.01) - logs.std()
         expected = (t - t.mean()) / t.std()
@@ -1743,7 +1750,7 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
     assert (member_y == zero_code).mean() == (y == 0).mean()
 
 
-@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom"])
+@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p"])
 def test__predict__zero_inflated_transform__members_are_clamped_at_zero(
     transform: str,
 ) -> None:
@@ -2476,6 +2483,7 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
         ("1_plus_log", -2.0, "greater than -1"),
         ("log_qgap", -1.0, "nonnegative"),
         ("log_fixed_atom", -1.0, "nonnegative"),
+        ("log1p", -1.0, "nonnegative"),
     ],
 )
 def test__fit__invalid_log_target__raises_clear_error(

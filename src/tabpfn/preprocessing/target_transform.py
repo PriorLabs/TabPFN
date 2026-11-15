@@ -114,20 +114,54 @@ class FixedAtomTransformer(TransformerMixin, BaseEstimator):
             return np.where(t < self.CUT, 0.0, np.exp(self.mean_ + self.scale_ * t))
 
 
+class Log1pTransformer(TransformerMixin, BaseEstimator):
+    """log1p(scale * y) for nonnegative targets, decoded with expm1(t) / scale.
+
+    A larger ``scale`` spreads the targets over more decades.
+    """
+
+    def __init__(self, scale: float) -> None:
+        self.scale = scale
+
+    def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> Log1pTransformer:
+        """Check that the target ``X`` is nonnegative."""
+        del y
+        _nonnegative(X, "log1p")
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Return log1p(scale * X)."""
+        return np.log1p(self.scale * np.asarray(X, dtype=np.float64))
+
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+        """Return expm1(X) / scale."""
+        with np.errstate(over="ignore"):
+            return np.expm1(np.asarray(X, dtype=np.float64)) / self.scale
+
+
 ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
     "log_qgap": QuantileGapTransformer,
     "log_fixed_atom": FixedAtomTransformer,
+    "log1p": Log1pTransformer,
 }
-"""Presets of `REGRESSION_Y_PREPROCESS_TRANSFORMS` that decode a range to exactly 0."""
+"""Presets of `REGRESSION_Y_PREPROCESS_TRANSFORMS` for nonnegative targets.
+
+Members that use them put no mass below 0.
+"""
 
 
-def _positive_logs(X: np.ndarray, name: str) -> np.ndarray:
+def _nonnegative(X: np.ndarray, name: str) -> np.ndarray:
     values = np.asarray(X, dtype=np.float64)
     if (values < 0).any():
         raise ValueError(
             f"The '{name}' regression target transform requires nonnegative raw "
             "targets (y >= 0)."
         )
+    return values
+
+
+def _positive_logs(X: np.ndarray, name: str) -> np.ndarray:
+    values = _nonnegative(X, name)
     logs = np.log(values[values > 0])
     if np.unique(logs).size < 2:
         raise ValueError(
@@ -137,8 +171,8 @@ def _positive_logs(X: np.ndarray, name: str) -> np.ndarray:
     return logs
 
 
-def decodes_zeros(target_transform: Transformer | Pipeline) -> bool:
-    """Whether a member's target pipeline decodes a range of values to exactly 0."""
+def decodes_nonnegative(target_transform: Transformer | Pipeline) -> bool:
+    """Whether a member's target pipeline is for nonnegative targets."""
     return isinstance(target_transform, Pipeline) and isinstance(
         target_transform.named_steps.get(TARGET_TRANSFORM_STEP),
         tuple(ZERO_INFLATED_TARGET_TRANSFORMS.values()),
@@ -170,8 +204,9 @@ __all__ = [
     "TARGET_TRANSFORM_STEP",
     "ZERO_INFLATED_TARGET_TRANSFORMS",
     "FixedAtomTransformer",
+    "Log1pTransformer",
     "QuantileGapTransformer",
     "StandardizeTarget",
-    "decodes_zeros",
+    "decodes_nonnegative",
     "make_target_transform",
 ]

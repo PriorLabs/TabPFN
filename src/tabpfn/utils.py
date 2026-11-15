@@ -23,7 +23,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.target_transform import decodes_zeros
+from tabpfn.preprocessing.target_transform import decodes_nonnegative
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -593,7 +593,7 @@ def transform_borders_one(
 
     The inverse returns raw target units; map them into the shared standardized
     frame before applying sanity limits and aggregating predictions. A member
-    whose transform decodes to exactly 0 gets no borders below raw 0.
+    whose transform is for nonnegative targets gets no borders below raw 0.
 
     Args:
         borders: The borders to transform.
@@ -647,9 +647,10 @@ def transform_borders_one(
 
     _repair_borders(borders_t, inplace=True)
 
-    if decodes_zeros(target_transform):
-        # The repair above widens the collapsed outer bucket below raw 0, and
-        # its tail would carry mass at negative targets. Clamp it onto 0.
+    if decodes_nonnegative(target_transform):
+        # Clamp onto raw 0 so that no mass sits at negative targets. Low borders
+        # of log1p decode to (-1 / scale, 0), and the repair above widens the
+        # collapsed outer bucket of the transforms that decode to exactly 0.
         zero = np.asarray((0.0 - znorm_mean) / znorm_std).astype(borders_t.dtype)
         borders_t = np.maximum(borders_t, zero)
 
