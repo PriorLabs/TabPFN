@@ -18,6 +18,11 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
 )
 from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
+    TorchRandomSignFlipStep,
+    TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveRobustScalerStep,
+    TorchSelectiveSafePowerStep,
+    TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
     TorchStandardScalerStep,
 )
@@ -678,3 +683,107 @@ def test__fit_transform_rows_on_device__row_blocks__match_fit_transform(
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
     assert actual.schema_permutation == expected.schema_permutation
+
+
+def _blockwise_pipeline() -> TorchPreprocessingPipeline:
+    """One step of each kind the block runners handle, on 10 numerical columns."""
+    return TorchPreprocessingPipeline(
+        steps=[
+            (TorchSelectiveQuantileTransformerStep(20, [0, 1, 2]), None),
+            (TorchSelectiveSafePowerStep([3, 4]), None),
+            (TorchSelectiveSquashingScalerStep(3.0, [5, 6]), None),
+            (TorchSelectiveRobustScalerStep([7, 8]), None),
+            (TorchRandomSignFlipStep(random_state=0), {FeatureModality.NUMERICAL}),
+            (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
+        ]
+    )
+
+
+def _wide_input() -> tuple[torch.Tensor, FeatureSchema]:
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(64, 1, 10, generator=generator) * torch.linspace(0.5, 20, 10)
+    x[3, 0, 4] = float("nan")
+    return x, FeatureSchema.from_only_categorical_indices([], num_columns=10)
+
+
+def test__call__bfloat16_table__computes_by_blocks_in_float32(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bfloat16 table goes through the block runners even on its own device."""
+    # A few columns or rows per block, so every runner sees several blocks.
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 64 * 3 * 4)
+    x, schema = _wide_input()
+    x = x.to(torch.bfloat16).to(torch.float32)
+    expected = _blockwise_pipeline()(x.clone(), schema, num_train_rows=50)
+    table = x.to(torch.bfloat16)
+
+    actual = _blockwise_pipeline()(
+        table,
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+
+    assert actual.x.dtype == torch.bfloat16
+    assert actual.x.data_ptr() == table.data_ptr()
+    assert actual.feature_schema == expected.feature_schema
+    # Each step's output is stored at bfloat16 before the next step reads it.
+    torch.testing.assert_close(actual.x.float(), expected.x, rtol=3e-2, atol=5e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__call__host_table__matches_the_device_table() -> None:
+    x, schema = _wide_input()
+    device = torch.device("cuda")
+    expected = _blockwise_pipeline()(x.to(device), schema, num_train_rows=50)
+
+    actual = _blockwise_pipeline()(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=device,
+    )
+
+    assert actual.x.device.type == "cpu"
+    torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True)
+
+
+class _DtypeRecordingStep(MockStep):
+    """A columnwise step that records the dtype of each block it transforms."""
+
+    columnwise = True
+
+    def __init__(self) -> None:
+        super().__init__(factor=0.5)
+        self.dtypes: list[torch.dtype] = []
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        self.dtypes.append(x.dtype)
+        return super()._transform(x, fitted_cache)
+
+
+def test__call__bfloat16_table__steps_read_float32_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two bfloat16 columns of 8 rows per block: three blocks for five columns.
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 2 * 8 * 2)
+    step = _DtypeRecordingStep()
+    table = torch.ones(8, 1, 5, dtype=torch.bfloat16)
+
+    TorchPreprocessingPipeline(steps=[(step, None)])(
+        table,
+        FeatureSchema.from_only_categorical_indices([], num_columns=5),
+        num_train_rows=6,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+
+    assert step.dtypes == [torch.float32] * 3
+    assert torch.equal(table, torch.full_like(table, 0.5))
