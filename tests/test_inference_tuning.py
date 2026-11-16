@@ -15,8 +15,10 @@ from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
+    RegressionHoldoutFold,
     RegressorEvalMetrics,
     RegressorTuningConfig,
+    bar_marginal,
     compute_regression_metric_to_minimize,
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
@@ -835,9 +837,7 @@ def test__find_regression_optimal_temperature__sharpens_underconfident() -> None
     assert _pooled_nll(folds, temperature) < _pooled_nll(folds, 1.0)
 
 
-def _optimal_temperature(
-    folds: list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]],
-) -> float:
+def _optimal_temperature(folds: list[RegressionHoldoutFold]) -> float:
     return find_regression_optimal_temperature(
         holdout_folds=folds,
         metric_name=RegressorEvalMetrics.NLL,
@@ -1154,3 +1154,102 @@ def test__find_regression_optimal_temperature__settles_near_the_no_op(
     )
 
     assert abs(temperature - 1.0) <= 0.05
+
+
+def _corrupt_from_marginal(
+    y: np.ndarray, reliability: np.ndarray, rng: np.random.Generator
+) -> np.ndarray:
+    """Replace each label, with probability 1 - r, by another row's label."""
+    flip = rng.random(len(y)) >= reliability
+    noisy = y.copy()
+    noisy[flip] = y[rng.permutation(len(y))][flip]
+    return noisy
+
+
+def _noisy_classification(
+    n_samples: int, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Calibrated logits, clean labels, and labels kept with probability 0.6."""
+    rng = np.random.default_rng(seed)
+    logits = rng.normal(size=(n_samples, 5)) @ rng.normal(size=(5, 3)) + [1.2, 0, -1]
+    probas = np.exp(logits) / np.exp(logits).sum(-1, keepdims=True)
+    y = (probas.cumsum(1) > rng.random((n_samples, 1))).argmax(1)
+    reliability = np.full(n_samples, 0.6)
+    return logits, y, _corrupt_from_marginal(y, reliability, rng), reliability
+
+
+def test__find_optimal_temperature__label_reliability_undoes_label_noise() -> None:
+    logits, y, y_noisy, reliability = _noisy_classification(20_000, seed=0)
+    marginal = np.bincount(y_noisy, minlength=3) / len(y_noisy)
+
+    def temperature(y_true: np.ndarray, **kwargs: np.ndarray) -> float:
+        return find_optimal_temperature(
+            raw_logits=logits[None],
+            y_true=y_true,
+            logits_to_probabilities_fn=_softmax_over_estimators,
+            current_default_temperature=1.0,
+            **kwargs,
+        )
+
+    assert temperature(y_noisy) == get_tuning_temperatures().max()
+    corrected = temperature(
+        y_noisy, label_reliability=reliability, label_marginal=marginal
+    )
+    assert abs(corrected - temperature(y)) <= 0.05
+    assert temperature(
+        y_noisy, label_reliability=np.ones(len(y)), label_marginal=marginal
+    ) == temperature(y_noisy)
+    assert (
+        temperature(
+            y_noisy, label_reliability=np.zeros(len(y)), label_marginal=marginal
+        )
+        == 1.0
+    )
+
+
+@pytest.mark.parametrize("metric", list(ClassifierEvalMetrics))
+def test__find_optimal_classification_thresholds__label_reliability_undoes_label_noise(
+    metric: ClassifierEvalMetrics,
+) -> None:
+    logits, y, y_noisy, reliability = _noisy_classification(20_000, seed=1)
+    probas = np.exp(logits) / np.exp(logits).sum(-1, keepdims=True)
+    marginal = np.bincount(y_noisy, minlength=3) / len(y_noisy)
+
+    def thresholds(y_true: np.ndarray, **kwargs: np.ndarray) -> np.ndarray:
+        return find_optimal_classification_thresholds(
+            metric_name=metric,
+            y_true=y_true,
+            y_pred_probas=probas,
+            n_classes=3,
+            **kwargs,
+        )
+
+    clean = thresholds(y)
+    corrected = thresholds(
+        y_noisy, label_reliability=reliability, label_marginal=marginal
+    )
+    np.testing.assert_allclose(corrected, clean, atol=0.06)
+
+
+@pytest.mark.parametrize("metric", list(RegressorEvalMetrics))
+def test__find_regression_optimal_temperature__label_reliability_undoes_label_noise(
+    metric: RegressorEvalMetrics,
+) -> None:
+    logits, bardist, y = _miscalibrated_fold(
+        n_samples=4000, target_temperature=1.0, seed=6
+    )
+    reliability = torch.full((len(y),), 0.6)
+    y_noisy = torch.as_tensor(
+        _corrupt_from_marginal(y.numpy(), reliability.numpy(), np.random.default_rng(6))
+    )
+    noise = (reliability, bar_marginal(bardist, y_noisy))
+
+    def temperature(fold: tuple) -> float:
+        return find_regression_optimal_temperature(
+            holdout_folds=[fold], metric_name=metric, current_default_temperature=1.0
+        )
+
+    clean = temperature((logits, bardist, y))
+    assert temperature((logits, bardist, y_noisy)) - clean > 0.2
+    corrected = temperature((logits, bardist, y_noisy, None, None, noise))
+    assert abs(corrected - clean) <= 0.06

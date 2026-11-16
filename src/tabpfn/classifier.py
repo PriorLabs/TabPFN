@@ -104,7 +104,6 @@ from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
-    tuning_metric_row_weights,
     validate_row_weights,
 )
 from tabpfn.preprocessing.text import TextTransformer
@@ -1066,8 +1065,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 `SAMPLE_WEIGHT_MODE="learned"`.
 
         With `tuning_config`, each tuning fold is fit with the weights of its
-        rows, and a holdout row counts in the tuned metric in proportion to
-        `sample_weight * label_reliability`.
+        rows. A holdout row counts in the tuned metric in proportion to
+        `sample_weight`, and its label is scored as a noisy one: the clean label
+        with probability `label_reliability`, otherwise a draw from the labels'
+        distribution.
 
         Returns:
             self
@@ -1643,9 +1644,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 stacklevel=2,
             )
             return
-        holdout_raw_logits, holdout_y_true, holdout_weights, holdout_row_weights = (
-            holdout
-        )
+        (
+            holdout_raw_logits,
+            holdout_y_true,
+            holdout_weights,
+            holdout_sample_weight,
+            holdout_label_reliability,
+        ) = holdout
+        label_marginal = None
+        if holdout_label_reliability is not None:
+            label_marginal = np.bincount(
+                np.asarray(y).astype(np.int64), minlength=self.n_classes_
+            ) / len(y)
 
         # WARNING: ensure the calibration happens before threshold tuning!
         if tuning_config_resolved.calibrate_temperature:
@@ -1653,7 +1663,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 holdout_raw_logits=holdout_raw_logits,
                 holdout_y_true=holdout_y_true,
                 holdout_correction_weights=holdout_weights,
-                holdout_row_weights=holdout_row_weights,
+                holdout_sample_weight=holdout_sample_weight,
+                holdout_label_reliability=holdout_label_reliability,
+                label_marginal=label_marginal,
             )
             # The calibrated temperature is fitted on this dataset and replaces
             # whatever the checkpoint declared.
@@ -1675,7 +1687,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 y_true=holdout_y_true,
                 y_pred_probas=holdout_probas,
                 n_classes=self.n_classes_,
-                sample_weight=holdout_row_weights,
+                sample_weight=holdout_sample_weight,
+                label_reliability=holdout_label_reliability,
+                label_marginal=label_marginal,
             )
             self.tuned_classification_thresholds_ = tuned_classification_thresholds
 
@@ -1687,7 +1701,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_folds: int,
         sample_weight: npt.ArrayLike | None = None,
         label_reliability: npt.ArrayLike | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None] | None:
+    ) -> (
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]
+        | None
+    ):
         """Compute holdout validation data.
 
         Each fold is fit with the `sample_weight` and `label_reliability` of its
@@ -1708,10 +1725,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     small to be subsampled applies no correction at all. Such
                     rows carry weight one; the array is always explicit so that
                     tuning never falls back to the full model's weights.
-                - holdout_row_weights: The weight of each holdout row in the
-                    tuned metric (shape `[n_holdout_samples]`),
-                    `sample_weight * label_reliability`, or `None` when
-                    neither was given.
+                - holdout_sample_weight: The `sample_weight` of each holdout
+                    row (shape `[n_holdout_samples]`), or `None`.
+                - holdout_label_reliability: The `label_reliability` of each
+                    holdout row (shape `[n_holdout_samples]`), or `None`.
         """
         X = copy.deepcopy(X)
         y = copy.deepcopy(y)
@@ -1727,12 +1744,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             sample_weight = np.asarray(sample_weight, dtype=np.float64)
         if label_reliability is not None:
             label_reliability = np.asarray(label_reliability, dtype=np.float64)
-        row_weights = tuning_metric_row_weights(sample_weight, label_reliability)
 
         holdout_raw_logits = []
         holdout_y_true = []
         holdout_weights: list[np.ndarray] = []
-        holdout_row_weights: list[np.ndarray] = []
+        holdout_indices_kept: list[np.ndarray] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for train_indices, holdout_indices in split_indices:
             X_train_NtF, y_train_Nt = X[train_indices], y[train_indices]
@@ -1748,8 +1764,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             if label_reliability is not None:
                 fit_kwargs["label_reliability"] = label_reliability[train_indices]
             holdout_y_true.append(y_holdout_Nh)
-            if row_weights is not None:
-                holdout_row_weights.append(row_weights[holdout_indices])
+            holdout_indices_kept.append(holdout_indices)
             calibration_classifier = self._get_tuning_classifier()
             with warnings.catch_warnings():
                 # Filter expected warnings during tuning
@@ -1775,14 +1790,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
         holdout_y_true__all = np.concatenate(holdout_y_true, axis=0)
         holdout_weights_all = np.concatenate(holdout_weights, axis=0)
-        holdout_row_weights_all = (
-            None if row_weights is None else np.concatenate(holdout_row_weights)
-        )
+        kept = np.concatenate(holdout_indices_kept)
         return (
             holdout_raw_logits_all,
             holdout_y_true__all,
             holdout_weights_all,
-            holdout_row_weights_all,
+            None if sample_weight is None else sample_weight[kept],
+            None if label_reliability is None else label_reliability[kept],
         )
 
     def _raw_predict(
@@ -1937,11 +1951,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         holdout_raw_logits: np.ndarray,
         holdout_y_true: np.ndarray,
         holdout_correction_weights: np.ndarray,
-        holdout_row_weights: np.ndarray | None = None,
+        holdout_sample_weight: np.ndarray | None = None,
+        holdout_label_reliability: np.ndarray | None = None,
+        label_marginal: np.ndarray | None = None,
     ) -> float:
         """Calibrate temperature based on the holdout logits and true labels.
 
-        `holdout_row_weights` weights each holdout row in the log loss.
+        `holdout_sample_weight` weights each holdout row in the log loss, and
+        `holdout_label_reliability` scores each label as a noisy one.
 
         `holdout_correction_weights` are the per-sample downsampling correction
         weights of the folds that produced the logits (ones where a fold applied
@@ -1972,7 +1989,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_true=holdout_y_true,
             logits_to_probabilities_fn=logits_to_probabilities_fn,
             current_default_temperature=self.softmax_temperature_,
-            sample_weight=holdout_row_weights,
+            sample_weight=holdout_sample_weight,
+            label_reliability=holdout_label_reliability,
+            label_marginal=label_marginal,
         )
 
     def _maybe_reweight_probas(self, probas: np.ndarray) -> np.ndarray:

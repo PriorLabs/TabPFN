@@ -28,7 +28,6 @@ __all__ = [
     "SampleWeightMode",
     "resolve_sample_weight_mode",
     "row_weights_for_estimator",
-    "tuning_metric_row_weights",
     "validate_row_weights",
 ]
 
@@ -114,26 +113,6 @@ def row_weights_for_estimator(
     estimator_weights = selected.copy()
     estimator_weights[:, 0] *= len(selected) / total
     return estimator_weights
-
-
-def tuning_metric_row_weights(
-    sample_weight: np.ndarray | None, label_reliability: np.ndarray | None
-) -> np.ndarray | None:
-    """The weight of each row in a tuned metric when the row is held out.
-
-    A row counts in proportion to `sample_weight * label_reliability`, so a
-    label that carries no information does not steer the tuning.
-
-    Returns:
-        One weight per row, or `None` when neither argument is given.
-    """
-    if sample_weight is None and label_reliability is None:
-        return None
-    if sample_weight is None:
-        return label_reliability
-    if label_reliability is None:
-        return sample_weight
-    return sample_weight * label_reliability
 
 
 def resolve_sample_weight_mode(

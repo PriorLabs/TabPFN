@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import logging
 import numbers
 import typing
@@ -72,6 +73,7 @@ from tabpfn.inference import (
 from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
     RegressorTuningConfig,
+    bar_marginal,
     find_regression_optimal_temperature,
     get_tuning_split_indices,
     resolve_tuning_config,
@@ -106,7 +108,6 @@ from tabpfn.preprocessing.group_ids import (
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
-    tuning_metric_row_weights,
     validate_row_weights,
 )
 from tabpfn.preprocessing.steps import (
@@ -1479,8 +1480,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 supports `SAMPLE_WEIGHT_MODE="learned"`.
 
         With `tuning_config`, each tuning fold is fit with the weights of its
-        rows, and a holdout row counts in the tuned metric in proportion to
-        `sample_weight * label_reliability`.
+        rows. A holdout row counts in the tuned metric in proportion to
+        `sample_weight`, and its label is scored as a noisy one: the clean label
+        with probability `label_reliability`, otherwise a draw from the labels'
+        distribution.
 
         Returns:
             self
@@ -1797,6 +1800,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             torch.Tensor,
             torch.Tensor | None,
             torch.Tensor | None,
+            tuple[torch.Tensor, torch.Tensor] | None,
         ]
     ]:
         """Compute holdout validation data, one entry per cross-validation fold.
@@ -1810,11 +1814,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         training rows.
 
         Returns:
-            One `(logits, raw_space_bardist, y_holdout, log_weights, row_weights)`
-            tuple per usable fold. `row_weights` has shape `[n_holdout_samples]`
-            and holds the weight of each holdout row in the tuned metric,
-            `sample_weight * label_reliability`, or is `None` when neither was
-            given. `logits` has shape `[n_holdout_samples, n_buckets]` and
+            One `(logits, raw_space_bardist, y_holdout, log_weights,
+            sample_weight, label_noise)` tuple per usable fold. `sample_weight`
+            has shape `[n_holdout_samples]`, or is `None`. `label_noise` is
+            `(label_reliability, bar_marginal)`: the holdout rows' reliability,
+            and the share of the fold's training targets in each bar, or `None`.
+            `logits` has shape `[n_holdout_samples, n_buckets]` and
             carries no temperature and no downsampling correction; `log_weights`
             is the fold's own per-bar correction (or `None`), kept separate so the
             temperature sweep can compose the two exactly as prediction does.
@@ -1838,7 +1843,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             sample_weight = np.asarray(sample_weight, dtype=np.float64)
         if label_reliability is not None:
             label_reliability = np.asarray(label_reliability, dtype=np.float64)
-        row_weights = tuning_metric_row_weights(sample_weight, label_reliability)
 
         holdout_folds: list[
             tuple[
@@ -1847,6 +1851,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 torch.Tensor,
                 torch.Tensor | None,
                 torch.Tensor | None,
+                tuple[torch.Tensor, torch.Tensor] | None,
             ]
         ] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples,
@@ -1900,6 +1905,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 dtype=raw_space_bardist.borders.dtype,
                 device=logits_NhB.device,
             )
+            as_tensor = functools.partial(
+                torch.as_tensor,
+                dtype=raw_space_bardist.borders.dtype,
+                device=logits_NhB.device,
+            )
             holdout_folds.append(
                 (
                     logits_NhB,
@@ -1907,11 +1917,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     y_holdout_Nh_tensor,
                     tuning_regressor.downsample_correction_log_weights_,
                     None
-                    if row_weights is None
-                    else torch.as_tensor(
-                        row_weights[holdout_indices],
-                        dtype=raw_space_bardist.borders.dtype,
-                        device=logits_NhB.device,
+                    if sample_weight is None
+                    else as_tensor(sample_weight[holdout_indices]),
+                    None
+                    if label_reliability is None
+                    else (
+                        as_tensor(label_reliability[holdout_indices]),
+                        bar_marginal(raw_space_bardist, as_tensor(y_train_Nt)),
                     ),
                 )
             )

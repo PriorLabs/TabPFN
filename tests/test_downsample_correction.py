@@ -307,7 +307,7 @@ def test__classifier__tuning_folds_carry_their_own_correction_weights():
     """
     X, y = _imbalanced_classification(n_majority=450, n_minority=50)
     clf = _downsampling_classifier().fit(X, y)
-    _raw_logits, y_true, weights, _ = clf._compute_holdout_validation_data(
+    _raw_logits, y_true, weights, _, _ = clf._compute_holdout_validation_data(
         X, y, holdout_frac=0.5, n_folds=1
     )
     assert weights is not None
@@ -336,7 +336,7 @@ def test__classifier__tuning_folds_without_downsampling_get_weight_one():
         },
     ).fit(X, y)
     assert clf.downsample_correction_weights_ is not None
-    raw_logits, y_true, weights, _ = clf._compute_holdout_validation_data(
+    raw_logits, y_true, weights, _, _ = clf._compute_holdout_validation_data(
         X, y, holdout_frac=0.5, n_folds=1
     )
     np.testing.assert_array_equal(weights, np.ones((len(y_true), 2)))
@@ -516,7 +516,7 @@ def test__regressor__tuning_folds_keep_logits_and_correction_separate():
     reg = _downsampling_regressor().fit(X, y)
     folds = reg._compute_holdout_validation_data(X, y, holdout_frac=0.5, n_folds=1)
     assert len(folds) == 1
-    _logits, bardist, _y_true, log_w, _ = folds[0]
+    _logits, bardist, _y_true, log_w, _, _ = folds[0]
     assert log_w is not None
     assert log_w.shape == (bardist.num_bars,)
     # The fold's clone trains on 250 rows with ~25 nonzero, so its inclusion

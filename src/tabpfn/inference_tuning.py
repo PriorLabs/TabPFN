@@ -10,7 +10,7 @@ import itertools
 import warnings
 from collections.abc import Callable
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeVar
 from typing_extensions import Self
 
 import numpy as np
@@ -123,6 +123,8 @@ class RegressorEvalMetrics(str, Enum):
     """Continuous ranked probability score of the targets under the predicted bar
     distribution, evaluated in the raw target space."""
 
+
+ArrayT = TypeVar("ArrayT", np.ndarray, torch.Tensor)
 
 # Objectives for the one-vs-rest threshold search, so the inputs are always
 # binary: callers binarize y_true as ``(y_true == i)`` and pass thresholded 0/1
@@ -291,18 +293,38 @@ def get_tuning_split_indices(
     return list(itertools.islice(splitter.split(X, y), n_splits))
 
 
+def mix_in_label_noise(
+    probas: ArrayT, label_reliability: ArrayT, label_marginal: ArrayT
+) -> ArrayT:
+    """The distribution of a noisy label given the clean label's `probas`.
+
+    A noisy label is the clean one with probability `label_reliability`, and
+    otherwise a draw from `label_marginal`, as in the prior the model learned
+    `label_reliability` from.
+    """
+    reliability = label_reliability[:, None]
+    return reliability * probas + (1 - reliability) * label_marginal
+
+
 def find_optimal_classification_thresholds(
     metric_name: ClassifierEvalMetrics,
     y_true: np.ndarray,
     y_pred_probas: np.ndarray,
     n_classes: int,
     sample_weight: np.ndarray | None = None,
+    label_reliability: np.ndarray | None = None,
+    label_marginal: np.ndarray | None = None,
 ) -> np.ndarray:
     """Finds the optimal thresholds for each class in a one-vs-rest (OvR) fashion.
 
     Classes with no positive (or no negative) rows in the holdout carry no signal
     to tune on and are assigned a neutral threshold instead of a searched one.
-    Rows with weight zero do not count as rows of the holdout.
+
+    With `label_reliability`, the metric is computed on an unbiased estimate of
+    the clean labels' confusion matrix: since a noisy label is the clean one with
+    probability r and otherwise a draw from `label_marginal`, each row counts
+    as `onehot(y_true) - (1 - r) * label_marginal`, so as a positive and a
+    negative row whose weights can be negative.
 
     Args:
         metric_name: The name of the metric to optimize.
@@ -311,6 +333,9 @@ def find_optimal_classification_thresholds(
         n_classes: The number of classes.
         sample_weight: The weight of each row in the metric, of shape [n_samples],
             or `None` for equal weights.
+        label_reliability: The reliability of each label, of shape [n_samples].
+        label_marginal: The class frequencies of the labels, of shape [n_classes].
+            Required with `label_reliability`.
 
     Returns:
         The optimal thresholds of shape [n_classes].
@@ -319,19 +344,35 @@ def find_optimal_classification_thresholds(
 
     # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
-    has_weight = np.ones(len(y_true), dtype=bool)
-    if sample_weight is not None:
-        has_weight = sample_weight > 0
+    n_samples = len(y_true)
+    weight = np.ones(n_samples) if sample_weight is None else sample_weight
     for i in range(n_classes):
-        is_class_i = y_true == i
-        if not (is_class_i & has_weight).any() or not (~is_class_i & has_weight).any():
+        is_class_i = (y_true == i).astype(float)
+        if label_reliability is None:
+            ovr_y, ovr_probas = is_class_i.astype(int), y_pred_probas[:, i]
+            ovr_weight = weight
+        else:
+            assert label_marginal is not None
+            noise = 1 - label_reliability
+            ovr_y = np.concatenate([np.ones(n_samples), np.zeros(n_samples)])
+            ovr_y = ovr_y.astype(int)
+            ovr_probas = np.tile(y_pred_probas[:, i], 2)
+            ovr_weight = np.concatenate(
+                [
+                    weight * (is_class_i - noise * label_marginal[i]),
+                    weight * (1 - is_class_i - noise * (1 - label_marginal[i])),
+                ]
+            )
+        if ovr_weight[ovr_y == 1].sum() <= 0 or ovr_weight[ovr_y == 0].sum() <= 0:
             continue
 
         tuned_by_class[i] = find_optimal_classification_threshold_single_class(
             metric_name=metric_name,
-            y_true=is_class_i.astype(int),
-            y_pred_probas=y_pred_probas[:, i],
-            sample_weight=sample_weight,
+            y_true=ovr_y,
+            y_pred_probas=ovr_probas,
+            sample_weight=None
+            if sample_weight is None and label_reliability is None
+            else ovr_weight,
         )
 
     n_untuned = n_classes - len(tuned_by_class)
@@ -380,13 +421,20 @@ def find_optimal_classification_threshold_single_class(
     thresholds = np.linspace(0.01, 0.99, 198)
     thresholds_and_losses: list[tuple[float, float]] = []  # (threshold, metric)
 
+    # Every metric sees the rows only through the weighted 2x2 confusion matrix.
+    # Clipping its cells at 0 keeps it valid when noise-corrected weights, which
+    # can be negative, leave a cell slightly below 0.
+    cell_y_true, cell_y_pred = np.array([0, 0, 1, 1]), np.array([0, 1, 0, 1])
     for threshold in thresholds:
         y_pred_tuned = (y_pred_probas >= threshold).astype(int)
+        cells = np.bincount(
+            2 * y_true + y_pred_tuned, weights=sample_weight, minlength=4
+        ).clip(min=0)
         current_loss = compute_metric_to_minimize(
             metric_name=metric_name,
-            y_true=y_true,
-            y_pred=y_pred_tuned,
-            sample_weight=sample_weight,
+            y_true=cell_y_true,
+            y_pred=cell_y_pred,
+            sample_weight=cells,
         )
         thresholds_and_losses.append((float(threshold), current_loss))
 
@@ -454,6 +502,8 @@ def find_optimal_temperature(
     ],
     current_default_temperature: float,
     sample_weight: np.ndarray | None = None,
+    label_reliability: np.ndarray | None = None,
+    label_marginal: np.ndarray | None = None,
 ) -> float:
     """Finds the optimal temperature to maximize the specified metric.
 
@@ -466,12 +516,21 @@ def find_optimal_temperature(
         current_default_temperature: The current default temperature.
         sample_weight: The weight of each row in the log loss, of shape
             [n_samples], or `None` for equal weights.
+        label_reliability: The reliability of each label, of shape [n_samples].
+            The log loss then scores each label under `mix_in_label_noise`.
+        label_marginal: The class frequencies of the labels, of shape [n_classes].
+            Required with `label_reliability`.
 
     Returns:
         The temperature that minimizes the log loss, or
-        `current_default_temperature` when every row has weight zero.
+        `current_default_temperature` when no row carries information.
     """
-    if sample_weight is not None and not sample_weight.any():
+    informative = np.ones(len(y_true), dtype=bool)
+    if sample_weight is not None:
+        informative &= sample_weight > 0
+    if label_reliability is not None:
+        informative &= label_reliability > 0
+    if not informative.any():
         return current_default_temperature
 
     temperatures = get_tuning_temperatures()
@@ -481,6 +540,9 @@ def find_optimal_temperature(
     # TODO: think about vectorizing this loop.
     for temperature in temperatures:
         probas = logits_to_probabilities_fn(raw_logits, temperature)
+        if label_reliability is not None:
+            assert label_marginal is not None
+            probas = mix_in_label_noise(probas, label_reliability, label_marginal)
         # The holdout may lack a rare class, so labels cannot be inferred from y_true.
         current_log_loss = log_loss(
             y_true=y_true,
@@ -506,10 +568,20 @@ RegressionHoldoutFold = (
         torch.Tensor | None,
         torch.Tensor | None,
     ]
+    | tuple[
+        torch.Tensor,
+        FullSupportBarDistribution,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        tuple[torch.Tensor, torch.Tensor] | None,
+    ]
 )
 """`(logits, raw_space_bardist, y_true)` with an optional fourth entry holding the
-fold's per-bar downsampling correction log weights, and an optional fifth entry
-holding the weight of each holdout row in the metric."""
+fold's per-bar downsampling correction log weights, an optional fifth entry
+holding the weight of each holdout row in the metric, and an optional sixth entry
+holding `(label_reliability, bar_marginal)`: each holdout row's reliability, and
+the share of the fold's training targets in each bar."""
 
 
 def find_regression_optimal_temperature(
@@ -537,7 +609,9 @@ def find_regression_optimal_temperature(
             downsampling correction, added after the temperature exactly as
             `TabPFNRegressor` does at predict time. The optional `sample_weight`
             has shape [n_holdout] and weights each row's loss; without it every
-            row has weight 1. Each tuple must be internally
+            row has weight 1. With the optional `(label_reliability,
+            bar_marginal)`, each target is scored under `mix_in_label_noise` of
+            the predicted bar probabilities. Each tuple must be internally
             consistent: the targets in the units of that bar distribution's
             borders, and everything on the same device.
         metric_name: The metric to minimize.
@@ -559,6 +633,7 @@ def find_regression_optimal_temperature(
         sample_weight = fold[4] if len(fold) > 4 else None
         if sample_weight is None:
             sample_weight = torch.ones(logits.shape[0], device=logits.device)
+        label_noise = fold[5] if len(fold) > 5 else None
         folds.append(
             (
                 logits,
@@ -566,11 +641,16 @@ def find_regression_optimal_temperature(
                 fold[2],
                 fold[3] if len(fold) > 3 else None,
                 sample_weight,
+                label_noise,
             )
         )
-    total_weight = sum(float(fold[4].sum()) for fold in folds)
-    if total_weight == 0:
+    informative_weight = sum(
+        float((fold[4] if fold[5] is None else fold[4] * (fold[5][0] > 0)).sum())
+        for fold in folds
+    )
+    if informative_weight == 0:
         return current_default_temperature
+    total_weight = sum(float(fold[4].sum()) for fold in folds)
 
     temperatures = get_tuning_temperatures()
     best_loss = float("inf")
@@ -587,10 +667,13 @@ def find_regression_optimal_temperature(
                             * compute_regression_metric_to_minimize(
                                 metric_name=metric_name,
                                 raw_space_bardist=raw_space_bardist,
-                                logits=temper_and_correct_logits(
-                                    logits,
-                                    temperature=float(temperature),
-                                    log_weights=log_weights,
+                                logits=_noisy_label_logits(
+                                    temper_and_correct_logits(
+                                        logits,
+                                        temperature=float(temperature),
+                                        log_weights=log_weights,
+                                    ),
+                                    label_noise,
                                 ),
                                 y_true=y_true,
                             )
@@ -602,6 +685,7 @@ def find_regression_optimal_temperature(
                         y_true,
                         log_weights,
                         sample_weight,
+                        label_noise,
                     ) in folds
                 )
                 / total_weight
@@ -612,6 +696,29 @@ def find_regression_optimal_temperature(
                 best_temperature = float(temperature)
 
     return best_temperature
+
+
+def bar_marginal(
+    raw_space_bardist: FullSupportBarDistribution, y: torch.Tensor
+) -> torch.Tensor:
+    """The share of the targets `y` that falls in each bar."""
+    bars = torch.searchsorted(raw_space_bardist.borders, y)
+    bars = bars.clamp(1, raw_space_bardist.num_bars) - 1
+    return torch.bincount(bars, minlength=raw_space_bardist.num_bars).to(y.dtype) / len(
+        y
+    )
+
+
+def _noisy_label_logits(
+    logits: torch.Tensor, label_noise: tuple[torch.Tensor, torch.Tensor] | None
+) -> torch.Tensor:
+    """Logits of `mix_in_label_noise` over the bars, or `logits` without noise."""
+    if label_noise is None:
+        return logits
+    label_reliability, marginal = label_noise
+    return torch.log(
+        mix_in_label_noise(torch.softmax(logits, dim=-1), label_reliability, marginal)
+    )
 
 
 def get_tuning_temperatures() -> np.ndarray:

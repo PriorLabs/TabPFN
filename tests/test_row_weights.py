@@ -28,7 +28,6 @@ from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
     row_weights_for_estimator,
-    tuning_metric_row_weights,
     validate_row_weights,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
@@ -499,11 +498,11 @@ def test__compute_holdout_validation_data__skips_fold_with_zero_weight_class(
     )
 
     assert holdout is not None
-    raw_logits, y_true, _, row_weights = holdout
+    raw_logits, y_true, _, holdout_sample_weight, holdout_reliability = holdout
     assert raw_logits.shape[1] == len(y_true) == 20
-    assert row_weights is not None
+    assert holdout_reliability is None
     # The surviving fold holds out the rows where class 1 has weight 0.
-    np.testing.assert_array_equal(row_weights, (y_true == 0).astype(float))
+    np.testing.assert_array_equal(holdout_sample_weight, (y_true == 0).astype(float))
 
     # With the first fold alone, no fold is left and `fit` keeps its defaults.
     estimator.tuning_config = {
@@ -518,18 +517,3 @@ def test__compute_holdout_validation_data__skips_fold_with_zero_weight_class(
     ):
         estimator.fit(X, y, sample_weight=sample_weight)
     assert estimator.softmax_temperature_ == default_temperature
-
-
-def test__tuning_metric_row_weights__multiplies_what_is_given() -> None:
-    sample_weight = np.array([2.0, 0.0, 1.0])
-    label_reliability = np.array([0.5, 1.0, 0.0])
-    assert tuning_metric_row_weights(None, None) is None
-    np.testing.assert_array_equal(
-        tuning_metric_row_weights(sample_weight, None), sample_weight
-    )
-    np.testing.assert_array_equal(
-        tuning_metric_row_weights(None, label_reliability), label_reliability
-    )
-    np.testing.assert_array_equal(
-        tuning_metric_row_weights(sample_weight, label_reliability), [1.0, 0.0, 0.0]
-    )

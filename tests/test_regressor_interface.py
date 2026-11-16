@@ -2129,9 +2129,9 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
     )
 
     assert len(folds) == 2
-    for logits, raw_space_bardist, y_holdout, log_weights, row_weights in folds:
+    for logits, raw_space_bardist, y_holdout, log_weights, *noise in folds:
         assert log_weights is None
-        assert row_weights is None
+        assert noise == [None, None]
         n_holdout = len(X) // 2
         assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
         assert y_holdout.shape == (n_holdout,)
