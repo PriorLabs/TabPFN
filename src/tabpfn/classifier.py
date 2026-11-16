@@ -244,8 +244,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     feature, holding the key-to-code mapping fitted on the training rows."""
 
     group_aggregator_: GroupAggregator
-    """Detects one label per `group_col` group, and appends the per-group
-    aggregates then if `APPEND_GROUP_AGGREGATES` is on."""
+    """Appends the per-group aggregates (`APPEND_GROUP_AGGREGATES`) and decides
+    whether predictions are pooled per group (`POOL_GROUP_PREDICTIONS`)."""
 
     group_feature_index_: int | None
     """Where the encoded group feature sits in the cleaned input, or `None`
@@ -385,8 +385,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 or `fit_from_preprocessed` raises `ValueError` too.
 
                 `APPEND_GROUP_AGGREGATES` and `POOL_GROUP_PREDICTIONS` in
-                `inference_config` add transductive modes for data with one
-                label per group.
+                `inference_config` add transductive modes for grouped data.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -884,7 +883,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
         )
         self.group_aggregator_ = GroupAggregator(
-            append=self.inference_config_.APPEND_GROUP_AGGREGATES
+            append=self.inference_config_.APPEND_GROUP_AGGREGATES,
+            pool=self.inference_config_.POOL_GROUP_PREDICTIONS,
         )
         X = self.group_aggregator_.fit_transform(
             X, y, groups, exclude=self.group_encoder_.feature_name_

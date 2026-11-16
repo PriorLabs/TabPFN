@@ -139,11 +139,10 @@ class InferenceConfig:
 
     APPEND_GROUP_AGGREGATES: bool = False
     """Whether per-group aggregates of the features are appended for `group_col`
-    data with one label per group: the target is constant within every training
-    group and some group has more than one row. Up to 50 are kept, by their
-    variance over the training rows, from the mean, std, min, max and last value
-    of numeric columns and the count, last value and number of unique values of
-    the others.
+    data. Up to 50 are kept, by their variance over the training rows, from the
+    mean, std, min, max and last value of numeric columns and the count, last
+    value and number of unique values of the others. Ignored with a warning when
+    no training group has more than one row.
 
     This is transductive: at predict, a row's aggregates are computed over the
     rows of its group in the predict input, so the other rows passed in change
@@ -151,9 +150,11 @@ class InferenceConfig:
 
     POOL_GROUP_PREDICTIONS: bool = False
     """Whether the rows of a group get one shared prediction, for `group_col` data
-    with one label per group (see `APPEND_GROUP_AGGREGATES`). Each row's predicted
-    distribution, over the classes or over the target, is replaced by the mean
-    distribution of the rows of its group in the predict input.
+    with one label per group: the target is constant within every training group
+    and some group has more than one row. Ignored with a warning otherwise. Each
+    row's predicted distribution, over the classes or over the target, is
+    replaced by the mean distribution of the rows of its group in the predict
+    input.
 
     This is transductive too: predict all rows of a group in one call."""
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from typing import TYPE_CHECKING
 
@@ -18,12 +19,14 @@ if TYPE_CHECKING:
 
 __all__ = ["GroupAggregator", "pool_rows"]
 
+logger = logging.getLogger(__name__)
+
 _NUMERIC_AGGREGATES = ("mean", "std", "min", "max", "last")
 _OTHER_AGGREGATES = ("count", "last", "nunique")
 
 
 class GroupAggregator:
-    """Appends per-group aggregates of the features, for one label per group.
+    """Appends per-group aggregates of the features, and decides on pooling.
 
     Numeric columns get the mean, std, min, max and last value of their group;
     other columns the count, last value and number of unique values. Of these,
@@ -32,24 +35,26 @@ class GroupAggregator:
     predict alike.
 
     Args:
-        append: Whether to append the aggregates. Off, `fit_transform` only
-            detects one label per group.
+        append: Whether to append the aggregates. They need a group with more
+            than one row.
+        pool: Whether to pool the predictions per group. This needs one label
+            per group too: `y` constant within every training group.
         max_features: How many aggregates to keep at most.
 
     Attributes:
-        one_label_per_group_: Whether `y` is constant within every training
-            group and some group has more than one row.
-        aggregates_: The kept `(column, aggregate)` pairs. Empty unless
-            `append` and `one_label_per_group_`.
+        aggregates_: The kept `(column, aggregate)` pairs. Empty when none are
+            appended.
         names_: The labels of the appended columns.
+        pool_: Whether the predictions of a group's rows are to be pooled.
     """
 
-    one_label_per_group_: bool
     aggregates_: list[tuple[str, str]]
     names_: list[str]
+    pool_: bool
 
-    def __init__(self, *, append: bool, max_features: int = 50) -> None:
+    def __init__(self, *, append: bool, pool: bool, max_features: int = 50) -> None:
         self.append = append
+        self.pool = pool
         self.max_features = max_features
 
     def fit_transform(
@@ -62,6 +67,8 @@ class GroupAggregator:
     ) -> pd.DataFrame:
         """Select the aggregates to keep, then `transform(X, groups)`.
 
+        A requested mode that the data does not allow is skipped with a warning.
+
         Args:
             X: The training rows.
             y: The training labels.
@@ -69,11 +76,28 @@ class GroupAggregator:
                 without grouping.
             exclude: A column of `X` not to aggregate.
         """
-        self.aggregates_, self.names_ = [], []
-        self.one_label_per_group_ = groups is not None and _one_label_per_group(
-            y, groups
-        )
-        if not (self.append and self.one_label_per_group_):
+        self.aggregates_, self.names_, self.pool_ = [], [], False
+        if groups is None:
+            return X
+        several_rows = bool(np.bincount(groups).max() > 1)
+        one_label = several_rows and _one_label_per_group(y, groups)
+        if one_label:
+            logger.info("`group_col`: every training group has one label.")
+        self.pool_ = self.pool and one_label
+        if self.pool and not one_label:
+            warnings.warn(
+                "`POOL_GROUP_PREDICTIONS` is ignored: it needs one label per group, "
+                "but the target varies within a training group or no group has "
+                "more than one row.",
+                stacklevel=2,
+            )
+        if self.append and not several_rows:
+            warnings.warn(
+                "`APPEND_GROUP_AGGREGATES` is ignored: no training group has more "
+                "than one row.",
+                stacklevel=2,
+            )
+        if not (self.append and several_rows):
             return X
 
         sizes = np.bincount(groups)
@@ -103,6 +127,11 @@ class GroupAggregator:
         self.names_ = make_names_unique(
             [f"{column}_{aggregate}" for column, aggregate in self.aggregates_],
             existing=map(str, X.columns),
+        )
+        logger.info(
+            "Appending %d per-group aggregates. They are computed over the rows "
+            "passed in, so predict all rows of a group in one call.",
+            len(self.names_),
         )
         return self.transform(X, groups)
 
@@ -146,14 +175,13 @@ def pool_rows(
 
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
-    """Whether `y` is constant within every group and some group has two rows."""
+    """Whether `y` is constant within every group."""
     # `y` is not validated yet: a column vector is flattened, and a wrong length
     # is left for the validation to report.
     y = np.ravel(y)
     if len(y) != len(groups):
         return False
-    labels = pd.Series(y).groupby(groups).nunique(dropna=False)
-    return bool(labels.max() <= 1 and np.bincount(groups).max() > 1)
+    return bool(pd.Series(y).groupby(groups).nunique(dropna=False).max() <= 1)
 
 
 def _row_variance(values: np.ndarray, sizes: np.ndarray) -> float:

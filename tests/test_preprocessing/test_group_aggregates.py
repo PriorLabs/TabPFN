@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -22,31 +23,56 @@ def _frame() -> pd.DataFrame:
     )
 
 
-@pytest.mark.parametrize(
-    ("y", "groups"),
-    [([0, 1, 1, 1, 1], GROUPS), ([0, 1, 2, 3, 4], np.arange(5)), ([0, 0], GROUPS)],
-    ids=["label_varies_in_a_group", "one_row_per_group", "y_of_another_length"],
-)
-def test__no_one_label_per_group__adds_nothing(y: list, groups: np.ndarray) -> None:
+def _aggregator(*, append: bool = True, pool: bool = False, **kwargs: int) -> Any:
+    return GroupAggregator(append=append, pool=pool, **kwargs)
+
+
+def test__one_row_per_group__adds_nothing_and_warns() -> None:
     X = _frame()
 
-    out = GroupAggregator(append=True).fit_transform(X, y, groups, exclude=None)
+    with pytest.warns(UserWarning, match="APPEND_GROUP_AGGREGATES"):
+        out = _aggregator().fit_transform(
+            X, [0, 1, 2, 3, 4], np.arange(5), exclude=None
+        )
 
     assert out is X
 
 
-def test__column_vector_y__is_read_as_one_label_per_row() -> None:
-    aggregator = GroupAggregator(append=True)
+def test__label_varying_in_a_group__still_gets_aggregates() -> None:
+    aggregator = _aggregator()
 
-    aggregator.fit_transform(
-        _frame(), np.array([[0, 0, 1, 1, 1]]).T, GROUPS, exclude=None
-    )
+    aggregator.fit_transform(_frame(), [0, 1, 1, 1, 1], GROUPS, exclude=None)
 
-    assert aggregator.one_label_per_group_
+    assert "num_mean" in aggregator.names_
+
+
+@pytest.mark.parametrize(
+    ("y", "groups", "pooled"),
+    [
+        ([0, 0, 1, 1, 1], GROUPS, True),
+        (np.array([[0, 0, 1, 1, 1]]).T, GROUPS, True),
+        ([0, 1, 1, 1, 1], GROUPS, False),
+        ([0, 1, 2, 3, 4], np.arange(5), False),
+        ([0, 0], GROUPS, False),
+    ],
+    ids=["one_label", "column_vector", "label_varies", "one_row", "wrong_length"],
+)
+def test__pooling__needs_one_label_per_group_and_warns_without(
+    y: Any, groups: np.ndarray, pooled: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    aggregator = _aggregator(append=False, pool=True)
+
+    with warnings.catch_warnings(record=True) as caught, caplog.at_level("INFO"):
+        warnings.simplefilter("always")
+        aggregator.fit_transform(_frame(), y, groups, exclude=None)
+
+    assert aggregator.pool_ is pooled
+    assert ("one label" in caplog.text) is pooled
+    assert any("POOL_GROUP_PREDICTIONS" in str(w.message) for w in caught) is not pooled
 
 
 def test__aggregates__per_group_values() -> None:
-    aggregator = GroupAggregator(append=True, max_features=100)
+    aggregator = _aggregator(max_features=100)
 
     out = aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)
 
@@ -68,7 +94,7 @@ def test__aggregates__per_group_values() -> None:
 def test__selection__keeps_the_largest_variance_and_breaks_ties_by_name() -> None:
     X = pd.DataFrame({"b": [0.0, 0.0, 9.0, 9.0], "a": [0.0, 0.0, 9.0, 9.0]})
 
-    aggregator = GroupAggregator(append=True, max_features=3)
+    aggregator = _aggregator(max_features=3)
     aggregator.fit_transform(X, [0, 0, 1, 1], np.array([0, 0, 1, 1]), exclude=None)
 
     # Every mean, min, max and last has the same variance; std has none.
@@ -76,7 +102,7 @@ def test__selection__keeps_the_largest_variance_and_breaks_ties_by_name() -> Non
 
 
 def test__exclude__is_not_aggregated() -> None:
-    aggregator = GroupAggregator(append=True)
+    aggregator = _aggregator()
 
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude="cat")
 
@@ -84,7 +110,7 @@ def test__exclude__is_not_aggregated() -> None:
 
 
 def test__transform__aggregates_over_the_rows_passed_in() -> None:
-    aggregator = GroupAggregator(append=True)
+    aggregator = _aggregator()
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)
     X_test = pd.DataFrame({"num": [10.0, 20.0, 7.0], "cat": ["c", "c", "d"]})
 
@@ -164,18 +190,19 @@ def test__estimator__each_flag_switches_on_its_own_mode(
 
 
 @ESTIMATORS
-def test__estimator__several_labels_in_a_group__switch_both_modes_off(
+def test__estimator__several_labels_in_a_group__get_aggregates_but_no_pooling(
     estimator_cls: type, method: str
 ) -> None:
     X, _ = _grouped_data()
-    estimator = _fit(
-        estimator_cls,
-        np.arange(40) % 2,
-        APPEND_GROUP_AGGREGATES=True,
-        POOL_GROUP_PREDICTIONS=True,
-    )
+    with pytest.warns(UserWarning, match="POOL_GROUP_PREDICTIONS"):
+        estimator = _fit(
+            estimator_cls,
+            np.arange(40) % 2,
+            APPEND_GROUP_AGGREGATES=True,
+            POOL_GROUP_PREDICTIONS=True,
+        )
 
-    assert estimator.group_aggregator_.names_ == []
+    assert "num_mean" in estimator.group_aggregator_.names_
     assert not _pooled(getattr(estimator, method)(X))
 
 
