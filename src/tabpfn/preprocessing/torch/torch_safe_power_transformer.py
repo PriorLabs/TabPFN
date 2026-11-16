@@ -9,6 +9,8 @@ from collections.abc import Callable
 
 import torch
 
+from tabpfn.preprocessing.torch.ops import columnwise_sum
+
 _INV_GOLDEN = (math.sqrt(5) - 1) / 2
 # scipy.optimize.fminbound's xtol, as used by SafePowerTransformer.
 _XTOL = 1.48e-8
@@ -64,11 +66,12 @@ def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
     lambdas = _fit_lambdas(x)
     y = _yeo_johnson(x, torch.log1p(x.abs()), lambdas)
     y.masked_fill_(torch.isinf(y), torch.nan)
-    impute_mean = torch.nan_to_num(y.nanmean(dim=0), nan=0.0)
+    num_finite = (~torch.isnan(y)).sum(dim=0)
+    impute_mean = torch.nan_to_num(columnwise_sum(y) / num_finite, nan=0.0)
     torch.where(torch.isnan(y), impute_mean, y, out=y)
 
-    mean = y.mean(dim=0)
-    var = y.var(dim=0, correction=0)
+    mean = columnwise_sum(y) / y.shape[0]
+    var = columnwise_sum((y - mean).square_()) / y.shape[0]
     scale = torch.where(_is_constant(var, mean, x.shape[0]), 1.0, var.sqrt())
     return {
         "lambdas": lambdas,
@@ -93,8 +96,8 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     abs_max = x.abs().nan_to_num_(nan=0.0).amax(dim=0)
     n_neg = (x < 0).sum(dim=0)
     # Near-constant observed values, as in SafePowerTransformer; False when all-NaN.
-    obs_mean = x.nansum(dim=0) / n_valid
-    obs_var = (x - obs_mean).square_().nansum(dim=0) / n_valid
+    obs_mean = columnwise_sum(x) / n_valid
+    obs_var = columnwise_sum((x - obs_mean).square_()) / n_valid
     constant = _is_constant(obs_var, obs_mean, n_valid)
     any_neg, all_neg = n_neg > 0, n_neg == n_valid
 
@@ -116,13 +119,13 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
 
     # Lambda-independent terms of the log-likelihood, computed once.
     log1p_abs = torch.log1p(x.abs())
-    sum_log = log1p_abs.copysign(x).nansum(dim=0)
+    sum_log = columnwise_sum(log1p_abs.copysign(x))
 
     def neg_llf(lambdas: torch.Tensor) -> torch.Tensor:
         y = _yeo_johnson(x, log1p_abs, lambdas).masked_fill_(invalid, 0.0)
-        mean = y.sum(dim=0) / n_valid
+        mean = columnwise_sum(y) / n_valid
         y.sub_(mean).masked_fill_(invalid, 0.0)
-        var = y.square_().sum(dim=0) / n_valid
+        var = columnwise_sum(y.square_()) / n_valid
         llf = -n_valid / 2 * var.log() + (lambdas - 1) * sum_log
         # scipy rejects near-zero variance as an infinite likelihood.
         return torch.where(var < finfo.tiny, torch.inf, -llf)
@@ -159,20 +162,35 @@ def _golden_section_search(
 ) -> torch.Tensor:
     """Minimise ``f`` elementwise on ``[lb, ub]`` to within ``_XTOL``."""
     a, b = lb.clone(), ub.clone()
-    width = float((b - a).max()) if a.numel() else 0.0
-    n_iter = math.ceil(math.log(max(width, _XTOL) / _XTOL) / -math.log(_INV_GOLDEN))
+    # Each column takes as many steps as its own interval needs, then stops moving.
+    # So a column's result does not depend on which other columns are searched.
+    steps = torch.ceil(
+        torch.log((b - a).clamp(min=_XTOL) / _XTOL) / -math.log(_INV_GOLDEN)
+    )
+    n_iter = int(steps.max()) if steps.numel() else 0
     c = b - _INV_GOLDEN * (b - a)
     d = a + _INV_GOLDEN * (b - a)
     fc, fd = f(c), f(d)
-    for _ in range(n_iter):
+    for i in range(n_iter):
         # Ties move right, as in fminbound.
         left = fc < fd
-        a = torch.where(left, a, c)
-        b = torch.where(left, d, b)
-        new = torch.where(left, b - _INV_GOLDEN * (b - a), a + _INV_GOLDEN * (b - a))
+        next_a = torch.where(left, a, c)
+        next_b = torch.where(left, d, b)
+        new = torch.where(
+            left,
+            next_b - _INV_GOLDEN * (next_b - next_a),
+            next_a + _INV_GOLDEN * (next_b - next_a),
+        )
         f_new = f(new)
-        c, d = torch.where(left, new, d), torch.where(left, c, new)
-        fc, fd = torch.where(left, f_new, fd), torch.where(left, fc, f_new)
+        moves = i < steps
+        a = torch.where(moves, next_a, a)
+        b = torch.where(moves, next_b, b)
+        c, d, fc, fd = (
+            torch.where(moves, torch.where(left, new, d), c),
+            torch.where(moves, torch.where(left, c, new), d),
+            torch.where(moves, torch.where(left, f_new, fd), fc),
+            torch.where(moves, torch.where(left, fc, f_new), fd),
+        )
     return (a + b) / 2
 
 

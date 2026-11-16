@@ -84,11 +84,10 @@ def test__fit_transform__chunking_matches_single_chunk(monkeypatch):
     chunked_cache = torch_pt.fit(x)
     chunked = torch_pt.transform(x, fitted_cache=chunked_cache)
 
-    # Reductions over chunks of different widths sum in a different order, so
-    # the lambda search may stop at a different point within its tolerance.
+    # Each column is fitted on its own, so chunking changes no bit.
     for key, value in cache.items():
-        torch.testing.assert_close(chunked_cache[key], value, rtol=1e-6, atol=1e-7)
-    torch.testing.assert_close(chunked, expected, rtol=1e-6, atol=1e-6)
+        torch.testing.assert_close(chunked_cache[key], value, rtol=0, atol=0)
+    torch.testing.assert_close(chunked, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
