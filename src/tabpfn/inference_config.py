@@ -31,6 +31,7 @@ OVERRIDABLE_FIELDS: dict[str, tuple[str, str]] = {
     # field -> (how to name several of them, the estimator argument that sets one)
     "SOFTMAX_TEMPERATURE": ("softmax temperatures", "softmax_temperature"),
     "N_ESTIMATORS": ("numbers of estimators", "n_estimators"),
+    "AVERAGE_BEFORE_SOFTMAX": ("ensemble averaging orders", "average_before_softmax"),
 }
 """Fields a user can set from the estimator interface, and which the checkpoints of
 one ensemble may therefore disagree on -- the user can break the tie. Every other
@@ -136,6 +137,19 @@ class InferenceConfig:
     `TabPFNClassifier(n_estimators=...)`; naming a count both ways at once is
     rejected. With neither, the value comes from the checkpoint, and an ensemble
     whose checkpoints declare different counts is rejected too."""
+
+    AVERAGE_BEFORE_SOFTMAX: bool = False
+    """Whether the logits of the estimators are averaged before the softmax, instead
+    of averaging the probabilities of each estimator.
+
+    The default is the value that shipped as the `average_before_softmax` argument
+    of `TabPFNClassifier`/`TabPFNRegressor` before this became a config field, so
+    checkpoints that predate the field keep their original behavior.
+
+    Setting this here overrides the checkpoint, as does
+    `TabPFNClassifier(average_before_softmax=...)`; naming it both ways at once is
+    rejected. With neither, the value comes from the checkpoint, and an ensemble
+    whose checkpoints declare different values is rejected too."""
 
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,

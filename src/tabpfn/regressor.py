@@ -52,6 +52,7 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
+    resolved_average_before_softmax,
     resolved_n_estimators,
     resolved_softmax_temperature,
 )
@@ -329,7 +330,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_features_indices: Sequence[int] | None = None,
         group_col: str | list[str] | None = None,
         softmax_temperature: float | Literal["auto"] = "auto",
-        average_before_softmax: bool = False,
+        average_before_softmax: bool | Literal["auto"] = "auto",
         model_path: str
         | Path
         | list[str]
@@ -449,6 +450,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   softmax.
                 - If `False`, the softmax function is applied to each set of logits.
                   Then, we average the resulting probabilities of each forward pass.
+                - If `"auto"` (the default), the value is taken from the checkpoint
+                  (`InferenceConfig.AVERAGE_BEFORE_SOFTMAX`), which is `False`
+                  unless the checkpoint sets it. Passing a bool overrides the
+                  checkpoint; it cannot be combined with an
+                  `AVERAGE_BEFORE_SOFTMAX` in `inference_config`, which is the other
+                  way of naming one.
 
             model_path:
                 The path to the TabPFN model file, i.e., the pre-trained weights.
@@ -1973,7 +1980,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     to=self.znorm_space_bardist_.borders.to(output.device),
                 )
 
-                if self.average_before_softmax:
+                if resolved_average_before_softmax(self):
                     transformed = transformed.log()
 
                 if accumulated_logits is None:
@@ -2016,7 +2023,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             A `[n_samples, n_buckets]` tensor of log-probabilities with
             `ensemble_softmax_temperature_` applied.
         """
-        if self.average_before_softmax:
+        if resolved_average_before_softmax(self):
             logits = (accumulated_logits / n_estimators).softmax(dim=-1)
         else:
             logits = accumulated_logits / n_estimators
@@ -2370,7 +2377,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             frm=torch.as_tensor(borders_t, device=out_d.device),
             to=znorm_borders.to(out_d.device),
         )
-        return transformed.log() if self.average_before_softmax else transformed
+        return (
+            transformed.log() if resolved_average_before_softmax(self) else transformed
+        )
 
     def _decode_batched_dataset(
         self,

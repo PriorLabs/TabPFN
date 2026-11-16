@@ -637,6 +637,7 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    average_before_softmax_override: bool | None = None,
     devices: Sequence[torch.device] | None = None,
     force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
@@ -657,6 +658,7 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    average_before_softmax_override: bool | None = None,
     devices: Sequence[torch.device] | None = None,
     force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
@@ -676,6 +678,7 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    average_before_softmax_override: bool | None = None,
     devices: Sequence[torch.device] | None = None,
     force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
@@ -707,6 +710,7 @@ def load_model_criterion_config(
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
         n_estimators_override: Likewise for the number of estimators.
+        average_before_softmax_override: Likewise for the ensemble averaging order.
 
     Returns:
         list of models, the criterion, list of architecture configs, the inference
@@ -805,6 +809,7 @@ def load_model_criterion_config(
         overrides={
             "SOFTMAX_TEMPERATURE": softmax_temperature_override,
             "N_ESTIMATORS": n_estimators_override,
+            "AVERAGE_BEFORE_SOFTMAX": average_before_softmax_override,
         },
     )
 
