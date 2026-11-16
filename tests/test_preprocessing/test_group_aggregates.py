@@ -117,7 +117,8 @@ def _mixed_frame() -> tuple[pd.DataFrame, np.ndarray]:
     X = X.mask(rng.random(X.shape) < 0.3)
     # One group without a value and one with a single value.
     X.loc[groups == 0, "n0"] = np.nan
-    X.loc[(groups == 1).cumsum() > 1, "n0"] = np.nan
+    X.loc[groups == 1, "n0"] = np.nan
+    X.loc[np.flatnonzero(groups == 1)[0], "n0"] = 1.0
     X["int"] = rng.integers(0, 5, size=400)
     X["nullable"] = pd.array(rng.integers(0, 9, size=400), dtype="Int64")
     X.loc[::3, "nullable"] = pd.NA

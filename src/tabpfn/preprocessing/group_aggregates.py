@@ -166,7 +166,9 @@ class GroupAggregator:
                 [pd.api.types.is_numeric_dtype(X[column]) for column in columns],
                 dtype=bool,
             )
-            spread = _numeric_spread(X[columns[numeric]], groups, sizes, self.device)
+            spread = _numeric_spread(
+                X, columns[numeric], groups, sizes, self.device
+            )
             columns = columns[~numeric]
         if len(columns):
             # The first column runs alone: it fills the lazy caches of `grouped`,
@@ -241,19 +243,23 @@ def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
 
 
 def _numeric_spread(
-    X: pd.DataFrame, groups: np.ndarray, sizes: np.ndarray, device: torch.device
+    X: pd.DataFrame,
+    columns: pd.Index,
+    groups: np.ndarray,
+    sizes: np.ndarray,
+    device: torch.device,
 ) -> dict[tuple[str, str], float]:
-    """The `_row_variance` of every numeric aggregate of every column, with torch."""
+    """The `_row_variance` of every numeric aggregate of `columns`, with torch."""
     index = torch.as_tensor(groups, device=device)[:, None]
     weights = torch.as_tensor(sizes, dtype=torch.float64, device=device)[:, None]
     # Bounds the device memory to a few GB: the temporaries are about 4 tensors
     # of rows x columns and about 20 of groups x columns, in float64.
     step = max(1, 2**26 // (len(X) + 4 * len(sizes)))
     spread = {}
-    for start in range(0, X.shape[1], step):
-        columns = X.columns[start : start + step]
+    for start in range(0, len(columns), step):
+        chunk = columns[start : start + step]
         values = torch.as_tensor(
-            X[columns].to_numpy(np.float64, na_value=np.nan), device=device
+            X[chunk].to_numpy(np.float64, na_value=np.nan), device=device
         )
         tables = _numeric_aggregates(values, index.expand_as(values), len(sizes))
         keep = ~tables.isnan()
@@ -263,7 +269,7 @@ def _numeric_spread(
         variance = (weights * keep * (tables - mean) ** 2).sum(dim=1) / (n - 1)
         variance = variance.where(n > 1, torch.nan).tolist()
         for aggregate, of_columns in zip(_NUMERIC_AGGREGATES, variance, strict=True):
-            for column, value in zip(columns, of_columns, strict=True):
+            for column, value in zip(chunk, of_columns, strict=True):
                 spread[column, aggregate] = value
     return spread
 
