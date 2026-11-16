@@ -243,28 +243,26 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         """Override to select only target columns for quantile transform."""
         del column_indices
         orig_device = x.device
-        target_x = x[:, :, self._target_column_indices]
 
         # The quantile transform uses many small ops (searchsorted, gather,
         # where) that are faster on CPU than on MPS due to per-kernel launch
         # overhead.  On CUDA the GPU is preferred.
         run_on_cpu = orig_device.type == "mps"
-        if run_on_cpu:
-            target_x = target_x.cpu()
-
+        compute_device = torch.device("cpu") if run_on_cpu else orig_device
+        target_x = x[:, :, self._target_column_indices].to(compute_device)
         if fitted_cache is None:
             fitted_cache = self._qt.fit(target_x[:num_train_rows])
         else:
-            fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
+            fitted_cache = _move_cache_to_device(fitted_cache, compute_device)
 
-        transformed = self._qt.transform(target_x, fitted_cache=fitted_cache)
-        del target_x  # free before the full-size clone below
-
-        if run_on_cpu:
-            transformed = transformed.to(orig_device)
+        # Written over its own input, so the transform's intermediates sit next
+        # to this one target-sized buffer only, and never next to the clone.
+        target_x = self._qt.transform(
+            target_x, fitted_cache=fitted_cache, out=target_x
+        ).to(orig_device)
 
         x = x.clone()
-        x[:, :, self._target_column_indices] = transformed
+        x[:, :, self._target_column_indices] = target_x
 
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 

@@ -200,6 +200,7 @@ class Architecture(nn.Module, ABC):
         categorical_inds: list[list[int]] | None = None,
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
+        estimator_ids: list[int] | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -213,6 +214,7 @@ class Architecture(nn.Module, ABC):
         categorical_inds: list[list[int]] | None = None,
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
+        estimator_ids: list[int] | None = None,
     ) -> dict[str, Tensor]: ...
 
     @abstractmethod
@@ -226,6 +228,7 @@ class Architecture(nn.Module, ABC):
         categorical_inds: list[list[int]] | None = None,
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
+        estimator_ids: list[int] | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass.
 
@@ -254,6 +257,8 @@ class Architecture(nn.Module, ABC):
             performance_options: Performance and memory options for this forward pass.
                 If None, uses defaults (no memory saving, no recomputation).
             task_type: The type of task, typically "classification" or "regression".
+            estimator_ids: Zero-based ensemble positions, one per batch element.
+                These stay fixed across batching, cache construction, and prediction.
 
         Returns:
             If `only_return_standard_out`, then a Tensor of shape

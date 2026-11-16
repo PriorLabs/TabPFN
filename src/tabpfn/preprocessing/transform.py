@@ -105,6 +105,9 @@ def _transform_labels_one(
             y_train = config.target_transform.fit_transform(
                 y_train.reshape(-1, 1),
             ).ravel()
+        if config.flip_target:
+            # After the pipeline, so its presets see the raw target.
+            y_train = -y_train
     elif isinstance(config, ClassifierEnsembleConfig):
         if config.class_permutation is not None:
             y_train = config.class_permutation[y_train]

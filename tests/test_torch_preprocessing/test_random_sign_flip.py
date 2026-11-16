@@ -128,6 +128,7 @@ def _make_config(*, enabled: bool) -> ClassifierEnsembleConfig:
         feature_shift_decoder=None,
         outlier_removal_std=None,
         _model_index=0,
+        estimator_id=0,
         passthrough_inf=False,
         class_permutation=None,
     )

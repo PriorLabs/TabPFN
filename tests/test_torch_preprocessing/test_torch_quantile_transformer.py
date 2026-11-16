@@ -17,6 +17,7 @@ from tabpfn.preprocessing.torch import (
     TorchPreprocessingPipeline,
     TorchQuantileTransformer,
     TorchQuantileTransformerStep,
+    TorchSelectiveQuantileTransformerStep,
 )
 
 
@@ -625,6 +626,102 @@ class TestChunkedQuantileTransformerEquivalence:
         result_chunked = qt.transform(x, cache)
 
         assert torch.allclose(result_full, result_chunked, atol=1e-6, equal_nan=True)
+
+    @pytest.mark.parametrize(
+        ("extrapolate_ratio", "output_distribution"),
+        [(None, "uniform"), (1.0, "uniform"), (None, "normal")],
+    )
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+    def test__selective_step__row_chunks_match_unchunked(
+        self, monkeypatch, extrapolate_ratio, output_distribution, dtype
+    ):
+        """Row chunks are bit-identical, with or without a given cache."""
+        torch.manual_seed(0)
+        x = torch.randn(100, 2, 9).to(dtype)
+        x[::7, :, 2] = float("nan")
+        x_before = x.clone()
+        step = TorchSelectiveQuantileTransformerStep(
+            n_quantiles=40,
+            target_column_indices=[7, 0, 2, 4],
+            extrapolate_ratio=extrapolate_ratio,
+            output_distribution=output_distribution,
+        )
+
+        other_cache = step.fit_transform(
+            x * 3 + 1, list(range(9)), num_train_rows=80
+        ).fitted_cache
+        full = step.fit_transform(x, list(range(9)), num_train_rows=80)
+        full_cached = step.fit_transform(
+            x, list(range(9)), num_train_rows=80, fitted_cache=other_cache
+        )
+
+        monkeypatch.setattr(
+            TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
+        )
+        chunked = step.fit_transform(x, list(range(9)), num_train_rows=80)
+        chunked_cached = step.fit_transform(
+            x, list(range(9)), num_train_rows=80, fitted_cache=other_cache
+        )
+
+        torch.testing.assert_close(chunked.x, full.x, rtol=0, atol=0, equal_nan=True)
+        torch.testing.assert_close(
+            chunked_cached.x, full_cached.x, rtol=0, atol=0, equal_nan=True
+        )
+        assert not torch.equal(chunked_cached.x, chunked.x)
+        torch.testing.assert_close(x, x_before, rtol=0, atol=0, equal_nan=True)
+        assert not torch.equal(chunked.x[:, :, 7], x[:, :, 7])
+        assert torch.equal(chunked.x[:, :, [1, 3, 5, 6, 8]], x[:, :, [1, 3, 5, 6, 8]])
+
+    def test__transform__row_chunks_without_out__support_autograd(self, monkeypatch):
+        """Without ``out``, a chunked transform stays differentiable."""
+        torch.manual_seed(0)
+        x = torch.randn(30, 1, 3)
+        qt = TorchQuantileTransformer(n_quantiles=20)
+        cache = qt.fit(x)
+        monkeypatch.setattr(
+            TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
+        )
+        x_grad = x.clone().requires_grad_()
+
+        result = qt.transform(x_grad, cache)
+        result.sum().backward()
+
+        torch.testing.assert_close(result.detach(), qt.transform(x, cache))
+        assert x_grad.grad is not None
+        assert torch.isfinite(x_grad.grad).all()
+
+    @pytest.mark.parametrize(
+        "out",
+        [torch.empty(30, 2, 3), torch.empty(29, 1, 3)],
+        ids=["wrong_columns", "wrong_rows"],
+    )
+    def test__transform__out_of_another_shape__raises(self, out):
+        x = torch.randn(30, 1, 3)
+        qt = TorchQuantileTransformer(n_quantiles=20)
+
+        with pytest.raises(ValueError, match="out must match x"):
+            qt.transform(x, qt.fit(x), out=out)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test__selective_step__mps__matches_cpu(monkeypatch, dtype):
+    """On MPS the step computes on CPU and returns the same bits on MPS."""
+    torch.manual_seed(0)
+    x = torch.randn(100, 2, 9).to(dtype)
+    x[::7, :, 2] = float("nan")
+    step = TorchSelectiveQuantileTransformerStep(
+        n_quantiles=40, target_column_indices=[7, 0, 2, 4]
+    )
+    monkeypatch.setattr(
+        TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
+    )
+
+    cpu = step.fit_transform(x, list(range(9)), num_train_rows=80)
+    mps = step.fit_transform(x.to("mps"), list(range(9)), num_train_rows=80)
+
+    assert mps.x.device.type == "mps"
+    torch.testing.assert_close(mps.x.cpu(), cpu.x, rtol=0, atol=0, equal_nan=True)
 
 
 class TestTorchQuantileTransformerCategoricalBoundary:

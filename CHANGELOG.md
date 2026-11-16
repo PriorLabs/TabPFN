@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-11-13
+
+### Breaking Changes
+
+- Previously saved fitted regressors (`.tabpfn_fit` archives and pickled estimators) are incompatible with the updated target preprocessing and must be refitted. Custom fine-tuning loops must pass `y_train_mean` and `y_train_std` to `fit_from_preprocessed`. ([#1198](https://github.com/PriorLabs/TabPFN/pull/1198))
+
+### Added
+
+- Add optional numerical sign flipping with `PreprocessorConfig(random_sign_flip_numericals=True)`, using reproducible signs per ensemble member after preprocessing. ([#1381](https://github.com/PriorLabs/TabPFN/pull/1381))
+- `TabPFNClassifier` and `TabPFNRegressor` take `group_col`: the label of the column that says which group a row belongs to, or a list of labels whose joint value is one composite key. The selected columns are replaced by one categorical feature holding that key's integer code, fitted on the training rows alone. ([#1392](https://github.com/PriorLabs/TabPFN/pull/1392))
+- Add `REGRESSION_TARGET_SIGN_FLIP` to `InferenceConfig`: when enabled, about half the regression ensemble members see their standardized target negated, and their predictions are mirrored back. ([#1393](https://github.com/PriorLabs/TabPFN/pull/1393))
+- The `quantile_norm`, `quantile_norm_coarse` and `quantile_norm_fine` presets now run on GPU when GPU preprocessing is enabled. ([#1397](https://github.com/PriorLabs/TabPFN/pull/1397))
+- The `safepower` preset now runs on GPU when GPU preprocessing is enabled. ([#1398](https://github.com/PriorLabs/TabPFN/pull/1398))
+
+### Changed
+
+- Regression ensembles now normalize targets using each member’s training rows; without subsampling, only floating-point differences are expected. ([#1198](https://github.com/PriorLabs/TabPFN/pull/1198))
+- Regression target transforms now act on raw targets before final standardization. Both `power` and `safepower` retain input standardization; `None` and `"none"` retain standardization only. Invalid `log` and `1_plus_log` target domains now raise clear errors during fitting, and `exp` warns when transformed targets would overflow in float32. ([#1199](https://github.com/PriorLabs/TabPFN/pull/1199))
+- Predicting on several devices uses less peak host memory. Predictions are unchanged. ([#1327](https://github.com/PriorLabs/TabPFN/pull/1327))
+- The license acceptance prompts, license errors and README now state that your datasets stay local and are never sent to Prior Labs. ([#1339](https://github.com/PriorLabs/TabPFN/pull/1339))
+- Correct stale README claims: the offline-usage FAQ keeps the downloaded checkpoint filename, the Linux cache path notes `XDG_CACHE_HOME`, the prediction tip points at `fit_mode="fit_with_cache"` instead of manual test-set chunking, `TABPFN_MODEL_VERSION` is documented, and TabPFN-3.5-Fast is named in the license section and the license-acceptance FAQ. ([#1361](https://github.com/PriorLabs/TabPFN/pull/1361))
+- The `inference_precision` docstrings of `TabPFNClassifier` and `TabPFNRegressor` now state that predicting a row alone or in a batch gives exactly the same result only with `torch.float64`. ([#1389](https://github.com/PriorLabs/TabPFN/pull/1389))
+- TabPFN-3.5 uses native grouped-query attention on CPU (PyTorch 2.9+) instead of copying the shared K/V head, so predictions are faster, mainly with `fit_mode="fit_with_cache"`. ([#1395](https://github.com/PriorLabs/TabPFN/pull/1395))
+- Attention no longer copies its inputs on CUDA and CPU. This lowers GPU memory and speeds up predictions, most for classification on large training sets. Outputs are unchanged. ([#1396](https://github.com/PriorLabs/TabPFN/pull/1396))
+- Attention over an int8 or float8 KV cache now casts the cache and folds the scales into the query and the output, which makes cached predicts on large training sets faster. Custom attention backends now receive the cast cache instead of the dequantized one (see `AttentionBackend`). ([#1402](https://github.com/PriorLabs/TabPFN/pull/1402))
+- The many-class decoder now runs one attention call per 64 classes and no longer copies the one-hot targets over the heads. Its peak memory no longer grows with the class count, and cached predicts are faster. ([#1403](https://github.com/PriorLabs/TabPFN/pull/1403))
+- The GPU quantile transform step now transforms its target columns in place, one row chunk at a time, through a new `out=` argument on `TorchQuantileTransformer.transform`. This lowers its peak GPU memory on inputs that need several chunks by up to one copy of the transformed columns. ([#1405](https://github.com/PriorLabs/TabPFN/pull/1405))
+
+### Fixed
+
+- When an API key is valid but the model license has not been accepted, TabPFN now opens the license acceptance page directly, or links to it when no browser is available. ([#1340](https://github.com/PriorLabs/TabPFN/pull/1340))
+- Fix silently wrong predictions on MPS with 65,536 or more training rows (torch <= 2.14). ([#1358](https://github.com/PriorLabs/TabPFN/pull/1358))
+- Accept any real number in [0, 1] as a quantile in `TabPFNRegressor.predict` and `predict_batched`, including `np.float32` values and the ints 0 and 1, and report out-of-range quantiles as a range error. ([#1375](https://github.com/PriorLabs/TabPFN/pull/1375))
+- Remove constant features before adding polynomial features, so constant columns no longer change predictions when `POLYNOMIAL_FEATURES` is set. ([#1376](https://github.com/PriorLabs/TabPFN/pull/1376))
+- Development and release tooling no longer trusts the compromised eMudhra (emSign) CAs: pinned certifi, uv, pip and pypa/gh-action-pypi-publish are bumped to their fixed releases. ([#1377](https://github.com/PriorLabs/TabPFN/pull/1377))
+- Saving a fitted model whose `model_path` is a `pathlib.Path` (or a list of them) no longer fails with "Object of type PosixPath is not JSON serializable". ([#1387](https://github.com/PriorLabs/TabPFN/pull/1387))
+- `TabPFNRegressor` with `inference_precision=torch.float64` now keeps float64 precision in its predictions. ([#1388](https://github.com/PriorLabs/TabPFN/pull/1388))
+- Fix regression predictions for target transforms that reverse the order of the target, including when their outer borders are cancelled. ([#1393](https://github.com/PriorLabs/TabPFN/pull/1393))
+- The `safepower` preset now leaves a column unchanged before scaling when its non-missing values are equal up to rounding. Before, such columns with missing values could map test values to huge numbers or infinity. ([#1398](https://github.com/PriorLabs/TabPFN/pull/1398))
+- Fix excessive memory use on CPUs with AVX512-BF16 (AMD Zen 4 and later, Intel Sapphire Rapids and later), due to batching of estimators. ([#1400](https://github.com/PriorLabs/TabPFN/pull/1400))
+
+
 ## [9.2.0] - 2026-10-12
 
 ### Added
