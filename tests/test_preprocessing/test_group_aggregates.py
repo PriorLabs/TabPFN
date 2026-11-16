@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -28,13 +30,13 @@ def _frame() -> pd.DataFrame:
 def test__no_one_label_per_group__adds_nothing(y: list, groups: np.ndarray) -> None:
     X = _frame()
 
-    out = GroupAggregator().fit_transform(X, y, groups, exclude=None)
+    out = GroupAggregator(append=True).fit_transform(X, y, groups, exclude=None)
 
     assert out is X
 
 
 def test__aggregates__per_group_values() -> None:
-    aggregator = GroupAggregator(max_features=100)
+    aggregator = GroupAggregator(append=True, max_features=100)
 
     out = aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)
 
@@ -56,7 +58,7 @@ def test__aggregates__per_group_values() -> None:
 def test__selection__keeps_the_largest_variance_and_breaks_ties_by_name() -> None:
     X = pd.DataFrame({"b": [0.0, 0.0, 9.0, 9.0], "a": [0.0, 0.0, 9.0, 9.0]})
 
-    aggregator = GroupAggregator(max_features=3)
+    aggregator = GroupAggregator(append=True, max_features=3)
     aggregator.fit_transform(X, [0, 0, 1, 1], np.array([0, 0, 1, 1]), exclude=None)
 
     # Every mean, min, max and last has the same variance; std has none.
@@ -64,7 +66,7 @@ def test__selection__keeps_the_largest_variance_and_breaks_ties_by_name() -> Non
 
 
 def test__exclude__is_not_aggregated() -> None:
-    aggregator = GroupAggregator()
+    aggregator = GroupAggregator(append=True)
 
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude="cat")
 
@@ -72,7 +74,7 @@ def test__exclude__is_not_aggregated() -> None:
 
 
 def test__transform__aggregates_over_the_rows_passed_in() -> None:
-    aggregator = GroupAggregator()
+    aggregator = GroupAggregator(append=True)
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)
     X_test = pd.DataFrame({"num": [10.0, 20.0, 7.0], "cat": ["c", "c", "d"]})
 
@@ -94,10 +96,18 @@ def test__row_groups__codes_composite_keys_within_the_input() -> None:
 def test__pool_rows__replaces_each_row_by_its_group_mean() -> None:
     values = torch.tensor([[[1.0], [7.0], [5.0]], [[0.0], [9.0], [4.0]]])
 
-    out = pool_rows(values, np.array([0, 1, 0]))
+    out = pool_rows(values, np.array([0, 1, 0]), logits=False)
 
     expected = torch.tensor([[[3.0], [7.0], [3.0]], [[2.0], [9.0], [2.0]]])
     torch.testing.assert_close(out, expected)
+
+
+def test__pool_rows__averages_logits_as_probabilities() -> None:
+    probabilities = torch.tensor([[0.9, 0.1], [0.5, 0.5]])
+
+    out = pool_rows(probabilities.log() + 3.0, np.array([0, 0]), logits=True)
+
+    torch.testing.assert_close(out.exp(), torch.tensor([[0.7, 0.3], [0.7, 0.3]]))
 
 
 def _grouped_data() -> tuple[pd.DataFrame, np.ndarray]:
@@ -106,47 +116,63 @@ def _grouped_data() -> tuple[pd.DataFrame, np.ndarray]:
     return pd.DataFrame({"num": rng.normal(size=40), "g": groups}), groups % 2
 
 
-@pytest.mark.parametrize(
+def _fit(estimator_cls: type, y: np.ndarray, **inference_config: bool) -> Any:
+    X, _ = _grouped_data()
+    return estimator_cls(
+        n_estimators=1, group_col="g", inference_config=inference_config
+    ).fit(X, y)
+
+
+def _pooled(pred: np.ndarray) -> bool:
+    by_group = pred.reshape(10, 4, -1)
+    return np.allclose(by_group, by_group[:, :1], rtol=1e-5)
+
+
+ESTIMATORS = pytest.mark.parametrize(
     ("estimator_cls", "method"),
     [(TabPFNClassifier, "predict_proba"), (TabPFNRegressor, "predict")],
 )
-def test__estimator__appends_aggregates_and_pools_the_predictions_of_a_group(
-    estimator_cls: type, method: str
+
+
+@ESTIMATORS
+@pytest.mark.parametrize(("append", "pool"), [(True, False), (False, True)])
+def test__estimator__each_flag_switches_on_its_own_mode(
+    estimator_cls: type, method: str, append: bool, pool: bool
 ) -> None:
     X, y = _grouped_data()
-    estimator = estimator_cls(
-        n_estimators=1,
-        group_col="g",
-        inference_config={"USE_GROUP_AGGREGATES": True},
-    ).fit(X, y)
+    estimator = _fit(
+        estimator_cls, y, APPEND_GROUP_AGGREGATES=append, POOL_GROUP_PREDICTIONS=pool
+    )
 
-    by_group = getattr(estimator, method)(X).reshape(10, 4, -1)
+    pred = getattr(estimator, method)(X)
 
     names = [f.name for f in estimator.inferred_feature_schema_.features]
-    assert "input_num_mean" in names
+    assert ("input_num_mean" in names) is append
     assert estimator.group_feature_index_ is not None
-    np.testing.assert_allclose(by_group, by_group[:, :1].repeat(4, axis=1), rtol=1e-5)
-    assert len(np.unique(by_group[:, 0].round(5), axis=0)) > 1
+    assert _pooled(pred) is pool
+    assert len(np.unique(pred.round(5), axis=0)) > 1
 
 
-@pytest.mark.parametrize("several_labels", [True, False], ids=["labels", "flag_off"])
-@pytest.mark.parametrize(
-    ("estimator_cls", "method"),
-    [(TabPFNClassifier, "predict_proba"), (TabPFNRegressor, "predict")],
-)
-def test__estimator__is_unchanged_without_the_flag_or_one_label_per_group(
-    estimator_cls: type, method: str, several_labels: bool
+@ESTIMATORS
+def test__estimator__several_labels_in_a_group__switch_both_modes_off(
+    estimator_cls: type, method: str
 ) -> None:
-    X, y = _grouped_data()
-    if several_labels:
-        y = np.arange(40) % 2
-    estimator = estimator_cls(
-        n_estimators=1,
-        group_col="g",
-        inference_config={"USE_GROUP_AGGREGATES": several_labels},
-    ).fit(X, y)
-
-    pred = getattr(estimator, method)(X).reshape(10, 4, -1)
+    X, _ = _grouped_data()
+    estimator = _fit(
+        estimator_cls,
+        np.arange(40) % 2,
+        APPEND_GROUP_AGGREGATES=True,
+        POOL_GROUP_PREDICTIONS=True,
+    )
 
     assert estimator.group_aggregator_.names_ == []
-    assert (pred != pred[:, :1]).any()
+    assert not _pooled(getattr(estimator, method)(X))
+
+
+def test__classifier__pooled_logits_match_the_pooled_probabilities() -> None:
+    X, y = _grouped_data()
+    classifier = _fit(TabPFNClassifier, y, POOL_GROUP_PREDICTIONS=True)
+
+    from_logits = torch.as_tensor(classifier.predict_logits(X)).softmax(dim=-1)
+
+    np.testing.assert_allclose(from_logits, classifier.predict_proba(X), atol=1e-5)

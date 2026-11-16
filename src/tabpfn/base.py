@@ -492,7 +492,8 @@ def transform_columns(
 
     Returns:
         The transformed input, and each row's group within `X` when the
-        predictions are to be pooled per group, else `None`.
+        predictions are to be pooled per group (`POOL_GROUP_PREDICTIONS`, with
+        one label per group), else `None`.
     """
     groups = model.group_encoder_.row_groups(X)
     X = model.group_encoder_.transform(X)
@@ -500,7 +501,8 @@ def transform_columns(
     X = model.text_transformer_.transform(X)
     if groups is None or not model.group_aggregator_.one_label_per_group_:
         return X, None
-    return model.group_aggregator_.transform(X, groups), groups
+    X = model.group_aggregator_.transform(X, groups)
+    return X, groups if model.inference_config_.POOL_GROUP_PREDICTIONS else None
 
 
 def reject_categoricals_for_differentiable_input(
