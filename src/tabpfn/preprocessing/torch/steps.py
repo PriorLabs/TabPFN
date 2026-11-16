@@ -39,10 +39,10 @@ from tabpfn.utils import infer_random_state
 
 
 class TorchSelectiveStep(TorchPreprocessingStep):
-    """A step on the columns that CPU preprocessing marked for it.
+    """A step that transforms only the columns CPU preprocessing marked for it.
 
-    The marks come with the feature schema, so the targets are fixed at construction;
-    `fit_transform` reads them instead of `column_indices`.
+    The marked columns are known when the step is built. `fit_transform` uses them
+    and ignores `column_indices`.
     """
 
     _target_column_indices: list[int]
