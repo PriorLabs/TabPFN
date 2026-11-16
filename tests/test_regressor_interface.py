@@ -15,6 +15,7 @@ from typing import Any, Literal
 from unittest import mock
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn.base
 import sklearn.datasets
@@ -2864,6 +2865,27 @@ def test__fit__unknown_preset__raises() -> None:
 
     with pytest.raises(ValueError, match="Unknown preset 'zero'"):
         regressor.fit(X, y)
+
+
+def test__fit__grouped_preset__appends_aggregates_and_pools_predictions() -> None:
+    """The preset composes with "zero_inflated" and switches on both group modes."""
+    rng = np.random.default_rng(0)
+    groups = np.repeat(np.arange(10), 4)
+    X = pd.DataFrame({"num": rng.normal(size=40), "g": groups})
+    y = (groups % 3).astype(float)
+
+    regressor = TabPFNRegressor(
+        presets=["zero_inflated", "grouped"],
+        group_col="g",
+        **_tuning_regressor_kwargs(),
+    ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.APPEND_GROUP_AGGREGATES is True
+    assert config.POOL_GROUP_PREDICTIONS == "mean"
+    assert config.REGRESSION_READOUT == "nonnegative_and_capped"
+    assert "num_mean" in regressor.group_aggregator_.names_
+    assert regressor.group_aggregator_.pool_ is True
 
 
 def _zero_inflated_checkpoint_specs(transform: str) -> ModelSpecs:

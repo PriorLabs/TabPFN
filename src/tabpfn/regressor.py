@@ -187,6 +187,10 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
+    "grouped": {
+        "APPEND_GROUP_AGGREGATES": True,
+        "POOL_GROUP_PREDICTIONS": "mean",
+    },
 }
 """The named bundles of `inference_config` values that `presets` selects."""
 
@@ -722,6 +726,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   models up to TabPFN-3.5 it sets
                   `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, with
                   `log_quantile_gap`, and warns.
+                - `"grouped"`: for `group_col` data. It sets
+                  `APPEND_GROUP_AGGREGATES=True` and
+                  `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
+                  passed to predict, so predict all rows of a group in one call.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
