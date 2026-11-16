@@ -1699,7 +1699,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         With `fit_mode="fit_with_cache"`, test sets larger than the
         `TABPFN_MAX_REGRESSOR_PREDICT_ROWS` setting are predicted block by
         block, so peak memory does not grow with the number of test rows.
-        `output_type="full"` always runs in one pass.
+        `output_type="full"` and predictions pooled per group always run in one
+        pass.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for

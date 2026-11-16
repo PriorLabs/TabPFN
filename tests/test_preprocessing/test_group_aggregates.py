@@ -13,6 +13,7 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing.group_aggregates import GroupAggregator, pool_rows
 from tabpfn.preprocessing.group_ids import GroupIdEncoder
+from tabpfn.settings import settings
 
 GROUPS = np.array([0, 0, 1, 1, 1])
 
@@ -228,6 +229,21 @@ def test__estimator__several_labels_in_a_group__get_aggregates_but_no_pooling(
 
     assert "num_mean" in estimator.group_aggregator_.names_
     assert not _pooled(getattr(estimator, method)(X))
+
+
+def test__regressor__block_prediction__still_pools_whole_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X, y = _grouped_data()
+    regressor = TabPFNRegressor(
+        n_estimators=1,
+        group_col="g",
+        fit_mode="fit_with_cache",
+        inference_config={"POOL_GROUP_PREDICTIONS": "mean"},
+    ).fit(X, y)
+    monkeypatch.setattr(settings.tabpfn, "max_regressor_predict_rows", 6)
+
+    assert _pooled(regressor.predict(X))
 
 
 @pytest.mark.parametrize("pool", ["mean", "geometric_mean"])
