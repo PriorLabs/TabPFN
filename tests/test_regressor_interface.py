@@ -1785,6 +1785,220 @@ def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
         assert borders[0] < zero
 
 
+@pytest.mark.parametrize(
+    "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
+)
+def test__predict__nonnegative_and_capped__outputs_are_nonnegative(
+    transform: str,
+) -> None:
+    """The grid bucket that holds 0 and every bucket below it are read at 0."""
+    X, y = _zero_inflated_regression_data()
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        inference_precision=torch.float32,
+        random_state=42,
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,),
+            "REGRESSION_READOUT": "nonnegative_and_capped",
+        },
+    )
+    reg.fit(X[:200], y[:200])
+    full = reg.predict(X[200:], output_type="full")
+
+    for output in (full["mean"], full["median"], full["mode"], *full["quantiles"]):
+        assert output.min() >= 0
+    assert (full["quantiles"][0] == 0).any()
+
+
+# Buckets [-3, -2] and [3, 4] are the half-normal tails; [-0.5, 1.5] holds 0.
+_SMALL_GRID = FullSupportBarDistribution(
+    torch.tensor([-3.0, -2.0, -0.5, 1.5, 2.0, 3.0, 4.0], dtype=torch.float64)
+)
+
+
+def _small_grid_output(
+    probs: torch.Tensor, output_type: str, truncate_above: float | None
+) -> typing.Any:
+    return regressor_module._logits_to_output(
+        output_type=output_type,
+        logits=probs.log(),
+        znorm_space_bardist=_SMALL_GRID,
+        y_mean=0.0,
+        y_std=1.0,
+        quantiles=[0.25, 0.75],
+        truncate_above=truncate_above,
+    )
+
+
+def test__logits_to_output__truncated__reads_the_zero_bucket_at_zero() -> None:
+    # Rows: all mass in the bucket that holds 0; half there, half in [2, 3]; a
+    # quarter each in the two buckets below it, half in [2, 3].
+    probs = torch.zeros(3, 6, dtype=torch.float64)
+    probs[0, 2] = 1.0
+    probs[1, 2] = probs[1, 4] = 0.5
+    probs[2, 0] = probs[2, 1] = 0.25
+    probs[2, 4] = 0.5
+
+    def output(output_type: str, truncate_above: float | None = 10.0) -> typing.Any:
+        # Nothing on the grid lies above 10, so only the read at 0 acts.
+        return _small_grid_output(probs, output_type, truncate_above)
+
+    np.testing.assert_allclose(output("mean", None)[:2], [0.5, 1.5])
+    np.testing.assert_allclose(output("mean"), [0.0, 1.25, 1.25])
+    np.testing.assert_array_equal(output("median"), [0.0, 0.0, 0.0])
+    low, high = output("quantiles")
+    np.testing.assert_array_equal(low, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(high, [0.0, 2.5, 2.5])
+    np.testing.assert_array_equal(output("mode"), [0.0, 2.5, 2.5])
+
+
+def test__logits_to_output__truncated__drops_the_mass_above_truncate_above() -> None:
+    # Rows: a quarter below 0, a quarter in the bucket that holds 0, half in the
+    # tail above 3; half in [1.5, 2], half in [2, 3], which holds 2.5.
+    probs = torch.zeros(2, 6, dtype=torch.float64)
+    probs[0, 1] = probs[0, 2] = 0.25
+    probs[0, 5] = 0.5
+    probs[1, 3] = probs[1, 4] = 0.5
+
+    # Row 0: the mass above 3 is dropped, and the rest reads at 0. Row 1: the
+    # bucket [2, 3] holds 2.5 and is kept whole.
+    np.testing.assert_allclose(
+        _small_grid_output(probs, "mean", 2.5), [0.0, (1.75 + 2.5) / 2]
+    )
+    _, high = _small_grid_output(probs, "quantiles", 2.5)
+    np.testing.assert_allclose(high, [0.0, 2.5])
+    _, high_untruncated = _small_grid_output(probs, "quantiles", None)
+    assert high_untruncated[0] > 3.0
+
+
+def test__logits_to_output__truncated__grid_above_zero__reads_nothing_at_zero() -> None:
+    """With every raw border above 0, the left tail is not read at 0."""
+    probs = torch.full((1, 6), 1 / 6, dtype=torch.float64)
+
+    def output(output_type: str, truncate_above: float | None) -> typing.Any:
+        # The raw borders run from 7 to 14, so nothing on the grid is capped.
+        return regressor_module._logits_to_output(
+            output_type=output_type,
+            logits=probs.log(),
+            znorm_space_bardist=_SMALL_GRID,
+            y_mean=10.0,
+            y_std=1.0,
+            quantiles=[0.05, 0.5],
+            truncate_above=truncate_above,
+        )
+
+    low, _ = output("quantiles", 100.0)
+    assert 0.0 < low[0] < 7.0
+    np.testing.assert_allclose(low, output("quantiles", None)[0])
+    np.testing.assert_allclose(output("mean", 100.0), output("mean", None))
+
+
+@pytest.mark.parametrize(("truncate_above", "expected"), [(2.5, 3.0), (3.5, np.inf)])
+def test__logits_to_output__truncated__quantile_one_is_the_last_kept_border(
+    truncate_above: float, expected: float
+) -> None:
+    """Capped below the tail bucket, the quantile 1 is the last kept border."""
+    probs = torch.full((1, 6), 1 / 6, dtype=torch.float64)
+
+    (top,) = regressor_module._logits_to_output(
+        output_type="quantiles",
+        logits=probs.log(),
+        znorm_space_bardist=_SMALL_GRID,
+        y_mean=0.0,
+        y_std=1.0,
+        quantiles=[1.0],
+        truncate_above=truncate_above,
+    )
+
+    np.testing.assert_array_equal(top, [expected])
+
+
+def test__predict__nonnegative_and_capped__reads_every_output_truncated() -> None:
+    X, y = _zero_inflated_regression_data()
+    config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)}
+    kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 42}
+    reg = TabPFNRegressor(
+        **kwargs,
+        inference_config={**config, "REGRESSION_READOUT": "nonnegative_and_capped"},
+    ).fit(X[:200], y[:200])
+    plain = TabPFNRegressor(**kwargs, inference_config=config).fit(X[:200], y[:200])
+
+    full = reg.predict(X[200:], output_type="full")
+    full_plain = plain.predict(X[200:], output_type="full")
+
+    def expected(output_type: str) -> typing.Any:
+        return regressor_module._logits_to_output(
+            output_type=output_type,
+            logits=full["logits"],
+            znorm_space_bardist=reg.znorm_space_bardist_,
+            y_mean=reg.y_train_mean_,
+            y_std=reg.y_train_std_,
+            quantiles=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+            truncate_above=float(y[:200].max()),
+        )
+
+    for output_type in ("mean", "median", "mode"):
+        np.testing.assert_array_equal(full[output_type], expected(output_type))
+    np.testing.assert_array_equal(full["quantiles"], expected("quantiles"))
+    np.testing.assert_array_equal(reg.predict(X[200:]), expected("mean"))
+    assert (full["mean"] >= 0).all()
+    assert not np.allclose(full["mean"], full_plain["mean"])
+    # The returned distribution is the untruncated one.
+    torch.testing.assert_close(full["logits"], full_plain["logits"])
+
+
+@pytest.mark.parametrize("constant", [False, True])
+def test__fit__nonnegative_and_capped_with_negative_targets__raises(
+    constant: bool,
+) -> None:
+    X, y = _zero_inflated_regression_data()
+    y[0] = -1.0
+    if constant:
+        # A constant target skips the model, but not the check.
+        y[:] = -1.0
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_READOUT": "nonnegative_and_capped"},
+    )
+
+    with pytest.raises(ValueError, match=r"nonnegative_and_capped.*nonnegative"):
+        reg.fit(X, y)
+
+
+def _nonnegative_and_capped_regressor(**kwargs: typing.Any) -> TabPFNRegressor:
+    return TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_READOUT": "nonnegative_and_capped"},
+        **kwargs,
+    )
+
+
+def test__fit_with_differentiable_input__nonnegative_and_capped__raises() -> None:
+    """Only `fit` stores the largest training target that the readout needs."""
+    reg = _nonnegative_and_capped_regressor(differentiable_input=True)
+
+    with pytest.raises(NotImplementedError, match="nonnegative_and_capped"):
+        reg.fit_with_differentiable_input(torch.randn(20, 3), torch.rand(20))
+
+
+def test__fit_from_preprocessed__nonnegative_and_capped__raises() -> None:
+    reg = _nonnegative_and_capped_regressor()
+
+    with pytest.raises(NotImplementedError, match="nonnegative_and_capped"):
+        reg.fit_from_preprocessed(
+            [torch.zeros(20, 3)],
+            [torch.zeros(20)],
+            [[[]]],
+            [[]],
+            performance_options=typing.cast("typing.Any", None),
+            y_train_mean=0.0,
+            y_train_std=1.0,
+        )
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test__fit__target_frame_is_independent_of_the_target_units(dtype: str) -> None:
     """Rescaling the target changes its frame but preserves standardized inputs."""
