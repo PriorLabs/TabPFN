@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import warnings
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ from tabpfn.inference_tuning import (
     find_optimal_temperature,
     find_regression_optimal_temperature,
     get_tuning_feature_flags,
-    get_tuning_splits,
+    get_tuning_split_indices,
     get_tuning_temperatures,
     resolve_tuning_config,
     select_robust_optimal_threshold,
@@ -441,39 +442,35 @@ def test__find_optimal_classification_threshold_single_class__all_negative() -> 
     assert 0.0 < threshold < 1.0
 
 
-def test__get_tuning_splits__accepts_numpy_generator_random_state() -> None:
-    X = np.arange(100, dtype=np.float64).reshape(50, 2)
+@pytest.mark.parametrize("task_type", ["classifier", "regressor"])
+def test__get_tuning_split_indices__accepts_numpy_generator_random_state(
+    task_type: Literal["classifier", "regressor"],
+) -> None:
+    X = np.zeros((50, 2))
     y = np.array([0, 1] * 25)
 
-    splits = get_tuning_splits(
+    splits = get_tuning_split_indices(
         X=X,
         y=y,
         holdout_frac=0.2,
         n_splits=1,
         random_state=np.random.default_rng(0),
+        task_type=task_type,
     )
 
     assert len(splits) == 1
-    X_train, X_holdout, y_train, y_holdout = splits[0]
-    assert len(X_train) + len(X_holdout) == len(X)
-    assert len(y_train) + len(y_holdout) == len(y)
+    train_indices, holdout_indices = splits[0]
+    assert len(train_indices) + len(holdout_indices) == len(X)
 
 
-def _identity_X(n_samples: int) -> np.ndarray:
-    """X whose first column is the row index, so rows can be tracked across splits."""
-    return np.column_stack(
-        [np.arange(n_samples, dtype=np.float64), np.zeros(n_samples)]
-    )
-
-
-def test__get_tuning_splits__regression_accepts_continuous_target() -> None:
+def test__get_tuning_split_indices__regression_accepts_continuous_target() -> None:
     # StratifiedKFold rejects a continuous target, which is exactly why regression
     # needs its own splitter. Assert both halves so the parameter is shown to matter.
-    X = _identity_X(50)
+    X = np.zeros((50, 2))
     y_continuous = np.random.default_rng(0).normal(size=50)
 
     with pytest.raises(ValueError, match="Supported target types"):
-        get_tuning_splits(
+        get_tuning_split_indices(
             X=X,
             y=y_continuous,
             holdout_frac=0.2,
@@ -481,7 +478,7 @@ def test__get_tuning_splits__regression_accepts_continuous_target() -> None:
             task_type="classifier",
         )
 
-    splits = get_tuning_splits(
+    splits = get_tuning_split_indices(
         X=X,
         y=y_continuous,
         holdout_frac=0.2,
@@ -490,12 +487,8 @@ def test__get_tuning_splits__regression_accepts_continuous_target() -> None:
     )
 
     assert len(splits) == 1
-    X_train, X_holdout, y_train, y_holdout = splits[0]
-    assert len(X_train) + len(X_holdout) == len(X)
-    assert len(y_train) + len(y_holdout) == len(y_continuous)
-    # The continuous target must survive the split untouched, not be binned.
-    assert y_holdout.dtype == y_continuous.dtype
-    assert set(np.concatenate([y_train, y_holdout])) == set(y_continuous)
+    train_indices, holdout_indices = splits[0]
+    assert len(train_indices) + len(holdout_indices) == len(X)
 
 
 @pytest.mark.parametrize(
@@ -507,16 +500,16 @@ def test__get_tuning_splits__regression_accepts_continuous_target() -> None:
         (0.25, 1, 50),
     ],
 )
-def test__get_tuning_splits__regression_respects_frac_and_n_splits(
+def test__get_tuning_split_indices__regression_respects_frac_and_n_splits(
     holdout_frac: float,
     n_splits: int,
     expected_holdout_size: int,
 ) -> None:
     n_samples = 200
-    X = _identity_X(n_samples)
+    X = np.zeros((n_samples, 2))
     y = np.random.default_rng(0).normal(size=n_samples)
 
-    splits = get_tuning_splits(
+    splits = get_tuning_split_indices(
         X=X,
         y=y,
         holdout_frac=holdout_frac,
@@ -525,21 +518,21 @@ def test__get_tuning_splits__regression_respects_frac_and_n_splits(
     )
 
     assert len(splits) == n_splits
-    for X_train, X_holdout, y_train, y_holdout in splits:
-        assert len(X_holdout) == expected_holdout_size
-        assert len(X_train) == n_samples - expected_holdout_size
-        assert len(y_train) == len(X_train)
-        assert len(y_holdout) == len(X_holdout)
+    for train_indices, holdout_indices in splits:
+        assert len(holdout_indices) == expected_holdout_size
+        assert len(train_indices) == n_samples - expected_holdout_size
 
 
-def test__get_tuning_splits__regression_holdouts_are_disjoint_across_folds() -> None:
+def test__get_tuning_split_indices__regression_holdouts_are_disjoint_across_folds() -> (
+    None
+):
     # The K-fold structure exists so that no sample is held out twice; a plain
     # random shuffle split would not guarantee this.
     n_samples = 200
-    X = _identity_X(n_samples)
+    X = np.zeros((n_samples, 2))
     y = np.random.default_rng(0).normal(size=n_samples)
 
-    splits = get_tuning_splits(
+    splits = get_tuning_split_indices(
         X=X,
         y=y,
         holdout_frac=0.2,
@@ -547,45 +540,23 @@ def test__get_tuning_splits__regression_holdouts_are_disjoint_across_folds() -> 
         task_type="regressor",
     )
 
-    holdout_indices = [X_holdout[:, 0].astype(int) for _, X_holdout, _, _ in splits]
-    all_holdout_indices = np.concatenate(holdout_indices)
-
+    all_holdout_indices = np.concatenate([holdout for _, holdout in splits])
     assert len(all_holdout_indices) == len(set(all_holdout_indices.tolist()))
     assert set(all_holdout_indices.tolist()) == set(range(n_samples))
 
     # Each fold's train and holdout parts must be complementary.
-    for (X_train, _, _, _), holdout_idx in zip(splits, holdout_indices, strict=True):
-        train_idx = X_train[:, 0].astype(int)
-        assert set(train_idx.tolist()).isdisjoint(set(holdout_idx.tolist()))
-        assert set(train_idx.tolist()) | set(holdout_idx.tolist()) == set(
-            range(n_samples)
-        )
+    for train_indices, holdout_indices in splits:
+        train, holdout = set(train_indices.tolist()), set(holdout_indices.tolist())
+        assert train.isdisjoint(holdout)
+        assert train | holdout == set(range(n_samples))
 
 
-def test__get_tuning_splits__regression_accepts_numpy_generator_random_state() -> None:
-    X = _identity_X(50)
-    y = np.random.default_rng(0).normal(size=50)
-
-    splits = get_tuning_splits(
-        X=X,
-        y=y,
-        holdout_frac=0.2,
-        n_splits=1,
-        random_state=np.random.default_rng(0),
-        task_type="regressor",
-    )
-
-    assert len(splits) == 1
-    X_train, X_holdout, _, _ = splits[0]
-    assert len(X_train) + len(X_holdout) == len(X)
-
-
-def test__get_tuning_splits__regression_handles_constant_target() -> None:
+def test__get_tuning_split_indices__regression_handles_constant_target() -> None:
     # A constant target has no variation to stratify or bin on.
-    X = _identity_X(50)
+    X = np.zeros((50, 2))
     y = np.full(50, 3.0)
 
-    splits = get_tuning_splits(
+    splits = get_tuning_split_indices(
         X=X,
         y=y,
         holdout_frac=0.2,
@@ -594,37 +565,23 @@ def test__get_tuning_splits__regression_handles_constant_target() -> None:
     )
 
     assert len(splits) == 2
-    for X_train, X_holdout, _, _ in splits:
-        assert len(X_train) + len(X_holdout) == len(X)
+    for train_indices, holdout_indices in splits:
+        assert len(train_indices) + len(holdout_indices) == len(X)
 
 
-def test__get_tuning_splits__classification_is_unchanged_by_default() -> None:
-    # The default must stay stratified so existing classifier behaviour is untouched.
+def test__get_tuning_split_indices__classification_is_stratified() -> None:
     n_samples = 200
-    X = _identity_X(n_samples)
+    X = np.zeros((n_samples, 2))
     y = np.array([0] * 20 + [1] * 180)
 
-    default_splits = get_tuning_splits(X=X, y=y, holdout_frac=0.2, n_splits=5)
-    explicit_splits = get_tuning_splits(
-        X=X,
-        y=y,
-        holdout_frac=0.2,
-        n_splits=5,
-        task_type="classifier",
+    splits = get_tuning_split_indices(
+        X=X, y=y, holdout_frac=0.2, n_splits=5, task_type="classifier"
     )
 
-    assert len(default_splits) == len(explicit_splits) == 5
-    for default_split, explicit_split in zip(
-        default_splits, explicit_splits, strict=True
-    ):
-        for default_array, explicit_array in zip(
-            default_split, explicit_split, strict=True
-        ):
-            np.testing.assert_array_equal(default_array, explicit_array)
-
+    assert len(splits) == 5
     # Stratification keeps the rare class present in every holdout.
-    for _, _, _, y_holdout in default_splits:
-        assert (y_holdout == 0).sum() == 4
+    for _, holdout_indices in splits:
+        assert (y[holdout_indices] == 0).sum() == 4
 
 
 @pytest.mark.parametrize(

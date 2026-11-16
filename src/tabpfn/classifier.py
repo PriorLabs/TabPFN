@@ -1721,6 +1721,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             holdout_frac=holdout_frac,
             random_state=self.random_state,
             n_splits=n_folds,
+            task_type="classifier",
         )
         if sample_weight is not None:
             sample_weight = np.asarray(sample_weight, dtype=np.float64)

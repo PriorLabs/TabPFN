@@ -486,7 +486,7 @@ def test__compute_holdout_validation_data__skips_fold_with_zero_weight_class(
     )
     _record_row_weights(monkeypatch, estimator, X, y)
     (_, first_holdout), _ = get_tuning_split_indices(
-        X, y, holdout_frac=0.5, n_splits=2, random_state=0
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0, task_type="classifier"
     )
     # Class 1 has weight only in the first fold's holdout, so only the second
     # fold, which trains on those rows, can be fit.

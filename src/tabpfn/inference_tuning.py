@@ -247,9 +247,10 @@ def get_tuning_split_indices(
     X: np.ndarray,
     y: np.ndarray,
     holdout_frac: float,
+    *,
+    task_type: Literal["classifier", "regressor"],
     n_splits: int = 1,
     random_state: int | np.random.RandomState | np.random.Generator | None = 0,
-    task_type: Literal["classifier", "regressor"] = "classifier",
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Get the row indices of the tuning split(s) for the given configuration.
 
@@ -260,9 +261,9 @@ def get_tuning_split_indices(
         X: The input data of shape [n_samples, n_features].
         y: The target labels of shape [n_samples].
         holdout_frac: The percentage of the data to hold out for tuning.
+        task_type: Whether the splits are for a classifier or a regressor.
         n_splits: Number of random splits to generate.
         random_state: The random state to use for the split(s).
-        task_type: Whether the splits are for a classifier or a regressor.
 
     Returns:
         One `(train_indices, holdout_indices)` tuple per split.
@@ -288,37 +289,6 @@ def get_tuning_split_indices(
     )
 
     return list(itertools.islice(splitter.split(X, y), n_splits))
-
-
-def get_tuning_splits(
-    X: np.ndarray,
-    y: np.ndarray,
-    holdout_frac: float,
-    n_splits: int = 1,
-    random_state: int | np.random.RandomState | np.random.Generator | None = 0,
-    task_type: Literal["classifier", "regressor"] = "classifier",
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-    """Get tuning split(s) for the given configuration.
-
-    Takes the arguments of `get_tuning_split_indices`.
-
-    Returns:
-        Returns a list of splits as tuples of
-        (X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh).
-        Shape suffixes: Nt=num train samples, F=num features, Nh=num holdout samples.
-    """
-    split_indices = get_tuning_split_indices(
-        X=X,
-        y=y,
-        holdout_frac=holdout_frac,
-        n_splits=n_splits,
-        random_state=random_state,
-        task_type=task_type,
-    )
-    return [
-        (X[train_indices], X[holdout_indices], y[train_indices], y[holdout_indices])
-        for train_indices, holdout_indices in split_indices
-    ]
 
 
 def find_optimal_classification_thresholds(
