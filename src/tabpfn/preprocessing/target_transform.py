@@ -127,7 +127,7 @@ class Log1pTransformer(TransformerMixin, BaseEstimator):
     def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> Log1pTransformer:
         """Check that the target ``X`` is nonnegative."""
         del y
-        _nonnegative(X, "log1p")
+        _nonnegative(X, "log1p_target")
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
@@ -143,7 +143,7 @@ class Log1pTransformer(TransformerMixin, BaseEstimator):
 ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
     "log_qgap": QuantileGapTransformer,
     "log_fixed_atom": FixedAtomTransformer,
-    "log1p": Log1pTransformer,
+    "log1p_target": Log1pTransformer,
 }
 """Presets of `REGRESSION_Y_PREPROCESS_TRANSFORMS` for nonnegative targets.
 

@@ -1139,7 +1139,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         possible_target_transforms.update(
             log_qgap=QuantileGapTransformer(),
             log_fixed_atom=FixedAtomTransformer(),
-            log1p=Log1pTransformer(scale=self.inference_config_.REGRESSION_LOG1P_SCALE),
+            log1p_target=Log1pTransformer(
+                scale=self.inference_config_.REGRESSION_LOG1P_SCALE
+            ),
         )
         # Each member fits its target pipeline on raw targets.
         target_preprocessors: list[Pipeline] = [

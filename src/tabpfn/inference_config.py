@@ -333,14 +333,15 @@ class InferenceConfig:
         - "log_fixed_atom": for zero-inflated nonnegative targets. log(y)
           standardized on the positive targets, with the zeros at -4. Values below
           -3.5 decode to 0, and positives below it are raised to it.
-        - "log1p": for nonnegative targets. log1p(c * y), with c the
+        - "log1p_target": for nonnegative targets. log1p(c * y), with c the
           `REGRESSION_LOG1P_SCALE`, decoded with expm1(t) / c.
 
-        A member with "log_qgap", "log_fixed_atom" or "log1p" puts no mass below 0.
+        A member with "log_qgap", "log_fixed_atom" or "log1p_target" puts no mass
+        below 0.
     """
 
     REGRESSION_LOG1P_SCALE: float = 1.0
-    """The scale c of the "log1p" target transform log1p(c * y).
+    """The scale c of the "log1p_target" target transform log1p(c * y).
 
     A larger c spreads the targets over more decades.
     """

@@ -649,7 +649,7 @@ def transform_borders_one(
 
     if decodes_nonnegative(target_transform):
         # Clamp onto raw 0 so that no mass sits at negative targets. Low borders
-        # of log1p decode to (-1 / scale, 0), and the repair above widens the
+        # of log1p_target decode to (-1 / scale, 0), and the repair above widens the
         # collapsed outer bucket of the transforms that decode to exactly 0.
         zero = np.asarray((0.0 - znorm_mean) / znorm_std).astype(borders_t.dtype)
         borders_t = np.maximum(borders_t, zero)
