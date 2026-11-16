@@ -164,21 +164,15 @@ class TestEncoding:
 
         np.testing.assert_array_equal(out["group_id"], [1.0, np.nan, 0.0])
 
-    @pytest.mark.parametrize(
-        ("fit_keys", "predict_keys"),
-        [([1.0, np.nan], [np.nan]), (["a", None], [None])],
-        ids=["nan", "none"],
-    )
-    def test__missing_key__is_one_group_coded_alike_at_fit_and_predict(
-        self, fit_keys: list, predict_keys: list
-    ) -> None:
+    @pytest.mark.parametrize("keys", [[1.0, np.nan], ["a", None]], ids=["nan", "none"])
+    def test__missing_key__is_refused_at_fit_and_predict(self, keys: list) -> None:
         encoder = GroupIdEncoder("g")
-        out = encoder.fit_transform(_frame(fit_keys))
+        with pytest.raises(TabPFNValidationError, match="missing values"):
+            encoder.fit(_frame(keys))
 
-        predicted = encoder.transform(_frame(predict_keys))
-
-        np.testing.assert_array_equal(out["group_id"], [0.0, 1.0])
-        np.testing.assert_array_equal(predicted["group_id"], [1.0])
+        encoder.fit(_frame(keys[:1]))
+        with pytest.raises(TabPFNValidationError, match="missing values"):
+            encoder.transform(_frame(keys))
 
     def test__predict__leaves_the_fitted_mapping_alone(self) -> None:
         encoder = GroupIdEncoder("g")

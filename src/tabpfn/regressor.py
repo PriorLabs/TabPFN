@@ -307,7 +307,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     group_aggregator_: GroupAggregator
     """Detects one label per `group_col` group, and appends the per-group
-    aggregates then. Inactive unless `USE_GROUP_AGGREGATES` is on."""
+    aggregates then if `APPEND_GROUP_AGGREGATES` is on."""
 
     group_feature_index_: int | None
     """Where the encoded group feature sits in the cleaned input, or `None`
@@ -434,12 +434,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 The codes are fitted on the training rows alone, every group
                 keeping its own; a key `fit` did not see becomes a missing
                 value. When set, `fit` and `predict` take a DataFrame holding
-                those columns and raise `ValueError` otherwise.
+                those columns, without missing values, and raise `ValueError`
+                otherwise.
                 Combining it with `tuning_config`, `differentiable_input=True`
                 or `fit_from_preprocessed` raises `ValueError` too.
 
-                `USE_GROUP_AGGREGATES` in `inference_config` adds a
-                transductive mode for data with one label per group.
+                `APPEND_GROUP_AGGREGATES` and `POOL_GROUP_PREDICTIONS` in
+                `inference_config` add transductive modes for data with one
+                label per group.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -1094,12 +1096,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 inference_config=self.inference_config_,
             )
         )
-        self.group_aggregator_ = GroupAggregator()
+        self.group_aggregator_ = GroupAggregator(
+            append=self.inference_config_.APPEND_GROUP_AGGREGATES
+        )
         X = self.group_aggregator_.fit_transform(
-            X,
-            y,
-            groups if self.inference_config_.USE_GROUP_AGGREGATES else None,
-            exclude=self.group_encoder_.feature_name_,
+            X, y, groups, exclude=self.group_encoder_.feature_name_
         )
         if feature_names is not None:
             feature_names = [*feature_names, *self.group_aggregator_.names_]
@@ -1747,10 +1748,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         if not use_blocks:
             logits = self._compute_aggregated_logits(X)
-            if groups is not None:
-                # Pooled as probabilities: each row gets its group's mixture.
-                logits = pool_rows(logits.softmax(dim=-1), groups).log()
-            return decode(logits)
+            return decode(pool_rows(logits, groups, logits=True))
 
         # Each test row only attends to the cached training context, and every
         # later step is per row, so blocks give the same result as one call.

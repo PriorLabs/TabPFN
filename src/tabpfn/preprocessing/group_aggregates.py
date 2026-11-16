@@ -30,11 +30,16 @@ class GroupAggregator:
     kept. The aggregates are computed from the rows passed in, at fit and at
     predict alike.
 
+    Args:
+        append: Whether to append the aggregates. Off, `fit_transform` only
+            detects one label per group.
+        max_features: How many aggregates to keep at most.
+
     Attributes:
         one_label_per_group_: Whether `y` is constant within every training
             group and some group has more than one row.
         aggregates_: The kept `(column, aggregate)` pairs. Empty unless
-            `one_label_per_group_`.
+            `append` and `one_label_per_group_`.
         names_: The labels of the appended columns.
     """
 
@@ -42,7 +47,8 @@ class GroupAggregator:
     aggregates_: list[tuple[str, str]]
     names_: list[str]
 
-    def __init__(self, max_features: int = 50) -> None:
+    def __init__(self, *, append: bool, max_features: int = 50) -> None:
+        self.append = append
         self.max_features = max_features
 
     def fit_transform(
@@ -66,7 +72,7 @@ class GroupAggregator:
         self.one_label_per_group_ = groups is not None and _one_label_per_group(
             y, groups
         )
-        if not self.one_label_per_group_:
+        if not (self.append and self.one_label_per_group_):
             return X
 
         sizes = np.bincount(groups)
@@ -111,15 +117,24 @@ class GroupAggregator:
         return pd.concat([X, pd.DataFrame(columns, index=X.index)], axis=1)
 
 
-def pool_rows(values: torch.Tensor, groups: np.ndarray | None) -> torch.Tensor:
-    """Replace each row, along dim -2, by the mean over its group's rows."""
+def pool_rows(
+    values: torch.Tensor, groups: np.ndarray | None, *, logits: bool
+) -> torch.Tensor:
+    """Replace each row, along dim -2, by the mean over its group's rows.
+
+    `logits` are averaged as probabilities, so the result is the log of the
+    group's mean distribution. `groups=None` returns `values` unchanged.
+    """
     if groups is None:
         return values
+    if logits:
+        values = values.softmax(dim=-1)
     index = torch.as_tensor(groups, device=values.device)
     shape = (*values.shape[:-2], int(index.max()) + 1, values.shape[-1])
     sums = values.new_zeros(shape).index_add_(-2, index, values)
     counts = torch.bincount(index).to(values.dtype)
-    return (sums / counts[:, None]).index_select(-2, index)
+    pooled = (sums / counts[:, None]).index_select(-2, index)
+    return pooled.log() if logits else pooled
 
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
