@@ -23,7 +23,7 @@ def _common_dtype(*tensors: torch.Tensor) -> torch.dtype:
     return dtype
 
 
-def _expected_value(logits: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+def expected_value(logits: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
     """Softmax-weighted sum of `values`, in the wider of the two dtypes.
 
     The softmax runs in that dtype too, so the weights sum to 1 to that dtype's
@@ -272,10 +272,13 @@ class BarDistribution(nn.Module):
         # 1 x B
         return -scaled_mean_log_probs.gather(1, target_mean.T).mean(1).unsqueeze(0)
 
+    def bucket_means(self) -> torch.Tensor:
+        """The mean of each bucket, the value `mean` weights by its probability."""
+        return self.borders[:-1] + self.bucket_widths / 2
+
     def mean(self, logits: torch.Tensor) -> torch.Tensor:
         """Expected value of the distribution."""
-        bucket_means = self.borders[:-1] + self.bucket_widths / 2
-        return _expected_value(logits, bucket_means)
+        return expected_value(logits, self.bucket_means())
 
     def median(self, logits: torch.Tensor) -> torch.Tensor:
         """Median of the distribution."""
@@ -443,7 +446,7 @@ class BarDistribution(nn.Module):
             + right_borders.square()
             + left_borders * right_borders
         ) / 3.0
-        return _expected_value(logits, bucket_mean_of_square)
+        return expected_value(logits, bucket_mean_of_square)
 
     def variance(self, logits: torch.Tensor) -> torch.Tensor:
         """Variance of the distribution."""
@@ -747,15 +750,16 @@ class FullSupportBarDistribution(BarDistribution):
         )
 
     @override
-    def mean(self, logits: torch.Tensor) -> torch.Tensor:
-        bucket_means = self.borders[:-1] + self.bucket_widths / 2
+    def bucket_means(self) -> torch.Tensor:
+        """The mean of each bucket; the end buckets are half-normal tails."""
+        bucket_means = super().bucket_means()
         side_normals = (
             self.halfnormal_with_p_weight_before(self.bucket_widths[0]),
             self.halfnormal_with_p_weight_before(self.bucket_widths[-1]),
         )
         bucket_means[0] = -side_normals[0].mean + self.borders[1]
         bucket_means[-1] = side_normals[1].mean + self.borders[-2]
-        return _expected_value(logits, bucket_means)
+        return bucket_means
 
     @override
     def mean_of_square(self, logits: torch.Tensor) -> torch.Tensor:
@@ -783,7 +787,7 @@ class FullSupportBarDistribution(BarDistribution):
             side_normals[1].variance
             + (side_normals[1].mean + self.borders[-2]).square()
         )
-        return _expected_value(logits, bucket_mean_of_square)
+        return expected_value(logits, bucket_mean_of_square)
 
     @override
     def pi(

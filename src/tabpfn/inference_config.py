@@ -354,6 +354,18 @@ class InferenceConfig:
     their target pipeline. Their predicted distributions are mirrored back. Ignored
     for classification."""
 
+    REGRESSION_READOUT: Literal["default", "nonnegative_and_capped"] = "default"
+    """How the regressor reads its outputs from the ensemble's averaged
+    distribution.
+
+    The options are:
+        - "default": the distribution as it is.
+        - "nonnegative_and_capped": the distribution of max(Y, 0) given Y <= y_max,
+          with y_max the largest training target. The mass above y_max is dropped,
+          and the grid bucket that holds 0 and every bucket below it are read at 0.
+          It needs y >= 0. The `"full"` output keeps the untruncated logits.
+    """
+
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
     """Whether to round the probabilities to float 16 to match the precision of
      scikit-learn. This can help with reproducibility and compatibility with

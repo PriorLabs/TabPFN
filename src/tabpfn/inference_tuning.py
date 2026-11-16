@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import itertools
 import warnings
 from collections.abc import Callable
 from enum import Enum
@@ -128,34 +129,40 @@ class RegressorEvalMetrics(str, Enum):
 # predictions. ``f1`` (average="binary") and ``roc_auc`` (1-D scores) rely on
 # this too, and raise on multiclass input.
 BINARY_METRIC_NAME_TO_OBJECTIVE = {
-    "f1": lambda y_true, y_pred: (
+    "f1": lambda y_true, y_pred, sample_weight: (
         -f1_score(
             y_true,
             y_pred,
             average="binary",
             zero_division=0,
+            sample_weight=sample_weight,
         )
     ),
-    "accuracy": lambda y_true, y_pred: (
+    "accuracy": lambda y_true, y_pred, sample_weight: (
         -accuracy_score(
             y_true,
             y_pred,
+            sample_weight=sample_weight,
         )
     ),
-    "balanced_accuracy": lambda y_true, y_pred: (
+    "balanced_accuracy": lambda y_true, y_pred, sample_weight: (
         -balanced_accuracy_score(
             y_true,
             y_pred,
+            sample_weight=sample_weight,
         )
     ),
-    "roc_auc": lambda y_true, y_pred: (
+    "roc_auc": lambda y_true, y_pred, sample_weight: (
         -roc_auc_score(
             y_true,
             y_pred,
+            sample_weight=sample_weight,
         )
     ),
     # y_true is binarized one-vs-rest and may contain a single label.
-    "log_loss": lambda y_true, y_pred: log_loss(y_true, y_pred, labels=[0, 1]),
+    "log_loss": lambda y_true, y_pred, sample_weight: log_loss(
+        y_true, y_pred, labels=[0, 1], sample_weight=sample_weight
+    ),
 }
 
 
@@ -163,18 +170,19 @@ def compute_metric_to_minimize(
     metric_name: ClassifierEvalMetrics,
     y_true: np.ndarray,
     y_pred: np.ndarray,
+    sample_weight: np.ndarray | None = None,
 ) -> float:
     """Computes the metric for binary one-vs-rest inputs.
 
     Adjusts the sign of the metric to frame the problem as a minimization
-    problem.
+    problem. `sample_weight` holds one weight per row, or `None` for equal weights.
     """
     if metric_name not in BINARY_METRIC_NAME_TO_OBJECTIVE:
         raise ValueError(
             f"Metric '{metric_name}' is not supported. "
             f"Supported metrics are: {list(BINARY_METRIC_NAME_TO_OBJECTIVE.keys())}"
         )
-    return BINARY_METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
+    return BINARY_METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred, sample_weight)
 
 
 # Objectives for the regression temperature search. Each returns the loss of every
@@ -235,15 +243,16 @@ def compute_regression_metric_to_minimize(
     )
 
 
-def get_tuning_splits(
+def get_tuning_split_indices(
     X: np.ndarray,
     y: np.ndarray,
     holdout_frac: float,
+    *,
+    task_type: Literal["classifier", "regressor"],
     n_splits: int = 1,
     random_state: int | np.random.RandomState | np.random.Generator | None = 0,
-    task_type: Literal["classifier", "regressor"] = "classifier",
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-    """Get tuning split(s) for the given configuration.
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Get the row indices of the tuning split(s) for the given configuration.
 
     Splits are stratified for classification and shuffled-but-unstratified for
     regression, where the continuous target cannot be stratified on.
@@ -252,14 +261,12 @@ def get_tuning_splits(
         X: The input data of shape [n_samples, n_features].
         y: The target labels of shape [n_samples].
         holdout_frac: The percentage of the data to hold out for tuning.
+        task_type: Whether the splits are for a classifier or a regressor.
         n_splits: Number of random splits to generate.
         random_state: The random state to use for the split(s).
-        task_type: Whether the splits are for a classifier or a regressor.
 
     Returns:
-        Returns a list of splits as tuples of
-        (X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh).
-        Shape suffixes: Nt=num train samples, F=num features, Nh=num holdout samples.
+        One `(train_indices, holdout_indices)` tuple per split.
     """
     # We want to use (Stratified)KFold to ensure that no train samples are used twice.
     # Therefore, we have to invert the holdout_frac to get the number of folds to
@@ -281,17 +288,7 @@ def get_tuning_splits(
         random_state=random_state,
     )
 
-    splits: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
-    for i, (train_indices, holdout_indices) in enumerate(splitter.split(X, y)):
-        if i >= n_splits:
-            break
-        X_train_NtF = X[train_indices]
-        X_holdout_NhF = X[holdout_indices]
-        y_train_Nt = y[train_indices]
-        y_holdout_Nh = y[holdout_indices]
-        splits.append((X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh))
-
-    return splits
+    return list(itertools.islice(splitter.split(X, y), n_splits))
 
 
 def find_optimal_classification_thresholds(
@@ -299,17 +296,21 @@ def find_optimal_classification_thresholds(
     y_true: np.ndarray,
     y_pred_probas: np.ndarray,
     n_classes: int,
+    sample_weight: np.ndarray | None = None,
 ) -> np.ndarray:
     """Finds the optimal thresholds for each class in a one-vs-rest (OvR) fashion.
 
     Classes with no positive (or no negative) rows in the holdout carry no signal
     to tune on and are assigned a neutral threshold instead of a searched one.
+    Rows with weight zero do not count as rows of the holdout.
 
     Args:
         metric_name: The name of the metric to optimize.
         y_true: The true labels of shape [n_samples].
         y_pred_probas: The predicted probabilities of shape [n_samples, n_classes].
         n_classes: The number of classes.
+        sample_weight: The weight of each row in the metric, of shape [n_samples],
+            or `None` for equal weights.
 
     Returns:
         The optimal thresholds of shape [n_classes].
@@ -318,21 +319,26 @@ def find_optimal_classification_thresholds(
 
     # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
+    has_weight = np.ones(len(y_true), dtype=bool)
+    if sample_weight is not None:
+        has_weight = sample_weight > 0
     for i in range(n_classes):
         is_class_i = y_true == i
-        if not is_class_i.any() or is_class_i.all():
+        if not (is_class_i & has_weight).any() or not (~is_class_i & has_weight).any():
             continue
 
         tuned_by_class[i] = find_optimal_classification_threshold_single_class(
             metric_name=metric_name,
             y_true=is_class_i.astype(int),
             y_pred_probas=y_pred_probas[:, i],
+            sample_weight=sample_weight,
         )
 
     n_untuned = n_classes - len(tuned_by_class)
     if n_untuned:
         warnings.warn(
             f"{n_untuned} of {n_classes} classes have no rows in the tuning holdout, "
+            "or only rows with weight 0, "
             "so their decision thresholds could not be tuned and a neutral value is "
             "used instead. Set `tune_decision_thresholds=False` to skip threshold "
             "tuning entirely.",
@@ -355,6 +361,7 @@ def find_optimal_classification_threshold_single_class(
     metric_name: ClassifierEvalMetrics,
     y_true: np.ndarray,
     y_pred_probas: np.ndarray,
+    sample_weight: np.ndarray | None = None,
 ) -> float:
     """Finds the optimal classification threshold to maximize the specified metric.
 
@@ -365,6 +372,8 @@ def find_optimal_classification_threshold_single_class(
         metric_name: The name of the metric to optimize.
         y_true: The true labels of shape [n_samples].
         y_pred_probas: The predicted probabilities of shape [n_samples].
+        sample_weight: The weight of each row in the metric, of shape [n_samples],
+            or `None` for equal weights.
 
     Returns:
         The optimal threshold.
@@ -378,6 +387,7 @@ def find_optimal_classification_threshold_single_class(
             metric_name=metric_name,
             y_true=y_true,
             y_pred=y_pred_tuned,
+            sample_weight=sample_weight,
         )
         thresholds_and_losses.append((float(threshold), current_loss))
 
@@ -444,6 +454,7 @@ def find_optimal_temperature(
         [np.ndarray | torch.Tensor, float], np.ndarray
     ],
     current_default_temperature: float,
+    sample_weight: np.ndarray | None = None,
 ) -> float:
     """Finds the optimal temperature to maximize the specified metric.
 
@@ -454,10 +465,16 @@ def find_optimal_temperature(
             The function should take an array of the shape of raw_logits and
             a softmax temperature as argument.
         current_default_temperature: The current default temperature.
+        sample_weight: The weight of each row in the log loss, of shape
+            [n_samples], or `None` for equal weights.
 
     Returns:
-        The temperature that minimizes the log loss.
+        The temperature that minimizes the log loss, or
+        `current_default_temperature` when every row has weight zero.
     """
+    if sample_weight is not None and not sample_weight.any():
+        return current_default_temperature
+
     temperatures = get_tuning_temperatures()
     best_log_loss = float("inf")
     best_temperature = current_default_temperature
@@ -470,6 +487,7 @@ def find_optimal_temperature(
             y_true=y_true,
             y_pred=probas,
             labels=np.arange(probas.shape[-1]),
+            sample_weight=sample_weight,
         )
 
         if current_log_loss < best_log_loss:
@@ -482,9 +500,17 @@ def find_optimal_temperature(
 RegressionHoldoutFold = (
     tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]
     | tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor, torch.Tensor | None]
+    | tuple[
+        torch.Tensor,
+        FullSupportBarDistribution,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]
 )
 """`(logits, raw_space_bardist, y_true)` with an optional fourth entry holding the
-fold's per-bar downsampling correction log weights."""
+fold's per-bar downsampling correction log weights, and an optional fifth entry
+holding the weight of each holdout row in the metric."""
 
 
 def find_regression_optimal_temperature(
@@ -504,12 +530,15 @@ def find_regression_optimal_temperature(
     own borders.
 
     Args:
-        holdout_folds: One `(logits, raw_space_bardist, y_true[, log_weights])`
+        holdout_folds: One
+            `(logits, raw_space_bardist, y_true[, log_weights[, sample_weight]])`
             tuple per fold, where `logits` has shape [n_holdout, n_buckets] and
             carries neither temperature nor correction, and `y_true` has shape
             [n_holdout]. The optional `log_weights` is the fold's per-bar
             downsampling correction, added after the temperature exactly as
-            `TabPFNRegressor` does at predict time. Each tuple must be internally
+            `TabPFNRegressor` does at predict time. The optional `sample_weight`
+            has shape [n_holdout] and weights each row's loss; without it every
+            row has weight 1. Each tuple must be internally
             consistent: the targets in the units of that bar distribution's
             borders, and everything on the same device.
         metric_name: The metric to minimize.
@@ -517,25 +546,33 @@ def find_regression_optimal_temperature(
             has nothing usable to choose from.
 
     Returns:
-        The temperature that minimizes the metric over the pooled holdout rows.
+        The temperature that minimizes the weighted mean of the metric over the
+        pooled holdout rows.
     """
     # `FullSupportBarDistribution.forward` accumulates into its `losses_per_bucket`
     # buffer on every call, so sweep on copies and leave the callers' bar
     # distributions clean.
-    folds = [
-        (
-            fold[0],
-            copy.deepcopy(fold[1]),
-            fold[2],
-            fold[3] if len(fold) > 3 else None,
+    folds = []
+    for fold in holdout_folds:
+        logits = fold[0]
+        if logits.shape[0] == 0:
+            continue
+        sample_weight = fold[4] if len(fold) > 4 else None
+        if sample_weight is None:
+            sample_weight = torch.ones(logits.shape[0], device=logits.device)
+        folds.append(
+            (
+                logits,
+                copy.deepcopy(fold[1]),
+                fold[2],
+                fold[3] if len(fold) > 3 else None,
+                sample_weight,
+            )
         )
-        for fold in holdout_folds
-        if fold[0].shape[0] > 0
-    ]
-    if not folds:
+    total_weight = sum(float(fold[4].sum()) for fold in folds)
+    if total_weight == 0:
         return current_default_temperature
 
-    n_holdout_total = sum(logits.shape[0] for logits, *_ in folds)
     temperatures = get_tuning_temperatures()
     best_loss = float("inf")
     best_temperature = current_default_temperature
@@ -545,22 +582,30 @@ def find_regression_optimal_temperature(
         for temperature in temperatures:
             current_loss = (
                 sum(
-                    logits.shape[0]
-                    * float(
-                        compute_regression_metric_to_minimize(
-                            metric_name=metric_name,
-                            raw_space_bardist=raw_space_bardist,
-                            logits=temper_and_correct_logits(
-                                logits,
-                                temperature=float(temperature),
-                                log_weights=log_weights,
-                            ),
-                            y_true=y_true,
-                        ).mean()
+                    float(
+                        (
+                            sample_weight
+                            * compute_regression_metric_to_minimize(
+                                metric_name=metric_name,
+                                raw_space_bardist=raw_space_bardist,
+                                logits=temper_and_correct_logits(
+                                    logits,
+                                    temperature=float(temperature),
+                                    log_weights=log_weights,
+                                ),
+                                y_true=y_true,
+                            )
+                        ).sum()
                     )
-                    for logits, raw_space_bardist, y_true, log_weights in folds
+                    for (
+                        logits,
+                        raw_space_bardist,
+                        y_true,
+                        log_weights,
+                        sample_weight,
+                    ) in folds
                 )
-                / n_holdout_total
+                / total_weight
             )
 
             if np.isfinite(current_loss) and current_loss < best_loss:
