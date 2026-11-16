@@ -299,8 +299,7 @@ def mix_in_label_noise(
     """The distribution of a noisy label given the clean label's `probas`.
 
     A noisy label is the clean one with probability `label_reliability`, and
-    otherwise a draw from `label_marginal`, as in the prior the model learned
-    `label_reliability` from.
+    otherwise a draw from `label_marginal`.
     """
     reliability = label_reliability[:, None]
     return reliability * probas + (1 - reliability) * label_marginal
