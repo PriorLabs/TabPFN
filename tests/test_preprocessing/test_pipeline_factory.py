@@ -157,3 +157,32 @@ def test__reshape_step__no_arithmetic__follows_a_changed_transform_name() -> Non
 
     assert not step.no_arithmetic
     assert not pipeline.keep_float32
+
+
+def test__keep_float32_pipeline__runs_on_a_finite_input_itself() -> None:
+    """Nothing writes into a finite float32 input, so it is not copied."""
+    pipeline = PreprocessingPipeline(
+        [ReshapeFeatureDistributionsStep(transform_name="none")]
+    )
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
+
+    result = pipeline.fit_transform(X, schema)
+
+    assert np.shares_memory(result.X, X)
+    assert result.X.dtype == np.float32
+
+
+def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
+    """Infinities are replaced in place, so such an input is copied first."""
+    pipeline = PreprocessingPipeline(
+        [ReshapeFeatureDistributionsStep(transform_name="none")]
+    )
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    X[0, 0] = np.inf
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
+
+    result = pipeline.fit_transform(X, schema)
+
+    assert not np.shares_memory(result.X, X)
+    assert np.isinf(X[0, 0])
