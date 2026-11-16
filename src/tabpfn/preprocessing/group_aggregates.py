@@ -246,9 +246,9 @@ def _numeric_spread(
     """The `_row_variance` of every numeric aggregate of every column, with torch."""
     index = torch.as_tensor(groups, device=device)[:, None]
     weights = torch.as_tensor(sizes, dtype=torch.float64, device=device)[:, None]
-    # Bounds the device memory: a chunk of 2**26 float64 values is 0.5 GB, and
-    # its temporaries peak at about 4 times that.
-    step = max(1, 2**26 // len(X))
+    # Bounds the device memory to a few GB: the temporaries are about 4 tensors
+    # of rows x columns and about 20 of groups x columns, in float64.
+    step = max(1, 2**26 // (len(X) + 4 * len(sizes)))
     spread = {}
     for start in range(0, X.shape[1], step):
         columns = X.columns[start : start + step]
