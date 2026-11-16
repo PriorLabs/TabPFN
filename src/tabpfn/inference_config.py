@@ -272,6 +272,15 @@ class InferenceConfig:
     on CPU regardless of this flag.  SVD and shuffle always move to GPU / torch when
     this flag is set."""
 
+    PREPROCESSED_TABLE_DTYPE: Literal["float32", "bfloat16"] = "float32"
+    """The dtype each estimator's preprocessed table is stored in, for
+    ``fit_mode="low_memory"`` and ``"fit_preprocessors"``.
+
+    ``"bfloat16"`` halves the memory the table takes, so larger tables fit. GPU
+    preprocessing still computes in float32, but stores each step's result in
+    bfloat16, and the model reads bfloat16 values. Only models that accept a
+    bfloat16 input support it."""
+
     FEATURE_SUBSAMPLING_METHOD: Literal[
         "balanced",
         "random",

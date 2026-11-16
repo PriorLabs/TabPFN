@@ -295,6 +295,15 @@ class Architecture(nn.Module, ABC):
         return ("auto",)
 
     @property
+    def accepts_host_input(self) -> bool:
+        """Whether `forward` accepts `x` in host memory while the model is on a GPU.
+
+        Such a model moves `x` to the GPU a chunk at a time. Its input can then stay
+        on the host when it is larger than the GPU memory.
+        """
+        return False
+
+    @property
     def estimator_batch_budget(self) -> EstimatorBatchBudget:
         """How much one forward may carry summed over batched estimators.
 

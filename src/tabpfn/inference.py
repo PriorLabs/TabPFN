@@ -566,6 +566,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         enable_torch_compile: bool = False,
+        table_dtype: torch.dtype = torch.float32,
     ) -> None:
         """Initialize the on-demand inference engine.
 
@@ -581,8 +582,11 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             enable_torch_compile: Enable the architecture's compiled regions.
+            table_dtype: The dtype each member's preprocessed table is stored in;
+                see `InferenceConfig.PREPROCESSED_TABLE_DTYPE`.
         """
         self.enable_torch_compile = enable_torch_compile
+        self.table_dtype = table_dtype
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
@@ -713,6 +717,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             only_return_standard_out=only_return_standard_out,
             save_peak_mem=save_peak_mem,
             task_type=task_type,
+            table_dtype=self.table_dtype,
         )
 
 
@@ -877,6 +882,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         inference_mode: bool,
         no_preprocessing: bool = False,
         enable_torch_compile: bool = False,
+        table_dtype: torch.dtype = torch.float32,
     ) -> None:
         """Initialize the cache preprocessing inference engine.
 
@@ -896,8 +902,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 (this is quicker but disables backpropagation)
             no_preprocessing: If True, skip preprocessing on test data.
                 Used for differentiability.
+            table_dtype: The dtype each member's preprocessed table is stored in;
+                see `InferenceConfig.PREPROCESSED_TABLE_DTYPE`.
         """
         self.enable_torch_compile = enable_torch_compile
+        self.table_dtype = table_dtype
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
@@ -1028,6 +1037,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             only_return_standard_out=only_return_standard_out,
             save_peak_mem=save_peak_mem,
             task_type=task_type,
+            table_dtype=self.table_dtype,
         )
 
     @override
@@ -1575,6 +1585,7 @@ def _call_model_on_members(  # noqa: PLR0913
     only_return_standard_out: bool,
     save_peak_mem: bool,
     task_type: str,
+    table_dtype: torch.dtype,
 ) -> _MemberOutputs:
     """Forward the members, which share a model, from their train and test rows.
 
@@ -1585,23 +1596,14 @@ def _call_model_on_members(  # noqa: PLR0913
     model = model_caches[members[0].config._model_index].get(device)
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
     for member, X_test in zip(members, X_tests, strict=True):
-        X_full, y_train = _prepare_model_inputs(
-            device,
-            force_inference_dtype,
-            member.X_train,
+        X_full, y_train, feature_schema = _prepare_member_inputs(
+            member,
+            model,
             X_test,
-            member.y_train,
-            x_device=_model_input_device(
-                model, device, member.X_train, X_test, force_inference_dtype
-            ),
-        )
-        X_full, feature_schema = _maybe_run_gpu_preprocessing(
-            X_full,
-            gpu_preprocessor=member.gpu_preprocessor,
-            num_train_rows=member.X_train.shape[0],
-            feature_schema=member.feature_schema,
-            consume_input=True,
-            compute_device=device,
+            device=device,
+            force_inference_dtype=force_inference_dtype,
+            inference_mode=inference_mode,
+            table_dtype=table_dtype,
         )
         prepared.append(
             (X_full, y_train, feature_schema.indices_for(FeatureModality.CATEGORICAL))
@@ -1640,6 +1642,56 @@ def _call_model_on_members(  # noqa: PLR0913
     return outputs
 
 
+def _prepare_member_inputs(
+    member: TabPFNEnsembleMember,
+    model: torch.nn.Module,
+    X_test: torch.Tensor | np.ndarray,
+    *,
+    device: torch.device,
+    force_inference_dtype: torch.dtype | None,
+    inference_mode: bool,
+    table_dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor, FeatureSchema]:
+    """A member's train and test rows as the model reads them, `(rows, 1, columns)`.
+
+    Also returns the train targets and the feature schema after GPU preprocessing.
+    """
+    assert member.X_train is not None
+    num_train_rows = member.X_train.shape[0]
+    # With a forced dtype, or when gradients are needed, store the table in the
+    # dtype the model computes in.
+    x_dtype = (
+        table_dtype
+        if force_inference_dtype is None and inference_mode
+        else force_inference_dtype or torch.float32
+    )
+    X_full, y_train = _prepare_model_inputs(
+        device,
+        force_inference_dtype,
+        member.X_train,
+        X_test,
+        member.y_train,
+        x_device=_model_input_device(
+            model,
+            device,
+            member.X_train,
+            X_test,
+            force_inference_dtype,
+            x_dtype=x_dtype,
+        ),
+        x_dtype=x_dtype,
+    )
+    X_full, feature_schema = _maybe_run_gpu_preprocessing(
+        X_full,
+        gpu_preprocessor=member.gpu_preprocessor,
+        num_train_rows=num_train_rows,
+        feature_schema=member.feature_schema,
+        consume_input=True,
+        compute_device=device,
+    )
+    return X_full, y_train, feature_schema
+
+
 def _prepare_model_inputs(
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
@@ -1648,21 +1700,28 @@ def _prepare_model_inputs(
     y_train: torch.Tensor | np.ndarray,
     *,
     x_device: torch.device | None = None,
+    x_dtype: torch.dtype | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """The train and test rows as one `(rows, 1, columns)` tensor, and the labels.
 
     Written into one tensor on `x_device`, by default `device`, a block of rows at a
     time, so that device holds the table once. The labels go to `device`.
+
+    The table is stored at `x_dtype`, by default the dtype the model computes in.
     """
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
+    x_dtype = x_dtype or dtype
+    x_device = device if x_device is None else x_device
     num_train, num_test = len(X_train), len(X_test)
     num_columns = X_train.shape[1] if num_train else X_test.shape[1]
     X_full = torch.empty(
         (num_train + num_test, 1, num_columns),
-        dtype=dtype,
-        device=device if x_device is None else x_device,
+        dtype=x_dtype,
+        device=x_device,
+        # Pinned host memory copies to the GPU faster, a block at a time.
+        pin_memory=x_device.type == "cpu" and device.type == "cuda",
     )
-    rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
+    rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * x_dtype.itemsize))
     for offset, part in ((0, X_train), (num_train, X_test)):
         for start in range(0, len(part), rows):
             block = torch.as_tensor(part[start : start + rows])
@@ -1685,15 +1744,18 @@ def _model_input_device(
     X_train: torch.Tensor | np.ndarray,
     X_test: torch.Tensor | np.ndarray,
     force_inference_dtype: torch.dtype | None,
+    *,
+    x_dtype: torch.dtype | None = None,
 ) -> torch.device:
     """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
 
     In host memory when the model reads its input from there and the input takes
-    `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`.
+    `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`. `x_dtype` is the one given to
+    `_prepare_model_inputs`.
     """
     if not getattr(model, "accepts_host_input", False) or device.type == "cpu":
         return device
-    dtype = force_inference_dtype if force_inference_dtype else torch.float32
+    dtype = x_dtype or force_inference_dtype or torch.float32
     num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
     nbytes = (len(X_train) + len(X_test)) * num_columns * dtype.itemsize
     if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:

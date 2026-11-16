@@ -1088,6 +1088,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             inference_mode=True,
             keep_cache_on_device=self.keep_cache_on_device,
             kv_cache_precision=self.kv_cache_precision,
+            table_dtype=getattr(torch, self.inference_config_.PREPROCESSED_TABLE_DTYPE),
         )
 
         return self

@@ -331,6 +331,7 @@ def create_inference_engine(  # noqa: PLR0913
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
     enable_torch_compile: bool = False,
+    table_dtype: torch.dtype = torch.float32,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -369,6 +370,8 @@ def create_inference_engine(  # noqa: PLR0913
             semantics); ``"auto"`` keeps the computed dtype; ``"adaptive"``
             stores the grid an attention backend already rounded the keys and
             values to (``kv_grid_dtype``), else ``"int8"``.
+        table_dtype: For ``fit_mode`` ``"low_memory"`` and ``"fit_preprocessors"``,
+            the dtype each member's preprocessed table is stored in.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -381,6 +384,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             enable_torch_compile=enable_torch_compile,
+            table_dtype=table_dtype,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
@@ -394,6 +398,7 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
             enable_torch_compile=enable_torch_compile,
+            table_dtype=table_dtype,
         )
     if fit_mode == "fit_with_cache":
         return InferenceEngineExplicitKVCache(
