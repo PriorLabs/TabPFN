@@ -190,7 +190,18 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
 
 ZERO_SHARE_WARNING_THRESHOLD = 0.2
 """`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
-share of exact zeros."""
+share of exact zeros, if their positives pass the checks below."""
+
+ZERO_SHARE_WARNING_MIN_POSITIVES = 50
+"""Fewer positive targets than this give no suggestion."""
+
+ZERO_SHARE_WARNING_MIN_DECADES = 0.5
+"""The least log10(q95 / q50) of the positive targets for a suggestion. Narrower
+positives gain little from a log map."""
+
+ZERO_SHARE_WARNING_MAX_COUNT_LEVELS = 10
+"""Integer positives with at most this many distinct values are counts, and give no
+suggestion."""
 
 
 class MainOutputDict(TypedDict):
@@ -2933,17 +2944,27 @@ def _warn_if_zero_inflated(y: np.ndarray) -> None:
     if _zero_share_warning_issued:
         return
     zero_share = float(np.mean(y == 0))
-    if zero_share > ZERO_SHARE_WARNING_THRESHOLD and np.min(y) >= 0:
-        _zero_share_warning_issued = True
-        warnings.warn(
-            f"{zero_share:.0%} of the training targets are exactly 0, and none is "
-            "negative. For such zero-inflated targets, consider "
-            '`TabPFNRegressor(presets="zero_inflated")`, which models the zeros as a '
-            "separate point mass.",
-            UserWarning,
-            # Past fit and the frame of its `config_context` decorator.
-            stacklevel=4,
-        )
+    if zero_share <= ZERO_SHARE_WARNING_THRESHOLD or np.min(y) < 0:
+        return
+    positives = y[y > 0]
+    if len(positives) < ZERO_SHARE_WARNING_MIN_POSITIVES:
+        return
+    q50, q95 = np.quantile(positives, [0.5, 0.95])
+    if np.log10(q95 / q50) < ZERO_SHARE_WARNING_MIN_DECADES:
+        return
+    is_integer = np.array_equal(positives, np.round(positives))
+    if is_integer and len(np.unique(positives)) <= ZERO_SHARE_WARNING_MAX_COUNT_LEVELS:
+        return
+    _zero_share_warning_issued = True
+    warnings.warn(
+        f"{zero_share:.0%} of the training targets are exactly 0, and none is "
+        "negative. For such zero-inflated targets, consider "
+        '`TabPFNRegressor(presets="zero_inflated")`, which models the zeros as a '
+        "separate point mass.",
+        UserWarning,
+        # Past fit and the frame of its `config_context` decorator.
+        stacklevel=4,
+    )
 
 
 def _place_raw_space_bardist(

@@ -2893,15 +2893,19 @@ def test__fit__zero_inflated_preset_on_another_zero_inflated_checkpoint__raises(
 
 
 @pytest.mark.parametrize(
-    ("zero_share", "minimum", "presets", "warns"),
+    ("positives", "zero_share", "minimum", "presets", "warns"),
     [
-        (0.3, 0.0, None, True),
-        (0.2, 0.0, None, False),
-        (0.3, -1.0, None, False),
-        (0.3, 0.0, "zero_inflated", False),
+        ("spread", 0.3, 0.0, None, True),
+        ("spread", 0.2, 0.0, None, False),
+        ("spread", 0.3, -1.0, None, False),
+        ("spread", 0.3, 0.0, "zero_inflated", False),
+        ("spread", 0.6, 0.0, None, False),  # 40 positives, fewer than 50
+        ("narrow", 0.3, 0.0, None, False),
+        ("counts", 0.3, 0.0, None, False),
     ],
 )
 def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
+    positives: str,
     zero_share: float,
     minimum: float,
     presets: str | None,
@@ -2911,7 +2915,13 @@ def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
     monkeypatch.setattr(regressor_module, "_zero_share_warning_issued", False)
     rng = np.random.default_rng(0)
     X = rng.normal(size=(100, 3))
-    y = rng.uniform(1.0, 10.0, size=100)
+    y = {
+        # log10(q95 / q50) is about 1.1 for the spread positives, 0.1 for the
+        # narrow ones.
+        "spread": np.exp(rng.normal(0.0, 1.5, size=100)),
+        "narrow": rng.uniform(1.0, 1.5, size=100),
+        "counts": rng.choice([1.0, 2.0, 5.0, 20.0], size=100),
+    }[positives]
     y[: int(zero_share * 100)] = 0.0
     y[-1] = minimum if minimum < 0 else y[-1]
     regressor = TabPFNRegressor(presets=presets, **_tuning_regressor_kwargs())
