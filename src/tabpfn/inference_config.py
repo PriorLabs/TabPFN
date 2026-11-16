@@ -349,15 +349,9 @@ class InferenceConfig:
 
     The options are:
         - "ensemble": the mean of the ensemble's averaged distribution.
-        - "single_clamp", "single_trunc", "single_pot", "single_pot_exp": the
-          average of each member's own mean of a nonnegative target, see
-          `tabpfn.mean_readout`. They need y >= 0.
+        - "single_clamp", "single_trunc": the average of each member's own mean
+          of a nonnegative target, see `tabpfn.mean_readout`. They need y >= 0.
     """
-
-    REGRESSION_POT_THRESHOLD: float | None = None
-    """The threshold u above which the "single_pot" readouts use the fitted tail.
-    If None, u is the (k+1)-th largest positive training target, with
-    k = clip(round(0.05 * n_pos), 30, 500)."""
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
     """Whether to round the probabilities to float 16 to match the precision of

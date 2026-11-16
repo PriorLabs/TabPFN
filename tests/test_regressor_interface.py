@@ -1786,7 +1786,7 @@ def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
         assert borders[0] < zero
 
 
-MEAN_READOUTS = ["single_clamp", "single_trunc", "single_pot", "single_pot_exp"]
+MEAN_READOUTS = ["single_clamp", "single_trunc"]
 
 
 @pytest.mark.parametrize("readout", MEAN_READOUTS)
@@ -1806,16 +1806,12 @@ def test__predict__mean_readout__averages_the_member_means(readout: str) -> None
         y_mean=reg.y_train_mean_,
         y_std=reg.y_train_std_,
         y_max=float(y[:200].max()),
-        tail=reg.pareto_tail_,
     )
     _, outputs, borders = reg.forward(X[200:], use_inference_mode=True)
     for member_borders, output in zip(borders, outputs, strict=False):
         member_means.add(member_borders, output)
     np.testing.assert_allclose(mean, member_means.mean(), rtol=1e-12)
     assert (mean >= 0).all()
-    assert (reg.pareto_tail_ is not None) == (
-        readout in ("single_pot", "single_pot_exp")
-    )
     # Only the mean is read out differently.
     main, main_plain = (r.predict(X[200:], output_type="main") for r in (reg, plain))
     np.testing.assert_array_equal(main["mean"], mean)

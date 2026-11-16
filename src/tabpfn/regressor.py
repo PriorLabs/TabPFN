@@ -76,12 +76,7 @@ from tabpfn.inference_tuning import (
     get_tuning_split_indices,
     resolve_tuning_config,
 )
-from tabpfn.mean_readout import (
-    POT_READOUTS,
-    MemberMeans,
-    ParetoTail,
-    fit_pareto_tail,
-)
+from tabpfn.mean_readout import MemberMeans
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -329,12 +324,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     declares unless it was overridden."""
 
     y_train_max_: float
-    """The largest training target, where the "single_trunc" and "single_pot" mean
-    readouts truncate each member's distribution."""
-
-    pareto_tail_: ParetoTail | None
-    """The tail the "single_pot" mean readouts add above their threshold. None for
-    the other readouts, or when there are too few positive targets to fit it."""
+    """The largest training target, where the "single_trunc" mean readout
+    truncates each member's distribution."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -1748,10 +1739,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return getattr(self.inference_config_, "REGRESSION_MEAN_READOUT", "ensemble")
 
     def _fit_mean_readout(self, y: np.ndarray) -> None:
-        """Check that the mean readout applies to `y`, and fit its tail."""
+        """Check that the mean readout applies to `y`."""
         readout = self._mean_readout()
         self.y_train_max_ = float(np.max(y))
-        self.pareto_tail_ = None
         if readout == "ensemble":
             return
         if np.any(y < 0):
@@ -1764,12 +1754,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "SAMPLE_SUBSAMPLING_METHOD='majority_downsample' correction. Use "
                 "REGRESSION_MEAN_READOUT='ensemble' or another subsampling method."
             )
-        if readout in POT_READOUTS:
-            self.pareto_tail_ = fit_pareto_tail(
-                y,
-                threshold=self.inference_config_.REGRESSION_POT_THRESHOLD,
-                fix_shape=readout == "single_pot_exp",
-            )
 
     def _member_means(self) -> MemberMeans | None:
         """A fresh accumulator for the mean readout, or None for "ensemble"."""
@@ -1781,7 +1765,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y_mean=self.y_train_mean_,
             y_std=self.y_train_std_,
             y_max=self.y_train_max_,
-            tail=self.pareto_tail_,
         )
 
     def _maybe_calibrate_ensemble_temperature(
