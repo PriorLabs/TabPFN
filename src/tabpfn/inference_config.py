@@ -159,8 +159,8 @@ class InferenceConfig:
       in the predict input.
     - If `"geometric_mean"`, by their geometric mean, normalised: the rows'
       log-probabilities are averaged. This is sharper than `"mean"` when the
-      rows agree, and a class or value that one row rules out is ruled out for
-      the group.
+      rows agree, and a class or value that one row finds very unlikely stays
+      unlikely for the group.
 
     This is transductive too: predict all rows of a group in one call."""
 

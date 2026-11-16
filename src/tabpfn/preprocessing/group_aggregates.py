@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from typing import TYPE_CHECKING
 
@@ -160,15 +161,21 @@ def pool_rows(
     """Replace each row, along dim -2, by the mean distribution of its group.
 
     The arithmetic mean averages the rows' probabilities; the `geometric` one
-    averages their logs and normalises the result. `logits` says whether
-    `values` holds logits or probabilities; the result holds the same.
+    averages their log-probabilities and normalises the result. `logits` says
+    whether `values` holds logits or probabilities; the result holds the same.
     `groups=None` returns `values` unchanged.
     """
     if groups is None:
         return values
-    # The geometric mean is taken on logs, the arithmetic one on probabilities.
-    if logits != geometric:
-        values = values.log() if geometric else values.softmax(dim=-1)
+    if values.dtype == torch.float16:
+        values = values.float()
+    if geometric:
+        # Floored: a probability that is zero in some row would rule the class
+        # out for the group, and rows with disjoint support would leave no class.
+        values = values.log_softmax(dim=-1) if logits else values.log()
+        values = values.clamp_min(math.log(torch.finfo(values.dtype).tiny))
+    elif logits:
+        values = values.softmax(dim=-1)
     index = torch.as_tensor(groups, device=values.device)
     shape = (*values.shape[:-2], int(index.max()) + 1, values.shape[-1])
     sums = values.new_zeros(shape).index_add_(-2, index, values)
@@ -176,9 +183,8 @@ def pool_rows(
     pooled = (sums / counts[:, None]).index_select(-2, index)
     if geometric:
         pooled = pooled.log_softmax(dim=-1)
-    if logits != geometric:
-        pooled = pooled.exp() if geometric else pooled.log()
-    return pooled
+        return pooled if logits else pooled.exp()
+    return pooled.log() if logits else pooled
 
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:

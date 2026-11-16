@@ -154,6 +154,19 @@ def test__pool_rows__pools_logits_and_probabilities_alike(
     torch.testing.assert_close(out, torch.tensor([expected, expected]))
 
 
+@pytest.mark.parametrize("logits", [True, False])
+def test__pool_rows__geometric_mean_of_rows_with_disjoint_support__is_finite(
+    logits: bool,
+) -> None:
+    probabilities = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float16)
+    values = probabilities.log() if logits else probabilities
+
+    out = pool_rows(values, np.array([0, 0]), logits=logits, geometric=True)
+
+    out = out.softmax(dim=-1) if logits else out
+    torch.testing.assert_close(out, torch.full((2, 2), 0.5))
+
+
 def _grouped_data() -> tuple[pd.DataFrame, np.ndarray]:
     rng = np.random.default_rng(0)
     groups = np.repeat(np.arange(10), 4)
