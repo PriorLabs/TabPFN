@@ -136,9 +136,10 @@ class TorchPreprocessingStep(abc.ABC):
         feature_schema: FeatureSchema,
         modalities: set[FeatureModality] | None,
     ) -> list[int]:
-        """The columns the pipeline passes as `column_indices`.
+        """The columns this step transforms, which the pipeline passes as
+        `column_indices`.
 
-        Those of `modalities`, or all columns for None.
+        These are the columns of `modalities`, or all columns if it is None.
         """
         if modalities is None:
             return list(range(feature_schema.num_columns))
