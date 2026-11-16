@@ -1715,7 +1715,9 @@ def _zero_inflated_regression_data() -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p_target"])
+@pytest.mark.parametrize(
+    "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
+)
 def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> None:
     """The transform must find the exact zeros of the raw target, not a z-score."""
     X, y = _zero_inflated_regression_data()
@@ -1734,7 +1736,7 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
     if transform == "log1p_target":
         t = np.log1p(y)
         expected = (t - t.mean()) / t.std()
-    elif transform == "log_qgap":
+    elif transform == "log_quantile_gap":
         t = np.where(y > 0, np.log(np.where(y > 0, y, 1.0)), 0.0)
         t[y == 0] = np.quantile(logs, 0.01) - logs.std()
         expected = (t - t.mean()) / t.std()
@@ -1748,7 +1750,9 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
     assert (member_y == zero_code).mean() == (y == 0).mean()
 
 
-@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p_target"])
+@pytest.mark.parametrize(
+    "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
+)
 def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
     transform: str,
 ) -> None:
@@ -2478,7 +2482,7 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
         ("log", -1.0, "strictly positive"),
         ("1_plus_log", -1.0, "greater than -1"),
         ("1_plus_log", -2.0, "greater than -1"),
-        ("log_qgap", -1.0, "nonnegative"),
+        ("log_quantile_gap", -1.0, "nonnegative"),
         ("log_fixed_atom", -1.0, "nonnegative"),
         ("log1p_target", -1.0, "nonnegative"),
     ],

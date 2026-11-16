@@ -61,7 +61,7 @@ class QuantileGapTransformer(TransformerMixin, BaseEstimator):
     def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> QuantileGapTransformer:
         """Place the zeros below the positive logs of the target ``X``."""
         del y
-        logs = _positive_logs(X, "log_qgap")
+        logs = _positive_logs(X, "log_quantile_gap")
         sd = float(np.std(logs))
         self.zero_ = float(np.quantile(logs, self.QUANTILE)) - sd
         self.cut_ = self.zero_ + sd / 2
@@ -138,7 +138,7 @@ class Log1pTransformer(TransformerMixin, BaseEstimator):
 
 
 ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
-    "log_qgap": QuantileGapTransformer,
+    "log_quantile_gap": QuantileGapTransformer,
     "log_fixed_atom": FixedAtomTransformer,
     "log1p_target": Log1pTransformer,
 }

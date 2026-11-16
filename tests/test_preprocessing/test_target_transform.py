@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import pickle
+import warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -181,6 +182,28 @@ def test__transform_borders_one__guard_is_applied_in_the_znorm_frame() -> None:
 
     assert logit_cancel_mask is None
     np.testing.assert_allclose(borders_t, borders, atol=1e-6)
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test__transform_borders_one__float32_overflow_warns_only_without_repair(
+    repair: bool,
+) -> None:
+    """Borders that overflow float32 warn only when no repair cancels them."""
+    exp_inverse = FunctionTransformer(inverse_func=np.exp, check_inverse=False)
+    borders = np.linspace(-5.0, 100.0, 22, dtype=np.float32)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        transform_borders_one(
+            borders,
+            target_transform=exp_inverse,
+            znorm_mean=0.0,
+            znorm_std=1.0,
+            repair_nan_borders_after_transform=repair,
+        )
+
+    overflow = [w for w in caught if "overflow" in str(w.message)]
+    assert bool(overflow) is not repair
 
 
 def _odd_inverse(sign: float) -> FunctionTransformer:
