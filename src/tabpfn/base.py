@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.constants import MemorySavingMode
+    from tabpfn.inference import _PerDeviceModelCache
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
@@ -341,6 +342,7 @@ def create_inference_engine(  # noqa: PLR0913
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
     enable_torch_compile: bool = False,
+    model_caches: list[_PerDeviceModelCache] | None = None,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -379,6 +381,9 @@ def create_inference_engine(  # noqa: PLR0913
             semantics); ``"auto"`` keeps the computed dtype; ``"adaptive"``
             stores the grid an attention backend already rounded the keys and
             values to (``kv_grid_dtype``), else ``"int8"``.
+        model_caches: Per-device copies of `models` to use instead of creating
+            new ones. Engines given the same caches share one copy of the weights
+            on every device.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -391,6 +396,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             enable_torch_compile=enable_torch_compile,
+            model_caches=model_caches,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
@@ -404,6 +410,7 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
             enable_torch_compile=enable_torch_compile,
+            model_caches=model_caches,
         )
     if fit_mode == "fit_with_cache":
         return InferenceEngineExplicitKVCache(
@@ -420,6 +427,7 @@ def create_inference_engine(  # noqa: PLR0913
             keep_cache_on_device=keep_cache_on_device,
             kv_cache_precision=kv_cache_precision,
             enable_torch_compile=enable_torch_compile,
+            model_caches=model_caches,
         )
     if fit_mode == "batched":
         raise ValueError(
