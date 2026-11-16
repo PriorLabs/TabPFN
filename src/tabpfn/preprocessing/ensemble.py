@@ -302,7 +302,7 @@ class TabPFNEnsemblePreprocessor:
 
         Used to gate the LAPACK lazy-wrapper pre-warm in
         ``parallel_execute``: pre-warm is only needed when the parallel
-        functions will hit ``torch.svd_lowrank`` -> ``torch.linalg.qr``.
+        functions will hit ``torch.linalg.eigh``.
         Mirrors the SVD-step inclusion logic in ``create_preprocessing_pipeline``
         and ``create_gpu_preprocessing_pipeline``.
         """

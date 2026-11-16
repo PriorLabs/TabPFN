@@ -21,9 +21,11 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
 )
 from tabpfn.preprocessing.torch.steps import TorchAddSVDFeaturesStep
 from tabpfn.preprocessing.torch.torch_svd import (
+    _GRAM_SPAN_ROWS,
     TorchSafeStandardScaler,
     TorchTruncatedSVD,
     _svd_flip_stable,
+    add_to_gram,
 )
 
 
@@ -36,18 +38,14 @@ class TestSvdFlipStable:
         u = torch.randn(10, 5)
         v = torch.randn(5, 8)
 
-        u_torch, v_torch = _svd_flip_stable(u, v)
-        u_sklearn, v_sklearn = sklearn_svd_flip(
-            u.numpy(), v.numpy(), u_based_decision=False
-        )
+        v_torch = _svd_flip_stable(v)
+        _, v_sklearn = sklearn_svd_flip(u.numpy(), v.numpy(), u_based_decision=False)
 
-        assert torch.allclose(u_torch, torch.from_numpy(u_sklearn), atol=1e-6)
         assert torch.allclose(v_torch, torch.from_numpy(v_sklearn), atol=1e-6)
 
     def test__svd_flip_stable__deterministic_with_ties(self):
         """When multiple elements tie for max abs value, the leftmost wins."""
         # Construct v where row 0 has a tie: columns 2 and 5 both have abs=3
-        u = torch.eye(2, dtype=torch.float32)
         v = torch.tensor(
             [
                 [1.0, 2.0, -3.0, 0.0, 1.0, 3.0, 0.5],
@@ -56,7 +54,7 @@ class TestSvdFlipStable:
         )
         # Leftmost max-abs in row 0 is col 2 (value -3), so sign = -1
         # Leftmost max-abs in row 1 is col 2 (value 2), so sign = +1
-        _, v_out = _svd_flip_stable(u, v)
+        v_out = _svd_flip_stable(v)
 
         # Row 0 flipped (sign of col 2 was negative)
         assert v_out[0, 2].item() == 3.0
@@ -283,40 +281,42 @@ class TestChunkedSVDEquivalence:
 
         assert torch.allclose(result_full, result_chunked, atol=1e-6, equal_nan=True)
 
-    def test__fit__lowrank_svd_close_to_exact_svd(self):
-        """svd_lowrank result should be close to exact SVD for the top components.
-
-        Uses n=100, f=10001 which satisfies both lowrank trigger conditions:
-        n*f=1,000,100 > 1,000,000 and min(100,10001)=100 >= 2*(5+10)=30.
-        """
+    @pytest.mark.parametrize(
+        ("n_samples", "n_features"), [(100, 10001), (20_000, 60)], ids=["wide", "tall"]
+    )
+    def test__fit__matches_the_exact_svd(self, n_samples: int, n_features: int):
+        """The fit is the exact top-k SVD, also where a randomized one was used."""
         torch.manual_seed(0)
-        n_samples, n_features, n_components = 100, 10001, 5
+        n_components = 5
 
-        # Low-rank structured matrix so the top-k approximation is meaningful
         factors = torch.randn(n_samples, 10) @ torch.randn(10, n_features)
         noise = 0.01 * torch.randn(n_samples, n_features)
         x = (factors + noise).float()
 
-        # TorchTruncatedSVD should choose the lowrank path
-        svd = TorchTruncatedSVD(n_components=n_components)
-        cache = svd.fit(x)
+        cache = TorchTruncatedSVD(n_components=n_components).fit(x)
 
-        # Exact reference: thin SVD truncated to n_components
-        _, s_exact, vh_exact = torch.linalg.svd(x, full_matrices=False)
-        s_exact = s_exact[:n_components]
-        vh_exact = vh_exact[:n_components]
+        _, s_exact, vh_exact = torch.linalg.svd(x.double(), full_matrices=False)
+        torch.testing.assert_close(
+            cache["singular_values"].double(), s_exact[:n_components], rtol=1e-4, atol=0
+        )
+        # Components agree up to sign; the sign convention fixes it per component.
+        overlap = (cache["components"].double() @ vh_exact[:n_components].T).abs()
+        torch.testing.assert_close(
+            overlap, torch.eye(n_components, dtype=torch.float64), rtol=0, atol=1e-4
+        )
 
-        s_lowrank = cache["singular_values"]
-        vh_lowrank = cache["components"]
+    def test__fit__any_split_at_span_multiples__identical_gram(self):
+        """The Gram matrix does not depend on how the rows reach `add_to_gram`."""
+        x = torch.randn(
+            3 * _GRAM_SPAN_ROWS + 17, 9, generator=torch.Generator().manual_seed(0)
+        )
 
-        # Singular values from lowrank should be close to exact top-k values
-        assert s_lowrank.shape == (n_components,)
-        torch.testing.assert_close(s_lowrank, s_exact, rtol=0.05, atol=1.0)
+        whole = add_to_gram(None, x)
+        split = add_to_gram(
+            add_to_gram(None, x[: 2 * _GRAM_SPAN_ROWS]), x[2 * _GRAM_SPAN_ROWS :]
+        )
 
-        # Transformed output should be close up to per-component sign flips
-        proj_exact = (x @ vh_exact.T).abs()
-        proj_lowrank = (x @ vh_lowrank.T).abs()
-        torch.testing.assert_close(proj_lowrank, proj_exact, rtol=0.05, atol=1.0)
+        assert torch.equal(whole, split)
 
 
 class TestChunkedTorchSafeStandardScalerEquivalence:
@@ -679,29 +679,65 @@ def test__add_svd_features__single_feature_is_noop_like_cpu():
     assert cpu_step.num_added_features(40, schema) == 0
 
 
-def test__torch_truncated_svd__random_state_controls_the_projection():
-    """``random_state`` must fix the randomized projection, and different seeds vary it.
-
-    ``torch.svd_lowrank`` draws its projection from the global torch RNG, so an
-    unseeded call returns different components each time. This shape takes that branch
-    (>1M cells, and min(n, f) >= 2 * (n_components + 10)); smaller inputs use the exact
-    path, which is deterministic anyway.
-    """
+def test__torch_truncated_svd__fit__deterministic_and_leaves_the_rng_alone():
+    """The fit draws no random numbers: repeated fits agree; the RNG is untouched."""
     x = torch.randn(5_000, 250, generator=torch.Generator().manual_seed(0))
+    before = torch.get_rng_state()
 
-    same = [TorchTruncatedSVD(n_components=8, random_state=0).fit(x) for _ in range(2)]
-    other = TorchTruncatedSVD(n_components=8, random_state=1).fit(x)
+    fits = [TorchTruncatedSVD(n_components=8).fit(x) for _ in range(2)]
 
-    assert torch.equal(same[0]["components"], same[1]["components"])
-    assert not torch.equal(same[0]["components"], other["components"])
+    assert torch.equal(before, torch.get_rng_state())
+    assert torch.equal(fits[0]["components"], fits[1]["components"])
+
+
+def test__add_svd_features__fit_blocks__any_block_size__matches_one_block():
+    """The streamed fit over blocks of rows gives the fit of the rows at once."""
+    x = torch.randn(
+        2 * _GRAM_SPAN_ROWS + 5, 1, 12, generator=torch.Generator().manual_seed(1)
+    )
+    x[3, 0, 2] = float("nan")
+    step = TorchAddSVDFeaturesStep("svd_quarter_components")
+    whole = step._fit(x)
+    rows = x.reshape(-1, 12)
+
+    blocks = step.fit_blocks(
+        lambda: rows.split(_GRAM_SPAN_ROWS),
+        num_train_rows=x.shape[0],
+        num_features=12,
+        batch_size=1,
+    )
+
+    for key in ("svd_components", "svd_singular_values", "scaler_std", "scaler_mean"):
+        torch.testing.assert_close(blocks[key], whole[key], rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+@pytest.mark.parametrize("n_rows", [40, 200], ids=["fewer_rows_than_columns", "tall"])
+def test__add_svd_features__fit__mps__close_to_cpu(n_rows: int):
+    """MPS has no float64; the fit there sums in float32 and still agrees."""
+    x = torch.randn(n_rows, 1, 60, generator=torch.Generator().manual_seed(2))
+    x[3, 0, 2] = float("nan")
+    step = TorchAddSVDFeaturesStep("svd_quarter_components")
+
+    on_cpu = step._fit(x)
+    on_mps = step._fit(x.to("mps"))
+
+    for key in ("svd_singular_values", "scaler_std", "scaler_mean"):
+        assert on_mps[key].device.type == "mps"
+        torch.testing.assert_close(on_mps[key].cpu(), on_cpu[key], rtol=1e-4, atol=1e-4)
+    # Components are unique up to rotations within near-equal singular values, so
+    # compare the subspaces they span.
+    overlap = on_mps["svd_components"].cpu() @ on_cpu["svd_components"].T
+    singular = torch.linalg.svdvals(overlap)
+    torch.testing.assert_close(singular, torch.ones_like(singular), rtol=0, atol=1e-3)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 def test__torch_truncated_svd__fit_leaves_cuda_rng_untouched():
-    """Seeding must not leak: CUDA RNG state must survive the call unchanged."""
+    """The fit must not touch the CUDA RNG state either."""
     x = torch.randn(5_000, 250, generator=torch.Generator().manual_seed(0)).cuda()
     before = torch.cuda.get_rng_state()
 
-    TorchTruncatedSVD(n_components=8, random_state=0).fit(x)
+    TorchTruncatedSVD(n_components=8).fit(x)
 
     assert torch.equal(before, torch.cuda.get_rng_state())
