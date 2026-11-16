@@ -614,9 +614,8 @@ def transform_borders_one(
     borders_t = target_transform.inverse_transform(  # type: ignore
         borders.reshape(-1, 1).astype(np.float64)
     ).squeeze()
-    # Exponentiated borders reach 1e66 and more and overflow float32. The repair
-    # below cancels the borders that overflow to inf, so warn only without it.
-    with np.errstate(over="ignore" if repair_nan_borders_after_transform else "warn"):
+    # Exponentiated borders reach 1e66 and more; silence the float32 overflow warnings.
+    with np.errstate(over="ignore"):
         borders_t = ((borders_t - znorm_mean) / znorm_std).astype(borders.dtype)
 
     broken_mask: npt.NDArray[np.bool_] | None = None

@@ -185,10 +185,8 @@ def test__transform_borders_one__guard_is_applied_in_the_znorm_frame() -> None:
 
 
 @pytest.mark.parametrize("repair", [True, False])
-def test__transform_borders_one__float32_overflow_warns_only_without_repair(
-    repair: bool,
-) -> None:
-    """Borders that overflow float32 warn only when no repair cancels them."""
+def test__transform_borders_one__float32_overflow_does_not_warn(repair: bool) -> None:
+    """Borders that overflow float32 in the cast do not warn."""
     exp_inverse = FunctionTransformer(inverse_func=np.exp, check_inverse=False)
     borders = np.linspace(-5.0, 100.0, 22, dtype=np.float32)
 
@@ -202,8 +200,7 @@ def test__transform_borders_one__float32_overflow_warns_only_without_repair(
             repair_nan_borders_after_transform=repair,
         )
 
-    overflow = [w for w in caught if "overflow" in str(w.message)]
-    assert bool(overflow) is not repair
+    assert not [w for w in caught if "overflow" in str(w.message)]
 
 
 def _odd_inverse(sign: float) -> FunctionTransformer:
