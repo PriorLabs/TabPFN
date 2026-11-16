@@ -166,9 +166,7 @@ class GroupAggregator:
                 [pd.api.types.is_numeric_dtype(X[column]) for column in columns],
                 dtype=bool,
             )
-            spread = _numeric_spread(
-                X, columns[numeric], groups, sizes, self.device
-            )
+            spread = _numeric_spread(X, columns[numeric], groups, sizes, self.device)
             columns = columns[~numeric]
         if len(columns):
             # The first column runs alone: it fills the lazy caches of `grouped`,
