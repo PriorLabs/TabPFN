@@ -69,6 +69,24 @@ def test__fit__column_blocks__match_one_pass(monkeypatch: pytest.MonkeyPatch):
         assert torch.equal(one_pass[key], blocked[key])
 
 
+def test__fit_transform__offset_column__float64_keeps_its_distinct_values():
+    """Given float64, a column with a large offset matches the CPU preset exactly.
+
+    In float32 such a column has lost its distinct values before any scaling.
+    """
+    rng = np.random.default_rng(0)
+    x = (1.7e9 + rng.integers(0, 1000, 2000)).astype(np.float64)[:, None]
+    cpu = get_all_reshape_feature_distribution_preprocessors(len(x))["robust"]
+    expected = cpu.fit_transform(x.copy())
+
+    scaler = TorchRobustScaler()
+    x_torch = torch.from_numpy(x)
+    result = scaler.transform(x_torch, fitted_cache=scaler.fit(x_torch))
+
+    np.testing.assert_array_equal(result.numpy(), expected)
+    assert len(np.unique(x.astype(np.float32))) < len(np.unique(x)) / 10
+
+
 def test__selective_step__in_place__column_blocks_match_a_copy(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -96,3 +114,16 @@ def test__selective_step__in_place__column_blocks_match_a_copy(
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
     for key, value in expected.fitted_cache.items():
         torch.testing.assert_close(actual.fitted_cache[key], value, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+def test__fit_transform__mps__matches_cpu():
+    """The scaler runs on MPS as it is, with no CPU fallback."""
+    x = torch.from_numpy(_make_columns(np.random.default_rng(3), 500)).float()
+    scaler = TorchRobustScaler()
+
+    on_cpu = scaler.transform(x, fitted_cache=scaler.fit(x))
+    on_mps = scaler.transform(x.to("mps"), fitted_cache=scaler.fit(x.to("mps")))
+
+    assert on_mps.device.type == "mps"
+    torch.testing.assert_close(on_mps.cpu(), on_cpu, rtol=1e-6, atol=1e-6)
