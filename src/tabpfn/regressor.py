@@ -1611,6 +1611,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Decoding each block keeps the [rows, n_buckets] tensors block-sized.
         X_clean = self._clean_predict_input(X)
         parts: list[RegressionResultType] = []
+        speed_metrics = self.executor_._speed_metrics
+        forward_seconds = 0.0
         for start in tqdm(
             range(0, X_clean.shape[0], block_rows),
             desc="TabPFN inference",
@@ -1622,6 +1624,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             parts.append(decode(logits))
             del logits
+            # Each block overwrites the metric, so accumulate the per-block time.
+            forward_seconds += speed_metrics.get("predict_model_forward_seconds", 0.0)
+        speed_metrics["predict_model_forward_seconds"] = forward_seconds
         return _concat_block_outputs(parts, output_type)
 
     def _maybe_calibrate_ensemble_temperature(self, X: XType, y: YType) -> None:
@@ -2574,8 +2579,8 @@ def _decode_logits(
 ) -> RegressionResultType:
     """Turn aggregated log-probabilities into the output `predict` returns.
 
-    Shared by `predict` and `predict_batched`. `raw_space_bardist` is only
-    returned, as the criterion of `output_type="full"`.
+    `raw_space_bardist` is only returned, as the criterion of
+    `output_type="full"`.
     """
     logit_to_output = partial(
         _logits_to_output,

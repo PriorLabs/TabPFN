@@ -1108,6 +1108,40 @@ def test__regressor_predict_row_blocks__match_single_pass(
         _assert_regression_outputs_close(blocked, single)
 
 
+def test__regressor_predict_row_blocks__sum_forward_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The forward-time metric covers every block and resets between calls."""
+    n_train, n_test, block = 32, 37, 8
+    X, y = sklearn.datasets.make_regression(
+        n_samples=n_train + n_test, n_features=5, random_state=0
+    )
+    model = TabPFNRegressor(
+        n_estimators=2, random_state=42, device="cpu", fit_mode="fit_with_cache"
+    )
+    model.fit(X[:n_train], y[:n_train])
+    metrics = model.executor_._speed_metrics
+    monkeypatch.setattr(settings.tabpfn, "max_regressor_predict_rows", block)
+
+    original = model._aggregate_cleaned_logits
+    per_block: list[float] = []
+
+    def spy(X, **kwargs):  # noqa: ANN202
+        out = original(X, **kwargs)
+        per_block.append(metrics["predict_model_forward_seconds"])
+        return out
+
+    monkeypatch.setattr(model, "_aggregate_cleaned_logits", spy)
+
+    for _ in range(2):
+        per_block.clear()
+        model.predict(X[n_train:])
+        assert len(per_block) == 5
+        assert metrics["predict_model_forward_seconds"] == pytest.approx(
+            sum(per_block)
+        )
+
+
 @pytest.mark.parametrize(
     ("fit_mode", "output_type"),
     [("fit_preprocessors", "mean"), ("fit_with_cache", "full")],
