@@ -41,8 +41,9 @@ from tabpfn.utils import infer_random_state
 class TorchSelectiveStep(TorchPreprocessingStep):
     """A step that transforms only the columns CPU preprocessing marked for it.
 
-    The marked columns are known when the step is built. `fit_transform` uses them
-    and ignores `column_indices`.
+    The marked columns are known when the step is built, and the pipeline passes
+    them as `column_indices`. Steps that override `fit_transform` read their marked
+    columns directly.
     """
 
     _target_column_indices: list[int]
@@ -448,32 +449,6 @@ class TorchSelectiveRobustScalerStep(TorchSelectiveStep):
         super().__init__()
         self._scaler = TorchRobustScaler()
         self._target_column_indices = target_column_indices
-
-    @override
-    def fit_transform(
-        self,
-        x: torch.Tensor,
-        column_indices: list[int],
-        num_train_rows: int,
-        fitted_cache: dict[str, torch.Tensor] | None = None,
-        *,
-        in_place: bool = False,
-    ) -> TorchPreprocessingStepResult:
-        """Override to select only target columns for robust scaling."""
-        del column_indices, in_place
-        target_x = x[:, :, self._target_column_indices]
-        if fitted_cache is None:
-            fitted_cache = self._scaler.fit(target_x[:num_train_rows])
-        else:
-            fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
-
-        transformed = self._scaler.transform(target_x, fitted_cache=fitted_cache)
-        del target_x  # free before the full-size clone below
-
-        x = x.clone()
-        x[:, :, self._target_column_indices] = transformed
-
-        return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
     @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:

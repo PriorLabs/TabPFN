@@ -12,7 +12,6 @@ import torch
 
 from tabpfn.preprocessing.torch.torch_squashing_scaler import (
     _FIT_BLOCK_BYTES,
-    _TRANSFORM_BLOCK_BYTES,
     _block_size,
 )
 
@@ -57,13 +56,5 @@ class TorchRobustScaler:
     def transform(
         self, x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
     ) -> torch.Tensor:
-        """Returns `(x - center) / scale`, computed a block of rows at a time."""
-        center = fitted_cache["center"]
-        scale = fitted_cache["scale"]
-        out = torch.empty_like(x)
-        block = _block_size(x, dim=0, budget_bytes=_TRANSFORM_BLOCK_BYTES)
-        for start in range(0, x.shape[0], block):
-            out_block = out[start : start + block]
-            torch.sub(x[start : start + block], center, out=out_block)
-            out_block.div_(scale)
-        return out
+        """Returns `(x - center) / scale`."""
+        return (x - fitted_cache["center"]).div_(fitted_cache["scale"])
