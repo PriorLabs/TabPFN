@@ -12,6 +12,8 @@ import tabpfn.preprocessing.torch.torch_robust_scaler as module
 from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     get_all_reshape_feature_distribution_preprocessors,
 )
+from tabpfn.preprocessing.torch import pipeline_interface
+from tabpfn.preprocessing.torch.steps import TorchSelectiveRobustScalerStep
 from tabpfn.preprocessing.torch.torch_robust_scaler import TorchRobustScaler
 
 
@@ -65,3 +67,32 @@ def test__fit__column_blocks__match_one_pass(monkeypatch: pytest.MonkeyPatch):
     blocked = TorchRobustScaler().fit(x)
     for key in one_pass:
         assert torch.equal(one_pass[key], blocked[key])
+
+
+def test__selective_step__in_place__column_blocks_match_a_copy(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """In place, the step writes its columns into `x` a block at a time."""
+    x = torch.from_numpy(_make_columns(np.random.default_rng(2), 200)).float()
+    x = x.unsqueeze(1)
+    targets = [0, 1, 2, 4]
+    step = TorchSelectiveRobustScalerStep(target_column_indices=targets)
+    expected = step.fit_transform(x.clone(), targets, num_train_rows=150)
+    # One float32 column of 200 rows per block.
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 200 * 4)
+    fitted_blocks: list[torch.Tensor] = []
+    fit = step._fit
+
+    def counting_fit(block: torch.Tensor) -> dict[str, torch.Tensor]:
+        fitted_blocks.append(block)
+        return fit(block)
+
+    monkeypatch.setattr(step, "_fit", counting_fit)
+
+    actual = step.fit_transform(x, targets, num_train_rows=150, in_place=True)
+
+    assert len(fitted_blocks) == len(targets)
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
+    for key, value in expected.fitted_cache.items():
+        torch.testing.assert_close(actual.fitted_cache[key], value, rtol=0, atol=0)

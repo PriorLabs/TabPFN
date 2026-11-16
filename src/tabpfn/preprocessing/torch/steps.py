@@ -445,6 +445,8 @@ class TorchSelectiveRobustScalerStep(TorchSelectiveStep):
     :class:`TorchSelectiveQuantileTransformerStep`.
     """
 
+    columnwise = True
+
     def __init__(self, target_column_indices: list[int]) -> None:
         super().__init__()
         self._scaler = TorchRobustScaler()
