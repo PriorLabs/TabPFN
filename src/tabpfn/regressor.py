@@ -1509,7 +1509,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 matter: scaling every weight changes nothing, and a weight of 2
                 is not the same as the row appearing twice. Rows with weight 0
                 stay in the context. Raises unless the model supports per-row
-                weights, see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
+                weights, see `InferenceConfig.SAMPLE_WEIGHT_MODE`. For a target
+                that accrues over an exposure, such as a claim cost over the
+                years a policy was in force, pass the rate, target / exposure, as
+                `y` and the exposure as `sample_weight`, not as a feature. The
+                predictions are then rates.
             label_reliability: Experimental. One value in [0, 1] per training row:
                 how much to trust that row's target, from 1 (known to be right)
                 to 0 (carries no information). Raises unless the model
@@ -1864,11 +1868,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y_holdout = (
                 torch.cat([y_fold for _, _, y_fold, *_ in holdout_folds]).cpu().numpy()
             )
-            if not np.any(y_holdout > 0):
+            row_weights = np.concatenate(
+                [
+                    np.ones(len(fold[2])) if fold[4] is None else fold[4].cpu().numpy()
+                    for fold in holdout_folds
+                ]
+            )
+            if not np.any((y_holdout > 0) & (row_weights > 0)):
                 # The fitted constant would be 0 and zero out every mean.
                 warnings.warn(
-                    "`calibrate_mean` found no positive target in the "
-                    "tuning holdout rows and leaves the mean unscaled.",
+                    "`calibrate_mean` found no tuning holdout row with a "
+                    "positive target and a positive weight, and leaves the mean "
+                    "unscaled.",
                     UserWarning,
                     stacklevel=3,
                 )
@@ -1879,6 +1890,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     [self._holdout_mean(fold) for fold in holdout_folds]
                 ),
                 power=tuning_config_resolved.mean_calibration_power,
+                sample_weight=row_weights,
             )
 
     def _holdout_mean(self, fold: _HoldoutFold) -> np.ndarray:

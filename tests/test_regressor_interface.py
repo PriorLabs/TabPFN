@@ -2629,7 +2629,7 @@ def test__fit__mean_calibration_without_positive_holdout_targets__warns() -> Non
         **_tuning_regressor_kwargs(),
     )
 
-    with pytest.warns(UserWarning, match="no positive target"):
+    with pytest.warns(UserWarning, match="positive target and a positive weight"):
         regressor.fit(X, y)
 
     assert regressor.mean_calibration_scale_ == 1.0
@@ -2677,6 +2677,93 @@ def test__fit__with_mean_calibration_and_a_mean_readout__scales_the_readout() ->
         expected_scale * plain.predict(X[:20]),
         rtol=1e-6,
     )
+
+
+def _weighted_tuning_regressor_kwargs(
+    monkeypatch: pytest.MonkeyPatch, **overrides: Any
+) -> dict[str, Any]:
+    """`_tuning_regressor_kwargs` for a dummy model that takes and ignores row
+    weights, so `fit` accepts `sample_weight`.
+    """
+    kwargs = _tuning_regressor_kwargs(
+        inference_config={"SAMPLE_WEIGHT_MODE": "learned"}, **overrides
+    )
+    model_cls = type(kwargs["model_path"].model)
+    original_forward = model_cls.forward
+
+    def forward(
+        self: Any,
+        *args: Any,
+        row_weights_NB2: torch.Tensor | None = None,
+        sample_weight_mode: str | None = None,
+        **forward_kwargs: Any,
+    ) -> Any:
+        del row_weights_NB2, sample_weight_mode
+        return original_forward(self, *args, **forward_kwargs)
+
+    monkeypatch.setattr(model_cls, "forward", forward)
+    monkeypatch.setattr(
+        model_cls, "get_supported_sample_weight_modes", lambda _: ("learned",)
+    )
+    return kwargs
+
+
+def test__fit__mean_calibration_with_sample_weight__weights_the_holdout_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X, rate = _zero_inflated_tuning_data()
+    exposure = np.random.RandomState(1).uniform(0.05, 2.0, len(rate))
+    kwargs = _weighted_tuning_regressor_kwargs(monkeypatch)
+    splits = {"tuning_holdout_frac": 0.5, "tuning_n_folds": 2}
+    calibrated = TabPFNRegressor(
+        tuning_config={"calibrate_mean": True, **splits}, **kwargs
+    ).fit(X, rate, sample_weight=exposure)
+
+    rate_holdout, mean_holdout, exposure_holdout = [], [], []
+    for train, holdout in get_tuning_split_indices(
+        X, rate, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        fold_regressor = TabPFNRegressor(**kwargs).fit(
+            X[train], rate[train], sample_weight=exposure[train]
+        )
+        rate_holdout.append(rate[holdout])
+        mean_holdout.append(fold_regressor.predict(X[holdout]))
+        exposure_holdout.append(exposure[holdout])
+    fold_scale = partial(
+        find_mean_calibration_scale,
+        y_true=np.concatenate(rate_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=1.5,
+    )
+    expected_scale = fold_scale(sample_weight=np.concatenate(exposure_holdout))
+    assert expected_scale != pytest.approx(fold_scale(), rel=1e-3)
+    np.testing.assert_allclose(
+        calibrated.mean_calibration_scale_, expected_scale, rtol=1e-6
+    )
+
+
+def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X, y = _zero_inflated_tuning_data()
+    ((_, holdout),) = get_tuning_split_indices(
+        X, y, holdout_frac=0.2, n_splits=1, random_state=0, task_type="regressor"
+    )
+    sample_weight = np.ones(len(y))
+    sample_weight[holdout[y[holdout] > 0]] = 0.0
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "calibrate_mean": True,
+            "tuning_holdout_frac": 0.2,
+            "tuning_n_folds": 1,
+        },
+        **_weighted_tuning_regressor_kwargs(monkeypatch),
+    )
+
+    with pytest.warns(UserWarning, match="positive target and a positive weight"):
+        regressor.fit(X, y, sample_weight=sample_weight)
+
+    assert regressor.mean_calibration_scale_ == 1.0
 
 
 @pytest.mark.parametrize(

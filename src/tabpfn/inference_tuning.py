@@ -99,7 +99,10 @@ class RegressorTuningConfig(TuningConfig):
     calibrate_mean: bool = False
     """Whether to scale the `"mean"` output by a constant c fitted on the tuning
     holdout rows, as `mean_calibration_mode` says. The predictive distribution, and
-    with it every other output, is unchanged. Set to True to enable."""
+    with it every other output, is unchanged. A holdout row counts in proportion
+    to its `sample_weight * label_reliability` from `fit`, so with an exposure as
+    `sample_weight` and the rate as the target, c fits the exposure-weighted
+    rate. Set to True to enable."""
 
     mean_calibration_mode: Literal["tweedie"] = "tweedie"
     """How `calibrate_mean` fits c.
@@ -543,18 +546,22 @@ def find_mean_calibration_scale(
     y_true: np.ndarray,
     mean: np.ndarray,
     power: float,
+    sample_weight: np.ndarray | None = None,
 ) -> float:
-    """Finds the constant c that minimizes the Tweedie deviance of `c * mean`.
+    """Finds the constant c that minimizes the weighted Tweedie deviance of
+    `c * mean`.
 
-    The minimizer has the closed form c = sum(y m^(1-p)) / sum(m^(2-p)), with the
-    means m floored at `MEAN_CALIBRATION_MIN_MEAN_FRACTION` times the mean target.
-    p = 1 gives sum(y) / sum(m).
+    The minimizer has the closed form c = sum(w y m^(1-p)) / sum(w m^(2-p)), with
+    the means m floored at `MEAN_CALIBRATION_MIN_MEAN_FRACTION` times the mean
+    target. p = 1 gives sum(w y) / sum(w m).
 
     Args:
         y_true: The nonnegative targets, of shape [n_samples], at least one of
             them positive.
         mean: The predicted means, of shape [n_samples].
         power: The Tweedie power p.
+        sample_weight: The weight w of each row, of shape [n_samples], or `None`
+            for equal weights.
 
     Returns:
         The constant c.
@@ -563,7 +570,8 @@ def find_mean_calibration_scale(
     m = np.maximum(
         mean.astype(np.float64), MEAN_CALIBRATION_MIN_MEAN_FRACTION * y.mean()
     )
-    return float((y * m ** (1 - power)).sum() / (m ** (2 - power)).sum())
+    w = np.ones_like(y) if sample_weight is None else sample_weight.astype(np.float64)
+    return float((w * y * m ** (1 - power)).sum() / (w * m ** (2 - power)).sum())
 
 
 def find_regression_optimal_temperature(
