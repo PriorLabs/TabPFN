@@ -1872,6 +1872,28 @@ def test__logits_to_output__truncated__drops_the_mass_above_truncate_above() -> 
     assert high_untruncated[0] > 3.0
 
 
+def test__logits_to_output__truncated__grid_above_zero__reads_nothing_at_zero() -> None:
+    """With every raw border above 0, the left tail is not read at 0."""
+    probs = torch.full((1, 6), 1 / 6, dtype=torch.float64)
+
+    def output(output_type: str, truncate_above: float | None) -> typing.Any:
+        # The raw borders run from 7 to 14, so nothing on the grid is capped.
+        return regressor_module._logits_to_output(
+            output_type=output_type,
+            logits=probs.log(),
+            znorm_space_bardist=_SMALL_GRID,
+            y_mean=10.0,
+            y_std=1.0,
+            quantiles=[0.05, 0.5],
+            truncate_above=truncate_above,
+        )
+
+    low, _ = output("quantiles", 100.0)
+    assert 0.0 < low[0] < 7.0
+    np.testing.assert_allclose(low, output("quantiles", None)[0])
+    np.testing.assert_allclose(output("mean", 100.0), output("mean", None))
+
+
 @pytest.mark.parametrize(("truncate_above", "expected"), [(2.5, 3.0), (3.5, np.inf)])
 def test__logits_to_output__truncated__quantile_one_is_the_last_kept_border(
     truncate_above: float, expected: float

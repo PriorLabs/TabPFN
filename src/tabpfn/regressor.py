@@ -2842,16 +2842,19 @@ def _logits_to_output(
     `truncate_above` are dropped; the bucket that holds it is kept whole. The
     grid bucket that holds 0 and every bucket below it are read as a point at 0:
     `translate_probs_across_borders` moves a member's mass at 0 into that bucket.
+    If 0 lies below the grid, no bucket is read at 0 and outputs are clipped at 0.
     """
     criterion = znorm_space_bardist
 
     def to_raw(output: torch.Tensor) -> np.ndarray:
         return output.cpu().detach().numpy().astype(np.float64) * y_std + y_mean
 
-    zero_bucket = None
     if truncate_above is not None:
         raw_borders = to_raw(criterion.borders)
-        zero_bucket = int(np.searchsorted(raw_borders, 0.0, side="right")) - 1
+        # The buckets that start at or below 0 are read at 0. Outputs at or below
+        # the upper border of the last of them read 0.
+        n_zero = int(np.searchsorted(raw_borders, 0.0, side="right"))
+        zero_cut = raw_borders[n_zero] if n_zero > 0 else 0.0
         above = raw_borders[:-1] >= truncate_above
         logits = logits.masked_fill(
             torch.as_tensor(above, device=logits.device), float("-inf")
@@ -2862,12 +2865,10 @@ def _logits_to_output(
 
     def decode(output: torch.Tensor) -> np.ndarray:
         raw = to_raw(output)
-        if zero_bucket is None:
+        if truncate_above is None:
             return raw
         # `icdf` returns inf for the quantile 1 without reading the logits.
-        return np.minimum(
-            np.where(raw <= raw_borders[zero_bucket + 1], 0.0, raw), upper
-        )
+        return np.minimum(np.where(raw <= zero_cut, 0.0, raw), upper)
 
     if output_type == "quantiles":
         return [decode(criterion.icdf(logits, q)) for q in quantiles]
@@ -2876,11 +2877,11 @@ def _logits_to_output(
     #   "pi": criterion.pi(logits, np.max(self.y)),
     #   "ei": criterion.ei(logits),
     if output_type == "mean":
-        if zero_bucket is None:
+        if truncate_above is None:
             return to_raw(criterion.mean(logits))
         # In target units, so the buckets read at 0 add exactly 0.
         values = torch.as_tensor(to_raw(criterion.bucket_means()))
-        values[: zero_bucket + 1] = 0.0
+        values[:n_zero] = 0.0
         return expected_value(logits.detach().cpu(), values).numpy()
     if output_type == "median":
         output = criterion.median(logits)
