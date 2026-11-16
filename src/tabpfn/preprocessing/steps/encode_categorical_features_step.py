@@ -213,6 +213,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
     It will be updated in future versions.
     """
 
+    no_arithmetic = True
+
     def __init__(
         self,
         categorical_transform_name: str = "ordinal",

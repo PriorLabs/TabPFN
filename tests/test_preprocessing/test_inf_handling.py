@@ -1130,10 +1130,13 @@ def test__extract_inf_masks__row_blocks_on_threads__match_the_whole_table(
     np.testing.assert_array_equal(np.asarray(actual_X), np.asarray(expected_X))
 
 
-def test__torch_extract_inf_masks__column_blocks__match_the_whole_table(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("only_in_last_block", [False, True])
+def test__torch_extract_inf_masks__row_blocks__match_the_whole_table(
+    *, only_in_last_block: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     X = _table_with_infinities((20, 2, 9))
+    if only_in_last_block:
+        X[:-1] = np.where(np.isinf(X[:-1]), 0.0, X[:-1])
     expected_X, actual_X = torch.from_numpy(X.copy()), torch.from_numpy(X.copy())
     schema = _numerical_schema(num_features=9)
     expected = _whole_table_inf_masks(expected_X, schema)

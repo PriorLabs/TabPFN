@@ -287,6 +287,13 @@ class PreprocessingStep:
     modality_added_: FeatureModality | None
     """Modality of added columns from `_transform`. Set during first transform call."""
 
+    no_arithmetic: bool = False
+    """Whether the step only selects, reorders, compares and encodes values.
+
+    Such a step gives the same float32 results from a float32 copy of its input as
+    from a float64 one.
+    """
+
     @abstractmethod
     def _fit(
         self,

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-import os
 import warnings
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +21,7 @@ from tabpfn.preprocessing.datamodel import (
     FeatureSchema,
     build_input_feature_names,
 )
+from tabpfn.preprocessing.pipeline_interface import _usable_cpus
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
 
@@ -313,7 +313,7 @@ def _count_distinct_per_column(
 
     workers = min(
         len(blocks),
-        os.cpu_count() or 1,
+        _usable_cpus(),
         max(1, _DISTINCT_COUNT_BUDGET_BYTES // (3 * _DISTINCT_COUNT_BLOCK_BYTES)),
     )
     with ThreadPoolExecutor(max_workers=workers) as pool:

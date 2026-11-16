@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 class ShuffleFeaturesStep(PreprocessingStep):
     """Shuffle the features in the data."""
 
+    no_arithmetic = True
+
     def __init__(
         self,
         shuffle_method: Literal["shuffle", "rotate"] | None = "rotate",

@@ -12,6 +12,7 @@ import contextlib
 import contextvars
 import typing
 import warnings
+import weakref
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -311,6 +312,8 @@ def _encode_categoricals(
     del frame
     out = X if in_place else X.copy()
     out[:, positions] = codes
+    if in_place:
+        _OVERWRITTEN_FIT_INPUTS[id(X)] = X
     return out
 
 
@@ -318,14 +321,23 @@ _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_overwrite_fit_input", default=False
 )
 
+_OVERWRITTEN_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
+    weakref.WeakValueDictionary()
+)
+"""The live arrays a `fit` has written into, by `id`."""
+
 
 @contextlib.contextmanager
 def overwrite_fit_input() -> Iterator[None]:
     """Let a `fit` inside this block write into the array it is given.
 
-    For a caller that hands over a large float32 array it no longer needs: its
-    categorical columns are then coded in place rather than in a copy. The array
-    must not be read after the fit.
+    For a caller that hands over a large, writeable float32 array it no longer
+    needs: its categorical columns are then coded in place rather than in a copy. A
+    read-only array is copied as outside the block.
+
+    Each array may be given to one `fit` only. Its contents are undefined after that
+    fit, and the fitted model may keep it, so the caller must neither read nor
+    write it. A later `fit` given the same array raises a `ValueError`.
     """
     token = _OVERWRITE_FIT_INPUT.set(True)
     try:
@@ -335,9 +347,27 @@ def overwrite_fit_input() -> Iterator[None]:
 
 
 def may_overwrite_fit_input(X: Any, given: Any) -> bool:
-    """Whether `fit` may write into `X`, the array it made from the caller's `given`."""
+    """Whether `fit` may write into `X`, the array it made from the caller's `given`.
+
+    Raises:
+        ValueError: If an earlier `fit` inside `overwrite_fit_input()` wrote into
+            `given`.
+    """
+    if (
+        isinstance(given, np.ndarray)
+        and _OVERWRITTEN_FIT_INPUTS.get(id(given)) is given
+    ):
+        raise ValueError(
+            "This array was overwritten by an earlier fit inside "
+            "`overwrite_fit_input()`, so it no longer holds the data it was given "
+            "with. Pass each array to one fit only, or fit on a copy."
+        )
     if X is given:
-        return isinstance(X, np.ndarray) and _OVERWRITE_FIT_INPUT.get()
+        return (
+            isinstance(X, np.ndarray)
+            and X.flags.writeable
+            and _OVERWRITE_FIT_INPUT.get()
+        )
     return is_private_copy(X, given)
 
 

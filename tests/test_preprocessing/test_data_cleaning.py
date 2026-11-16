@@ -1618,6 +1618,55 @@ def test__overwrite_fit_input__float32_with_categoricals__codes_in_place() -> No
     np.testing.assert_array_equal(model.predict_proba(X), expected)
 
 
+def _categorical_float32_table() -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(150, 4)).astype(np.float32)
+    X[:, 0] = rng.choice([10.0, 20.0, 30.0, 40.0], 150)
+    y = ((X[:, 0] > 25) ^ (X[:, 1] > 0)).astype(int)
+    return X, y
+
+
+def _categorical_classifier() -> TabPFNClassifier:
+    return TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        random_state=0,
+        categorical_features_indices=[0],
+    )
+
+
+def test__overwrite_fit_input__second_fit_on_the_same_array__raises() -> None:
+    X, y = _categorical_float32_table()
+    X_train, X_test = X[:120].copy(), X[120:]
+    expected = _categorical_classifier().fit(X_train.copy(), y[:120])
+
+    with clean_module.overwrite_fit_input():
+        first = _categorical_classifier().fit(X_train, y[:120])
+        with pytest.raises(ValueError, match="overwritten by an earlier fit"):
+            _categorical_classifier().fit(X_train, y[:120])
+    with pytest.raises(ValueError, match="overwritten by an earlier fit"):
+        _categorical_classifier().fit(X_train, y[:120])
+
+    np.testing.assert_array_equal(
+        first.predict_proba(X_test), expected.predict_proba(X_test)
+    )
+
+
+def test__overwrite_fit_input__read_only_array__is_copied() -> None:
+    X, y = _categorical_float32_table()
+    X_read_only = X[:120].copy()
+    X_read_only.flags.writeable = False
+    expected = _categorical_classifier().fit(X[:120].copy(), y[:120])
+
+    with clean_module.overwrite_fit_input():
+        model = _categorical_classifier().fit(X_read_only, y[:120])
+
+    np.testing.assert_array_equal(X_read_only, X[:120])
+    np.testing.assert_array_equal(
+        model.predict_proba(X[120:]), expected.predict_proba(X[120:])
+    )
+
+
 def test__clean_data__float32_infinity_in_categorical__matches_float64() -> None:
     """With `passthrough_inf`, an infinity in a categorical column of a float32
     array is carried through as the float64 array's is.

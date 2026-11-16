@@ -71,6 +71,45 @@ def torch_nanstd(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
     return torch.sqrt(variance)
 
 
+def columnwise_nanmean_nanstd(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean and standard deviation over dimension 0, ignoring NaNs.
+
+    Equal to `torch_nanmean` and `torch_nanstd` up to rounding. Each column's values
+    depend only on that column, whichever other columns `x` holds: its sums run in
+    an order set by the number of rows alone.
+
+    Args:
+        x: The input tensor.
+
+    Returns:
+        The mean and the standard deviation (with N-1 correction) of each column.
+    """
+    nan_mask = torch.isnan(x)
+    num_valid = (~nan_mask).sum(dim=0).to(x.dtype)
+    mean = _pairwise_sum(torch.where(nan_mask, 0, x)) / num_valid.clamp(min=1.0)
+    sq_diff = _pairwise_sum((x - mean).square_().masked_fill_(nan_mask, 0))
+    variance = sq_diff / (num_valid - 1).clamp(min=1.0)
+    return mean, torch.sqrt(variance)
+
+
+def _pairwise_sum(x: torch.Tensor) -> torch.Tensor:
+    """Sum over dimension 0 by a pairwise tree of elementwise additions.
+
+    Each column's sum reads only that column, in an order set by `x.shape[0]`.
+    """
+    leftovers = []
+    while x.shape[0] > 1:
+        if x.shape[0] % 2:
+            leftovers.append(x[-1])
+            x = x[:-1]
+        half = x.shape[0] // 2
+        x = x[:half] + x[half:]
+    total = x.sum(dim=0)
+    for leftover in leftovers:
+        total = total + leftover
+    return total
+
+
 def select_features(x: torch.Tensor, sel: torch.Tensor) -> torch.Tensor:
     """Select features from the input tensor based on the selection mask,
     and arrange them contiguously in the last dimension.

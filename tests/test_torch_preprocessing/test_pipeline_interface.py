@@ -558,17 +558,61 @@ def test__fit_transform_on_device__column_blocks__match_fit_transform(
         step, x, indices, 9, cache, torch.device("cpu")
     )
 
-    # A fit on fewer columns may sum in another order.
-    tolerance = {"rtol": 0, "atol": 0} if use_cache else {}
     assert actual.x.data_ptr() == x.data_ptr()
-    torch.testing.assert_close(actual.x, expected.x, **tolerance)
+    assert torch.equal(actual.x, expected.x)
     assert actual.fitted_cache is not None
     assert expected.fitted_cache is not None
     for key, value in expected.fitted_cache.items():
-        torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
+        assert torch.equal(actual.fitted_cache[key], value)
 
 
-def test__extract_inf_masks__scan_device__matches_the_column_scan(
+@pytest.mark.parametrize("block_width", [1, 2, 5])
+def test__fit_transform__in_place_column_blocks__equal_the_whole_fit(
+    block_width: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows, batch, columns = 301, 2, 13
+    monkeypatch.setattr(
+        pipeline_interface, "IN_PLACE_BLOCK_BYTES", block_width * rows * batch * 4
+    )
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(rows, batch, columns, generator=generator) * 3 + 1
+    x[::7, 0, 4] = float("nan")
+    x[3, 1, 9] = 60.0
+    x[11, 0, 2] = -45.0
+    indices = [0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12]
+    step = TorchSoftClipOutliersStep(n_sigma=2.0)
+    whole = step.fit_transform(x, indices, num_train_rows=200)
+
+    blocks = step.fit_transform(x.clone(), indices, num_train_rows=200, in_place=True)
+
+    assert whole.fitted_cache is not None
+    assert blocks.fitted_cache is not None
+    for key, value in whole.fitted_cache.items():
+        assert torch.equal(blocks.fitted_cache[key], value)
+    assert torch.equal(blocks.x.nan_to_num(), whole.x.nan_to_num())
+    assert torch.equal(blocks.x.isnan(), whole.x.isnan())
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        ("cpu", "cpu", True),
+        ("cpu", "cpu:0", True),
+        ("mps", "mps:0", True),
+        ("mps:0", "mps", True),
+        ("cuda:0", "cuda:1", False),
+        ("cuda:1", "cuda:1", True),
+        ("cpu", "cuda", False),
+        ("mps", "cpu", False),
+    ],
+)
+def test__same_device__index_none_is_the_current_one(
+    a: str, b: str, *, same: bool
+) -> None:
+    assert pipeline_interface._same_device(torch.device(a), torch.device(b)) is same
+
+
+def test__extract_inf_masks__scan_device__matches_the_host_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 2 * 5 * 4)

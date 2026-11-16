@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
+import typing
 from typing import Literal
 
 import numpy as np
@@ -12,6 +15,15 @@ import pytest
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
+from tabpfn.preprocessing.presets import (
+    v2_5_classifier_preprocessor_configs,
+    v2_5_regressor_preprocessor_configs,
+    v2_classifier_preprocessor_configs,
+    v2_regressor_preprocessor_configs,
+)
+from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
+    get_gpu_transform_type,
+)
 
 
 def _fit_transform(
@@ -58,3 +70,76 @@ def test__polynomial_features__constant_and_all_nan_products_are_removed() -> No
     assert not np.isnan(X_out).all(axis=0).any()
     non_nan_values = [col[~np.isnan(col)] for col in X_out.T]
     assert all(len(np.unique(values)) > 1 for values in non_nan_values)
+
+
+def _preprocessor_configs() -> list[PreprocessorConfig]:
+    """The preset configs, and one per transform name with and without SVD."""
+    presets = [
+        *v2_classifier_preprocessor_configs(),
+        *v2_regressor_preprocessor_configs(),
+        *v2_5_classifier_preprocessor_configs(),
+        *v2_5_regressor_preprocessor_configs(),
+    ]
+    names = typing.get_args(typing.get_type_hints(PreprocessorConfig)["name"])
+    swept = [
+        PreprocessorConfig(name, global_transformer_name=svd)
+        for name, svd in itertools.product(names, [None, "svd"])
+    ]
+    differentiable = [PreprocessorConfig("none", differentiable=True)]
+    return presets + swept + differentiable
+
+
+def _keeps_float32_by_step_types(
+    config: EnsembleConfig, *, enable_gpu_preprocessing: bool
+) -> bool:
+    """Whether the pipeline keeps a float32 input, as decided from its step types."""
+    pconfig = config.preprocess_config
+    schedule_gpu_transform = (
+        get_gpu_transform_type(pconfig.name) if enable_gpu_preprocessing else None
+    )
+    adds_svd = (
+        not pconfig.differentiable
+        and not enable_gpu_preprocessing
+        and pconfig.global_transformer_name not in (None, "None")
+    )
+    adds_fingerprint = config.add_fingerprint_feature and not enable_gpu_preprocessing
+    return (
+        config.polynomial_features == "no"
+        and not pconfig.differentiable
+        and (schedule_gpu_transform is not None or pconfig.name == "none")
+        and not adds_svd
+        and not adds_fingerprint
+    )
+
+
+@pytest.mark.parametrize("enable_gpu_preprocessing", [False, True])
+@pytest.mark.parametrize("add_fingerprint_feature", [False, True])
+@pytest.mark.parametrize("polynomial_features", ["no", 3])
+def test__create_preprocessing_pipeline__keep_float32__matches_step_types(
+    enable_gpu_preprocessing: bool,
+    add_fingerprint_feature: bool,
+    polynomial_features: Literal["no"] | int,
+) -> None:
+    for pconfig in _preprocessor_configs():
+        config = EnsembleConfig(
+            preprocess_config=pconfig,
+            add_fingerprint_feature=add_fingerprint_feature,
+            polynomial_features=polynomial_features,
+            feature_shift_count=0,
+            feature_shift_decoder="shuffle",
+            outlier_removal_std=None,
+            _model_index=0,
+            estimator_id=0,
+            passthrough_inf=False,
+        )
+
+        pipeline = create_preprocessing_pipeline(
+            config,
+            random_state=0,
+            enable_gpu_preprocessing=enable_gpu_preprocessing,
+        )
+
+        expected = _keeps_float32_by_step_types(
+            config, enable_gpu_preprocessing=enable_gpu_preprocessing
+        )
+        assert pipeline.keep_float32 == expected, dataclasses.asdict(pconfig)

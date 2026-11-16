@@ -39,7 +39,9 @@ class TorchPreprocessingStep(abc.ABC):
     """Whether each column's fit and transform read only that column.
 
     Such a step fits and transforms an input it may write into a block of
-    columns at a time, its cache tensors' last dimension indexing the columns.
+    columns at a time, its cache tensors' last dimension indexing the columns. A
+    column's fitted values are bitwise the same whichever other columns it is
+    fitted with.
     """
 
     rowwise: bool = False
@@ -265,7 +267,7 @@ class TorchPreprocessingPipeline:
         staged = (
             consume_input
             and compute_device is not None
-            and torch.device(compute_device) != x.device
+            and not _same_device(torch.device(compute_device), x.device)
         )
         inf_masks = _extract_inf_masks(
             x, feature_schema, scan_device=compute_device if staged else None
@@ -387,6 +389,25 @@ def _accepts_in_place(step_type: type) -> bool:
 def _in_place_kwargs(step: TorchPreprocessingStep) -> dict[str, bool]:
     """`in_place=True` for a step whose `fit_transform` takes it, else nothing."""
     return {"in_place": True} if _accepts_in_place(type(step)) else {}
+
+
+def _same_device(a: torch.device, b: torch.device) -> bool:
+    """Whether `a` and `b` name one device, an index of None meaning the current
+    one of its type.
+    """
+    if a.type != b.type:
+        return False
+    if a.type == "cpu" or a.index == b.index:
+        return True
+    return _device_index(a) == _device_index(b)
+
+
+def _device_index(device: torch.device) -> int:
+    """`device`'s index, the current one of its type when it names none."""
+    if device.index is not None:
+        return device.index
+    current = getattr(getattr(torch, device.type, None), "current_device", None)
+    return int(current()) if callable(current) else 0
 
 
 def _move_cache_to_device(
@@ -534,29 +555,27 @@ def _extract_inf_masks(
     (last) axis of an ``[num_rows, batch_size, num_columns]`` tensor. Returns a
     ``{feature_name: signed-inf slice}`` mapping for the columns that contained
     infinities (empty when ``x`` is finite, leaving ``x`` untouched). ``x`` is
-    mutated in place. Columns are scanned a block at a time, so no table-sized
-    boolean mask is held. With `scan_device`, the scan moves blocks of rows there.
+    mutated in place. Rows are scanned a block at a time, so no table-sized boolean
+    mask is held. With `scan_device`, the scan moves the blocks there.
     """
     n_columns = x.shape[-1]
     if n_columns == 0:
         return {}
-    if scan_device is not None:
-        row_bytes = max(1, x[:1].numel() * x.element_size())
-        rows = max(1, DEVICE_BLOCK_BYTES // row_bytes)
-        found = torch.zeros(n_columns, dtype=torch.bool, device=scan_device)
-        for start in range(0, x.shape[0], rows):
-            block = x[start : start + rows].to(scan_device)
-            found |= torch.isinf(block).flatten(0, -2).any(0)
-        has_inf = found.cpu().tolist()
-    else:
-        n_cells = x.numel() // max(1, n_columns)
-        width = max(1, _INF_SCAN_BLOCK_BYTES // max(1, n_cells * x.element_size()))
-        has_inf = torch.cat(
-            [
-                torch.isinf(x[..., start : start + width]).flatten(0, -2).any(0).cpu()
-                for start in range(0, n_columns, width)
-            ]
-        ).tolist()
+    block_bytes = _INF_SCAN_BLOCK_BYTES if scan_device is None else DEVICE_BLOCK_BYTES
+    row_bytes = max(1, x[:1].numel() * x.element_size())
+    rows = max(1, block_bytes // row_bytes)
+    found: torch.Tensor | None = None
+    for start in range(0, x.shape[0], rows):
+        block = x[start : start + rows]
+        if scan_device is not None:
+            block = block.to(scan_device)
+        block_inf = torch.isinf(block)
+        if block_inf.any():
+            columns_inf = block_inf.flatten(0, -2).any(0)
+            found = columns_inf if found is None else found | columns_inf
+    if found is None:
+        return {}
+    has_inf = found.cpu().tolist()
     masks: dict[str, torch.Tensor] = {}
     for idx, feat in enumerate(feature_schema.features):
         if has_inf[idx]:
@@ -568,7 +587,7 @@ def _extract_inf_masks(
 
 
 _INF_SCAN_BLOCK_BYTES = 1 << 28
-"""Bytes of columns `_extract_inf_masks` scans for infinities at a time."""
+"""Bytes of rows `_extract_inf_masks` scans for infinities at a time."""
 
 
 def _restore_inf_masks(

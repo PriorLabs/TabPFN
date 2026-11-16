@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 class RemoveConstantFeaturesStep(PreprocessingStep):
     """Remove features that are constant in the training data."""
 
+    no_arithmetic = True
+
     def __init__(self) -> None:
         super().__init__()
         self.sel_: list[bool] | None = None

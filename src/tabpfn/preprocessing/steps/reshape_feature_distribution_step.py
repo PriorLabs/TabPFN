@@ -260,6 +260,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             raise ValueError("max_features_per_estimator must be a positive integer.")
 
         self.transform_name = transform_name
+        self.no_arithmetic = transform_name == "none"
         self.apply_to_categorical = apply_to_categorical
         self.append_to_original = append_to_original
         self.random_state = random_state
