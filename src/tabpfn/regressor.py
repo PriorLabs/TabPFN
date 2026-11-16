@@ -326,7 +326,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     declares unless it was overridden."""
 
     y_train_max_: float
-    """The largest training target, above which the "ensemble_truncated" readout
+    """The largest training target, above which the "nonnegative_and_capped" readout
     drops the predicted mass."""
 
     def __init__(  # noqa: PLR0913
@@ -1334,10 +1334,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
-        if self._readout() != "ensemble":
+        if self._readout() != "default":
             raise NotImplementedError(
                 "fit_from_preprocessed supports only "
-                "REGRESSION_READOUT='ensemble'; the 'ensemble_truncated' readout "
+                "REGRESSION_READOUT='default'; the 'nonnegative_and_capped' readout "
                 "needs the largest training target. Use fit instead."
             )
 
@@ -1417,10 +1417,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Mirror classifier.py: re-assert n_estimators_ from cached
             # configs so a subsequent call after pickling restores it.
             self.n_estimators_ = len(ensemble_configs)
-        if self._readout() != "ensemble":
+        if self._readout() != "default":
             raise NotImplementedError(
                 "fit_with_differentiable_input supports only "
-                "REGRESSION_READOUT='ensemble'; the 'ensemble_truncated' readout "
+                "REGRESSION_READOUT='default'; the 'nonnegative_and_capped' readout "
                 "needs the largest training target. Use fit instead."
             )
 
@@ -1547,9 +1547,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
         self.y_train_max_ = float(np.max(y))
-        if self._readout() == "ensemble_truncated" and np.any(y < 0):
+        if self._readout() == "nonnegative_and_capped" and np.any(y < 0):
             raise TabPFNValidationError(
-                "The 'ensemble_truncated' readout requires nonnegative targets "
+                "The 'nonnegative_and_capped' readout requires nonnegative targets "
                 "(y >= 0)."
             )
         row_weights, sample_weight_mode = self._resolve_row_weights(
@@ -1753,14 +1753,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return _concat_block_outputs(parts, output_type)
 
     def _truncate_above(self) -> float | None:
-        """The largest training target for the "ensemble_truncated" readout, or
+        """The largest training target for the "nonnegative_and_capped" readout, or
         None.
         """
-        return self.y_train_max_ if self._readout() == "ensemble_truncated" else None
+        return (
+            self.y_train_max_ if self._readout() == "nonnegative_and_capped" else None
+        )
 
     def _readout(self) -> str:
         # `getattr` keeps models pickled before this field existed loadable.
-        return getattr(self.inference_config_, "REGRESSION_READOUT", "ensemble")
+        return getattr(self.inference_config_, "REGRESSION_READOUT", "default")
 
     def _maybe_calibrate_ensemble_temperature(
         self,
@@ -2201,10 +2203,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "correction is fitted per dataset. Score datasets individually "
                 "with predict."
             )
-        if self.get_inference_config().REGRESSION_READOUT != "ensemble":
+        if self.get_inference_config().REGRESSION_READOUT != "default":
             raise NotImplementedError(
-                "predict_batched supports only REGRESSION_READOUT='ensemble'; the "
-                "'ensemble_truncated' readout needs each dataset's largest target. "
+                "predict_batched supports only REGRESSION_READOUT='default'; the "
+                "'nonnegative_and_capped' readout needs each dataset's largest target. "
                 "Score datasets individually with predict."
             )
         if self.tuning_config is not None:
@@ -2489,7 +2491,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raw_space_bardist=raw_space_bardist,
             y_mean=y_mean,
             y_std=y_std,
-            # `predict_batched` rejects the "ensemble_truncated" readout.
+            # `predict_batched` rejects the "nonnegative_and_capped" readout.
             truncate_above=None,
         )
 

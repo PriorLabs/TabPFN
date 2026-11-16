@@ -1788,7 +1788,7 @@ def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
 @pytest.mark.parametrize(
     "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
 )
-def test__predict__ensemble_truncated__outputs_are_nonnegative(
+def test__predict__nonnegative_and_capped__outputs_are_nonnegative(
     transform: str,
 ) -> None:
     """The grid bucket that holds 0 and every bucket below it are read at 0."""
@@ -1800,7 +1800,7 @@ def test__predict__ensemble_truncated__outputs_are_nonnegative(
         random_state=42,
         inference_config={
             "REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,),
-            "REGRESSION_READOUT": "ensemble_truncated",
+            "REGRESSION_READOUT": "nonnegative_and_capped",
         },
     )
     reg.fit(X[:200], y[:200])
@@ -1872,13 +1872,13 @@ def test__logits_to_output__truncated__drops_the_mass_above_truncate_above() -> 
     assert high_untruncated[0] > 3.0
 
 
-def test__predict__ensemble_truncated__reads_every_output_truncated() -> None:
+def test__predict__nonnegative_and_capped__reads_every_output_truncated() -> None:
     X, y = _zero_inflated_regression_data()
     config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)}
     kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 42}
     reg = TabPFNRegressor(
         **kwargs,
-        inference_config={**config, "REGRESSION_READOUT": "ensemble_truncated"},
+        inference_config={**config, "REGRESSION_READOUT": "nonnegative_and_capped"},
     ).fit(X[:200], y[:200])
     plain = TabPFNRegressor(**kwargs, inference_config=config).fit(X[:200], y[:200])
 
@@ -1907,7 +1907,7 @@ def test__predict__ensemble_truncated__reads_every_output_truncated() -> None:
 
 
 @pytest.mark.parametrize("constant", [False, True])
-def test__fit__ensemble_truncated_with_negative_targets__raises(
+def test__fit__nonnegative_and_capped_with_negative_targets__raises(
     constant: bool,
 ) -> None:
     X, y = _zero_inflated_regression_data()
@@ -1918,34 +1918,34 @@ def test__fit__ensemble_truncated_with_negative_targets__raises(
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
-        inference_config={"REGRESSION_READOUT": "ensemble_truncated"},
+        inference_config={"REGRESSION_READOUT": "nonnegative_and_capped"},
     )
 
-    with pytest.raises(ValueError, match=r"ensemble_truncated.*nonnegative"):
+    with pytest.raises(ValueError, match=r"nonnegative_and_capped.*nonnegative"):
         reg.fit(X, y)
 
 
-def _ensemble_truncated_regressor(**kwargs: typing.Any) -> TabPFNRegressor:
+def _nonnegative_and_capped_regressor(**kwargs: typing.Any) -> TabPFNRegressor:
     return TabPFNRegressor(
         n_estimators=1,
         device="cpu",
-        inference_config={"REGRESSION_READOUT": "ensemble_truncated"},
+        inference_config={"REGRESSION_READOUT": "nonnegative_and_capped"},
         **kwargs,
     )
 
 
-def test__fit_with_differentiable_input__ensemble_truncated__raises() -> None:
+def test__fit_with_differentiable_input__nonnegative_and_capped__raises() -> None:
     """Only `fit` stores the largest training target that the readout needs."""
-    reg = _ensemble_truncated_regressor(differentiable_input=True)
+    reg = _nonnegative_and_capped_regressor(differentiable_input=True)
 
-    with pytest.raises(NotImplementedError, match="ensemble_truncated"):
+    with pytest.raises(NotImplementedError, match="nonnegative_and_capped"):
         reg.fit_with_differentiable_input(torch.randn(20, 3), torch.rand(20))
 
 
-def test__fit_from_preprocessed__ensemble_truncated__raises() -> None:
-    reg = _ensemble_truncated_regressor()
+def test__fit_from_preprocessed__nonnegative_and_capped__raises() -> None:
+    reg = _nonnegative_and_capped_regressor()
 
-    with pytest.raises(NotImplementedError, match="ensemble_truncated"):
+    with pytest.raises(NotImplementedError, match="nonnegative_and_capped"):
         reg.fit_from_preprocessed(
             [torch.zeros(20, 3)],
             [torch.zeros(20)],
