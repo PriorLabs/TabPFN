@@ -360,6 +360,73 @@ def test__find_optimal_temperature__works_when_class_missing_from_holdout() -> N
     assert 0.6 <= temperature <= 1.4
 
 
+def test__find_optimal_temperature__follows_the_weighted_rows() -> None:
+    rng = np.random.default_rng(0)
+    n_samples = 400
+    y_true = rng.integers(0, 2, size=n_samples)
+    signed = np.where(y_true == 1, 1.0, -1.0)
+    # The first half is confidently right, the second half confidently wrong.
+    signed[n_samples // 2 :] *= -1
+    raw_logits = np.stack([np.zeros(n_samples), 2.0 * signed], axis=-1)[None]
+    first_half = (np.arange(n_samples) < n_samples // 2).astype(float)
+
+    def temperature(sample_weight: np.ndarray | None) -> float:
+        return find_optimal_temperature(
+            raw_logits=raw_logits,
+            y_true=y_true,
+            logits_to_probabilities_fn=_softmax_over_estimators,
+            current_default_temperature=1.0,
+            sample_weight=sample_weight,
+        )
+
+    temperatures = get_tuning_temperatures()
+    assert temperature(first_half) == temperatures.min()
+    assert temperature(1 - first_half) == temperatures.max()
+    assert temperature(np.zeros(n_samples)) == 1.0
+
+
+def test__find_optimal_classification_thresholds__follows_the_weighted_rows() -> None:
+    rng = np.random.default_rng(0)
+    n_samples = 400
+    y_true = rng.integers(0, 2, size=n_samples)
+    low = np.arange(n_samples) < n_samples // 2
+    # Class 1 separates at 0.2 in the first half and at 0.8 in the second.
+    centre = np.where(low, 0.2, 0.8)
+    proba_1 = centre + np.where(y_true == 1, 0.1, -0.1)
+    y_pred_probas = np.stack([1 - proba_1, proba_1], axis=-1)
+
+    def class_1_threshold(sample_weight: np.ndarray) -> float:
+        return find_optimal_classification_thresholds(
+            metric_name=ClassifierEvalMetrics.ACCURACY,
+            y_true=y_true,
+            y_pred_probas=y_pred_probas,
+            n_classes=2,
+            sample_weight=sample_weight,
+        )[1]
+
+    assert 0.1 < class_1_threshold(low.astype(float)) < 0.3
+    assert 0.7 < class_1_threshold((~low).astype(float)) < 0.9
+
+
+def test__find_optimal_classification_thresholds__zero_weight_class_is_neutral() -> (
+    None
+):
+    y_true = np.array([0, 0, 1, 1, 2, 2] * 10)
+    y_pred_probas = np.random.default_rng(0).dirichlet(np.ones(3), size=len(y_true))
+    sample_weight = (y_true != 2).astype(float)
+
+    with pytest.warns(UserWarning, match="1 of 3 classes"):
+        thresholds = find_optimal_classification_thresholds(
+            metric_name=ClassifierEvalMetrics.F1,
+            y_true=y_true,
+            y_pred_probas=y_pred_probas,
+            n_classes=3,
+            sample_weight=sample_weight,
+        )
+
+    assert thresholds[2] == pytest.approx(np.sqrt(thresholds[0] * thresholds[1]))
+
+
 def test__find_optimal_classification_threshold_single_class__all_negative() -> None:
     # One-vs-rest labels are all-negative when the class is absent from the holdout.
     y_true = np.zeros(20, dtype=int)
@@ -848,6 +915,23 @@ def test__find_regression_optimal_temperature__weights_folds_by_holdout_size() -
     pooled = _optimal_temperature([small_fold, big_fold])
 
     assert abs(pooled - big_only) < abs(pooled - small_only)
+
+
+def test__find_regression_optimal_temperature__follows_the_weighted_rows() -> None:
+    sharp_fold = _miscalibrated_fold(n_samples=400, target_temperature=0.8, seed=4)
+    wide_fold = _miscalibrated_fold(n_samples=400, target_temperature=1.3, seed=5)
+    ones, zeros = torch.ones(400), torch.zeros(400)
+
+    def temperature(sharp_weight: torch.Tensor, wide_weight: torch.Tensor) -> float:
+        return _optimal_temperature(
+            [(*sharp_fold, None, sharp_weight), (*wide_fold, None, wide_weight)]
+        )
+
+    assert temperature(ones, zeros) == _optimal_temperature([sharp_fold])
+    assert temperature(zeros, ones) == _optimal_temperature([wide_fold])
+    assert temperature(ones, ones) == _optimal_temperature([sharp_fold, wide_fold])
+    # No weight anywhere leaves nothing to tune on.
+    assert temperature(zeros, zeros) == 1.0
 
 
 def test__find_regression_optimal_temperature__is_invariant_to_target_units() -> None:

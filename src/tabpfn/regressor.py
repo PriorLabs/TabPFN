@@ -73,7 +73,7 @@ from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
     RegressorTuningConfig,
     find_regression_optimal_temperature,
-    get_tuning_splits,
+    get_tuning_split_indices,
     resolve_tuning_config,
 )
 from tabpfn.model_loading import (
@@ -106,6 +106,7 @@ from tabpfn.preprocessing.group_ids import (
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
+    tuning_metric_row_weights,
     validate_row_weights,
 )
 from tabpfn.preprocessing.steps import (
@@ -963,11 +964,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             uses_label_reliability=label_reliability is not None,
             task_type="regression",
         )
-        if self.tuning_config is not None:
-            raise TabPFNValidationError(
-                "`tuning_config` cannot be combined with `sample_weight` or "
-                "`label_reliability` yet: the tuning folds are fit without them."
-            )
         row_weights = validate_row_weights(
             sample_weight, label_reliability, n_samples=n_samples
         )
@@ -1482,6 +1478,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 to 0 (carries no information). Raises unless the model
                 supports `SAMPLE_WEIGHT_MODE="learned"`.
 
+        With `tuning_config`, each tuning fold is fit with the weights of its
+        rows, and a holdout row counts in the tuned metric in proportion to
+        `sample_weight * label_reliability`.
+
         Returns:
             self
         """
@@ -1542,7 +1542,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return self
 
         # Each tuning fold must derive its target statistics from its own raw targets.
-        self._maybe_calibrate_ensemble_temperature(X=X, y=y)
+        self._maybe_calibrate_ensemble_temperature(
+            X=X, y=y, sample_weight=sample_weight, label_reliability=label_reliability
+        )
 
         y_raw = np.asarray(y, dtype=np.float64)
         # Shared aggregation frame; each member standardizes raw targets separately.
@@ -1711,7 +1713,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         speed_metrics["predict_model_forward_seconds"] = forward_seconds
         return _concat_block_outputs(parts, output_type)
 
-    def _maybe_calibrate_ensemble_temperature(self, X: XType, y: YType) -> None:
+    def _maybe_calibrate_ensemble_temperature(
+        self,
+        X: XType,
+        y: YType,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
+    ) -> None:
         """If a `tuning_config` was given, calibrate the ensemble temperature.
 
         The regressor analogue of the classifier's
@@ -1724,6 +1732,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         `y` must be the *raw* target: each fold's regressor performs its own
         z-normalisation, and passing an already-normalised `y` would normalise
         it twice.
+
+        `sample_weight` and `label_reliability` are the validated arguments of
+        `fit`, aligned with the rows of `X`.
 
         Unlike the classifier's counterpart there are no metric-specific
         warnings, as NLL is the only supported metric and calibrating the
@@ -1759,6 +1770,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y=y,
             holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
             n_folds=int(tuning_config_resolved.tuning_n_folds),
+            sample_weight=sample_weight,
+            label_reliability=label_reliability,
         )
 
         # Falls back to the current no-op temperature if every fold was
@@ -1775,11 +1788,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         y: YType,
         holdout_frac: float,
         n_folds: int,
+        sample_weight: npt.ArrayLike | None = None,
+        label_reliability: npt.ArrayLike | None = None,
     ) -> list[
         tuple[
             torch.Tensor,
             FullSupportBarDistribution,
             torch.Tensor,
+            torch.Tensor | None,
             torch.Tensor | None,
         ]
     ]:
@@ -1790,25 +1806,39 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         every fold's `raw_space_bardist_` has its own borders and only scores that
         fold's own logits correctly.
 
+        Each fold is fit with the `sample_weight` and `label_reliability` of its
+        training rows.
+
         Returns:
-            One `(logits, raw_space_bardist, y_holdout, log_weights)` tuple per
-            usable fold. `logits` has shape `[n_holdout_samples, n_buckets]` and
+            One `(logits, raw_space_bardist, y_holdout, log_weights, row_weights)`
+            tuple per usable fold. `row_weights` has shape `[n_holdout_samples]`
+            and holds the weight of each holdout row in the tuned metric,
+            `sample_weight * label_reliability`, or is `None` when neither was
+            given. `logits` has shape `[n_holdout_samples, n_buckets]` and
             carries no temperature and no downsampling correction; `log_weights`
             is the fold's own per-bar correction (or `None`), kept separate so the
             temperature sweep can compose the two exactly as prediction does.
             `y_holdout` has shape `[n_holdout_samples]` in the *original* units
             of the target, to match the borders of the fold's `raw_space_bardist`.
-            Folds whose training target turned out to be constant are omitted,
-            so the list may be shorter than `n_folds` and may be empty.
+            Folds whose training target turned out to be constant, or whose
+            training rows all have `sample_weight` 0, are omitted, so the list
+            may be shorter than `n_folds` and may be empty.
         """
-        splits = get_tuning_splits(
-            X=copy.deepcopy(X),
-            y=copy.deepcopy(y),
+        X = copy.deepcopy(X)
+        y = copy.deepcopy(y)
+        split_indices = get_tuning_split_indices(
+            X=X,
+            y=y,
             holdout_frac=holdout_frac,
             random_state=self.random_state,
             n_splits=n_folds,
             task_type="regressor",
         )
+        if sample_weight is not None:
+            sample_weight = np.asarray(sample_weight, dtype=np.float64)
+        if label_reliability is not None:
+            label_reliability = np.asarray(label_reliability, dtype=np.float64)
+        row_weights = tuning_metric_row_weights(sample_weight, label_reliability)
 
         holdout_folds: list[
             tuple[
@@ -1816,11 +1846,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 FullSupportBarDistribution,
                 torch.Tensor,
                 torch.Tensor | None,
+                torch.Tensor | None,
             ]
         ] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples,
         # B=num buckets
-        for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
+        for train_indices, holdout_indices in split_indices:
+            X_train_NtF, y_train_Nt = X[train_indices], y[train_indices]
+            X_holdout_NhF, y_holdout_Nh = X[holdout_indices], y[holdout_indices]
+            fit_kwargs: dict[str, np.ndarray] = {}
+            if sample_weight is not None:
+                fit_kwargs["sample_weight"] = sample_weight[train_indices]
+                if not fit_kwargs["sample_weight"].any():
+                    continue
+            if label_reliability is not None:
+                fit_kwargs["label_reliability"] = label_reliability[train_indices]
             tuning_regressor = self._get_tuning_regressor()
             with warnings.catch_warnings():
                 # Filter expected warnings during tuning
@@ -1829,7 +1869,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
                 )
-                tuning_regressor.fit(X_train_NtF, y_train_Nt)
+                tuning_regressor.fit(X_train_NtF, y_train_Nt, **fit_kwargs)
 
             if tuning_regressor.is_constant_target_:
                 # This fold's training split is single-valued, so its regressor
@@ -1841,16 +1881,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
             check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
-            X_holdout_NhF = tuning_regressor.group_encoder_.transform(  # noqa: PLW2901
-                X_holdout_NhF
-            )
-            X_holdout_NhF = tuning_regressor.date_transformer_.transform(  # noqa: PLW2901
-                X_holdout_NhF
-            )
-            X_holdout_NhF = tuning_regressor.text_transformer_.transform(  # noqa: PLW2901
-                X_holdout_NhF
-            )
-            X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
+            X_holdout_NhF = tuning_regressor.group_encoder_.transform(X_holdout_NhF)
+            X_holdout_NhF = tuning_regressor.date_transformer_.transform(X_holdout_NhF)
+            X_holdout_NhF = tuning_regressor.text_transformer_.transform(X_holdout_NhF)
+            X_holdout_NhF = ensure_compatible_predict_input_sklearn(
                 X_holdout_NhF, tuning_regressor
             )
             logits_NhB = tuning_regressor._compute_aggregated_logits(
@@ -1872,6 +1906,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     raw_space_bardist,
                     y_holdout_Nh_tensor,
                     tuning_regressor.downsample_correction_log_weights_,
+                    None
+                    if row_weights is None
+                    else torch.as_tensor(
+                        row_weights[holdout_indices],
+                        dtype=raw_space_bardist.borders.dtype,
+                        device=logits_NhB.device,
+                    ),
                 )
             )
 

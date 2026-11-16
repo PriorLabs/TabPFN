@@ -23,10 +23,12 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
 )
+from tabpfn.inference_tuning import get_tuning_split_indices
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
     row_weights_for_estimator,
+    tuning_metric_row_weights,
     validate_row_weights,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
@@ -424,18 +426,110 @@ def test__fit__raises_when_subsampling_leaves_only_weight_zero_rows(
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit__rejects_row_weights_with_tuning_config(
+def test__fit__with_tuning_config__gives_each_fold_its_rows_weights(
     monkeypatch: pytest.MonkeyPatch, estimator_cls: type
 ) -> None:
     rng = default_rng(seed=0)
-    X = rng.standard_normal((30, 3))
+    n_train = 40
+    X = rng.standard_normal((n_train, 3))
     y = (X[:, 0] > 0).astype(int)
+    # Distinct values, so a weight identifies its row.
+    sample_weight = rng.uniform(1, 3, n_train)
+    label_reliability = rng.uniform(0.1, 1, n_train)
     estimator = estimator_cls(
         n_estimators=1,
         device="cpu",
+        inference_config={"SAMPLE_WEIGHT_MODE": "learned", "SUBSAMPLE_SAMPLES": None},
+    )
+    calls = _record_row_weights(monkeypatch, estimator, X, y)
+    estimator.tuning_config = {
+        "calibrate_temperature": True,
+        "tuning_holdout_frac": 0.5,
+        "tuning_n_folds": 2,
+    }
+
+    with pytest.warns(UserWarning, match="We recommend tuning only"):
+        estimator.fit(
+            X, y, sample_weight=sample_weight, label_reliability=label_reliability
+        )
+    estimator.predict(X[:4])
+
+    fold_calls = [weights for weights, _ in calls if weights.shape[0] == n_train // 2]
+    assert len(fold_calls) == 2
+    fold_rows = []
+    for weights in fold_calls:
+        reliability = weights[:, 0, 1].numpy()
+        rows = np.array(
+            [np.flatnonzero(np.isclose(label_reliability, r))[0] for r in reliability]
+        )
+        np.testing.assert_allclose(
+            weights[:, 0, 0].numpy(),
+            sample_weight[rows] / sample_weight[rows].mean(),
+            rtol=1e-5,
+        )
+        fold_rows.append(set(rows.tolist()))
+    assert fold_rows[0].isdisjoint(fold_rows[1])
+    assert any(weights.shape[0] == n_train for weights, _ in calls)
+
+
+def test__compute_holdout_validation_data__skips_fold_with_zero_weight_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = default_rng(seed=0)
+    X = rng.standard_normal((40, 3))
+    y = np.arange(40) % 2
+    estimator = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        random_state=0,
         inference_config={"SAMPLE_WEIGHT_MODE": "learned"},
     )
     _record_row_weights(monkeypatch, estimator, X, y)
-    estimator.tuning_config = {"calibrate_temperature": True}
-    with pytest.raises(TabPFNValidationError, match="tuning_config"):
-        estimator.fit(X, y, sample_weight=np.ones(30))
+    (_, first_holdout), _ = get_tuning_split_indices(
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0
+    )
+    # Class 1 has weight only in the first fold's holdout, so only the second
+    # fold, which trains on those rows, can be fit.
+    sample_weight = np.ones(40)
+    sample_weight[y == 1] = 0.0
+    sample_weight[first_holdout[y[first_holdout] == 1]] = 1.0
+
+    holdout = estimator._compute_holdout_validation_data(
+        X=X, y=y, holdout_frac=0.5, n_folds=2, sample_weight=sample_weight
+    )
+
+    assert holdout is not None
+    raw_logits, y_true, _, row_weights = holdout
+    assert raw_logits.shape[1] == len(y_true) == 20
+    assert row_weights is not None
+    # The surviving fold holds out the rows where class 1 has weight 0.
+    np.testing.assert_array_equal(row_weights, (y_true == 0).astype(float))
+
+    # With the first fold alone, no fold is left and `fit` keeps its defaults.
+    estimator.tuning_config = {
+        "calibrate_temperature": True,
+        "tuning_holdout_frac": 0.5,
+        "tuning_n_folds": 1,
+    }
+    default_temperature = estimator.softmax_temperature_
+    with (
+        pytest.warns(UserWarning, match="Tuning was skipped"),
+        pytest.warns(UserWarning, match="We recommend tuning only"),
+    ):
+        estimator.fit(X, y, sample_weight=sample_weight)
+    assert estimator.softmax_temperature_ == default_temperature
+
+
+def test__tuning_metric_row_weights__multiplies_what_is_given() -> None:
+    sample_weight = np.array([2.0, 0.0, 1.0])
+    label_reliability = np.array([0.5, 1.0, 0.0])
+    assert tuning_metric_row_weights(None, None) is None
+    np.testing.assert_array_equal(
+        tuning_metric_row_weights(sample_weight, None), sample_weight
+    )
+    np.testing.assert_array_equal(
+        tuning_metric_row_weights(None, label_reliability), label_reliability
+    )
+    np.testing.assert_array_equal(
+        tuning_metric_row_weights(sample_weight, label_reliability), [1.0, 0.0, 0.0]
+    )
