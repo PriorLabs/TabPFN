@@ -677,7 +677,10 @@ def get_all_reshape_feature_distribution_preprocessors(
             PowerTransformer(standardize=False),
         ),
         "safepower": wrap_with_safe_standard_scaler(
-            SafePowerTransformer(standardize=False),
+            SafePowerTransformer(
+                standardize=False,
+                random_state=0 if random_state is None else random_state,
+            ),
         ),
         "power_box": _make_box_cox_safe(
             wrap_with_safe_standard_scaler(

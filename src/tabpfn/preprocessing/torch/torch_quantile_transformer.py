@@ -9,6 +9,8 @@ from typing import Literal
 import numpy as np
 import torch
 
+from tabpfn.preprocessing.steps.utils import subsample_row_indices
+
 # Same as sklearn's QuantileTransformer: inputs this close to the fitted range
 # boundaries map to the clipped tails of the normal output.
 _BOUNDS_THRESHOLD = 1e-7
@@ -39,6 +41,8 @@ class TorchQuantileTransformer:
         n_quantiles: int = 1_000,
         extrapolate_ratio: float | None = None,
         output_distribution: Literal["uniform", "normal"] = "uniform",
+        subsample: int | None = None,
+        random_state: int = 0,
     ) -> None:
         """Initialize the quantile transformer.
 
@@ -52,6 +56,9 @@ class TorchQuantileTransformer:
                 :class:`AdaptiveQuantileTransformer` mode-1 behaviour.
             output_distribution: Marginal distribution of the output, as in
                 sklearn's ``QuantileTransformer``.
+            subsample: When set, fit the quantiles on at most this many rows,
+                chosen with ``random_state``. None fits on all rows.
+            random_state: Seed of the row subsample.
         """
         super().__init__()
         if extrapolate_ratio is not None and extrapolate_ratio < 0:
@@ -63,6 +70,8 @@ class TorchQuantileTransformer:
         self.n_quantiles = n_quantiles
         self.extrapolate_ratio = extrapolate_ratio
         self.output_distribution = output_distribution
+        self.subsample = subsample
+        self.random_state = random_state
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the quantiles from the training data.
@@ -75,6 +84,9 @@ class TorchQuantileTransformer:
                 - "quantiles": The computed quantiles [n_quantiles, ...]
                 - "references": The reference quantile positions [n_quantiles]
         """
+        rows = subsample_row_indices(x.shape[0], self.subsample, self.random_state)
+        if rows is not None:
+            x = x[torch.from_numpy(rows).to(x.device)]
         n_samples = x.shape[0]
 
         # torch.nanquantile and ndtri need float32 or float64; cast up if needed

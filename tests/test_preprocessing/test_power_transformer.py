@@ -165,3 +165,49 @@ def test__safe_power_transformer__transform_then_inverse_transform__returns_orig
             atol=1e-7,
             err_msg=f"Inverse transform failed for test case {i}",
         )
+
+
+def _skewed_columns(n: int) -> np.ndarray:
+    rng = np.random.default_rng(0)
+    x = np.column_stack(
+        [
+            rng.lognormal(0, 1, n),
+            -rng.gamma(2, 2, n),
+            rng.poisson(3, n).astype(np.float64),
+            rng.normal(5, 2, n),
+        ]
+    )
+    x[rng.random(x.shape) < 0.05] = np.nan
+    return x
+
+
+def test__safe_power_transformer__subsampled_lambdas__deterministic_and_close():
+    """Lambdas from a seeded subsample repeat exactly and stay near the full fit."""
+    x = _skewed_columns(20_000)
+
+    full = SafePowerTransformer(standardize=True, subsample=None).fit(x)
+    sub = SafePowerTransformer(standardize=True, subsample=5000, random_state=1)
+    sub_out = sub.fit_transform(x.copy())
+    again = SafePowerTransformer(standardize=True, subsample=5000, random_state=1)
+    other = SafePowerTransformer(standardize=True, subsample=5000, random_state=2)
+
+    np.testing.assert_array_equal(again.fit(x).lambdas_, sub.lambdas_)
+    assert not np.array_equal(other.fit(x).lambdas_, sub.lambdas_)
+    np.testing.assert_allclose(sub.lambdas_, full.lambdas_, atol=0.1)
+    delta = np.abs(sub_out - full.transform(x.copy()))
+    assert np.nanquantile(delta, 0.99) < 0.05
+
+
+def test__safe_power_transformer__subsample_at_least_n_rows__same_as_full_fit():
+    x = _skewed_columns(500)
+    full = SafePowerTransformer(subsample=None).fit(x)
+    same = SafePowerTransformer(subsample=500, random_state=3).fit(x)
+    np.testing.assert_array_equal(same.lambdas_, full.lambdas_)
+
+
+def test__safe_power_transformer__all_nan_column__lambda_one():
+    x = _skewed_columns(200)
+    x[:, 1] = np.nan
+    transformer = SafePowerTransformer(standardize=False).fit(x)
+    assert transformer.lambdas_[1] == 1.0
+    assert np.isnan(transformer.transform(x.copy())[:, 1]).all()

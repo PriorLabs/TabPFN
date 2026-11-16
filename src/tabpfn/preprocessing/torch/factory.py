@@ -78,6 +78,7 @@ def create_gpu_preprocessing_pipeline(
                     TorchSelectiveQuantileTransformerStep(
                         n_quantiles=n_quantiles,
                         target_column_indices=quantile_target_indices,
+                        random_state=random_state,
                         extrapolate_ratio=extrapolate_ratio,
                         output_distribution=get_quantile_output_distribution(
                             pconfig.name
@@ -112,7 +113,8 @@ def create_gpu_preprocessing_pipeline(
             steps.append(
                 (
                     TorchSelectiveSafePowerStep(
-                        target_column_indices=safe_power_target_indices
+                        target_column_indices=safe_power_target_indices,
+                        random_state=random_state,
                     ),
                     None,  # operates on explicit indices, receives full tensor
                 )

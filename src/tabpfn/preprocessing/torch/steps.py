@@ -11,6 +11,9 @@ import numpy as np
 import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
+    QUANTILE_FIT_SUBSAMPLE,
+)
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
@@ -221,14 +224,19 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         self,
         n_quantiles: int,
         target_column_indices: list[int],
+        random_state: int | np.random.Generator | None,
         extrapolate_ratio: float | None = None,
         output_distribution: Literal["uniform", "normal"] = "uniform",
     ) -> None:
         super().__init__()
+        seed, _ = infer_random_state(random_state)
+        # Fits on the same number of rows as the CPU AdaptiveQuantileTransformer.
         self._qt = TorchQuantileTransformer(
             n_quantiles=n_quantiles,
             extrapolate_ratio=extrapolate_ratio,
             output_distribution=output_distribution,
+            subsample=QUANTILE_FIT_SUBSAMPLE,
+            random_state=seed,
         )
         self._target_column_indices = target_column_indices
 
@@ -357,9 +365,14 @@ class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
     :class:`TorchSelectiveQuantileTransformerStep`.
     """
 
-    def __init__(self, target_column_indices: list[int]) -> None:
+    def __init__(
+        self,
+        target_column_indices: list[int],
+        random_state: int | np.random.Generator | None,
+    ) -> None:
         super().__init__()
-        self._transformer = TorchSafePowerTransformer()
+        seed, _ = infer_random_state(random_state)
+        self._transformer = TorchSafePowerTransformer(random_state=seed)
         self._target_column_indices = target_column_indices
 
     @override

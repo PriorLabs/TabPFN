@@ -11,13 +11,13 @@ import numpy as np
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.utils.validation import _num_samples
 
-_DEFAULT_SUBSAMPLE = 100_000
+QUANTILE_FIT_SUBSAMPLE = 100_000
 
 
 def compute_effective_n_quantiles(
     user_n_quantiles: int,
     n_samples: int,
-    subsample: int = _DEFAULT_SUBSAMPLE,
+    subsample: int = QUANTILE_FIT_SUBSAMPLE,
 ) -> int:
     """Compute the effective number of quantiles.
 
@@ -88,7 +88,7 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         n_quantiles: int = 1_000,
         output_distribution: Literal["uniform", "normal"] = "uniform",
         ignore_implicit_zeros: bool = False,
-        subsample: int = _DEFAULT_SUBSAMPLE,
+        subsample: int = QUANTILE_FIT_SUBSAMPLE,
         random_state: int | np.random.RandomState | np.random.Generator | None = None,
         copy: bool = True,
         extrapolate_ratio: float | None = None,

@@ -9,6 +9,9 @@ from collections.abc import Callable
 
 import torch
 
+from tabpfn.preprocessing.steps.safe_power_transformer import LAMBDA_FIT_SUBSAMPLE
+from tabpfn.preprocessing.steps.utils import subsample_row_indices
+
 _INV_GOLDEN = (math.sqrt(5) - 1) / 2
 # scipy.optimize.fminbound's xtol, as used by SafePowerTransformer.
 _XTOL = 1.48e-8
@@ -26,23 +29,40 @@ class TorchSafePowerTransformer:
     Mirrors the CPU ``safepower`` preset: ``SafePowerTransformer(standardize=False)``
     then ``make_scaler_safe(StandardScaler())``. Each column's lambda maximises the
     Yeo-Johnson log-likelihood within scipy's overflow-safe bounds, found by a
-    batched golden-section search. Computes in float64, so it cannot run on MPS.
-    Fit runs on column chunks and transform on row chunks to keep the float64
-    working set near ``_CHUNK_TARGET_BYTES``. A fit chunk holds at least one
-    whole column, so beyond about 22M rows the fit working set grows with the
-    row count.
+    batched golden-section search on at most ``subsample`` rows chosen with
+    ``random_state``, the same rows as the CPU preset with equal arguments.
+    Computes in float64, so it cannot run on MPS. Fit runs on column chunks
+    and transform on row chunks to keep the float64 working set near
+    ``_CHUNK_TARGET_BYTES``. A fit chunk holds at least one whole column, so
+    beyond about 22M rows the fit working set grows with the row count.
     """
+
+    def __init__(
+        self, subsample: int | None = LAMBDA_FIT_SUBSAMPLE, random_state: int = 0
+    ) -> None:
+        self.subsample = subsample
+        self.random_state = random_state
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit lambdas and scaler statistics on ``x`` of shape [n_rows, ...]."""
         x = x.reshape(x.shape[0], -1)
-        bytes_per_col = 8 * _OVERHEAD_FACTOR * max(x.shape[0], 1)
-        n_cols = max(1, _CHUNK_TARGET_BYTES // bytes_per_col)
+        rows = subsample_row_indices(x.shape[0], self.subsample, self.random_state)
+        x_fit = x if rows is None else x[torch.from_numpy(rows).to(x.device)]
+        n_cols = _cols_per_fit_chunk(x_fit.shape[0])
+        lambdas = torch.cat(
+            [
+                _fit_lambdas(x_fit[:, i : i + n_cols].to(torch.float64))
+                for i in range(0, x.shape[1], n_cols)
+            ]
+        )
+        n_cols = _cols_per_fit_chunk(x.shape[0])
         caches = [
-            _fit_chunk(x[:, i : i + n_cols].to(torch.float64))
+            _fit_scaler(x[:, i : i + n_cols].to(torch.float64), lambdas[i : i + n_cols])
             for i in range(0, x.shape[1], n_cols)
         ]
-        return {k: torch.cat([c[k] for c in caches]) for k in caches[0]}
+        return {"lambdas": lambdas} | {
+            k: torch.cat([c[k] for c in caches]) for k in caches[0]
+        }
 
     def transform(
         self, x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
@@ -60,8 +80,11 @@ class TorchSafePowerTransformer:
         return out.reshape(shape)
 
 
-def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
-    lambdas = _fit_lambdas(x)
+def _cols_per_fit_chunk(n_rows: int) -> int:
+    return max(1, _CHUNK_TARGET_BYTES // (8 * _OVERHEAD_FACTOR * max(n_rows, 1)))
+
+
+def _fit_scaler(x: torch.Tensor, lambdas: torch.Tensor) -> dict[str, torch.Tensor]:
     y = _yeo_johnson(x, torch.log1p(x.abs()), lambdas)
     y.masked_fill_(torch.isinf(y), torch.nan)
     impute_mean = torch.nan_to_num(y.nanmean(dim=0), nan=0.0)
@@ -71,7 +94,6 @@ def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
     var = y.var(dim=0, correction=0)
     scale = torch.where(_is_constant(var, mean, x.shape[0]), 1.0, var.sqrt())
     return {
-        "lambdas": lambdas,
         "impute_mean": impute_mean,
         "mean": mean,
         "scale": scale,
@@ -87,7 +109,7 @@ def _transform_chunk(
 
 
 def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
-    """Per-column ``_yeojohnson_normmax`` with sklearn's special cases."""
+    """Per-column ``_yeojohnson_normmax`` with the CPU preset's special cases."""
     invalid = torch.isnan(x)
     n_valid = x.shape[0] - invalid.sum(dim=0)
     abs_max = x.abs().nan_to_num_(nan=0.0).amax(dim=0)
@@ -128,8 +150,7 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
         return torch.where(var < finfo.tiny, torch.inf, -llf)
 
     lambdas = _golden_section_search(neg_llf, lb, ub)
-    lambdas = torch.where(constant, 1.0, lambdas)
-    return torch.where(n_valid == 0, torch.nan, lambdas)
+    return torch.where(skip, 1.0, lambdas)
 
 
 def _yeo_johnson(

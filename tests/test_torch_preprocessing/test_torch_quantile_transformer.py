@@ -13,6 +13,7 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSche
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
 )
+from tabpfn.preprocessing.steps.utils import subsample_row_indices
 from tabpfn.preprocessing.torch import (
     TorchPreprocessingPipeline,
     TorchQuantileTransformer,
@@ -643,6 +644,7 @@ class TestChunkedQuantileTransformerEquivalence:
         step = TorchSelectiveQuantileTransformerStep(
             n_quantiles=40,
             target_column_indices=[7, 0, 2, 4],
+            random_state=0,
             extrapolate_ratio=extrapolate_ratio,
             output_distribution=output_distribution,
         )
@@ -711,7 +713,7 @@ def test__selective_step__mps__matches_cpu(monkeypatch, dtype):
     x = torch.randn(100, 2, 9).to(dtype)
     x[::7, :, 2] = float("nan")
     step = TorchSelectiveQuantileTransformerStep(
-        n_quantiles=40, target_column_indices=[7, 0, 2, 4]
+        n_quantiles=40, target_column_indices=[7, 0, 2, 4], random_state=0
     )
     monkeypatch.setattr(
         TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
@@ -762,3 +764,79 @@ def test__torch_extrapolate_ratio__rejects_negative():
     """Negative extrapolate_ratio is rejected at construction."""
     with pytest.raises(ValueError, match="non-negative"):
         TorchQuantileTransformer(n_quantiles=10, extrapolate_ratio=-1.0)
+
+
+class TestTorchQuantileTransformerSubsample:
+    """Tests for fitting the quantiles on a seeded row subsample."""
+
+    def test__fit__subsample__equals_fit_on_selected_rows(self):
+        torch.manual_seed(0)
+        x = torch.randn(1000, 3)
+        x[::9, 1] = float("nan")
+        rows = subsample_row_indices(1000, 200, 5)
+        assert rows is not None
+
+        cache = TorchQuantileTransformer(
+            n_quantiles=50, subsample=200, random_state=5
+        ).fit(x)
+        expected = TorchQuantileTransformer(n_quantiles=50).fit(
+            x[torch.from_numpy(rows)]
+        )
+
+        for key, value in expected.items():
+            torch.testing.assert_close(cache[key], value, rtol=0, atol=0)
+
+    def test__fit__subsample_at_least_n_rows__same_as_full_fit(self):
+        x = torch.randn(300, 2)
+        full = TorchQuantileTransformer(n_quantiles=100).fit(x)
+        same = TorchQuantileTransformer(
+            n_quantiles=100, subsample=300, random_state=1
+        ).fit(x)
+        for key, value in full.items():
+            torch.testing.assert_close(same[key], value, rtol=0, atol=0)
+
+    @pytest.mark.parametrize("output_distribution", ["uniform", "normal"])
+    def test__transform__subsampled_fit__close_to_full_fit_and_to_cpu(
+        self, output_distribution: str
+    ):
+        """Subsampled torch fit stays near the full fit and the subsampled CPU fit."""
+        rng = np.random.default_rng(0)
+        x_np = np.column_stack(
+            [
+                rng.lognormal(0, 1, 20_000),
+                rng.standard_t(3, 20_000),
+                rng.poisson(3, 20_000).astype(np.float64),
+            ]
+        ).astype(np.float32)
+        x_np[rng.random(x_np.shape) < 0.05] = np.nan
+        x = torch.from_numpy(x_np)
+
+        full_qt = TorchQuantileTransformer(
+            n_quantiles=1000, output_distribution=output_distribution
+        )
+        full = full_qt.transform(x, full_qt.fit(x))
+        sub_qt = TorchQuantileTransformer(
+            n_quantiles=1000,
+            output_distribution=output_distribution,
+            subsample=5000,
+            random_state=0,
+        )
+        cache = sub_qt.fit(x)
+        sub = sub_qt.transform(x, cache)
+        for key, value in sub_qt.fit(x).items():
+            torch.testing.assert_close(value, cache[key], rtol=0, atol=0)
+
+        cpu = AdaptiveQuantileTransformer(
+            n_quantiles=1000,
+            output_distribution=output_distribution,
+            subsample=5000,
+            random_state=0,
+        ).fit(x_np)
+        cpu_out = torch.from_numpy(cpu.transform(x_np.copy()))
+
+        observed = ~torch.isnan(x)
+        # 0.05 in uniform output is about three times the DKW bound for 5000 rows.
+        tol = 0.05 if output_distribution == "uniform" else 0.2
+        for other in (full, cpu_out):
+            delta = (sub - other.to(sub.dtype))[observed].abs()
+            assert delta.quantile(0.99) < tol

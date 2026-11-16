@@ -4,11 +4,20 @@
 
 from __future__ import annotations
 
+from numbers import Integral
+from typing import Any, ClassVar
 from typing_extensions import override
 
 import numpy as np
 from scipy import optimize
 from sklearn.preprocessing import PowerTransformer
+from sklearn.utils._param_validation import Interval
+from sklearn.utils.validation import _num_samples
+
+from tabpfn.preprocessing.steps.utils import subsample_row_indices
+
+# Rows that the Yeo-Johnson lambda search sees; transform and scaling use all rows.
+LAMBDA_FIT_SUBSAMPLE = 100_000
 
 
 # this is taken from https://github.com/scipy/scipy/pull/18852
@@ -189,7 +198,16 @@ def _is_constant_feature(var: float, mean: float, n_samples: int) -> bool:
 class SafePowerTransformer(PowerTransformer):
     """Variant of PowerTransformer that uses the scipy yeo-johnson functions
     which have been fixed to avoid overflow issues.
+
+    The Yeo-Johnson lambdas are fitted on at most ``subsample`` rows, chosen
+    with ``random_state``; ``subsample=None`` fits them on all rows.
     """
+
+    _parameter_constraints: ClassVar[dict] = {
+        **PowerTransformer._parameter_constraints,
+        "subsample": [Interval(Integral, 1, None, closed="left"), None],
+        "random_state": [Interval(Integral, 0, None, closed="left")],
+    }
 
     def __init__(
         self,
@@ -197,21 +215,39 @@ class SafePowerTransformer(PowerTransformer):
         *,
         standardize: bool = True,
         copy: bool = True,
+        subsample: int | None = LAMBDA_FIT_SUBSAMPLE,
+        random_state: int = 0,
     ) -> None:
         super().__init__(method=method, standardize=standardize, copy=copy)
+        self.subsample = subsample
+        self.random_state = random_state
+
+    @override
+    def _fit(self, X: Any, y: Any = None, force_transform: bool = False) -> np.ndarray:
+        self._lambda_fit_rows = subsample_row_indices(
+            _num_samples(X), self.subsample, self.random_state
+        )
+        try:
+            return super()._fit(X, y=y, force_transform=force_transform)
+        finally:
+            del self._lambda_fit_rows
 
     # requires scipy >= 1.9
     # this is the default in scikit-learn main for versions > 1.7
     # see https://github.com/scikit-learn/scikit-learn/pull/31227
     @override
     def _yeo_johnson_optimize(self, x: np.ndarray) -> float:
+        if self._lambda_fit_rows is not None:
+            x = x[self._lambda_fit_rows]
         # the computation of lambda is influenced by NaNs so we need to
         # get rid of them
         x = x[~np.isnan(x)]
+        if x.size == 0:
+            return 1.0
         # sklearn >= 1.3 skips the search only for constant columns without NaNs.
         # On a constant column the search optimises rounding noise, so apply
         # sklearn's test to the observed values here, for every sklearn version.
-        if x.size and _is_constant_feature(x.var(), x.mean(), x.size):
+        if _is_constant_feature(x.var(), x.mean(), x.size):
             return 1.0
         _, lmbda = _yeojohnson(x, lmbda=None)
         return lmbda  # type: ignore
@@ -226,5 +262,6 @@ class SafePowerTransformer(PowerTransformer):
 
 
 __all__ = [
+    "LAMBDA_FIT_SUBSAMPLE",
     "SafePowerTransformer",
 ]

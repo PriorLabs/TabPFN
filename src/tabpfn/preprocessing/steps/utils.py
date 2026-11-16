@@ -16,6 +16,16 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
 
 
+def subsample_row_indices(
+    n_rows: int, max_rows: int | None, seed: int
+) -> np.ndarray | None:
+    """Sorted, seeded choice of ``max_rows`` of ``n_rows`` rows; None keeps all rows."""
+    if max_rows is None or n_rows <= max_rows:
+        return None
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(n_rows, size=max_rows, replace=False))
+
+
 def is_identity_transformer(transformer: str | TransformerMixin) -> bool:
     """Whether `transformer` hands back what it is given, untouched.
 
