@@ -1137,9 +1137,7 @@ def test__regressor_predict_row_blocks__sum_forward_seconds(
         per_block.clear()
         model.predict(X[n_train:])
         assert len(per_block) == 5
-        assert metrics["predict_model_forward_seconds"] == pytest.approx(
-            sum(per_block)
-        )
+        assert metrics["predict_model_forward_seconds"] == pytest.approx(sum(per_block))
 
 
 @pytest.mark.parametrize(
