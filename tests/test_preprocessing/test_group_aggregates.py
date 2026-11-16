@@ -182,7 +182,8 @@ def _fit(estimator_cls: type, y: np.ndarray, **inference_config: Any) -> Any:
 
 def _pooled(pred: np.ndarray) -> bool:
     by_group = pred.reshape(10, 4, -1)
-    return np.allclose(by_group, by_group[:, :1], rtol=1e-5)
+    # float32 decoding of equal logits differs in the last digits near zero.
+    return np.allclose(by_group, by_group[:, :1], rtol=1e-5, atol=1e-6)
 
 
 ESTIMATORS = pytest.mark.parametrize(
