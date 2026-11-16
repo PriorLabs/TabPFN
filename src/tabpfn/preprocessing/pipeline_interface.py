@@ -463,10 +463,10 @@ class PreprocessingPipeline:
                 (receives all columns) or a tuple of (PreprocessingStep,
                 set[FeatureModality]) where the step receives only columns
                 matching the specified modalities.
-            keep_float32: Copy a float32 input as float32 rather than float64, or
-                not at all when nothing would write into it. For steps that only
-                select, reorder, compare and encode values: their float32 results
-                equal the float64 ones cast back.
+            keep_float32: Copy a float32 input as float32 rather than float64, and
+                do not copy it at all when nothing would write into it. Use this for
+                steps that only select, reorder, compare and encode values: their
+                float32 results equal the float64 ones cast back.
         """
         super().__init__()
         self._raw_steps = steps
@@ -551,8 +551,10 @@ class PreprocessingPipeline:
     def _working_copy(
         self, X: np.ndarray | torch.Tensor, feature_indices: np.ndarray | None
     ) -> np.ndarray | torch.Tensor:
-        """The array the steps run on: a copy of `X` or of its `feature_indices`, or
-        `X` itself when nothing would write into it.
+        """The array the steps run on.
+
+        This is a copy of `X`, or of its `feature_indices` columns. It is `X` itself
+        when nothing would write into it.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -568,10 +570,11 @@ class PreprocessingPipeline:
         return gather_columns(X, feature_indices, dtype)
 
     def _writes_only_owned_input(self, X: np.ndarray) -> bool:
-        """Whether, without a copy of `X`, nothing would write into `X`.
+        """Whether the steps can run on `X` itself without anything writing into it.
 
-        The pipeline writes the output of a step with modalities back into its array,
-        and replaces infinities in place; a step writes only into an array it owns.
+        That is not the case when a step has modalities, because the pipeline writes
+        that step's output back into its array, or when `X` holds infinities, which
+        are replaced in place. The steps themselves only write into arrays they own.
         """
         if any(modalities for _, modalities in self.steps):
             return False
@@ -672,8 +675,8 @@ class PreprocessingPipeline:
             _restore_inf_masks(X, feature_schema, inf_masks)
 
         if not owns_input and isinstance(X, np.ndarray) and X.dtype == np.float64:
-            # A step that may not write into `X` returns a new float64 array; its
-            # values are float32 ones, as on the copied path.
+            # A step that could not write into `X` may return a new float64 array.
+            # Its values fit in float32, as on the path that copies `X`.
             X = X.astype(np.float32)
         return X, feature_schema
 
