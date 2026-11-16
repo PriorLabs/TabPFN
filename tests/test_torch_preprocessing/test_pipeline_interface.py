@@ -17,6 +17,7 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStepResult,
 )
 from tabpfn.preprocessing.torch.steps import (
+    TorchAddFingerprintFeaturesStep,
     TorchAddSVDFeaturesStep,
     TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
@@ -771,3 +772,16 @@ def test__call__host_table__matches_the_device_table() -> None:
 
     assert actual.x.device.type == "cpu"
     torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True)
+
+
+def test__run_step__staged__rejects_a_step_without_a_block_runner() -> None:
+    with pytest.raises(ValueError, match="cannot run by blocks"):
+        pipeline_interface._run_step(
+            TorchAddFingerprintFeaturesStep(),
+            _wide_input(),
+            list(range(10)),
+            50,
+            None,
+            consume_input=True,
+            compute_device=torch.device("cpu"),
+        )

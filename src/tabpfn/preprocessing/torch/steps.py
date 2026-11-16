@@ -46,6 +46,8 @@ class TorchSelectiveStep(TorchPreprocessingStep):
     columns directly.
     """
 
+    columnwise = True
+
     _target_column_indices: list[int]
 
     @override
@@ -59,6 +61,8 @@ class TorchSelectiveStep(TorchPreprocessingStep):
 
 class TorchRandomSignFlipStep(TorchPreprocessingStep):
     """Randomly negate columns with signs shared across rows."""
+
+    rowwise = True
 
     def __init__(self, random_state: int | np.random.Generator | None) -> None:
         super().__init__()
@@ -242,6 +246,8 @@ class TorchSelectiveQuantileTransformerStep(TorchSelectiveStep):
     and applies the quantile transform, and writes the results back. All other columns
     are left unchanged.
     """
+
+    shared_cache_keys = frozenset({"references"})
 
     def __init__(
         self,
