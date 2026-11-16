@@ -1599,7 +1599,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
         logits = self._compute_aggregated_logits(X)
-        logits = pool_rows(logits, groups, logits=True)
+        logits = pool_rows(
+            logits,
+            groups,
+            logits=True,
+            geometric=self.inference_config_.POOL_GROUP_RULE == "geometric",
+        )
 
         # Determine and return intended output type
         logit_to_output = partial(

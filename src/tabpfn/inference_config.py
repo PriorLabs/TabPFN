@@ -157,6 +157,10 @@ class InferenceConfig:
 
     This is transductive too: predict all rows of a group in one call."""
 
+    POOL_GROUP_RULE: Literal["linear", "geometric"] = "linear"
+    """How `POOL_GROUP_PREDICTIONS` pools a group's distributions: "linear" takes
+    their mean, "geometric" the renormalised mean of their log-probabilities."""
+
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
     or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`.

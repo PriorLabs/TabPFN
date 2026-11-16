@@ -1734,7 +1734,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
-        return pool_rows(output, groups, logits=return_logits or return_raw_logits)
+        return pool_rows(
+            output,
+            groups,
+            logits=return_logits or return_raw_logits,
+            geometric=self.inference_config_.POOL_GROUP_RULE == "geometric",
+        )
 
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.

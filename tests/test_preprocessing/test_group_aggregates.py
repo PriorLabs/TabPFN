@@ -186,3 +186,30 @@ def test__classifier__pooled_logits_match_the_pooled_probabilities() -> None:
     from_logits = torch.as_tensor(classifier.predict_logits(X)).softmax(dim=-1)
 
     np.testing.assert_allclose(from_logits, classifier.predict_proba(X), atol=1e-5)
+
+
+def test__pool_rows__geometric__renormalised_geometric_mean() -> None:
+    probabilities = torch.tensor([[0.9, 0.1], [0.5, 0.5]])
+    expected = (probabilities[0] * probabilities[1]).sqrt()
+    expected = (expected / expected.sum()).expand(2, 2)
+
+    from_probs = pool_rows(probabilities, np.array([0, 0]), logits=False, geometric=True)
+    from_logits = pool_rows(
+        probabilities.log() + 3.0, np.array([0, 0]), logits=True, geometric=True
+    )
+
+    torch.testing.assert_close(from_probs, expected)
+    torch.testing.assert_close(from_logits.exp(), expected)
+
+
+def test__classifier__geometric_pooling__logits_match_probabilities() -> None:
+    X, y = _grouped_data()
+    classifier = _fit(
+        TabPFNClassifier, y, POOL_GROUP_PREDICTIONS=True, POOL_GROUP_RULE="geometric"
+    )
+
+    proba = classifier.predict_proba(X)
+    from_logits = torch.as_tensor(classifier.predict_logits(X)).softmax(dim=-1)
+
+    assert _pooled(proba)
+    np.testing.assert_allclose(from_logits, proba, atol=1e-5)

@@ -126,23 +126,38 @@ class GroupAggregator:
 
 
 def pool_rows(
-    values: torch.Tensor, groups: np.ndarray | None, *, logits: bool
+    values: torch.Tensor,
+    groups: np.ndarray | None,
+    *,
+    logits: bool,
+    geometric: bool = False,
 ) -> torch.Tensor:
-    """Replace each row, along dim -2, by the mean over its group's rows.
+    """Replace each row, along dim -2, by its group's pooled distribution.
 
-    `logits` are averaged as probabilities, so the result is the log of the
-    group's mean distribution. `groups=None` returns `values` unchanged.
+    Linear pooling takes the mean of the probabilities; `logits` are averaged as
+    probabilities, so the result is the log of the group's mean distribution.
+    Geometric pooling takes the mean of the log-probabilities and renormalises.
+    `groups=None` returns `values` unchanged.
     """
     if groups is None:
         return values
+    if geometric:
+        log_p = values.log_softmax(-1) if logits else values.clamp_min(1e-12).log()
+        pooled = _group_mean(log_p, groups).log_softmax(-1)
+        return pooled if logits else pooled.exp()
     if logits:
         values = values.softmax(dim=-1)
+    pooled = _group_mean(values, groups)
+    return pooled.log() if logits else pooled
+
+
+def _group_mean(values: torch.Tensor, groups: np.ndarray) -> torch.Tensor:
+    """Each row, along dim -2, replaced by the mean over its group's rows."""
     index = torch.as_tensor(groups, device=values.device)
     shape = (*values.shape[:-2], int(index.max()) + 1, values.shape[-1])
     sums = values.new_zeros(shape).index_add_(-2, index, values)
     counts = torch.bincount(index).to(values.dtype)
-    pooled = (sums / counts[:, None]).index_select(-2, index)
-    return pooled.log() if logits else pooled
+    return (sums / counts[:, None]).index_select(-2, index)
 
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
