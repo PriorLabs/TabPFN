@@ -461,6 +461,13 @@ def _run_step(
         return _fit_transform_rows_on_device(
             step, x, column_indices, num_train_rows, fitted_cache, compute_device
         )
+    if compute_device is not None and not (step.columnwise or step.rowwise):
+        # Run whole, the step would read all of a table held off the compute
+        # device, and could copy it.
+        raise ValueError(
+            f"{type(step).__name__} cannot run by blocks, so it cannot preprocess "
+            "a table held off the compute device."
+        )
     in_place = _in_place_kwargs(step) if consume_input else {}
     return step.fit_transform(
         x,
