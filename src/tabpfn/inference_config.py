@@ -139,7 +139,7 @@ class InferenceConfig:
 
     APPEND_GROUP_AGGREGATES: bool = False
     """Whether per-group aggregates of the features are appended for `group_col`
-    data. Up to 50 are kept, by their variance over the training rows, from the
+    data. Up to 64 are kept, by their variance over the training rows, from the
     mean, std, min, max and last value of numeric columns and the count, last
     value and number of unique values of the others. Ignored with a warning when
     no training group has more than one row.

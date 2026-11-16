@@ -53,7 +53,7 @@ class GroupAggregator:
     names_: list[str]
     pool_: bool
 
-    def __init__(self, *, append: bool, pool: bool, max_features: int = 50) -> None:
+    def __init__(self, *, append: bool, pool: bool, max_features: int = 64) -> None:
         self.append = append
         self.pool = pool
         self.max_features = max_features
