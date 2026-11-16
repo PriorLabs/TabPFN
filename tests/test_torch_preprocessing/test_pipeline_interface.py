@@ -775,13 +775,61 @@ def test__call__host_table__matches_the_device_table() -> None:
 
 
 def test__run_step__staged__rejects_a_step_without_a_block_runner() -> None:
+    x = _wide_input()
     with pytest.raises(ValueError, match="cannot run by blocks"):
         pipeline_interface._run_step(
             TorchAddFingerprintFeaturesStep(),
-            _wide_input(),
+            x,
+            x,
             list(range(10)),
             50,
             None,
             consume_input=True,
             compute_device=torch.device("cpu"),
         )
+
+
+def _table_with_spare_columns(x: torch.Tensor, spare_columns: int) -> torch.Tensor:
+    table = torch.full((*x.shape[:-1], x.shape[-1] + spare_columns), torch.nan)
+    table[..., : x.shape[-1]] = x
+    return table
+
+
+def test__call__spare_columns__match_appending_by_concatenation() -> None:
+    x = _wide_input()
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    pipeline = _blockwise_pipeline()
+    pipeline.steps.append((TorchAddSVDFeaturesStep("svd"), None))
+    expected = pipeline(x.clone(), schema, num_train_rows=50)
+    spare = pipeline.num_added_columns(10, 50)
+    assert spare == expected.x.shape[-1] - 10
+    table = _table_with_spare_columns(x, spare)
+
+    actual = pipeline(
+        table, schema, num_train_rows=50, consume_input=True, spare_columns=spare
+    )
+
+    assert actual.x.data_ptr() == table.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
+    assert actual.feature_schema == expected.feature_schema
+
+
+def test__append_from_rows_on_device__row_blocks__match_fit_transform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Ten rows of a 13-column float32 table per block.
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 10 * 13 * 4)
+    x = _wide_input()
+    step = TorchAddSVDFeaturesStep("svd_quarter_components")
+    expected = step.fit_transform(x.clone(), list(range(10)), num_train_rows=50)
+    assert expected.added_columns is not None
+    spare = expected.added_columns.shape[-1]
+    table = _table_with_spare_columns(x, spare)
+
+    actual = pipeline_interface._append_from_rows_on_device(
+        step, table, 10, list(range(10)), 50, None, torch.device("cpu")
+    )
+
+    assert actual.added_columns is not None
+    assert actual.added_columns.data_ptr() == table[..., 10:].data_ptr()
+    torch.testing.assert_close(actual.added_columns, expected.added_columns)

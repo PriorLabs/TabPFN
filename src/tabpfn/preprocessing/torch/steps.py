@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Literal
 from typing_extensions import override
 
@@ -586,9 +586,39 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         self._scaler = TorchSafeStandardScaler()
         self._svd: TorchTruncatedSVD | None = None
 
+    appends_from_rows = True
+
     @override
     def added_feature_prefix(self) -> str:
         return "svd"
+
+    @override
+    def num_added_columns(self, num_columns: int, num_train_rows: int) -> int:
+        if num_columns < 2:
+            return 0
+        return get_svd_n_components(
+            self.global_transformer_name,
+            n_samples=num_train_rows,
+            n_features=num_columns,
+        )
+
+    @override
+    def fit_on_device(
+        self, x: torch.Tensor, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        def blocks() -> Iterator[torch.Tensor]:
+            # Each block of train rows is moved to `device`, then cast there.
+            for start in range(0, x.shape[0], self.FIT_BLOCK_ROWS):
+                block = x[start : start + self.FIT_BLOCK_ROWS].to(device)
+                block = block.to(torch.promote_types(block.dtype, torch.float32))
+                yield block.reshape(-1, x.shape[-1])
+
+        return self.fit_blocks(
+            blocks,
+            num_train_rows=x.shape[0],
+            num_features=x.shape[-1],
+            batch_size=x.shape[1],
+        )
 
     FIT_BLOCK_ROWS = 131_072
     """How many train rows the fit reads at a time.
@@ -732,6 +762,11 @@ class TorchAddFingerprintFeaturesStep(TorchPreprocessingStep):
     @override
     def added_feature_prefix(self) -> str:
         return "fingerprint"
+
+    @override
+    def num_added_columns(self, num_columns: int, num_train_rows: int) -> int:
+        del num_columns, num_train_rows
+        return 1
 
     @override
     def fit_transform(

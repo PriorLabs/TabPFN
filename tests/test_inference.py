@@ -1382,3 +1382,36 @@ def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() ->
     torch.testing.assert_close(X_full, expected, rtol=0, atol=0)
     assert X_full.device == cpu
     assert y.device == cpu
+
+
+def test__prepare_model_inputs__spare_columns() -> None:
+    rng = default_rng(0)
+    X_train = rng.standard_normal((40, 3)).astype(np.float32)
+    X_test = rng.standard_normal((6, 3)).astype(np.float32)
+    y_train = rng.integers(0, 2, 40)
+    cpu = torch.device("cpu")
+    expected, _ = _prepare_model_inputs(cpu, None, X_train, X_test, y_train)
+
+    X_full, _ = _prepare_model_inputs(
+        cpu, None, X_train, X_test, y_train, spare_columns=2
+    )
+
+    assert X_full.shape == (46, 1, 5)
+    torch.testing.assert_close(X_full[..., :3], expected, rtol=0, atol=0)
+
+
+def test__model_input_device__counts_spare_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X_train, X_test = np.zeros((30, 4)), np.zeros((10, 4))
+    # 40 rows of 4 float32 columns, plus 4 spare: 1280 bytes.
+    monkeypatch.setattr("tabpfn.inference.HOST_MODEL_INPUT_MIN_BYTES", 1280)
+    cuda = torch.device("cuda")
+
+    def device_for(spare_columns: int) -> torch.device:
+        return _model_input_device(
+            _HostInputModel(), cuda, X_train, X_test, None, spare_columns=spare_columns
+        )
+
+    assert device_for(4) == torch.device("cpu")
+    assert device_for(3) == cuda

@@ -1627,6 +1627,9 @@ def _call_model_on_members(  # noqa: PLR0913
     model = model_caches[members[0].config._model_index].get(device)
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
     for member, X_test in zip(members, X_tests, strict=True):
+        # Leave room for the columns the GPU steps add, so the table is never
+        # copied to grow.
+        spare_columns = _num_added_columns(member, X_test)
         X_full, y_train = _prepare_model_inputs(
             device,
             force_inference_dtype,
@@ -1634,8 +1637,14 @@ def _call_model_on_members(  # noqa: PLR0913
             X_test,
             member.y_train,
             x_device=_model_input_device(
-                model, device, member.X_train, X_test, force_inference_dtype
+                model,
+                device,
+                member.X_train,
+                X_test,
+                force_inference_dtype,
+                spare_columns=spare_columns,
             ),
+            spare_columns=spare_columns,
         )
         X_full, feature_schema = _maybe_run_gpu_preprocessing(
             X_full,
@@ -1644,6 +1653,7 @@ def _call_model_on_members(  # noqa: PLR0913
             feature_schema=member.feature_schema,
             consume_input=True,
             compute_device=device,
+            spare_columns=spare_columns,
         )
         prepared.append(
             (X_full, y_train, feature_schema.indices_for(FeatureModality.CATEGORICAL))
@@ -1687,6 +1697,17 @@ def _call_model_on_members(  # noqa: PLR0913
     return outputs
 
 
+def _num_added_columns(
+    member: TabPFNEnsembleMember, X_test: torch.Tensor | np.ndarray
+) -> int:
+    """How many columns the member's GPU preprocessing adds to its table."""
+    if member.gpu_preprocessor is None:
+        return 0
+    num_train_rows = member.X_train.shape[0]
+    num_columns = member.X_train.shape[1] if num_train_rows else X_test.shape[1]
+    return member.gpu_preprocessor.num_added_columns(num_columns, num_train_rows)
+
+
 def _prepare_model_inputs(
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
@@ -1695,17 +1716,20 @@ def _prepare_model_inputs(
     y_train: torch.Tensor | np.ndarray,
     *,
     x_device: torch.device | None = None,
+    spare_columns: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """The train and test rows as one `(rows, 1, columns)` tensor, and the labels.
 
     Written into one tensor on `x_device`, by default `device`, a block of rows at a
-    time, so that device holds the table once. The labels go to `device`.
+    time, so that device holds the table once. The labels go to `device`. The table
+    gets `spare_columns` more columns at the end, left unset, for the columns GPU
+    preprocessing adds.
     """
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
     num_train, num_test = len(X_train), len(X_test)
     num_columns = X_train.shape[1] if num_train else X_test.shape[1]
     X_full = torch.empty(
-        (num_train + num_test, 1, num_columns),
+        (num_train + num_test, 1, num_columns + spare_columns),
         dtype=dtype,
         device=device if x_device is None else x_device,
     )
@@ -1713,7 +1737,9 @@ def _prepare_model_inputs(
     for offset, part in ((0, X_train), (num_train, X_test)):
         for start in range(0, len(part), rows):
             block = torch.as_tensor(part[start : start + rows])
-            X_full[offset + start : offset + start + len(block), 0].copy_(block)
+            X_full[offset + start : offset + start + len(block), 0, :num_columns].copy_(
+                block
+            )
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
 
@@ -1732,6 +1758,8 @@ def _model_input_device(
     X_train: torch.Tensor | np.ndarray,
     X_test: torch.Tensor | np.ndarray,
     force_inference_dtype: torch.dtype | None,
+    *,
+    spare_columns: int = 0,
 ) -> torch.device:
     """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
 
@@ -1742,6 +1770,7 @@ def _model_input_device(
         return device
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
     num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
+    num_columns += spare_columns
     nbytes = (len(X_train) + len(X_test)) * num_columns * dtype.itemsize
     if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:
         return torch.device("cpu")
@@ -1778,6 +1807,7 @@ def _maybe_run_gpu_preprocessing(
     use_fitted_cache: bool = False,
     consume_input: bool = False,
     compute_device: torch.device | None = None,
+    spare_columns: int = 0,
 ) -> tuple[torch.Tensor, FeatureSchema]:
     """Run GPU preprocessing if a pipeline is provided.
 
@@ -1790,11 +1820,14 @@ def _maybe_run_gpu_preprocessing(
         consume_input: Whether the pipeline may write into `X`, which the caller
             no longer reads.
         compute_device: The device the pipeline computes on when `X` is elsewhere.
+        spare_columns: Unused columns at the end of `X`, for the columns the
+            pipeline adds.
 
     Returns:
         Tuple of (transformed tensor, updated feature schema).
     """
     if gpu_preprocessor is None:
+        assert spare_columns == 0, "Only a pipeline fills spare columns."
         return X, feature_schema
 
     result = gpu_preprocessor(
@@ -1804,6 +1837,7 @@ def _maybe_run_gpu_preprocessing(
         use_fitted_cache=use_fitted_cache,
         consume_input=consume_input,
         compute_device=compute_device,
+        spare_columns=spare_columns,
     )
     return result.x, result.feature_schema
 
