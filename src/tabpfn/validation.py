@@ -14,6 +14,7 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, TypeVar
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.base import is_classifier
@@ -30,7 +31,6 @@ from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
-    import numpy as np
     import numpy.typing as npt
     import torch
     from sklearn.base import BaseEstimator
@@ -237,6 +237,18 @@ def validate_dataset_size(
         max_cpu_samples=max_cpu_samples,
         allow_cpu_override=ignore_pretraining_limits,
     )
+
+
+def has_several_targets(y: YType) -> bool:
+    """Whether `y` has shape `(n_samples, n_targets)` with more than one target.
+
+    A single target column is not several targets: it keeps the single-target
+    path, including its handling of column vectors.
+    """
+    # Not `np.shape(y)`: numpy functions dispatch to array-likes that refuse
+    # them, like sklearn's `_NotAnArray`, while `np.asarray` only converts.
+    shape = y.shape if hasattr(y, "shape") else np.asarray(y).shape
+    return len(shape) == 2 and shape[1] > 1
 
 
 def ensure_compatible_fit_inputs_sklearn(

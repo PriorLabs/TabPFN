@@ -23,7 +23,7 @@ import logging
 import numbers
 import typing
 import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
@@ -76,6 +76,7 @@ from tabpfn.inference import (
     InferenceEngineBatchedNoPreprocessing,
     InferenceEngineExplicitKVCache,
     _maybe_run_gpu_preprocessing,
+    _PerDeviceModelCache,
 )
 from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
@@ -142,6 +143,7 @@ from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
     extract_input_shape,
+    has_several_targets,
     validate_dataset_size,
 )
 
@@ -309,8 +311,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
 
-    n_outputs_: Literal[1]  # We only support single output
-    """The number of outputs the model supports. Only 1 for now"""
+    n_outputs_: int
+    """The number of targets seen during `fit()`."""
+
+    target_estimators_: list[TabPFNRegressor] | None = None
+    """The per-target regressors after a fit on several targets, else `None`.
+
+    They hold each target's fitted state and share this regressor's model. Read
+    them, but do not refit or move them on their own.
+    """
+
+    _model_caches: list[_PerDeviceModelCache] | None = None
+    """Per-device model copies to use instead of creating new ones. Set on the
+    per-target regressors, so that they share one copy of the weights per device."""
 
     znorm_space_bardist_: FullSupportBarDistribution
     """The bar distribution of the target variable, used by the model.
@@ -956,11 +969,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def _more_tags(self) -> dict[str, Any]:
         return {
             "allow_nan": True,
+            "multioutput": True,
         }
 
     def __sklearn_tags__(self) -> Tags:
         tags = super().__sklearn_tags__()
         tags.input_tags.allow_nan = True
+        tags.target_tags.multi_output = True
         tags.estimator_type = self.estimator_type
         return tags
 
@@ -1062,6 +1077,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             kv_cache_precision=self.kv_cache_precision,
             kv_cache_on_host=self.kv_cache_on_host,
             inference_mode=inference_mode,
+            model_caches=self._model_caches,
         )
 
     def _resolve_row_weights(
@@ -1437,6 +1453,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 fit multiple times.
         """
         reject_group_col(self.group_col, "fit_from_preprocessed")
+        self._set_single_target()
         self.y_train_mean_ = y_train_mean
         self.y_train_std_ = y_train_std
         if self.fit_mode != "batched":
@@ -1516,6 +1533,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             self
         """
+        if has_several_targets(y):
+            raise NotImplementedError(
+                "fit_with_differentiable_input takes one target. Use fit() for "
+                "several targets."
+            )
         if self.fit_mode != "fit_preprocessors":
             logging.warning(
                 "The model was not in 'fit_preprocessors' mode. "
@@ -1524,6 +1546,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
+        self._set_single_target()
         static_seed, rng = infer_random_state(self.random_state)
 
         is_first_fit_call = not hasattr(self, "models_")
@@ -1622,7 +1645,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Args:
             X: The input data.
-            y: The target variable.
+            y: The target variable, of shape `(n_samples,)`, or
+                `(n_samples, n_targets)` for several targets. With several
+                targets, one regressor is fitted per target column (available as
+                `target_estimators_`); they share one set of model weights, and
+                `predict` returns one column per target. Each target still keeps
+                its own fitted state, such as the preprocessed training data and,
+                with `fit_mode="fit_with_cache"`, its own KV cache, so that
+                memory grows with the number of targets.
             sample_weight: Experimental. One non-negative weight per training row,
                 roughly saying how many rows it stands for. Only relative values
                 matter: scaling every weight changes nothing, and a weight of 2
@@ -1641,6 +1671,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             self
         """
+        if self.differentiable_input:
+            raise ValueError(
+                "differentiable_input=True requires fit_with_differentiable_input "
+                "with torch tensor X and y, not fit()."
+            )
+        if has_several_targets(y):
+            return self._fit_multi_target(
+                X,
+                np.asarray(y),
+                sample_weight=sample_weight,
+                label_reliability=label_reliability,
+            )
+        self._set_single_target()
+
         # Validate eval_metric here instead of in __init__ as per sklearn convention
         self.eval_metric_ = _validate_eval_metric(self.eval_metric)
         # Set here as well as in `_maybe_tune_on_holdout` below, so that the
@@ -1649,12 +1693,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.ensemble_softmax_temperature_ = 1.0
         self.mean_calibration_scale_ = 1.0
         self.downsample_correction_log_weights_ = None
-
-        if self.differentiable_input:
-            raise ValueError(
-                "differentiable_input=True requires fit_with_differentiable_input "
-                "with torch tensor X and y, not fit()."
-            )
 
         if self.fit_mode == "batched":
             logging.warning(
@@ -1734,6 +1772,91 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self._compute_downsample_correction(y_raw=y_raw)
 
         return self
+
+    def _fit_multi_target(
+        self,
+        X: XType,
+        y: np.ndarray,
+        *,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
+    ) -> Self:
+        """Fit one regressor per target column, all sharing one set of weights.
+
+        Each target is fitted exactly like a single-target `fit`, with its own
+        standardization, target transform and bar distribution. This regressor
+        loads the model once and holds it. Every per-target regressor gets it by
+        reference, along with its copies on each device.
+        """
+        # Only the model and the per-target regressors live on this regressor, so
+        # nothing an earlier single-target fit set may stay behind.
+        for name in [n for n in vars(self) if n.endswith("_") and n[0] != "_"]:
+            delattr(self, name)
+        self._initialize_model_variables()
+        params = self.get_params(deep=False)
+        params["model_path"] = [
+            ModelSpecs(
+                model=model,
+                architecture_config=config,
+                inference_config=self.inference_config_,
+                norm_criterion=self.znorm_space_bardist_,
+            )
+            for model, config in zip(self.models_, self.configs_, strict=True)
+        ]
+        model_caches = [_PerDeviceModelCache(model) for model in self.models_]
+        target_estimators = []
+        for y_k in y.T:
+            estimator = type(self)(**params)
+            estimator._model_caches = model_caches
+            target_estimators.append(
+                estimator.fit(
+                    X,
+                    y_k,
+                    sample_weight=sample_weight,
+                    label_reliability=label_reliability,
+                )
+            )
+        # Set only once every target fitted, so a failed fit leaves no regressor
+        # that predicts some of the targets.
+        self.target_estimators_ = target_estimators
+        self.n_outputs_ = y.shape[1]
+        self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        return self
+
+    def _set_single_target(self) -> None:
+        """Leave the state of an earlier fit on several targets."""
+        self.target_estimators_ = None
+        self.n_outputs_ = 1
+
+    def _predict_multi_target(
+        self,
+        X: XType,
+        output_type: OutputType,
+        quantiles: list[float] | None,
+    ) -> RegressionResultType:
+        """Predict every target and stack the results along a target axis.
+
+        The targets run one after another. `predict_batched` instead runs several
+        datasets in one forward pass, but has no fitted state to predict from.
+        """
+        assert self.target_estimators_ is not None
+        if output_type == "full":
+            self._raise_if_multi_target(
+                'predict(output_type="full")',
+                "Call it on `target_estimators_[k]` for target k.",
+            )
+        outs: list[Any] = [
+            est.predict(X, output_type=output_type, quantiles=quantiles)
+            for est in self.target_estimators_
+        ]
+        return _join_outputs(outs, output_type, join=partial(np.stack, axis=1))
+
+    def _raise_if_multi_target(self, method: str, instead: str) -> None:
+        if self.target_estimators_ is not None:
+            raise NotImplementedError(
+                f"`{method}` is not supported for a regressor fitted on several "
+                f"targets. {instead}"
+            )
 
     @overload
     def predict(
@@ -1818,8 +1941,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
             quantiles), or a dictionary with detailed outputs.
+
+            After a fit on several targets, arrays gain a target axis:
+            `(n_samples, n_targets)` for "mean", "median" and "mode", a list of
+            such arrays for "quantiles", and the same shapes inside the "main"
+            dict. "full" raises; call it on `target_estimators_[k]` for target k.
         """
         check_is_fitted(self)
+        if self.target_estimators_ is not None:
+            return self._predict_multi_target(X, output_type, quantiles)
 
         # TODO: Move these at some point to InferenceEngine
         check_input_shape_matches(X, estimator=self)
@@ -1893,7 +2023,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Each block overwrites the metric, so accumulate the per-block time.
             forward_seconds += speed_metrics.get("predict_model_forward_seconds", 0.0)
         speed_metrics["predict_model_forward_seconds"] = forward_seconds
-        return _concat_block_outputs(parts, output_type)
+        return _join_outputs(parts, output_type)
 
     def _truncate_above(self) -> float | None:
         """The largest training target for the "nonnegative_and_capped" readout, or
@@ -2389,6 +2519,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         if len(X_train_list) == 0:
             raise ValueError("Nothing to predict: empty dataset list.")
+        if any(has_several_targets(y) for y in y_train_list):
+            raise NotImplementedError(
+                "predict_batched takes one target per dataset. Pass each target "
+                "column as its own dataset."
+            )
 
         # `ensemble_softmax_temperature_` is calibrated per dataset on that
         # dataset's own holdout, so there is no single temperature to apply to a
@@ -2831,6 +2966,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - Raw outputs from each estimator in the ensemble.
                 - Borders used for each estimator.
         """
+        self._raise_if_multi_target(
+            "forward", "Call it on `target_estimators_[k]` for target k."
+        )
         outputs: list[torch.Tensor] = []
         borders: list[np.ndarray] = []
 
@@ -2900,10 +3038,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             np.ndarray
                 The computed embeddings for each fitted estimator.
         """
+        self._raise_if_multi_target(
+            "get_embeddings", "Call it on `target_estimators_[k]` for target k."
+        )
         return get_embeddings(self, X, data_source)
 
     def save_fit_state(self, path: Path | str) -> None:
         """Save a fitted regressor, light wrapper around save_fitted_tabpfn_model."""
+        self._raise_if_multi_target(
+            "save_fit_state", "Pickle the regressor to persist it."
+        )
         save_fitted_tabpfn_model(self, path)
 
     @classmethod
@@ -2939,6 +3083,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             during the first .fit() call.
         """
         estimator_to_device(self, device)
+        for est in self.target_estimators_ or []:
+            est.to(device)
         if hasattr(self, "znorm_space_bardist_"):
             self.znorm_space_bardist_.to(self.devices_[0])
         if hasattr(self, "raw_space_bardist_"):
@@ -3084,27 +3230,34 @@ def _decode_logits(
     return main_outputs
 
 
-def _concat_block_outputs(
-    parts: list[RegressionResultType], output_type: OutputType
+def _join_outputs(
+    parts: list[RegressionResultType],
+    output_type: OutputType,
+    *,
+    join: Callable[[list[np.ndarray]], np.ndarray] = np.concatenate,
 ) -> RegressionResultType:
-    """Join the outputs `predict` decoded for consecutive blocks of test rows."""
+    """Join `predict` outputs array by array.
+
+    `join` defaults to concatenating the outputs of consecutive blocks of test
+    rows. Stacking along a new axis joins the outputs of several targets.
+    """
     if output_type in _OUTPUT_TYPES_BASIC:
-        return np.concatenate(typing.cast("list[np.ndarray]", parts))
+        return join(typing.cast("list[np.ndarray]", parts))
     if output_type == "quantiles":
         lists = typing.cast("list[list[np.ndarray]]", parts)
-        return [np.concatenate(per_q) for per_q in zip(*lists, strict=True)]
+        return [join(list(per_q)) for per_q in zip(*lists, strict=True)]
     if output_type == "main":
         dicts = typing.cast("list[MainOutputDict]", parts)
         return MainOutputDict(
-            mean=np.concatenate([d["mean"] for d in dicts]),
-            median=np.concatenate([d["median"] for d in dicts]),
-            mode=np.concatenate([d["mode"] for d in dicts]),
+            mean=join([d["mean"] for d in dicts]),
+            median=join([d["median"] for d in dicts]),
+            mode=join([d["mode"] for d in dicts]),
             quantiles=[
-                np.concatenate(per_q)
+                join(list(per_q))
                 for per_q in zip(*(d["quantiles"] for d in dicts), strict=True)
             ],
         )
-    raise ValueError(f"Cannot join block outputs of output_type={output_type!r}.")
+    raise ValueError(f"Cannot join outputs of output_type={output_type!r}.")
 
 
 def _logits_to_output(

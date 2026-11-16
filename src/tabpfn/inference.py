@@ -607,6 +607,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         enable_torch_compile: bool = False,
+        model_caches: list[_PerDeviceModelCache] | None = None,
     ) -> None:
         """Initialize the on-demand inference engine.
 
@@ -622,10 +623,14 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             enable_torch_compile: Enable the architecture's compiled regions.
+            model_caches: Per-device copies of `models` to use instead of creating
+                new ones. Engines given the same caches share one copy of the
+                weights on every device.
         """
         self.enable_torch_compile = enable_torch_compile
         super().__init__(
-            model_caches=[_PerDeviceModelCache(model) for model in models],
+            model_caches=model_caches
+            or [_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
@@ -919,6 +924,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         inference_mode: bool,
         no_preprocessing: bool = False,
         enable_torch_compile: bool = False,
+        model_caches: list[_PerDeviceModelCache] | None = None,
     ) -> None:
         """Initialize the cache preprocessing inference engine.
 
@@ -934,6 +940,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             enable_torch_compile: Enable the architecture's compiled regions.
+            model_caches: Per-device copies of `models` to use instead of creating
+                new ones. Engines given the same caches share one copy of the
+                weights on every device.
             inference_mode: Whether to use torch.inference mode
                 (this is quicker but disables backpropagation)
             no_preprocessing: If True, skip preprocessing on test data.
@@ -941,7 +950,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         """
         self.enable_torch_compile = enable_torch_compile
         super().__init__(
-            model_caches=[_PerDeviceModelCache(model) for model in models],
+            model_caches=model_caches
+            or [_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
@@ -1155,6 +1165,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
         kv_cache_on_host: bool | None = None,
         enable_torch_compile: bool = False,
+        model_caches: list[_PerDeviceModelCache] | None = None,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -1174,6 +1185,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             enable_torch_compile: Enable the architecture's compiled regions.
+            model_caches: Per-device copies of `models` to use instead of creating
+                new ones. Engines given the same caches share one copy of the
+                weights on every device.
             autocast: Whether to use torch.autocast during cache build.
             task_type: The task type, e.g. "multiclass" or "regression". Needed
                 at build time because the cached activations are task-specific,
@@ -1199,7 +1213,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         """
         self.enable_torch_compile = enable_torch_compile
         super().__init__(
-            model_caches=[_PerDeviceModelCache(model) for model in models],
+            model_caches=model_caches
+            or [_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
