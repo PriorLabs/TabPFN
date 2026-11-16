@@ -2902,8 +2902,13 @@ def test__fit__zero_inflated_preset_on_another_zero_inflated_checkpoint__raises(
     ],
 )
 def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
-    zero_share: float, minimum: float, presets: str | None, warns: bool
+    zero_share: float,
+    minimum: float,
+    presets: str | None,
+    warns: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(regressor_module, "_zero_share_warning_issued", False)
     rng = np.random.default_rng(0)
     X = rng.normal(size=(100, 3))
     y = rng.uniform(1.0, 10.0, size=100)
@@ -2919,6 +2924,25 @@ def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
     assert len(suggestions) == int(warns)
     # The warning points at the caller of `fit`.
     assert all(w.filename == __file__ for w in suggestions)
+
+
+def test__fit__zero_inflated_target__suggests_the_preset_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated fits, such as the tuning folds of `calibrate_mean`, warn once."""
+    monkeypatch.setattr(regressor_module, "_zero_share_warning_issued", False)
+    X, y = _zero_inflated_tuning_data()
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        regressor = TabPFNRegressor(
+            tuning_config={"calibrate_mean": True}, **_tuning_regressor_kwargs()
+        )
+        regressor.fit(X, y)
+        regressor.fit(X[:500], y[:500])
+
+    suggestions = [w for w in record if 'presets="zero_inflated"' in str(w.message)]
+    assert len(suggestions) == 1
 
 
 @pytest.mark.parametrize(

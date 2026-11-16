@@ -2049,9 +2049,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
                 )
-                warnings.filterwarnings(
-                    "ignore", message=".*zero-inflated targets.*", category=UserWarning
-                )
                 tuning_regressor.fit(X_train_NtF, y_train_Nt, **fit_kwargs)
 
             if tuning_regressor.is_constant_target_:
@@ -2926,9 +2923,18 @@ def _apply_presets(
     return dataclasses.replace(config, **values)
 
 
+_zero_share_warning_issued = False
+"""Whether `fit` has suggested the "zero_inflated" preset in this process."""
+
+
 def _warn_if_zero_inflated(y: np.ndarray) -> None:
+    """Suggest the "zero_inflated" preset, once per process."""
+    global _zero_share_warning_issued  # noqa: PLW0603
+    if _zero_share_warning_issued:
+        return
     zero_share = float(np.mean(y == 0))
     if zero_share > ZERO_SHARE_WARNING_THRESHOLD and np.min(y) >= 0:
+        _zero_share_warning_issued = True
         warnings.warn(
             f"{zero_share:.0%} of the training targets are exactly 0, and none is "
             "negative. For such zero-inflated targets, consider "
