@@ -262,6 +262,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     `softmax_temperature`, i.e. the one the checkpoint declares when no temperature
     tuning is done."""
 
+    average_before_softmax_: bool
+    """The resolved `average_before_softmax`, i.e. the one the checkpoint declares
+    unless it was overridden."""
+
     ensemble_configs_: list[ClassifierEnsembleConfig]
     """The ensemble configurations used during fit.
     Stored for reuse in prompt tuning."""

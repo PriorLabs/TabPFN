@@ -555,12 +555,17 @@ def initialize_model_variables_helper(
     inference_config = inference_config.override_with_user_input_and_resolve_auto(
         user_config=user_config,
     )
-    # Only the `softmax_temperature` argument still has to be applied here; an
-    # override that came from `user_config` was applied by the call above, and the two
-    # cannot both be given.
+    # Only the `softmax_temperature` and `average_before_softmax` arguments still have
+    # to be applied here; an override that came from `user_config` was applied by the
+    # call above, and the two cannot both be given.
     if overrides["SOFTMAX_TEMPERATURE"] is not None:
         inference_config = dataclasses.replace(
             inference_config, SOFTMAX_TEMPERATURE=overrides["SOFTMAX_TEMPERATURE"]
+        )
+    if overrides["AVERAGE_BEFORE_SOFTMAX"] is not None:
+        inference_config = dataclasses.replace(
+            inference_config,
+            AVERAGE_BEFORE_SOFTMAX=overrides["AVERAGE_BEFORE_SOFTMAX"],
         )
 
     # An `n_estimators` argument is deliberately *not* written back into the config.
@@ -572,6 +577,7 @@ def initialize_model_variables_helper(
 
     calling_instance.inference_config_ = inference_config
     calling_instance.softmax_temperature_ = inference_config.SOFTMAX_TEMPERATURE
+    calling_instance.average_before_softmax_ = inference_config.AVERAGE_BEFORE_SOFTMAX
 
     return byte_size
 
@@ -641,14 +647,14 @@ def resolved_average_before_softmax(
 ) -> bool:
     """Whether `estimator` averages the estimators' logits before the softmax.
 
-    The `average_before_softmax` argument wins; left at `"auto"` the value comes
-    from the checkpoint's `InferenceConfig.AVERAGE_BEFORE_SOFTMAX`, and is `False`
-    on an estimator that was never initialized.
+    Reads the value resolved by `initialize_model_variables_helper`, falling back to
+    the unresolved argument for estimators that were never initialized or were pickled
+    before that resolution existed, where `"auto"` means averaging probabilities.
     """
-    if estimator.average_before_softmax != "auto":
-        return estimator.average_before_softmax
-    inference_config = getattr(estimator, "inference_config_", None)
-    return inference_config is not None and inference_config.AVERAGE_BEFORE_SOFTMAX
+    value = getattr(
+        estimator, "average_before_softmax_", estimator.average_before_softmax
+    )
+    return False if value == "auto" else bool(value)
 
 
 def resolved_softmax_temperature(

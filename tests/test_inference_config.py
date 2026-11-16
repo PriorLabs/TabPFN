@@ -985,6 +985,32 @@ def test__classifier_average_before_softmax__reaches_the_predictions(
 
 
 @pytest.mark.parametrize(
+    ("checkpoint_value", "argument", "expected"),
+    [(True, "auto", True), (False, True, True), (True, False, False)],
+)
+def test__classifier_average_before_softmax__is_resolved_at_fit(
+    classification_data: tuple[np.ndarray, np.ndarray],
+    checkpoint_value: bool,
+    argument: bool | str,
+    expected: bool,
+) -> None:
+    """Like the temperature, the resolved value is a fitted attribute and is what
+    the estimator's inference config, and so a saved checkpoint, carries.
+    """
+    X, y = classification_data
+    specs = _with_average_before_softmax(
+        _make_classifier_specs(), value=checkpoint_value
+    )
+    clf = TabPFNClassifier(
+        model_path=specs, device="cpu", n_estimators=2, average_before_softmax=argument
+    )
+    clf.fit(X, y)
+
+    assert clf.average_before_softmax_ is expected
+    assert clf.inference_config_.AVERAGE_BEFORE_SOFTMAX is expected
+
+
+@pytest.mark.parametrize(
     "inference_config",
     [
         {"AVERAGE_BEFORE_SOFTMAX": True},

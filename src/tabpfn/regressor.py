@@ -322,6 +322,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The resolved per-estimator `softmax_temperature`, i.e. the one the checkpoint
     declares unless it was overridden."""
 
+    average_before_softmax_: bool
+    """The resolved `average_before_softmax`, i.e. the one the checkpoint declares
+    unless it was overridden."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -1961,6 +1965,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             show_progress_bar = self.show_progress_bar
         n_estimators = 0
         accumulated_logits: torch.Tensor | None = None
+        average_before_softmax = resolved_average_before_softmax(self)
         with handle_oom_errors(
             self.devices_,
             X,
@@ -1980,7 +1985,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     to=self.znorm_space_bardist_.borders.to(output.device),
                 )
 
-                if resolved_average_before_softmax(self):
+                if average_before_softmax:
                     transformed = transformed.log()
 
                 if accumulated_logits is None:
