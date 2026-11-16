@@ -28,13 +28,13 @@ def _frame() -> pd.DataFrame:
 def test__no_one_label_per_group__adds_nothing(y: list, groups: np.ndarray) -> None:
     X = _frame()
 
-    out = GroupAggregator(append=True).fit_transform(X, y, groups, exclude=None)
+    out = GroupAggregator().fit_transform(X, y, groups, exclude=None)
 
     assert out is X
 
 
 def test__aggregates__per_group_values() -> None:
-    aggregator = GroupAggregator(append=True, max_features=100)
+    aggregator = GroupAggregator(max_features=100)
 
     out = aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)
 
@@ -56,7 +56,7 @@ def test__aggregates__per_group_values() -> None:
 def test__selection__keeps_the_largest_variance_and_breaks_ties_by_name() -> None:
     X = pd.DataFrame({"b": [0.0, 0.0, 9.0, 9.0], "a": [0.0, 0.0, 9.0, 9.0]})
 
-    aggregator = GroupAggregator(append=True, max_features=3)
+    aggregator = GroupAggregator(max_features=3)
     aggregator.fit_transform(X, [0, 0, 1, 1], np.array([0, 0, 1, 1]), exclude=None)
 
     # Every mean, min, max and last has the same variance; std has none.
@@ -64,7 +64,7 @@ def test__selection__keeps_the_largest_variance_and_breaks_ties_by_name() -> Non
 
 
 def test__exclude__is_not_aggregated() -> None:
-    aggregator = GroupAggregator(append=True)
+    aggregator = GroupAggregator()
 
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude="cat")
 
@@ -72,7 +72,7 @@ def test__exclude__is_not_aggregated() -> None:
 
 
 def test__transform__aggregates_over_the_rows_passed_in() -> None:
-    aggregator = GroupAggregator(append=True)
+    aggregator = GroupAggregator()
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)
     X_test = pd.DataFrame({"num": [10.0, 20.0, 7.0], "cat": ["c", "c", "d"]})
 
@@ -106,57 +106,47 @@ def _grouped_data() -> tuple[pd.DataFrame, np.ndarray]:
     return pd.DataFrame({"num": rng.normal(size=40), "g": groups}), groups % 2
 
 
-@pytest.mark.parametrize("append", [True, False])
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__estimator__appends_aggregates_and_keeps_the_group_feature(
-    estimator_cls: type, append: bool
-) -> None:
-    X, y = _grouped_data()
-    estimator = estimator_cls(
-        n_estimators=1,
-        group_col="g",
-        inference_config={"APPEND_GROUP_AGGREGATES": append},
-    ).fit(X, y)
-
-    names = [f.name for f in estimator.inferred_feature_schema_.features]
-    assert ("input_num_mean" in names) is append
-    assert estimator.group_feature_index_ is not None
-
-
-@pytest.mark.parametrize("append", [True, False])
 @pytest.mark.parametrize(
     ("estimator_cls", "method"),
     [(TabPFNClassifier, "predict_proba"), (TabPFNRegressor, "predict")],
 )
-def test__estimator__pools_the_predictions_of_a_group(
-    estimator_cls: type, method: str, append: bool
+def test__estimator__appends_aggregates_and_pools_the_predictions_of_a_group(
+    estimator_cls: type, method: str
 ) -> None:
     X, y = _grouped_data()
     estimator = estimator_cls(
         n_estimators=1,
         group_col="g",
-        inference_config={"APPEND_GROUP_AGGREGATES": append},
+        inference_config={"USE_GROUP_AGGREGATES": True},
     ).fit(X, y)
 
-    pred = getattr(estimator, method)(X)
+    by_group = getattr(estimator, method)(X).reshape(10, 4, -1)
 
-    by_group = pred.reshape(10, 4, -1)
+    names = [f.name for f in estimator.inferred_feature_schema_.features]
+    assert "input_num_mean" in names
+    assert estimator.group_feature_index_ is not None
     np.testing.assert_allclose(by_group, by_group[:, :1].repeat(4, axis=1), rtol=1e-5)
     assert len(np.unique(by_group[:, 0].round(5), axis=0)) > 1
 
 
+@pytest.mark.parametrize("several_labels", [True, False], ids=["labels", "flag_off"])
 @pytest.mark.parametrize(
     ("estimator_cls", "method"),
     [(TabPFNClassifier, "predict_proba"), (TabPFNRegressor, "predict")],
 )
-def test__estimator__does_not_pool_when_a_group_has_several_labels(
-    estimator_cls: type, method: str
+def test__estimator__is_unchanged_without_the_flag_or_one_label_per_group(
+    estimator_cls: type, method: str, several_labels: bool
 ) -> None:
-    X, _ = _grouped_data()
-    y = np.arange(40) % 2
-    estimator = estimator_cls(n_estimators=1, group_col="g").fit(X, y)
+    X, y = _grouped_data()
+    if several_labels:
+        y = np.arange(40) % 2
+    estimator = estimator_cls(
+        n_estimators=1,
+        group_col="g",
+        inference_config={"USE_GROUP_AGGREGATES": several_labels},
+    ).fit(X, y)
 
     pred = getattr(estimator, method)(X).reshape(10, 4, -1)
 
-    assert not estimator.group_aggregator_.one_label_per_group_
+    assert estimator.group_aggregator_.names_ == []
     assert (pred != pred[:, :1]).any()

@@ -30,16 +30,11 @@ class GroupAggregator:
     kept. The aggregates are computed from the rows passed in, at fit and at
     predict alike.
 
-    Args:
-        append: Whether to append the aggregates. Off, `fit_transform` only
-            detects one label per group.
-        max_features: How many aggregates to keep at most.
-
     Attributes:
         one_label_per_group_: Whether `y` is constant within every training
             group and some group has more than one row.
         aggregates_: The kept `(column, aggregate)` pairs. Empty unless
-            `append` and `one_label_per_group_`.
+            `one_label_per_group_`.
         names_: The labels of the appended columns.
     """
 
@@ -47,8 +42,7 @@ class GroupAggregator:
     aggregates_: list[tuple[str, str]]
     names_: list[str]
 
-    def __init__(self, *, append: bool, max_features: int = 50) -> None:
-        self.append = append
+    def __init__(self, max_features: int = 50) -> None:
         self.max_features = max_features
 
     def fit_transform(
@@ -72,7 +66,7 @@ class GroupAggregator:
         self.one_label_per_group_ = groups is not None and _one_label_per_group(
             y, groups
         )
-        if not (self.append and self.one_label_per_group_):
+        if not self.one_label_per_group_:
             return X
 
         sizes = np.bincount(groups)
