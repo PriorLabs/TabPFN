@@ -1749,13 +1749,13 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
 
 
 @pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p_target"])
-def test__predict__zero_inflated_transform__members_are_clamped_at_zero(
+def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
     transform: str,
 ) -> None:
-    """No member puts mass below raw 0.
+    """Each member's low borders decode to exactly raw 0.
 
-    The aggregated mean reads the mass at 0 at the middle of the grid bucket that
-    holds 0, so it can fall below 0 by at most half that bucket's width.
+    Only the outer border lies below 0: the border repair widens the collapsed
+    outer bucket.
     """
     X, y = _zero_inflated_regression_data()
     reg = TabPFNRegressor(
@@ -1766,14 +1766,13 @@ def test__predict__zero_inflated_transform__members_are_clamped_at_zero(
         inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
     )
     reg.fit(X[:200], y[:200])
-    full = reg.predict(X[200:], output_type="full")
+    _, _, member_borders = reg.forward(X[200:], use_inference_mode=True)
 
-    borders = full["criterion"].borders.cpu().numpy()
-    probs = full["logits"].softmax(-1).cpu().numpy()
-    below_zero = probs[:, borders[1:] <= 0].sum(-1)
-    assert below_zero.max() == 0
-    i = np.searchsorted(borders, 0.0, side="right") - 1
-    assert full["mean"].min() >= -(borders[i + 1] - borders[i]) / 2
+    for borders in member_borders:
+        zero = np.asarray(-reg.y_train_mean_ / reg.y_train_std_, borders.dtype)
+        assert borders[1] == borders[2] == zero
+        assert borders[1:].min() == zero
+        assert borders[0] < zero
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])

@@ -368,6 +368,14 @@ def test__log1p__decodes_without_a_cut() -> None:
     assert (decoded > 0).all()
 
 
+def test__log1p__decodes_negative_codes_to_zero() -> None:
+    step = Log1pTransformer().fit(np.array([[0.0], [1.0]]))
+
+    decoded = step.inverse_transform(np.array([[-3.0], [-1e-6], [0.0]])).ravel()
+
+    np.testing.assert_array_equal(decoded, [0.0, 0.0, 0.0])
+
+
 def test__log1p__rejects_negative_targets() -> None:
     with pytest.raises(ValueError, match="nonnegative"):
         Log1pTransformer().fit(np.array([[0.0], [1.0], [-0.5]]))
@@ -396,10 +404,10 @@ def test__zero_inflated_transforms__reject_targets_without_two_positive_levels(
         Log1pTransformer,
     ],
 )
-def test__transform_borders_one__clamps_zero_inflated_members_at_zero(
+def test__transform_borders_one__zero_inflated_members__decode_low_borders_to_zero(
     transform: type,
 ) -> None:
-    """The outer bucket must not reach below raw 0 after border repair."""
+    """Only the outer border, widened by the border repair, lies below raw 0."""
     y = _zero_inflated_target()
     pipeline = make_target_transform(transform())
     pipeline.fit(y.reshape(-1, 1))
@@ -416,6 +424,7 @@ def test__transform_borders_one__clamps_zero_inflated_members_at_zero(
     )
 
     zero = np.float32(-znorm_mean / znorm_std)
-    # Several buckets decode to 0, so they and the outer bucket are point masses.
-    assert (borders_t[:3] == zero).all()
-    assert borders_t.min() == zero
+    # Several buckets decode to 0, so they are point masses.
+    assert (borders_t[1:4] == zero).all()
+    assert borders_t[1:].min() == zero
+    assert borders_t[0] < zero

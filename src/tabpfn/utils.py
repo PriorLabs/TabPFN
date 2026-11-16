@@ -23,7 +23,6 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.target_transform import decodes_nonnegative
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -592,8 +591,7 @@ def transform_borders_one(
     """Transforms the borders used for the bar distribution for regression.
 
     The inverse returns raw target units; map them into the shared standardized
-    frame before applying sanity limits and aggregating predictions. A member
-    whose transform is for nonnegative targets gets no borders below raw 0.
+    frame before applying sanity limits and aggregating predictions.
 
     Args:
         borders: The borders to transform.
@@ -646,13 +644,6 @@ def transform_borders_one(
         )
 
     _repair_borders(borders_t, inplace=True)
-
-    if decodes_nonnegative(target_transform):
-        # Clamp onto raw 0 so that no mass sits at negative targets. Low borders
-        # of log1p_target decode to (-1, 0), and the repair above widens the
-        # collapsed outer bucket of the transforms that decode to exactly 0.
-        zero = np.asarray((0.0 - znorm_mean) / znorm_std).astype(borders_t.dtype)
-        borders_t = np.maximum(borders_t, zero)
 
     return logit_cancel_mask, descending_borders, borders_t
 

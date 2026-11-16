@@ -116,7 +116,10 @@ class FixedAtomTransformer(TransformerMixin, BaseEstimator):
 
 
 class Log1pTransformer(TransformerMixin, BaseEstimator):
-    """log1p(y) of the raw target for nonnegative targets, decoded with expm1(t)."""
+    """log1p(y) of the raw target for nonnegative targets.
+
+    Decodes with max(expm1(t), 0), so codes below 0 decode to exactly 0.
+    """
 
     def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> Log1pTransformer:
         """Check that the target ``X`` is nonnegative."""
@@ -129,9 +132,9 @@ class Log1pTransformer(TransformerMixin, BaseEstimator):
         return np.log1p(np.asarray(X, dtype=np.float64))
 
     def inverse_transform(self, X: np.ndarray) -> np.ndarray:
-        """Return expm1(X)."""
+        """Return max(expm1(X), 0)."""
         with np.errstate(over="ignore"):
-            return np.expm1(np.asarray(X, dtype=np.float64))
+            return np.maximum(np.expm1(np.asarray(X, dtype=np.float64)), 0.0)
 
 
 ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
@@ -141,7 +144,7 @@ ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
 }
 """Presets of `REGRESSION_Y_PREPROCESS_TRANSFORMS` for nonnegative targets.
 
-Members that use them put no mass below 0.
+They decode every code to y >= 0, and their low codes to exactly 0.
 """
 
 
@@ -164,14 +167,6 @@ def _positive_logs(X: np.ndarray, name: str) -> np.ndarray:
             "distinct positive targets."
         )
     return logs
-
-
-def decodes_nonnegative(target_transform: Transformer | Pipeline) -> bool:
-    """Whether a member's target pipeline is for nonnegative targets."""
-    return isinstance(target_transform, Pipeline) and isinstance(
-        target_transform.named_steps.get(TARGET_TRANSFORM_STEP),
-        tuple(ZERO_INFLATED_TARGET_TRANSFORMS.values()),
-    )
 
 
 def make_target_transform(transform: Transformer | Pipeline | None) -> Pipeline:
@@ -203,6 +198,5 @@ __all__ = [
     "Log1pTransformer",
     "QuantileGapTransformer",
     "StandardizeTarget",
-    "decodes_nonnegative",
     "make_target_transform",
 ]
