@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import itertools
 import os
@@ -2764,6 +2765,160 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
         regressor.fit(X, y, sample_weight=sample_weight)
 
     assert regressor.mean_calibration_scale_ == 1.0
+
+
+def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only() -> None:
+    X, y = _zero_inflated_tuning_data()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*zero-inflated targets.*")
+        regressor = TabPFNRegressor(
+            presets="zero_inflated", **_tuning_regressor_kwargs()
+        ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
+    assert config.REGRESSION_READOUT == "nonnegative_and_capped"
+    # The preset does not calibrate, and the constructor arguments stay as passed.
+    assert regressor.mean_calibration_scale_ == 1.0
+    assert regressor.get_params()["inference_config"] is None
+    assert sklearn.base.clone(regressor).presets == "zero_inflated"
+
+
+def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() -> None:
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(
+        presets="zero_inflated",
+        tuning_config={"calibrate_mean": True},
+        **_tuning_regressor_kwargs(),
+    ).fit(X, y)
+
+    assert regressor.mean_calibration_scale_ != 1.0
+    fold_regressor = regressor._get_tuning_regressor()
+    assert fold_regressor.presets == "zero_inflated"
+    assert fold_regressor.tuning_config is None
+
+
+def test__fit__presets__user_keys_win_and_later_presets_win(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        regressor_module.REGRESSION_PRESETS,
+        "uncapped",
+        {"REGRESSION_READOUT": "default", "REGRESSION_TARGET_SIGN_FLIP": True},
+    )
+    X, y = _zero_inflated_tuning_data()
+
+    regressor = TabPFNRegressor(
+        presets=["zero_inflated", "uncapped"],
+        inference_config={"REGRESSION_TARGET_SIGN_FLIP": False},
+        **_tuning_regressor_kwargs(),
+    ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
+    assert config.REGRESSION_READOUT == "default"
+    assert config.REGRESSION_TARGET_SIGN_FLIP is False
+
+
+def test__fit__unknown_preset__raises() -> None:
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(presets="zero", **_tuning_regressor_kwargs())
+
+    with pytest.raises(ValueError, match="Unknown preset 'zero'"):
+        regressor.fit(X, y)
+
+
+def _zero_inflated_checkpoint_specs(transform: str) -> ModelSpecs:
+    """A checkpoint that stores a zero-inflated target transform and readout."""
+    specs = _create_dummy_regressor_model_specs()
+    return dataclasses.replace(
+        specs,
+        inference_config=dataclasses.replace(
+            specs.inference_config,
+            REGRESSION_Y_PREPROCESS_TRANSFORMS=(transform,),
+            REGRESSION_READOUT="nonnegative_and_capped",
+        ),
+    )
+
+
+@pytest.mark.parametrize("presets", [None, "zero_inflated"])
+def test__fit__stored_fixed_atom__the_model_sees_every_zero_at_the_atom(
+    presets: str | None,
+) -> None:
+    """With the checkpoint's `log_fixed_atom`, every zero reaches the model at -4."""
+    X, y = _zero_inflated_tuning_data()
+    specs = _zero_inflated_checkpoint_specs("log_fixed_atom")
+    labels = []
+    forward = specs.model.forward
+
+    def recording_forward(x: Any, y: Any, **kwargs: Any) -> Any:
+        labels.append(y.detach().cpu().numpy().ravel())
+        return forward(x, y, **kwargs)
+
+    specs.model.forward = recording_forward  # type: ignore[method-assign]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*zero-inflated targets.*")
+        regressor = TabPFNRegressor(
+            presets=presets, **_tuning_regressor_kwargs(model_path=specs)
+        ).fit(X, y)
+    regressor.predict(X[:10])
+
+    assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
+        "log_fixed_atom",
+    )
+    assert labels
+    np.testing.assert_array_equal(np.sort(labels[0])[: (y == 0).sum()], -4.0)
+    assert (labels[0] == -4.0).sum() == (y == 0).sum()
+
+
+def test__fit__zero_inflated_preset_on_another_zero_inflated_checkpoint__raises() -> (
+    None
+):
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(
+        presets="zero_inflated",
+        **_tuning_regressor_kwargs(
+            model_path=_zero_inflated_checkpoint_specs("log_quantile_gap")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="stores the zero-inflated target transforms"):
+        regressor.fit(X, y)
+
+    # Naming the transform in `inference_config` keeps the checkpoint's map.
+    regressor.set_params(
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",)}
+    ).fit(X, y)
+    assert regressor.inference_config_.REGRESSION_READOUT == "nonnegative_and_capped"
+
+
+@pytest.mark.parametrize(
+    ("zero_share", "minimum", "presets", "warns"),
+    [
+        (0.3, 0.0, None, True),
+        (0.2, 0.0, None, False),
+        (0.3, -1.0, None, False),
+        (0.3, 0.0, "zero_inflated", False),
+    ],
+)
+def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
+    zero_share: float, minimum: float, presets: str | None, warns: bool
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(100, 3))
+    y = rng.uniform(1.0, 10.0, size=100)
+    y[: int(zero_share * 100)] = 0.0
+    y[-1] = minimum if minimum < 0 else y[-1]
+    regressor = TabPFNRegressor(presets=presets, **_tuning_regressor_kwargs())
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        regressor.fit(X, y)
+
+    suggestions = [w for w in record if 'presets="zero_inflated"' in str(w.message)]
+    assert len(suggestions) == int(warns)
+    # The warning points at the caller of `fit`.
+    assert all(w.filename == __file__ for w in suggestions)
 
 
 @pytest.mark.parametrize(

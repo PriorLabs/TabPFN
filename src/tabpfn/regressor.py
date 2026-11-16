@@ -180,6 +180,18 @@ _USABLE_OUTPUT_TYPES = _OUTPUT_TYPES + _OUTPUT_TYPES_COMPOSITE
 OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 """The type hint for the `output_type` parameter in `predict`."""
 
+REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
+    "zero_inflated": {
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
+        "REGRESSION_READOUT": "nonnegative_and_capped",
+    },
+}
+"""The named bundles of `inference_config` values that `presets` selects."""
+
+ZERO_SHARE_WARNING_THRESHOLD = 0.2
+"""`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
+share of exact zeros."""
+
 
 class MainOutputDict(TypedDict):
     """Specifies the return structure for `output_type="main"`."""
@@ -373,6 +385,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
+        presets: str | Sequence[str] | None = None,
         differentiable_input: bool = False,
         eval_metric: str | RegressorEvalMetrics | None = None,
         tuning_config: dict | RegressorTuningConfig | None = None,
@@ -664,6 +677,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   as a whole, so any field not set on it takes a class default
                   rather than the value the checkpoint declares. Deprecated.
 
+            presets:
+                Names of bundles of `inference_config` values, see
+                `REGRESSION_PRESETS`. `None` uses the checkpoint's settings as they
+                are. The settings resolve in this order, a later one winning: the
+                checkpoint, the presets in list order, then the keys of an
+                `inference_config` dict. A preset never changes `tuning_config`.
+
+                - `"zero_inflated"`: for nonnegative targets with many exact zeros,
+                  such as claim amounts or demand. It sets
+                  `REGRESSION_Y_PREPROCESS_TRANSFORMS=("log_fixed_atom",)` and
+                  `REGRESSION_READOUT="nonnegative_and_capped"`.
+
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
                 Less relevant for standard regression fine-tuning compared to
@@ -710,6 +735,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.kv_cache_precision = kv_cache_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.presets = presets
         self.differentiable_input = differentiable_input
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
@@ -888,7 +914,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             The determined byte_size.
         """
-        return initialize_model_variables_helper(self, self.estimator_type)
+        byte_size = initialize_model_variables_helper(self, self.estimator_type)
+        if self.presets is not None:
+            self.inference_config_ = _apply_presets(
+                self.inference_config_, self.presets, self.inference_config
+            )
+        return byte_size
 
     def _rebuild_raw_space_bardist(self) -> None:
         """Rebuild ``raw_space_bardist_`` from current ``y_train_mean_``/std_.
@@ -1605,6 +1636,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # No need to create an inference engine for a constant prediction
             return self
 
+        transforms = self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
+        if not any(t in ZERO_INFLATED_TARGET_TRANSFORMS for t in transforms):
+            _warn_if_zero_inflated(y)
+
         # Each tuning fold must derive its target statistics from its own raw targets.
         self._maybe_tune_on_holdout(
             X=X, y=y, sample_weight=sample_weight, label_reliability=label_reliability
@@ -2013,6 +2048,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     "ignore",
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
+                )
+                warnings.filterwarnings(
+                    "ignore", message=".*zero-inflated targets.*", category=UserWarning
                 )
                 tuning_regressor.fit(X_train_NtF, y_train_Nt, **fit_kwargs)
 
@@ -2851,6 +2889,55 @@ _HoldoutFold = tuple[
 """`(logits, raw_space_bardist, y_holdout, log_weights, row_weights,
 truncate_above)` of one tuning fold, see
 `TabPFNRegressor._compute_holdout_validation_data`."""
+
+
+def _apply_presets(
+    config: InferenceConfig,
+    presets: str | Sequence[str],
+    user_config: dict | InferenceConfig | None,
+) -> InferenceConfig:
+    """`config` with the presets' values, except the keys `user_config` names."""
+    if not isinstance(user_config, dict | None):
+        raise TabPFNValidationError(
+            "`presets` needs `inference_config` as a dict or None."
+        )
+    values: dict[str, Any] = {}
+    for name in [presets] if isinstance(presets, str) else presets:
+        if name not in REGRESSION_PRESETS:
+            raise TabPFNValidationError(
+                f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
+            )
+        values.update(REGRESSION_PRESETS[name])
+    values = {k: v for k, v in values.items() if k not in (user_config or {})}
+    key = "REGRESSION_Y_PREPROCESS_TRANSFORMS"
+    if key in values:
+        stored = {
+            t
+            for t in getattr(config, key)
+            if t in ZERO_INFLATED_TARGET_TRANSFORMS and t not in values[key]
+        }
+        if stored:
+            raise TabPFNValidationError(
+                f"This checkpoint stores the zero-inflated target transforms "
+                f"{sorted(stored)}, which the presets would replace with "
+                f"{values[key]}. To keep them, set `presets=None`, or set "
+                f"{key} in `inference_config`."
+            )
+    return dataclasses.replace(config, **values)
+
+
+def _warn_if_zero_inflated(y: np.ndarray) -> None:
+    zero_share = float(np.mean(y == 0))
+    if zero_share > ZERO_SHARE_WARNING_THRESHOLD and np.min(y) >= 0:
+        warnings.warn(
+            f"{zero_share:.0%} of the training targets are exactly 0, and none is "
+            "negative. For such zero-inflated targets, consider "
+            '`TabPFNRegressor(presets="zero_inflated")`, which models the zeros as a '
+            "separate point mass.",
+            UserWarning,
+            # Past fit and the frame of its `config_context` decorator.
+            stacklevel=4,
+        )
 
 
 def _place_raw_space_bardist(
