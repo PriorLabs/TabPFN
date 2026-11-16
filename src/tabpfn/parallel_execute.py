@@ -20,11 +20,11 @@ _LAPACK_PREWARMED_DEVICES: set[torch.device] = set()
 
 
 def _prewarm_lapack_lazy_init(devices: Sequence[torch.device]) -> None:
-    """Touch ``torch.linalg.qr`` once per cuda device on the main thread.
+    """Touch ``torch.linalg`` once per cuda device on the main thread.
 
     PyTorch's LAPACK lazy wrapper is not thread-safe on first use: when
-    several threads first-call ``torch.linalg.qr`` (transitively, via
-    ``torch.svd_lowrank`` in the GPU SVD preprocessing step) at the same
+    several threads first-call a ``torch.linalg`` solver (``torch.linalg.eigh``
+    in the GPU SVD preprocessing step) at the same
     time, PyTorch raises ``RuntimeError: lazy wrapper should be called at
     most once`` and the process aborts.  We avoid the race by warming the
     binding on each cuda device on the main thread before the thread pool
@@ -37,6 +37,7 @@ def _prewarm_lapack_lazy_init(devices: Sequence[torch.device]) -> None:
                 continue
             with torch.cuda.device(device):
                 torch.linalg.qr(torch.empty(2, 2, device=device).normal_())
+                torch.linalg.eigh(torch.eye(2, dtype=torch.float64, device=device))
             _LAPACK_PREWARMED_DEVICES.add(device)
 
 
@@ -73,9 +74,9 @@ def parallel_execute(
     Args:
         devices: The devices to use for evaluation.
         functions: The functions to evaluate following the `ParallelFunction` protocol.
-        prewarm_lapack: If True, pre-initialise ``torch.linalg.qr`` on each cuda
+        prewarm_lapack: If True, pre-initialise ``torch.linalg`` on each cuda
             device on the main thread before the thread pool spawns.  Required when
-            the parallel functions use ``torch.svd_lowrank`` (or any other path
+            the parallel functions use ``torch.linalg.eigh`` (or any other path
             that hits PyTorch's racy LAPACK lazy wrapper).
 
     Returns:

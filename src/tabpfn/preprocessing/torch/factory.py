@@ -58,7 +58,7 @@ def create_gpu_preprocessing_pipeline(  # noqa: C901
         feature_schema: Feature schema from the CPU preprocessing output.
             Used to read ``scheduled_gpu_transform`` column annotations.
         n_train_samples: Number of training samples (after subsampling).
-        random_state: Random state for SVD, shuffle, and random sign flips.
+        random_state: Random state for shuffle and random sign flips.
     """
     steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]] = []
     pconfig = config.preprocess_config
@@ -143,7 +143,6 @@ def create_gpu_preprocessing_pipeline(  # noqa: C901
                 (
                     TorchAddSVDFeaturesStep(
                         global_transformer_name=pconfig.global_transformer_name,
-                        random_state=random_state,
                     ),
                     None,
                 )

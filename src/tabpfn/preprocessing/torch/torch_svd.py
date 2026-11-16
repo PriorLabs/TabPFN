@@ -8,16 +8,11 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from tabpfn.utils import infer_random_state
-
 if TYPE_CHECKING:
-    import numpy as np
+    from collections.abc import Iterable
 
 
-def _svd_flip_stable(
-    u: torch.Tensor,
-    v: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+def _svd_flip_stable(v: torch.Tensor) -> torch.Tensor:
     """Sign correction for deterministic SVD output.
 
     Flips the sign of each component so the element with the largest absolute
@@ -25,11 +20,11 @@ def _svd_flip_stable(
     ``svd_flip(u_based_decision=False)``), with leftmost-column tie-breaking.
 
     Note:
-       This resolves sign ambiguity *within* a given SVD decomposition, but
-       cannot fix cross-platform differences where ``torch.linalg.svd`` itself
-       returns different singular vectors due to different LAPACK backends
-       (MKL on Linux, Accelerate on macOS).  For fully deterministic SVD
-       across platforms, use sklearn's ``TruncatedSVD(algorithm="arpack")``.
+       This resolves sign ambiguity *within* a given decomposition, but cannot
+       fix cross-platform differences where the eigensolver itself returns
+       different vectors due to different LAPACK backends (MKL on Linux,
+       Accelerate on macOS).  For fully deterministic SVD across platforms, use
+       sklearn's ``TruncatedSVD(algorithm="arpack")``.
     """
     abs_v = torch.abs(v)
     max_vals = abs_v.max(dim=1, keepdim=True).values  # [n_components, 1]
@@ -40,46 +35,65 @@ def _svd_flip_stable(
     signs = torch.sign(v[torch.arange(v.shape[0], device=v.device), max_col_indices])
     # Avoid flipping by zero (if an entire row is zero, sign returns 0)
     signs = torch.where(signs == 0, torch.ones_like(signs), signs)
-    u = u * signs
-    v = v * signs.unsqueeze(1)
-    return u, v
+    return v * signs.unsqueeze(1)
+
+
+_GRAM_SPAN_ROWS = 4096
+"""How many rows one float32 matrix product covers before it joins the float64 total.
+
+The scaled values are not centred, so float32 rounding errors add up in the same
+direction over a long sum. Shorter spans keep that error small, at the cost of more
+float64 additions.
+"""
+
+
+def _sum_dtype(device: torch.device) -> torch.dtype:
+    """The dtype sums are accumulated in: float64, except on MPS, which has none."""
+    return torch.float32 if device.type == "mps" else torch.float64
+
+
+def add_to_gram(gram: torch.Tensor | None, rows: torch.Tensor) -> torch.Tensor:
+    """Returns `gram + rows.T @ rows`.
+
+    `rows` has shape `[n, F]` and holds no NaN. The products are computed in the
+    dtype of `rows`, `_GRAM_SPAN_ROWS` rows at a time, and summed in `_sum_dtype`.
+    The spans are fixed, so the result does not depend on how the rows are split
+    across calls, as long as each call starts at a multiple of `_GRAM_SPAN_ROWS`.
+    """
+    for start in range(0, rows.shape[0], _GRAM_SPAN_ROWS):
+        span = rows[start : start + _GRAM_SPAN_ROWS]
+        part = (span.T @ span).to(_sum_dtype(span.device))
+        gram = part if gram is None else gram.add_(part)
+    if gram is None:
+        width = rows.shape[1]
+        return torch.zeros(
+            width, width, dtype=_sum_dtype(rows.device), device=rows.device
+        )
+    return gram
 
 
 class TorchTruncatedSVD:
     """Truncated SVD for PyTorch tensors.
 
     Similar to sklearn's TruncatedSVD but without any implicit state.
-    The state is returned explicitly. Uses randomized SVD
-    (``torch.svd_lowrank``) for large matrices and exact
-    ``torch.linalg.svd`` for small ones.
+    The state is returned explicitly. The fit is exact: it takes the top
+    eigenvectors of `X^T X`. That matrix can be built a block of rows at a time with
+    `add_to_gram`, so the fit's memory does not grow with the number of rows.
 
     Note: Unlike sklearn's TruncatedSVD, this does not center the data.
     If centering is needed, apply it before calling fit.
     """
 
-    def __init__(
-        self,
-        n_components: int,
-        random_state: int | np.random.Generator | None = None,
-    ) -> None:
+    def __init__(self, n_components: int) -> None:
         """Initialize the truncated SVD.
 
         Args:
             n_components: Number of components to keep.
-            random_state: Seeds the random projection drawn by the randomized
-                path. As in sklearn's ``TruncatedSVD``, ``None`` means a fresh
-                projection on every fit; the exact path ignores it.
         """
         self.n_components = n_components
-        self.random_state = random_state
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the truncated SVD on the training data.
-
-        Uses randomized SVD (``torch.svd_lowrank``) when ``n_components`` is
-        much smaller than the matrix dimensions.  This reduces memory from
-        O(N * min(N, F)) to O(N * n_components) — a large saving when
-        n_components << min(N, F) (e.g. 128 vs 500).
 
         Args:
             x: Input tensor with shape [n_samples, n_features].
@@ -90,82 +104,55 @@ class TorchTruncatedSVD:
                     [n_components, n_features]
                 - "singular_values": The singular values [n_components]
         """
-        orig_device = x.device
-
-        if x.device.type == "mps":
-            # SVD operators ('aten::linalg_svd', 'aten::linalg_qr') are not currently
-            # supported on the MPS backend, so we run on the CPU instead.
-            x = x.cpu()
-
+        compute_dtype = x.dtype if x.dtype == torch.float64 else torch.float32
+        x_filled = torch.nan_to_num(x.to(compute_dtype), nan=0.0)
         n_samples, n_features = x.shape
-
-        # Handle NaN values by replacing with 0 for SVD computation
-        nan_mask = torch.isnan(x)
-        x_filled = torch.where(nan_mask, torch.zeros_like(x), x)
-
-        # Clamp n_components to valid range
-        n_components = min(self.n_components, n_samples, n_features)
-        n_components = max(1, n_components)
-
-        # torch SVD ops require float32 or float64; cast up if needed
-        compute_dtype = x_filled.dtype
-        if compute_dtype not in (torch.float32, torch.float64):
-            compute_dtype = torch.float32
-            x_filled = x_filled.to(compute_dtype)
-
-        # Use randomized SVD only when it is both (a) accurate — the matrix
-        # is large enough that the top components are well-separated — and
-        # (b) faster — the projected rank q is well below the matrix rank.
-        # Benchmark shows svd_lowrank becomes favorable once
-        # min(N, F) >= 2*q; below that, the random-projection overhead
-        # exceeds the savings from avoiding the full decomposition.
-        oversampling = 10  # matches sklearn's TruncatedSVD n_oversamples default
-        q = n_components + oversampling
-        use_lowrank = (
-            n_samples * n_features > 1_000_000 and min(n_samples, n_features) >= 2 * q
-        )
-
-        if use_lowrank:
-            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T. It draws its
-            # projection from the default generator of x_filled.device and takes no
-            # generator argument, so the only way to control it is to seed that
-            # generator. Do so inside a fork, which restores the caller's state on
-            # exit: seeding is a side effect on process-global state that callers own.
-            # Fork only the tensor's own device -- torch.manual_seed would also reseed
-            # CUDA/MPS/XPU, which a CPU-only fork_rng does not restore, and forking
-            # every device would initialise a context on each.
-            static_seed, _ = infer_random_state(self.random_state)
-            device = x_filled.device
-            fork_devices = [] if device.type == "cpu" else [device]
-            with torch.random.fork_rng(devices=fork_devices, device_type=device.type):
-                if device.type == "cpu":
-                    torch.default_generator.manual_seed(static_seed)
-                else:
-                    # Seeding is per *current* device, so make it the right one.
-                    with getattr(torch, device.type).device(device):
-                        getattr(torch, device.type).manual_seed(static_seed)
-                u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
-            # Truncate oversampling dimensions
-            u = u[:, :n_components]
-            s = s[:n_components]
-            vh = v[:, :n_components].T  # V [n_features, q] → V^T [n_comp, n_features]
-        else:
-            u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
-            u = u[:, :n_components]
-            s = s[:n_components]
-            vh = vh[:n_components, :]
-
-        # Apply sign flip for deterministic output.
-        # We use the same convention as sklearn (u_based_decision=False:
-        # flip based on V rows) but use a tie-breaking rule that is stable
-        # across different SVD algorithms / platforms: for each row of V,
-        # pick the sign so that the element with the largest absolute value
-        # is positive; break ties by choosing the leftmost column.
-        u, vh = _svd_flip_stable(u, vh)
-
+        if n_samples >= n_features:
+            return self.fit_gram(
+                add_to_gram(None, x_filled), n_samples=n_samples, dtype=compute_dtype
+            )
+        # With fewer rows than columns, use the smaller matrix `X X^T`. Its
+        # eigenvectors U give the components as `U^T X / s`.
+        row_gram = add_to_gram(None, x_filled.T)
+        n_components = max(1, min(self.n_components, n_samples, n_features))
+        if row_gram.device.type == "mps":
+            # MPS has no float64 or eigh.
+            row_gram = row_gram.cpu()
+        eigenvalues, eigenvectors = torch.linalg.eigh(row_gram.to(torch.float64))
+        top = torch.arange(n_samples - 1, n_samples - 1 - n_components, -1)
+        singular_values = eigenvalues[top].clamp(min=0).sqrt()
+        singular_values = singular_values.to(device=x.device, dtype=compute_dtype)
+        u = eigenvectors[:, top].to(device=x.device, dtype=compute_dtype)
+        # A zero singular value has no direction in X, so its component stays zero.
+        scale = torch.where(singular_values > 0, 1 / singular_values, 0.0)
+        components = (u.T @ x_filled) * scale.unsqueeze(1)
         return {
-            "components": vh.to(orig_device),
-            "singular_values": s.to(orig_device),
+            "components": _svd_flip_stable(components),
+            "singular_values": singular_values,
+        }
+
+    def fit_gram(
+        self, gram: torch.Tensor, *, n_samples: int, dtype: torch.dtype
+    ) -> dict[str, torch.Tensor]:
+        """Fits from `gram`, the matrix `X^T X` of `n_samples` training rows.
+
+        Returns the same cache as `fit`, with the components in `dtype`.
+        """
+        n_features = gram.shape[0]
+        n_components = max(1, min(self.n_components, n_samples, n_features))
+        orig_device = gram.device
+        if gram.device.type == "mps":
+            # MPS has no float64 or eigh.
+            gram = gram.cpu()
+        eigenvalues, eigenvectors = torch.linalg.eigh(gram.to(torch.float64))
+        # eigh sorts ascending; the top components are the last columns.
+        top = torch.arange(n_features - 1, n_features - 1 - n_components, -1)
+        top = top.to(gram.device)
+        singular_values = eigenvalues[top].clamp(min=0).sqrt()
+        components = _svd_flip_stable(eigenvectors[:, top].T)
+        return {
+            "components": components.to(device=orig_device, dtype=dtype),
+            "singular_values": singular_values.to(device=orig_device, dtype=dtype),
         }
 
     def transform(
@@ -263,44 +250,52 @@ class TorchSafeStandardScaler:
         Returns:
             Cache dictionary with the std for the transform step.
         """
-        # Ensure float32+ for numerical stability (float16 has poor precision
-        # for statistics and is not supported by some ops on all devices).
-        if x.dtype not in (torch.float32, torch.float64):
-            x = x.to(torch.float32)
+        return self.fit_blocks([x])
 
-        # Replace inf with nan for std computation
-        x_safe = torch.where(
-            torch.isinf(x),
-            torch.tensor(float("nan"), device=x.device, dtype=x.dtype),
-            x,
-        )
+    def fit_blocks(self, blocks: Iterable[torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Same as `fit` on all the rows of `blocks`, reading one block at a time.
 
-        # Compute column means ignoring NaN (matching SimpleImputer(strategy="mean"))
-        nan_mask = torch.isnan(x_safe)
-        num_valid = (~nan_mask).float().sum(dim=0)
-        x_filled = torch.where(nan_mask, torch.zeros_like(x_safe), x_safe)
-        mean = x_filled.sum(dim=0) / num_valid.clamp(min=1.0)
-
-        # Compute population std (ddof=0) matching the CPU path where NaN
-        # values are imputed with column means BEFORE StandardScaler fits.
-        # Imputed values contribute 0 variance, so we sum squared deviations
-        # of valid values only but divide by N (total samples, not just valid).
-        n_samples = max(x_safe.shape[0], 1)
-        sq_diff = torch.where(
-            nan_mask,
-            torch.zeros_like(x_safe),
-            (x_safe - mean.unsqueeze(0)) ** 2,
-        ).sum(dim=0)
-        std = torch.sqrt(sq_diff / n_samples)
-
-        # Handle constant features (std=0) by setting std to 1
-        std = torch.where(std == 0, torch.ones_like(std), std)
-        std = torch.where(torch.isnan(std), torch.ones_like(std), std)
-
-        if x.shape[0] == 1:
+        Each column's mean is taken over its finite values. The sum of squared
+        deviations is divided by the number of all rows, as if missing values were
+        first replaced by the mean. Block statistics are merged in float64 (Chan et
+        al.), so a different split of the rows changes the result only by rounding.
+        """
+        rows = 0
+        count = mean = m2 = None
+        out_dtype = torch.float32
+        for block in blocks:
+            if block.dtype == torch.float64:
+                out_dtype = torch.float64
+            x = block.to(out_dtype)
+            sum_dtype = _sum_dtype(x.device)
+            valid = torch.isfinite(x)
+            x_valid = torch.where(valid, x, 0.0)
+            block_count = valid.sum(dim=0, dtype=sum_dtype)
+            block_mean = x_valid.sum(dim=0, dtype=sum_dtype) / block_count.clamp(
+                min=1.0
+            )
+            deviation = torch.where(valid, x - block_mean.to(x.dtype), 0.0)
+            block_m2 = (deviation * deviation).sum(dim=0, dtype=sum_dtype)
+            rows += x.shape[0]
+            if count is None:
+                count, mean, m2 = block_count, block_mean, block_m2
+                continue
+            total = count + block_count
+            delta = block_mean - mean
+            weight = torch.where(
+                total > 0, block_count / total.clamp(min=1.0), torch.zeros_like(total)
+            )
+            mean = mean + delta * weight
+            m2 = m2 + block_m2 + delta * delta * count * weight
+            count = total
+        assert mean is not None
+        assert m2 is not None
+        std = torch.sqrt(m2 / max(rows, 1))
+        # Constant or all-missing columns are not scaled.
+        std = torch.where((std == 0) | torch.isnan(std), torch.ones_like(std), std)
+        if rows == 1:
             std = torch.ones_like(std)
-
-        return {"std": std, "mean": mean}
+        return {"std": std.to(out_dtype), "mean": mean.to(out_dtype)}
 
     def transform(
         self,
