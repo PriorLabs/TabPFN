@@ -1785,7 +1785,9 @@ def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
         assert borders[0] < zero
 
 
-@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p_target"])
+@pytest.mark.parametrize(
+    "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
+)
 def test__predict__ensemble_truncated__outputs_are_nonnegative(
     transform: str,
 ) -> None:
