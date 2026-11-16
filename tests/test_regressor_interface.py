@@ -1872,6 +1872,26 @@ def test__logits_to_output__truncated__drops_the_mass_above_truncate_above() -> 
     assert high_untruncated[0] > 3.0
 
 
+@pytest.mark.parametrize(("truncate_above", "expected"), [(2.5, 3.0), (3.5, np.inf)])
+def test__logits_to_output__truncated__quantile_one_is_the_last_kept_border(
+    truncate_above: float, expected: float
+) -> None:
+    """Capped below the tail bucket, the quantile 1 is the last kept border."""
+    probs = torch.full((1, 6), 1 / 6, dtype=torch.float64)
+
+    (top,) = regressor_module._logits_to_output(
+        output_type="quantiles",
+        logits=probs.log(),
+        znorm_space_bardist=_SMALL_GRID,
+        y_mean=0.0,
+        y_std=1.0,
+        quantiles=[1.0],
+        truncate_above=truncate_above,
+    )
+
+    np.testing.assert_array_equal(top, [expected])
+
+
 def test__predict__nonnegative_and_capped__reads_every_output_truncated() -> None:
     X, y = _zero_inflated_regression_data()
     config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)}

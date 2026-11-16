@@ -2855,16 +2855,22 @@ def _logits_to_output(
     if truncate_above is not None:
         raw_borders = to_raw(criterion.borders)
         zero_bucket = int(np.searchsorted(raw_borders, 0.0, side="right")) - 1
-        above = torch.as_tensor(
-            raw_borders[:-1] >= truncate_above, device=logits.device
+        above = raw_borders[:-1] >= truncate_above
+        logits = logits.masked_fill(
+            torch.as_tensor(above, device=logits.device), float("-inf")
         )
-        logits = logits.masked_fill(above, float("-inf"))
+        # The kept buckets end where the first dropped one starts. With none
+        # dropped, the last bucket keeps its unbounded half-normal tail.
+        upper = raw_borders[above.argmax()] if above.any() else np.inf
 
     def decode(output: torch.Tensor) -> np.ndarray:
         raw = to_raw(output)
         if zero_bucket is None:
             return raw
-        return np.where(raw <= raw_borders[zero_bucket + 1], 0.0, raw)
+        # `icdf` returns inf for the quantile 1 without reading the logits.
+        return np.minimum(
+            np.where(raw <= raw_borders[zero_bucket + 1], 0.0, raw), upper
+        )
 
     if output_type == "quantiles":
         return [decode(criterion.icdf(logits, q)) for q in quantiles]
