@@ -8,10 +8,10 @@ import dataclasses
 import time
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import copy, deepcopy
 from functools import partial
-from inspect import signature
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
@@ -83,11 +83,16 @@ class _TimedIterator(Iterator[_T]):
         return self
 
 
+def _forward_parameters(model: torch.nn.Module) -> Mapping[str, Parameter]:
+    """The parameters of `model.forward`, by name."""
+    return signature(model.forward).parameters
+
+
 def _model_forward_kwargs(
     model: Architecture, task_type: str, estimator_ids: list[int]
 ) -> dict[str, str | list[int]]:
     """Return the metadata arguments accepted by the architecture."""
-    parameters = signature(model.forward).parameters
+    parameters = _forward_parameters(model)
     kwargs: dict[str, str | list[int]] = {}
     if "task_type" in parameters:
         kwargs["task_type"] = task_type
@@ -1623,13 +1628,22 @@ def _call_model_on_members(  # noqa: PLR0913
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
     for member, X_test in zip(members, X_tests, strict=True):
         X_full, y_train = _prepare_model_inputs(
-            device, force_inference_dtype, member.X_train, X_test, member.y_train
+            device,
+            force_inference_dtype,
+            member.X_train,
+            X_test,
+            member.y_train,
+            x_device=_model_input_device(
+                model, device, member.X_train, X_test, force_inference_dtype
+            ),
         )
         X_full, feature_schema = _maybe_run_gpu_preprocessing(
             X_full,
             gpu_preprocessor=member.gpu_preprocessor,
             num_train_rows=member.X_train.shape[0],
             feature_schema=member.feature_schema,
+            consume_input=True,
+            compute_device=device,
         )
         prepared.append(
             (X_full, y_train, feature_schema.indices_for(FeatureModality.CATEGORICAL))
@@ -1652,16 +1666,18 @@ def _call_model_on_members(  # noqa: PLR0913
         kwargs = _model_forward_kwargs(
             model, task_type, [members[i].config.estimator_id for i in positions]
         )
+        x, x_kwargs = _model_input_arguments(X, device)
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(inference_mode),
         ):
             output = model(
-                X,
+                x,
                 y,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=[prepared[i][2] for i in positions],
                 performance_options=performance_options,
+                **x_kwargs,
                 **kwargs,
                 **_row_weight_kwargs(
                     [members[i] for i in positions], sample_weight_mode, X
@@ -1677,13 +1693,72 @@ def _prepare_model_inputs(
     X_train: torch.Tensor | np.ndarray,
     X_test: torch.Tensor | np.ndarray,
     y_train: torch.Tensor | np.ndarray,
+    *,
+    x_device: torch.device | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """The train and test rows as one `(rows, 1, columns)` tensor, and the labels.
+
+    Written into one tensor on `x_device`, by default `device`, a block of rows at a
+    time, so that device holds the table once. The labels go to `device`.
+    """
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
-    X_train = torch.as_tensor(X_train, dtype=dtype, device=device)
-    X_test = torch.as_tensor(X_test, dtype=dtype, device=device)
-    X_full = torch.cat([X_train, X_test], dim=0).unsqueeze(1)
+    num_train, num_test = len(X_train), len(X_test)
+    num_columns = X_train.shape[1] if num_train else X_test.shape[1]
+    X_full = torch.empty(
+        (num_train + num_test, 1, num_columns),
+        dtype=dtype,
+        device=device if x_device is None else x_device,
+    )
+    rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
+    for offset, part in ((0, X_train), (num_train, X_test)):
+        for start in range(0, len(part), rows):
+            block = torch.as_tensor(part[start : start + rows])
+            X_full[offset + start : offset + start + len(block), 0].copy_(block)
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
+
+
+_MODEL_INPUT_BLOCK_BYTES = 1 << 28
+"""Bytes of rows `_prepare_model_inputs` converts and copies at a time."""
+
+HOST_MODEL_INPUT_MIN_BYTES = 16 << 30
+"""Model inputs at least this large stay in host memory, for a model that reads its
+input from there: one whose `forward` takes an `x_host` argument."""
+
+
+def _model_input_device(
+    model: torch.nn.Module,
+    device: torch.device,
+    X_train: torch.Tensor | np.ndarray,
+    X_test: torch.Tensor | np.ndarray,
+    force_inference_dtype: torch.dtype | None,
+) -> torch.device:
+    """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
+
+    In host memory when the model's `forward` takes an `x_host` argument and the input
+    takes `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`.
+    """
+    if "x_host" not in _forward_parameters(model) or device.type == "cpu":
+        return device
+    dtype = force_inference_dtype if force_inference_dtype else torch.float32
+    num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
+    nbytes = (len(X_train) + len(X_test)) * num_columns * dtype.itemsize
+    if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:
+        return torch.device("cpu")
+    return device
+
+
+def _model_input_arguments(
+    X: torch.Tensor, device: torch.device
+) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
+    """The model's `x` and extra keyword arguments that pass it the input `X`.
+
+    An input that `_model_input_device` kept in host memory for a model on another
+    device goes as `x_host`, with `x` None.
+    """
+    if X.device.type == "cpu" and device.type != "cpu":
+        return None, {"x_host": X}
+    return X, {}
 
 
 def _move_and_squeeze_output(
@@ -1701,6 +1776,8 @@ def _maybe_run_gpu_preprocessing(
     *,
     num_train_rows: int | None = None,
     use_fitted_cache: bool = False,
+    consume_input: bool = False,
+    compute_device: torch.device | None = None,
 ) -> tuple[torch.Tensor, FeatureSchema]:
     """Run GPU preprocessing if a pipeline is provided.
 
@@ -1710,6 +1787,9 @@ def _maybe_run_gpu_preprocessing(
         feature_schema: Feature schema from CPU preprocessing.
         num_train_rows: Number of training rows for fit.
         use_fitted_cache: Reuse previously fitted state.
+        consume_input: Whether the pipeline may write into `X`, which the caller
+            no longer reads.
+        compute_device: The device the pipeline computes on when `X` is elsewhere.
 
     Returns:
         Tuple of (transformed tensor, updated feature schema).
@@ -1722,6 +1802,8 @@ def _maybe_run_gpu_preprocessing(
         feature_schema=feature_schema,
         num_train_rows=num_train_rows,
         use_fitted_cache=use_fitted_cache,
+        consume_input=consume_input,
+        compute_device=compute_device,
     )
     return result.x, result.feature_schema
 

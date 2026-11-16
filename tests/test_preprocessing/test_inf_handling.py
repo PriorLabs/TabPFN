@@ -30,6 +30,7 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
+    pipeline_interface,
 )
 from tabpfn.preprocessing.clean import (
     PANDAS_BELOW_3,
@@ -51,6 +52,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     ReshapeFeatureDistributionsStep,
 )
+from tabpfn.preprocessing.torch import pipeline_interface as torch_pipeline_interface
 from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 
@@ -1083,3 +1085,66 @@ def test__classifier_fit_on_cuda__rejects_infinities_without_passthrough() -> No
     )
     with pytest.raises(TabPFNValidationError):
         model.fit(X, y)
+
+
+def _whole_table_inf_masks(X: Any, schema: FeatureSchema) -> dict[str, Any]:
+    """`_extract_inf_masks` from one table-sized mask, as the blocks replace it."""
+    xp = torch if isinstance(X, torch.Tensor) else np
+    inf_bool = xp.isinf(X)
+    masks = {}
+    for idx, feat in enumerate(schema.features):
+        col_inf = inf_bool[..., idx]
+        if bool(col_inf.any()):
+            masks[feat.name] = xp.where(col_inf, X[..., idx], 0)
+    X[inf_bool] = float("nan")
+    return masks
+
+
+def _table_with_infinities(shape: tuple[int, ...]) -> np.ndarray:
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal(shape)
+    X[..., 1][::3] = np.inf
+    X[..., 4][::5] = -np.inf
+    X[..., 6][0] = np.nan
+    X[..., 8][-1] = np.inf
+    return X
+
+
+@pytest.mark.parametrize("as_tensor", [False, True])
+def test__extract_inf_masks__row_blocks_on_threads__match_the_whole_table(
+    as_tensor: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    X = _table_with_infinities((40, 9))
+    expected_X = torch.from_numpy(X.copy()) if as_tensor else X.copy()
+    actual_X = torch.from_numpy(X.copy()) if as_tensor else X.copy()
+    schema = _numerical_schema(num_features=9)
+    expected = _whole_table_inf_masks(expected_X, schema)
+    monkeypatch.setattr(pipeline_interface, "ROW_SCAN_BLOCK_BYTES", 3 * 9 * 8)
+    monkeypatch.setattr(pipeline_interface, "ROW_SCAN_MAX_THREADS", 4)
+
+    actual = _extract_inf_masks(actual_X, schema)
+
+    assert list(actual) == list(expected)
+    for name in expected:
+        np.testing.assert_array_equal(np.asarray(actual[name]), expected[name])
+    np.testing.assert_array_equal(np.asarray(actual_X), np.asarray(expected_X))
+
+
+@pytest.mark.parametrize("only_in_last_block", [False, True])
+def test__torch_extract_inf_masks__row_blocks__match_the_whole_table(
+    *, only_in_last_block: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    X = _table_with_infinities((20, 2, 9))
+    if only_in_last_block:
+        X[:-1] = np.where(np.isinf(X[:-1]), 0.0, X[:-1])
+    expected_X, actual_X = torch.from_numpy(X.copy()), torch.from_numpy(X.copy())
+    schema = _numerical_schema(num_features=9)
+    expected = _whole_table_inf_masks(expected_X, schema)
+    monkeypatch.setattr(torch_pipeline_interface, "_INF_SCAN_BLOCK_BYTES", 2 * 40 * 8)
+
+    actual = torch_pipeline_interface._extract_inf_masks(actual_X, schema)
+
+    assert list(actual) == list(expected)
+    for name in expected:
+        torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
+    torch.testing.assert_close(actual_X, expected_X, rtol=0, atol=0, equal_nan=True)

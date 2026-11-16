@@ -4,15 +4,65 @@
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
+import os
 import time
 from abc import abstractmethod
-from typing import TypeAlias
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, TypeAlias
 
 import numpy as np
 import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+
+_STEP_OWNS_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "tabpfn_step_owns_input", default=False
+)
+
+PERMUTE_BLOCK_BYTES = 1 << 26
+"""Bytes of rows `permute_columns_in_place` moves at a time."""
+
+GATHER_BLOCK_BYTES = 1 << 26
+"""Bytes of columns `gather_columns` reads at a time."""
+
+
+def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray:
+    """`X[:, indices].astype(dtype, order="C")`, with no full-size intermediate.
+
+    The columns are gathered a block at a time straight into the C-ordered result.
+    """
+    out = np.empty((X.shape[0], len(indices)), dtype=dtype, order="C")
+    width = max(1, GATHER_BLOCK_BYTES // max(1, X.shape[0] * X.itemsize))
+    for start in range(0, len(indices), width):
+        out[:, start : start + width] = X[:, indices[start : start + width]]
+    return out
+
+
+def step_owns_input() -> bool:
+    """Whether the running step may write into the array it was handed.
+
+    True only inside `PreprocessingPipeline`, which hands each step a working copy
+    nobody else holds.
+    """
+    return _STEP_OWNS_INPUT.get()
+
+
+def permute_columns_in_place(X: np.ndarray, order: list[int]) -> np.ndarray:
+    """`X[:, order]` for a permutation `order`, written into `X` a block of rows at a
+    time; returns `X`.
+    """
+    if not X.flags.c_contiguous:
+        return X[:, order]
+    index = np.asarray(order, dtype=np.intp)
+    rows = max(1, PERMUTE_BLOCK_BYTES // max(1, X.shape[1] * X.itemsize))
+    for start in range(0, X.shape[0], rows):
+        block = X[start : start + rows]
+        block[:] = block[:, index]
+    return X
+
 
 StepWithModalities: TypeAlias = tuple["PreprocessingStep", set[FeatureModality]]
 
@@ -30,20 +80,65 @@ def _extract_inf_masks(
 
     Returns a ``{feature_name: signed-inf column}`` mapping for the features that
     contained infinities (empty when ``X`` is finite, leaving ``X`` untouched).
-    ``X`` is mutated in place.
+    ``X`` is mutated in place. The scan reads blocks of rows on threads, so no
+    table-sized boolean mask is held.
     """
     xp = torch if isinstance(X, torch.Tensor) else np
-    inf_bool = xp.isinf(X)
-    if not bool(inf_bool.any()):
-        return {}
-
+    (has_inf,) = any_per_column(X, [xp.isinf])
     masks: InfMasks = {}
     for idx, feat in enumerate(feature_schema.features):
-        col_inf = inf_bool[:, idx]
-        if bool(col_inf.any()):
-            masks[feat.name] = xp.where(col_inf, X[:, idx], 0)
-    X[inf_bool] = float("nan")
+        if has_inf[idx]:
+            column = X[:, idx]
+            col_inf = xp.isinf(column)
+            masks[feat.name] = xp.where(col_inf, column, 0)
+            column[col_inf] = float("nan")
     return masks
+
+
+ROW_SCAN_BLOCK_BYTES = 1 << 26
+"""Bytes of rows `any_per_column` tests at a time on one thread."""
+
+ROW_SCAN_MAX_THREADS = 16
+"""Threads `any_per_column` runs at most."""
+
+
+def _usable_cpus() -> int:
+    """The CPUs this process may run on."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def any_per_column(
+    X: np.ndarray | torch.Tensor,
+    tests: list[Callable[[Any], Any]],
+) -> list[np.ndarray]:
+    """For each elementwise boolean `test`, per column of 2D `X` whether any cell
+    passes it.
+
+    Reads `X` by blocks of rows, which are contiguous in a C-order table, on up to
+    `ROW_SCAN_MAX_THREADS` threads.
+    """
+    n_rows, n_columns = X.shape
+    itemsize = X.element_size() if isinstance(X, torch.Tensor) else X.itemsize
+    rows = max(1, ROW_SCAN_BLOCK_BYTES // max(1, n_columns * itemsize))
+    starts = range(0, n_rows, rows)
+
+    def scan(start: int) -> list[np.ndarray]:
+        block = X[start : start + rows]
+        found = [test(block).any(0) for test in tests]
+        return [
+            f.cpu().numpy() if isinstance(f, torch.Tensor) else np.asarray(f)
+            for f in found
+        ]
+
+    found = [np.zeros(n_columns, dtype=bool) for _ in tests]
+    threads = min(len(starts), ROW_SCAN_MAX_THREADS, _usable_cpus())
+    with ThreadPoolExecutor(max(1, threads)) as pool:
+        for part in pool.map(scan, starts):
+            for index, flags in enumerate(part):
+                found[index] |= flags
+    return found
 
 
 def _restore_inf_masks(
@@ -191,6 +286,13 @@ class PreprocessingStep:
 
     modality_added_: FeatureModality | None
     """Modality of added columns from `_transform`. Set during first transform call."""
+
+    no_arithmetic: bool = False
+    """Whether the step only selects, reorders, compares and encodes values.
+
+    Such a step gives the same float32 results from a float32 copy of its input as
+    from a float64 one.
+    """
 
     @abstractmethod
     def _fit(
@@ -364,6 +466,15 @@ class PreprocessingPipeline:
         self._raw_steps = steps
         self.steps = self._validate_steps(steps)
 
+    @property
+    def keep_float32(self) -> bool:
+        """Whether a float32 input is copied as float32 rather than float64.
+
+        True when every step only selects, reorders, compares and encodes values:
+        their float32 results equal the float64 ones cast back.
+        """
+        return all(step.no_arithmetic for step, _ in self.steps)
+
     step_timings_: dict[str, float] | None
     """Per-step wall-clock time (seconds) from the last ``fit_transform`` or
     ``transform`` call.  Keyed by ``<index>_<ClassName>``.
@@ -376,18 +487,24 @@ class PreprocessingPipeline:
         self,
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
+        *,
+        feature_indices: np.ndarray | None = None,
     ) -> PreprocessingPipelineResult:
         """Fit and transform the data using the pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
-            feature_schema: feature schema.
+            feature_schema: feature schema, of the columns the pipeline reads.
+            feature_indices: The columns of `X` the pipeline reads, gathered into
+                its working copy; None for all of them.
 
         Returns:
             PreprocessingPipelineResult with transformed data and updated schema.
         """
         self.initial_feature_schema_ = feature_schema
-        X, feature_schema = self._process_steps(X, feature_schema, is_fitting=True)
+        X, feature_schema = self._process_steps(
+            X, feature_schema, is_fitting=True, feature_indices=feature_indices
+        )
         self.final_feature_schema_ = feature_schema
         return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
@@ -433,12 +550,32 @@ class PreprocessingPipeline:
             step.has_data_dependent_feature_expansion() for step, _ in self.steps
         )
 
+    def _working_copy(
+        self, X: np.ndarray | torch.Tensor, feature_indices: np.ndarray | None
+    ) -> np.ndarray | torch.Tensor:
+        """The array the steps write into: a copy of `X`, or of its `feature_indices`.
+
+        One copy preserves the caller's array and saves each step its own; the cast
+        is fused with it.
+        """
+        if not isinstance(X, np.ndarray):
+            if feature_indices is None:
+                return X.clone()
+            index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
+            return X.index_select(-1, index)
+        keep = self.keep_float32 and X.dtype == np.float32
+        dtype = np.float32 if keep else np.float64
+        if feature_indices is None:
+            return X.astype(dtype, order="C", copy=True)
+        return gather_columns(X, feature_indices, dtype)
+
     def _process_steps(
         self,
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
         *,
         is_fitting: bool,
+        feature_indices: np.ndarray | None = None,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Process all pipeline steps.
 
@@ -446,18 +583,12 @@ class PreprocessingPipeline:
             X: Input array of shape (n_samples, n_features).
             feature_schema: Feature schema.
             is_fitting: If True, call fit_transform on steps; otherwise transform.
+            feature_indices: Columns of `X` to gather into the working copy.
 
         Returns:
             Tuple of (transformed array, updated feature schema).
         """
-        # Single copy to preserve immutability for the caller, avoiding N copies
-        # inside the loop for steps that target specific modalities.
-        # Fuse casting with copying for performance.
-        X = (
-            X.astype(np.float64, order="C", copy=True)
-            if isinstance(X, np.ndarray)
-            else X.clone()
-        )
+        X = self._working_copy(X, feature_indices)
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
@@ -507,11 +638,15 @@ class PreprocessingPipeline:
                 # We still have preprocessing steps that don't change the columns
                 # internally (will be deprecated going forward). For backwards
                 # compatibility, we still handle these here.
-                result = (
-                    step.fit_transform(X, feature_schema)
-                    if is_fitting
-                    else step.transform(X)
-                )
+                owned = _STEP_OWNS_INPUT.set(True)
+                try:
+                    result = (
+                        step.fit_transform(X, feature_schema)
+                        if is_fitting
+                        else step.transform(X)
+                    )
+                finally:
+                    _STEP_OWNS_INPUT.reset(owned)
                 X = result.X
                 feature_schema = result.feature_schema
                 X, feature_schema = self._maybe_append_added_columns(

@@ -21,6 +21,7 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
+    step_owns_input,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
@@ -210,6 +211,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
     This is needed for the pipeline with onehot encoding to work.
     It will be updated in future versions.
     """
+
+    no_arithmetic = True
 
     def __init__(
         self,
@@ -402,7 +405,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
         categorical_features = ct_cat_features
         if self.categorical_transform_name.startswith("ordinal"):
-            Xt = ct.fit_transform(X)
+            Xt = self._ordinal_fit_transform(ct, X)
             categorical_features = list(range(len(ct_cat_features)))
 
             self.random_mappings_ = {}
@@ -449,6 +452,24 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         return Xt, _carry_over_input_feature_metadata(
             feature_schema, out, ct, n_input_features
         )
+
+    @staticmethod
+    def _ordinal_fit_transform(ct: ColumnTransformer, X: np.ndarray) -> np.ndarray:
+        """`ct.fit_transform(X)`: the encoded columns first, the rest after them.
+
+        When the pipeline hands `X` over, the columns are moved and the codes written
+        within `X` wherever its dtype holds them exactly.
+        """
+        if (
+            isinstance(ct, EfficientColumnTransformer)
+            and step_owns_input()
+            and X.dtype.kind == "f"
+            and X.ndim == 2
+        ):
+            out = ct.fit_transform_into(X, out=X)
+            if out is not None:
+                return out
+        return ct.fit_transform(X)
 
     @override
     def fit_transform(

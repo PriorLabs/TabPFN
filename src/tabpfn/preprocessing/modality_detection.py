@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from tabpfn.preprocessing.datamodel import (
     FeatureSchema,
     build_input_feature_names,
 )
+from tabpfn.preprocessing.pipeline_interface import _usable_cpus
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
 
@@ -268,11 +270,58 @@ def _numeric_n_unique_per_column(
     n_unique = _count_distinct_per_column(X[:_EARLY_EXIT_PREFIX_ROWS])
     undecided = np.flatnonzero(n_unique < decided_at)
     if len(undecided):
-        n_unique[undecided] = _count_distinct_per_column(X[:, undecided])
+        n_unique[undecided] = _count_distinct_per_column(X, undecided)
     return n_unique
 
 
-def _count_distinct_per_column(X: np.ndarray) -> np.ndarray:
+_DISTINCT_COUNT_BLOCK_BYTES = 1 << 28
+"""Bytes of columns `_count_distinct_per_column` sorts at a time, per thread."""
+_DISTINCT_COUNT_BUDGET_BYTES = 4 << 30
+"""Bytes the threads of `_count_distinct_per_column` hold at once, at most: each holds
+a block's copy and its sort, about three blocks."""
+
+
+def _count_distinct_per_column(
+    X: np.ndarray, columns: np.ndarray | None = None
+) -> np.ndarray:
+    """`_count_distinct_in_columns` of `X`'s `columns` (all by default), by blocks.
+
+    The blocks run on threads. Each column's count reads only that column; a block
+    selects its own columns, so only a block is ever copied.
+    """
+    n_rows = X.shape[0]
+    if columns is None:
+        columns = np.arange(X.shape[1])
+    n_columns = len(columns)
+    if n_columns == 0:
+        return np.zeros(0, dtype=np.int64)
+    width = max(1, _DISTINCT_COUNT_BLOCK_BYTES // max(1, n_rows * X.itemsize))
+
+    def block_of(start: int, stop: int) -> np.ndarray:
+        picked = columns[start:stop]
+        if picked[-1] - picked[0] == len(picked) - 1:
+            return X[:, picked[0] : picked[-1] + 1]
+        return X[:, picked]
+
+    if X.dtype.kind == "b" or width >= n_columns:
+        return _count_distinct_in_columns(block_of(0, n_columns))
+    blocks = [slice(s, min(s + width, n_columns)) for s in range(0, n_columns, width)]
+    n_unique = np.empty(n_columns, dtype=np.int64)
+
+    def count(block: slice) -> None:
+        n_unique[block] = _count_distinct_in_columns(block_of(block.start, block.stop))
+
+    workers = min(
+        len(blocks),
+        _usable_cpus(),
+        max(1, _DISTINCT_COUNT_BUDGET_BYTES // (3 * _DISTINCT_COUNT_BLOCK_BYTES)),
+    )
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(count, blocks))
+    return n_unique
+
+
+def _count_distinct_in_columns(X: np.ndarray) -> np.ndarray:
     """`pd.Series(column).nunique(dropna=False)` per column of a numeric or bool array.
 
     A bool column holds one or two distinct values, told apart by `any` and `all`.

@@ -8,8 +8,11 @@ e.g. NaN mapping and dtype conversion.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import typing
 import warnings
+import weakref
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -24,7 +27,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
     from typing import Any, Literal
 
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
@@ -185,6 +188,7 @@ def clean_data(
     feature_schema: FeatureSchema,
     *,
     passthrough_inf: bool = False,
+    overwrite_input: bool = False,
 ) -> tuple[np.ndarray, OrderPreservingColumnTransformer, FeatureSchema]:
     """Clean the data by converting dtypes and ordinally encoding categorical columns.
 
@@ -194,6 +198,8 @@ def clean_data(
         passthrough_inf: If True, +/-inf values are carried through the ordinal
             encoding stage unchanged instead of crashing it (see
             `process_text_na_dataframe`).
+        overwrite_input: If True, `X` is the caller's own copy, and the categorical
+            codes of a float32 `X` may be written into it.
 
     Returns:
         A tuple containing the cleaned data, the ordinal encoder, and the inferred
@@ -220,6 +226,13 @@ def clean_data(
         ord_encoder.fit(fix_dtypes(X=X[:1], cat_indices=cat_indices))
         return X, ord_encoder, feature_schema
 
+    if _encodes_categoricals_only(X, cat_indices, passthrough_inf=passthrough_inf):
+        X_encoded = _encode_categoricals(
+            X, cat_indices, ord_encoder, in_place=overwrite_input
+        )
+        if X_encoded is not None:
+            return X_encoded, ord_encoder, feature_schema
+
     # Will convert inferred categorical indices to category dtype,
     # to be picked up by the ord_encoder, as well
     # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
@@ -233,6 +246,145 @@ def clean_data(
     )
 
     return X_numpy, ord_encoder, feature_schema
+
+
+_INF_SCAN_COLUMNS = 64
+"""Columns `_encodes_categoricals_only` scans for infinities at a time."""
+
+
+def _encodes_categoricals_only(
+    X: np.ndarray, cat_indices: Sequence[int], *, passthrough_inf: bool
+) -> bool:
+    """Whether `clean_data` can encode a float32 array's categorical columns alone.
+
+    The general path makes a float64 frame of the whole array, and a float64 output
+    from it. Encoding only the categorical columns into a float32 copy gives the same
+    values and the same fitted encoder. With `passthrough_inf`, an array holding an
+    infinity takes the general path, which carries it through the encoder.
+    """
+    if not (
+        isinstance(X, np.ndarray)
+        and X.dtype == np.float32
+        and X.ndim == 2
+        and all(isinstance(i, (int, np.integer)) for i in cat_indices)
+    ):
+        return False
+    if not passthrough_inf:
+        return True
+    for start in range(0, X.shape[1], _INF_SCAN_COLUMNS):
+        if np.isinf(X[:, start : start + _INF_SCAN_COLUMNS]).any():
+            return False
+    return True
+
+
+def _with_categoricals(X: np.ndarray, cat_indices: Sequence[int]) -> pd.DataFrame:
+    """`X` as a frame over its own data, with categorical columns as `fix_dtypes` has.
+
+    `fix_dtypes` makes them categories of the float64 values.
+    """
+    frame = pd.DataFrame(X, copy=False).copy(deep=False)
+    for index in cat_indices:
+        frame[frame.columns[index]] = pd.Categorical(X[:, index].astype(np.float64))
+    return frame
+
+
+def _encode_categoricals(
+    X: np.ndarray,
+    cat_indices: Sequence[int],
+    ord_encoder: OrderPreservingColumnTransformer,
+    *,
+    in_place: bool,
+) -> np.ndarray | None:
+    """Fit `ord_encoder` as `clean_data` does; `X` with its categorical columns coded.
+
+    A float32 array: `X` itself when `in_place`, else a copy. The values are those of
+    the float64 array the general path returns: a float32 value widens exactly, and a
+    code is a small integer. None, with the encoder left to be fitted again, when its
+    layout cannot be written column by column.
+    """
+    frame = _with_categoricals(X, cat_indices)
+    out = ord_encoder.fit_transform_into(frame, out=X if in_place else X.copy())
+    if out is None or not ord_encoder.selected_columns():
+        return None
+    if out is X:
+        _OVERWRITTEN_FIT_INPUTS[id(X)] = X
+    return out
+
+
+_OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "tabpfn_overwrite_fit_input", default=False
+)
+
+_OVERWRITTEN_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
+    weakref.WeakValueDictionary()
+)
+"""The live arrays a `fit` has written into, by `id`."""
+
+
+@contextlib.contextmanager
+def overwrite_fit_input() -> Iterator[None]:
+    """Let a `fit` inside this block write into the array it is given.
+
+    For a caller that hands over a large, writeable float32 array it no longer
+    needs: its categorical columns are then coded in place rather than in a copy. A
+    read-only array is copied as outside the block.
+
+    Each array may be given to one `fit` only. Its contents are undefined after that
+    fit, and the fitted model may keep it, so the caller must neither read nor
+    write it. A later `fit` given the same array raises a `ValueError`.
+    """
+    token = _OVERWRITE_FIT_INPUT.set(True)
+    try:
+        yield
+    finally:
+        _OVERWRITE_FIT_INPUT.reset(token)
+
+
+def may_overwrite_fit_input(X: Any, given: Any) -> bool:
+    """Whether `fit` may write into `X`, the array it made from the caller's `given`.
+
+    Raises:
+        ValueError: If an earlier `fit` inside `overwrite_fit_input()` wrote into
+            `given`.
+    """
+    if (
+        isinstance(given, np.ndarray)
+        and _OVERWRITTEN_FIT_INPUTS.get(id(given)) is given
+    ):
+        raise ValueError(
+            "This array was overwritten by an earlier fit inside "
+            "`overwrite_fit_input()`, so it no longer holds the data it was given "
+            "with. Pass each array to one fit only, or fit on a copy."
+        )
+    if X is given:
+        return (
+            isinstance(X, np.ndarray)
+            and X.flags.writeable
+            and _OVERWRITE_FIT_INPUT.get()
+        )
+    return is_private_copy(X, given)
+
+
+def is_private_copy(X: Any, given: Any) -> bool:
+    """Whether the array `X`, made from the caller's `given`, shares no memory with it.
+
+    A frame's blocks and an array are compared by their memory bounds, so a doubt
+    counts as shared.
+    """
+    if not isinstance(X, np.ndarray) or X is given:
+        return False
+    if isinstance(given, np.ndarray):
+        return not np.may_share_memory(X, given)
+    if isinstance(given, pd.DataFrame):
+        try:
+            blocks = [block.values for block in given._mgr.blocks]  # noqa: PD011
+        except AttributeError:
+            return False
+        return not any(
+            isinstance(values, np.ndarray) and np.may_share_memory(X, values)
+            for values in blocks
+        )
+    return X.base is None and X.flags.owndata
 
 
 def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:

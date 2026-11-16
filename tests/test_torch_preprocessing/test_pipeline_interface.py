@@ -10,10 +10,11 @@ import pytest
 import torch
 
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.torch import TorchSoftClipOutliersStep
+from tabpfn.preprocessing.torch import TorchSoftClipOutliersStep, pipeline_interface
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
+    TorchPreprocessingStepResult,
 )
 from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
@@ -479,3 +480,201 @@ def test__call__svd_does_not_crash_on_infinities_and_restores_them() -> None:
     names = [f.name for f in result.feature_schema.features]
     assert torch.isposinf(result.x[3, 0, names.index("c1")])
     assert torch.isneginf(result.x[7, 0, names.index("c2")])
+
+
+@pytest.mark.parametrize("block_bytes", [None, 12 * 2 * 4])
+def test__call__consume_input__same_output_written_into_the_input(
+    block_bytes: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if block_bytes is not None:
+        for module in ("pipeline_interface", "steps"):
+            monkeypatch.setattr(
+                f"tabpfn.preprocessing.torch.{module}.IN_PLACE_BLOCK_BYTES", block_bytes
+            )
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(12, 2, 7, generator=generator)
+    x[0, 0, 3] = 40.0
+    schema = FeatureSchema.from_only_categorical_indices([5], num_columns=7)
+    pipeline = TorchPreprocessingPipeline(
+        steps=[
+            (TorchSoftClipOutliersStep(n_sigma=2.0), {FeatureModality.NUMERICAL}),
+            (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
+        ]
+    )
+    before = x.clone()
+    expected = pipeline(x, feature_schema=schema, num_train_rows=9)
+    torch.testing.assert_close(x, before, rtol=0, atol=0)
+
+    actual = pipeline(x, feature_schema=schema, num_train_rows=9, consume_input=True)
+
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
+    assert actual.feature_schema == expected.feature_schema
+
+
+class LegacySignatureStep(MockStep):
+    """A step whose `fit_transform` override predates the `in_place` keyword."""
+
+    @override
+    def fit_transform(
+        self,
+        x: torch.Tensor,
+        column_indices: list[int],
+        num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None = None,
+    ) -> TorchPreprocessingStepResult:
+        return super().fit_transform(x, column_indices, num_train_rows, fitted_cache)
+
+
+def test__call__consume_input__step_without_in_place_keyword_runs() -> None:
+    schema = get_test_feature_schema(num_numericals=2, num_categoricals=1)
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(LegacySignatureStep(factor=3.0), {FeatureModality.NUMERICAL})]
+    )
+
+    expected = pipeline(torch.ones(10, 1, 3), schema, num_train_rows=5)
+    actual = pipeline(
+        torch.ones(10, 1, 3), schema, num_train_rows=5, consume_input=True
+    )
+
+    torch.testing.assert_close(actual.x, expected.x)
+
+
+@pytest.mark.parametrize("use_cache", [False, True])
+@pytest.mark.parametrize("indices", [[0, 1, 2, 3, 4, 6], [6, 1, 4, 2]])
+def test__fit_transform_on_device__column_blocks__match_fit_transform(
+    use_cache: bool, indices: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 12 * 2 * 4 * 2)
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(12, 2, 7, generator=generator)
+    x[0, 0, 3] = 40.0
+    x[5, 1, 6] = -30.0
+    step = TorchSoftClipOutliersStep(n_sigma=2.0)
+    expected = step.fit_transform(x.clone(), indices, num_train_rows=9)
+    cache = expected.fitted_cache if use_cache else None
+
+    actual = pipeline_interface._fit_transform_on_device(
+        step, x, indices, 9, cache, torch.device("cpu")
+    )
+
+    assert actual.x.data_ptr() == x.data_ptr()
+    assert torch.equal(actual.x, expected.x)
+    assert actual.fitted_cache is not None
+    assert expected.fitted_cache is not None
+    for key, value in expected.fitted_cache.items():
+        assert torch.equal(actual.fitted_cache[key], value)
+
+
+@pytest.mark.parametrize("block_width", [1, 2, 5])
+def test__fit_transform__in_place_column_blocks__equal_the_whole_fit(
+    block_width: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows, batch, columns = 301, 2, 13
+    monkeypatch.setattr(
+        pipeline_interface, "IN_PLACE_BLOCK_BYTES", block_width * rows * batch * 4
+    )
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(rows, batch, columns, generator=generator) * 3 + 1
+    x[::7, 0, 4] = float("nan")
+    x[3, 1, 9] = 60.0
+    x[11, 0, 2] = -45.0
+    indices = [0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12]
+    step = TorchSoftClipOutliersStep(n_sigma=2.0)
+    whole = step.fit_transform(x, indices, num_train_rows=200)
+
+    blocks = step.fit_transform(x.clone(), indices, num_train_rows=200, in_place=True)
+
+    assert whole.fitted_cache is not None
+    assert blocks.fitted_cache is not None
+    for key, value in whole.fitted_cache.items():
+        assert torch.equal(blocks.fitted_cache[key], value)
+    assert torch.equal(blocks.x.nan_to_num(), whole.x.nan_to_num())
+    assert torch.equal(blocks.x.isnan(), whole.x.isnan())
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        ("cpu", "cpu", True),
+        ("cpu", "cpu:0", True),
+        ("mps", "mps:0", True),
+        ("mps:0", "mps", True),
+        ("cuda:0", "cuda:1", False),
+        ("cuda:1", "cuda:1", True),
+        ("cpu", "cuda", False),
+        ("mps", "cpu", False),
+    ],
+)
+def test__same_device__index_none_is_the_current_one(
+    a: str, b: str, *, same: bool
+) -> None:
+    assert pipeline_interface._same_device(torch.device(a), torch.device(b)) is same
+
+
+def test__extract_inf_masks__scan_device__matches_the_host_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 2 * 5 * 4)
+    x = torch.randn(10, 2, 5, generator=torch.Generator().manual_seed(0))
+    x[7, 1, 2] = float("inf")
+    x[0, 0, 4] = -float("inf")
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=5)
+    expected_x = x.clone()
+    expected = pipeline_interface._extract_inf_masks(expected_x, schema)
+
+    actual = pipeline_interface._extract_inf_masks(
+        x, schema, scan_device=torch.device("cpu")
+    )
+
+    assert len(actual) == 2
+    assert list(actual) == list(expected)
+    for name, mask in expected.items():
+        torch.testing.assert_close(actual[name], mask, rtol=0, atol=0)
+    torch.testing.assert_close(x, expected_x, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__call__host_input_with_compute_device__matches_the_device_input() -> None:
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(64, 1, 9, generator=generator)
+    x[0, 0, 3] = 40.0
+    x[9, 0, 2] = float("inf")
+    schema = FeatureSchema.from_only_categorical_indices([5], num_columns=9)
+    pipeline = TorchPreprocessingPipeline(
+        steps=[
+            (TorchSoftClipOutliersStep(n_sigma=2.0), {FeatureModality.NUMERICAL}),
+            (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
+        ]
+    )
+    device = torch.device("cuda")
+    expected = pipeline(x.to(device), feature_schema=schema, num_train_rows=50)
+
+    actual = pipeline(
+        x,
+        feature_schema=schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=device,
+    )
+
+    assert actual.x.device.type == "cpu"
+    torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True)
+    assert actual.feature_schema == expected.feature_schema
+
+
+def test__fit_transform_rows_on_device__row_blocks__match_fit_transform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 2 * 7 * 4)
+    x = torch.randn(10, 2, 7, generator=torch.Generator().manual_seed(0))
+    step = TorchShuffleFeaturesStep("shuffle", 0, random_state=3)
+    expected = step.fit_transform(x.clone(), list(range(7)), num_train_rows=6)
+
+    actual = pipeline_interface._fit_transform_rows_on_device(
+        step, x, list(range(7)), 6, None, torch.device("cpu")
+    )
+
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
+    assert actual.schema_permutation == expected.schema_permutation

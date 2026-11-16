@@ -1492,3 +1492,194 @@ def test__coerce_nullable_dtypes_to_numpy__selects_by_dtype() -> None:
             assert out[c].dtype == X[c].dtype, c
     assert list(out.columns) == list(X.columns)
     assert out["boolean"].isna().tolist() == [False, True, False]
+
+
+@pytest.mark.parametrize("passthrough_inf", [False, True])
+@pytest.mark.parametrize("numerical_inf", [False, True])
+def test__clean_data__float32_with_categoricals__matches_the_float64_frame_path(
+    *, passthrough_inf: bool, numerical_inf: bool
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 6)).astype(np.float32)
+    X[:, 4] = rng.integers(0, 4, 300)
+    X[:, 5] = rng.integers(0, 7, 300) / 3
+    X[3, 5] = np.nan
+    if numerical_inf:
+        X[9, 0] = np.inf
+        X[11, 2] = -np.inf
+    before = X.copy()
+    schema = _get_schema(n_numerical_features=4, n_categorical_features=2)
+    X_test = rng.normal(size=(50, 6)).astype(np.float32)
+    X_test[:, 4] = rng.integers(0, 6, 50)
+    X_test[:, 5] = rng.integers(0, 7, 50) / 3
+
+    out32, encoder32, _ = clean_data(
+        X=X, feature_schema=schema, passthrough_inf=passthrough_inf
+    )
+    with mock.patch.object(
+        clean_module, "_encodes_categoricals_only", return_value=False
+    ):
+        out64, encoder64, _ = clean_data(
+            X=X, feature_schema=schema, passthrough_inf=passthrough_inf
+        )
+
+    assert out64.dtype == np.float64
+    fast = not (passthrough_inf and numerical_inf)
+    assert out32.dtype == (np.float32 if fast else np.float64)
+    np.testing.assert_array_equal(out32.astype(np.float64), out64)
+    np.testing.assert_array_equal(X, before)
+    for data in (X, X_test):
+        np.testing.assert_array_equal(
+            clean_data_transform(
+                data,
+                cat_indices=[4, 5],
+                ord_encoder=encoder32,
+                passthrough_inf=passthrough_inf,
+            ),
+            clean_data_transform(
+                data,
+                cat_indices=[4, 5],
+                ord_encoder=encoder64,
+                passthrough_inf=passthrough_inf,
+            ),
+        )
+
+
+def test__fit_predict__float32_input_with_categoricals__predicts_as_float64() -> None:
+    """The categorical-only encoding of a float32 input cannot change the output."""
+    rng = np.random.default_rng(1)
+    X32 = rng.standard_normal((80, 5)).astype(np.float32)
+    X32[:, 3] = rng.integers(0, 4, 80)
+    X32[:, 4] = rng.integers(0, 3, 80)
+    X64 = X32.astype(np.float64)
+    y = rng.integers(0, 2, 80)
+
+    def proba(X: np.ndarray) -> np.ndarray:
+        model = TabPFNClassifier(
+            n_estimators=2,
+            device="cpu",
+            random_state=0,
+            categorical_features_indices=[3, 4],
+        )
+        return model.fit(X, y).predict_proba(X)
+
+    np.testing.assert_array_equal(proba(X32), proba(X64))
+
+
+def test__is_private_copy__views_and_the_same_array__are_not_private() -> None:
+    X = np.ones((10, 3), dtype=np.float32)
+    frame = pd.DataFrame(X, copy=False)
+    assert not clean_module.is_private_copy(X, X)
+    assert not clean_module.is_private_copy(X[:, :2], X)
+    assert not clean_module.is_private_copy(frame.to_numpy(), frame)
+    assert clean_module.is_private_copy(X.copy(), X)
+    assert clean_module.is_private_copy(X.copy(), frame)
+
+
+@pytest.mark.parametrize("as_frame", [False, True])
+def test__fit__float32_with_categoricals__leaves_the_callers_input_unchanged(
+    *, as_frame: bool
+) -> None:
+    rng = np.random.default_rng(2)
+    X = rng.standard_normal((60, 4)).astype(np.float32)
+    X[:, 3] = rng.integers(10, 14, 60)
+    given = pd.DataFrame(X, copy=False) if as_frame else X
+    before = X.copy()
+    TabPFNClassifier(
+        n_estimators=1, device="cpu", categorical_features_indices=[3]
+    ).fit(given, rng.integers(0, 2, 60))
+    np.testing.assert_array_equal(X, before)
+
+
+def test__overwrite_fit_input__float32_with_categoricals__codes_in_place() -> None:
+    rng = np.random.default_rng(3)
+    X = rng.standard_normal((60, 4)).astype(np.float32)
+    X[:, 3] = rng.integers(10, 14, 60)
+    y = rng.integers(0, 2, 60)
+    expected = (
+        TabPFNClassifier(
+            n_estimators=1,
+            device="cpu",
+            random_state=0,
+            categorical_features_indices=[3],
+        )
+        .fit(X.copy(), y)
+        .predict_proba(X)
+    )
+    handed = X.copy()
+    with clean_module.overwrite_fit_input():
+        model = TabPFNClassifier(
+            n_estimators=1,
+            device="cpu",
+            random_state=0,
+            categorical_features_indices=[3],
+        ).fit(handed, y)
+    assert set(np.unique(handed[:, 3])) <= {0.0, 1.0, 2.0, 3.0}
+    np.testing.assert_array_equal(model.predict_proba(X), expected)
+
+
+def _categorical_float32_table() -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(150, 4)).astype(np.float32)
+    X[:, 0] = rng.choice([10.0, 20.0, 30.0, 40.0], 150)
+    y = ((X[:, 0] > 25) ^ (X[:, 1] > 0)).astype(int)
+    return X, y
+
+
+def _categorical_classifier() -> TabPFNClassifier:
+    return TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        random_state=0,
+        categorical_features_indices=[0],
+    )
+
+
+def test__overwrite_fit_input__second_fit_on_the_same_array__raises() -> None:
+    X, y = _categorical_float32_table()
+    X_train, X_test = X[:120].copy(), X[120:]
+    expected = _categorical_classifier().fit(X_train.copy(), y[:120])
+
+    with clean_module.overwrite_fit_input():
+        first = _categorical_classifier().fit(X_train, y[:120])
+        with pytest.raises(ValueError, match="overwritten by an earlier fit"):
+            _categorical_classifier().fit(X_train, y[:120])
+    with pytest.raises(ValueError, match="overwritten by an earlier fit"):
+        _categorical_classifier().fit(X_train, y[:120])
+
+    np.testing.assert_array_equal(
+        first.predict_proba(X_test), expected.predict_proba(X_test)
+    )
+
+
+def test__overwrite_fit_input__read_only_array__is_copied() -> None:
+    X, y = _categorical_float32_table()
+    X_read_only = X[:120].copy()
+    X_read_only.flags.writeable = False
+    expected = _categorical_classifier().fit(X[:120].copy(), y[:120])
+
+    with clean_module.overwrite_fit_input():
+        model = _categorical_classifier().fit(X_read_only, y[:120])
+
+    np.testing.assert_array_equal(X_read_only, X[:120])
+    np.testing.assert_array_equal(
+        model.predict_proba(X[120:]), expected.predict_proba(X[120:])
+    )
+
+
+def test__clean_data__float32_infinity_in_categorical__matches_float64() -> None:
+    """With `passthrough_inf`, an infinity in a categorical column of a float32
+    array is carried through as the float64 array's is.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.integers(0, 4, size=(40, 4)).astype(np.float32)
+    X[7, 1] = np.inf
+    X[9, 3] = -np.inf
+    schema = _numeric_schema(4, cat_indices=(1, 3))
+
+    out32, _, _ = clean_data(X=X, feature_schema=schema, passthrough_inf=True)
+    out64, _, _ = clean_data(
+        X=X.astype(np.float64), feature_schema=schema, passthrough_inf=True
+    )
+
+    np.testing.assert_array_equal(np.asarray(out32, dtype=np.float64), out64)

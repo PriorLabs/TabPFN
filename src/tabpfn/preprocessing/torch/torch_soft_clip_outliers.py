@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import torch
 
-from tabpfn.preprocessing.torch.ops import torch_nanmean, torch_nanstd
+from tabpfn.preprocessing.torch.ops import columnwise_nanmean_nanstd
 
 
 class TorchSoftClipOutliers:
@@ -52,24 +52,18 @@ class TorchSoftClipOutliers:
             return {"lower": lower, "upper": upper}
 
         # First pass: compute initial statistics
-        data_mean = torch_nanmean(x, axis=0)
-        data_std = torch_nanstd(x, axis=0)
+        data_mean, data_std = columnwise_nanmean_nanstd(x)
         cut_off = data_std * self.n_sigma
         lower_initial = data_mean - cut_off
         upper_initial = data_mean + cut_off
 
         # Create a clean copy with outliers masked as NaN
-        data_clean = x.clone()
-        outlier_mask = torch.logical_or(
-            data_clean > upper_initial, data_clean < lower_initial
-        )
-        data_clean = torch.where(
-            outlier_mask, torch.full_like(data_clean, torch.nan), data_clean
-        )
+        outlier_mask = torch.logical_or(x > upper_initial, x < lower_initial)
+        data_clean = torch.where(outlier_mask, torch.nan, x)
+        del outlier_mask
 
         # Second pass: recompute statistics without outliers
-        data_mean = torch_nanmean(data_clean, axis=0)
-        data_std = torch_nanstd(data_clean, axis=0)
+        data_mean, data_std = columnwise_nanmean_nanstd(data_clean)
         cut_off = data_std * self.n_sigma
         lower = data_mean - cut_off
         upper = data_mean + cut_off

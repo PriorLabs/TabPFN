@@ -7,7 +7,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean, torch_nanstd
+from tabpfn.preprocessing.torch.ops import (
+    columnwise_nanmean_nanstd,
+    select_features,
+    torch_nanmean,
+    torch_nanstd,
+)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.float64])
@@ -70,3 +75,27 @@ def test__select_features__no_features_selected():
     result = select_features(x, sel)
     assert result.shape == (10, 2, 4)
     assert torch.allclose(result, torch.zeros_like(result))
+
+
+@pytest.mark.parametrize("rows", [1, 2, 7, 1000])
+def test__columnwise_nanmean_nanstd__matches_torch_nanmean_and_nanstd(rows: int):
+    x = torch.randn(rows, 3, 5, generator=torch.Generator().manual_seed(0)) * 4 + 2
+    x[::3, 1, 2] = torch.nan
+    x[:, 0, 4] = torch.nan
+
+    mean, std = columnwise_nanmean_nanstd(x)
+
+    torch.testing.assert_close(mean, torch_nanmean(x, axis=0))
+    torch.testing.assert_close(std, torch_nanstd(x, axis=0))
+
+
+def test__columnwise_nanmean_nanstd__each_column_alone__gives_equal_values():
+    x = torch.randn(4099, 2, 17, generator=torch.Generator().manual_seed(1)) * 3 + 1
+    x[::5, 0, 3] = torch.nan
+
+    mean, std = columnwise_nanmean_nanstd(x)
+
+    for column in range(x.shape[-1]):
+        column_mean, column_std = columnwise_nanmean_nanstd(x[..., column].clone())
+        assert torch.equal(mean[..., column], column_mean)
+        assert torch.equal(std[..., column], column_std)

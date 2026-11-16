@@ -91,7 +91,7 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import clean_data_transform
+from tabpfn.preprocessing.clean import clean_data_transform, may_overwrite_fit_input
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
@@ -1063,6 +1063,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # not the wider frame expansion can make of it, so they come off the raw
         # input here, before any conversion.
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        X_given = X
 
         categorical_indices = resolve_categorical_features_indices(
             X, self.categorical_features_indices
@@ -1114,6 +1115,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X=X,
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
+            overwrite_input=may_overwrite_fit_input(X, X_given),
         )
         feature_schema = as_group_feature(
             feature_schema, self.group_feature_index_, FeatureModality.CATEGORICAL

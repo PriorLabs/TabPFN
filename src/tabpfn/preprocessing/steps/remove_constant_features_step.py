@@ -13,6 +13,7 @@ import torch
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
+    any_per_column,
 )
 
 if TYPE_CHECKING:
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 
 class RemoveConstantFeaturesStep(PreprocessingStep):
     """Remove features that are constant in the training data."""
+
+    no_arithmetic = True
 
     def __init__(self) -> None:
         super().__init__()
@@ -38,9 +41,7 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
             if any(forced):
                 sel_ = sel_ | torch.tensor(forced, dtype=torch.bool)
         else:
-            sel_ = np.logical_and(
-                (X[0:1, :] == X).mean(axis=0) < 1.0, ~np.all(np.isnan(X), axis=0)
-            ).tolist()
+            sel_ = _non_constant_columns(X).tolist()
             if any(forced):
                 sel_ = [bool(keep or f) for keep, f in zip(sel_, forced, strict=False)]
 
@@ -64,6 +65,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
             # Selecting every column with a boolean mask still builds a full copy of
             # the array
             return X, None, None
+        if isinstance(X, np.ndarray):
+            return X.compress(np.asarray(self.sel_, dtype=bool), axis=1), None, None
         return X[:, self.sel_], None, None
 
     def _keeps_every_column(self) -> bool:
@@ -71,3 +74,15 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         if isinstance(self.sel_, torch.Tensor):
             return bool(torch.all(self.sel_))
         return all(self.sel_)  # type: ignore[arg-type]
+
+
+def _non_constant_columns(X: np.ndarray) -> np.ndarray:
+    """Per column of `X`, whether its rows are not all equal and not all NaN.
+
+    A NaN equals nothing, so a column with a NaN and a number is not constant.
+    """
+    first = X[0:1]
+    differs, has_number = any_per_column(
+        X, [lambda block: block != first, lambda block: ~np.isnan(block)]
+    )
+    return differs & has_number

@@ -29,6 +29,8 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
+    permute_columns_in_place,
+    step_owns_input,
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
@@ -271,6 +273,11 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.column_order_: list[int] | None = None
         """Input columns in output order, when this step only reorders them."""
 
+    @property
+    def no_arithmetic(self) -> bool:  # type: ignore[override]
+        """Whether the step only selects and reorders values: with no transform."""
+        return self.transform_name == "none"
+
     def _create_transformers_and_new_schema(
         self,
         n_samples: int,
@@ -492,7 +499,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             return X, None, None
         column_order = getattr(self, "column_order_", None)
         if column_order is not None:
-            return X[:, column_order], None, None
+            return _reordered(X, column_order), None, None
         assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X), None, None
 
@@ -522,7 +529,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         if transformer is not None:
             x_transformed = transformer.fit_transform(X)
         elif self.column_order_ is not None:
-            x_transformed = X[:, self.column_order_]
+            x_transformed = _reordered(X, self.column_order_)
         else:
             x_transformed = X
         self.transformer_ = transformer
@@ -786,6 +793,13 @@ def get_all_reshape_feature_distribution_preprocessors(
     )
 
     return all_preprocessors
+
+
+def _reordered(X: np.ndarray, order: list[int]) -> np.ndarray:
+    """`X[:, order]`, written into `X` itself when the pipeline hands it over."""
+    if step_owns_input():
+        return permute_columns_in_place(X, order)
+    return X[:, order]
 
 
 __all__ = [
