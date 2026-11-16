@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import pickle
-from functools import partial
 from types import SimpleNamespace
 
 import numpy as np
@@ -345,16 +344,13 @@ def test__make_target_transform__does_not_standardize_the_fixed_atom_again() -> 
     np.testing.assert_array_equal(transformed[y == 0], -4.0)
 
 
-@pytest.mark.parametrize("scale", [1.0, 1e3])
-def test__log1p__encodes_log1p_of_the_scaled_target_and_round_trips(
-    scale: float,
-) -> None:
+def test__log1p__encodes_log1p_of_the_raw_target_and_round_trips() -> None:
     y = _zero_inflated_target()
-    step = Log1pTransformer(scale=scale)
+    step = Log1pTransformer()
 
     transformed = step.fit_transform(y.reshape(-1, 1)).ravel()
 
-    np.testing.assert_allclose(transformed, np.log1p(scale * y), rtol=1e-12)
+    np.testing.assert_allclose(transformed, np.log1p(y), rtol=1e-12)
     np.testing.assert_array_equal(transformed[y == 0], 0.0)
     np.testing.assert_allclose(
         step.inverse_transform(transformed.reshape(-1, 1)).ravel(), y, rtol=1e-12
@@ -363,18 +359,18 @@ def test__log1p__encodes_log1p_of_the_scaled_target_and_round_trips(
 
 def test__log1p__decodes_without_a_cut() -> None:
     """Values just above 0 decode to small positives, not to 0."""
-    step = Log1pTransformer(scale=10.0).fit(np.array([[0.0], [1.0]]))
+    step = Log1pTransformer().fit(np.array([[0.0], [1.0]]))
     t = np.array([1e-6, 0.5, 3.0])
 
     decoded = step.inverse_transform(t.reshape(-1, 1)).ravel()
 
-    np.testing.assert_allclose(decoded, np.expm1(t) / 10.0, rtol=1e-12)
+    np.testing.assert_allclose(decoded, np.expm1(t), rtol=1e-12)
     assert (decoded > 0).all()
 
 
 def test__log1p__rejects_negative_targets() -> None:
     with pytest.raises(ValueError, match="nonnegative"):
-        Log1pTransformer(scale=1.0).fit(np.array([[0.0], [1.0], [-0.5]]))
+        Log1pTransformer().fit(np.array([[0.0], [1.0], [-0.5]]))
 
 
 @pytest.mark.parametrize("transform", [QuantileGapTransformer, FixedAtomTransformer])
@@ -397,7 +393,7 @@ def test__zero_inflated_transforms__reject_targets_without_two_positive_levels(
     [
         QuantileGapTransformer,
         FixedAtomTransformer,
-        pytest.param(partial(Log1pTransformer, scale=1.0), id="Log1pTransformer"),
+        Log1pTransformer,
     ],
 )
 def test__transform_borders_one__clamps_zero_inflated_members_at_zero(

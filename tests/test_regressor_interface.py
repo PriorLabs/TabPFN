@@ -1726,15 +1726,13 @@ def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> N
         random_state=42,
         inference_config={
             "REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,),
-            # Only "log1p_target" reads the scale.
-            "REGRESSION_LOG1P_SCALE": 1e-2,
         },
     )
     reg.fit(X, y)
 
     logs = np.log(y[y > 0])
     if transform == "log1p_target":
-        t = np.log1p(1e-2 * y)
+        t = np.log1p(y)
         expected = (t - t.mean()) / t.std()
     elif transform == "log_qgap":
         t = np.where(y > 0, np.log(np.where(y > 0, y, 1.0)), 0.0)

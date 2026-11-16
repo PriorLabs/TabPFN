@@ -326,24 +326,8 @@ class InferenceConfig:
         - None: no preprocessing is done.
         - One of the options from
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
-        - "log_qgap": for zero-inflated nonnegative targets. log(y) for y > 0,
-          and the zeros in a gap below the positive logs, at q - sd with q the 1%
-          quantile and sd the standard deviation of the positive logs. Values
-          below q - sd / 2 decode to 0.
-        - "log_fixed_atom": for zero-inflated nonnegative targets. log(y)
-          standardized on the positive targets, with the zeros at -4. Values below
-          -3.5 decode to 0, and positives below it are raised to it.
-        - "log1p_target": for nonnegative targets. log1p(c * y), with c the
-          `REGRESSION_LOG1P_SCALE`, decoded with expm1(t) / c.
-
-        A member with "log_qgap", "log_fixed_atom" or "log1p_target" puts no mass
-        below 0.
-    """
-
-    REGRESSION_LOG1P_SCALE: float = 1.0
-    """The scale c of the "log1p_target" target transform log1p(c * y).
-
-    A larger c spreads the targets over more decades.
+        - One of the options for nonnegative targets from
+          `tabpfn.preprocessing.target_transform.ZERO_INFLATED_TARGET_TRANSFORMS`.
     """
 
     REGRESSION_TARGET_SIGN_FLIP: bool = False

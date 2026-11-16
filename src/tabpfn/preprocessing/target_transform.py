@@ -116,13 +116,7 @@ class FixedAtomTransformer(TransformerMixin, BaseEstimator):
 
 
 class Log1pTransformer(TransformerMixin, BaseEstimator):
-    """log1p(scale * y) for nonnegative targets, decoded with expm1(t) / scale.
-
-    A larger ``scale`` spreads the targets over more decades.
-    """
-
-    def __init__(self, scale: float) -> None:
-        self.scale = scale
+    """log1p(y) of the raw target for nonnegative targets, decoded with expm1(t)."""
 
     def fit(self, X: np.ndarray, y: np.ndarray | None = None) -> Log1pTransformer:
         """Check that the target ``X`` is nonnegative."""
@@ -131,13 +125,13 @@ class Log1pTransformer(TransformerMixin, BaseEstimator):
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
-        """Return log1p(scale * X)."""
-        return np.log1p(self.scale * np.asarray(X, dtype=np.float64))
+        """Return log1p(X)."""
+        return np.log1p(np.asarray(X, dtype=np.float64))
 
     def inverse_transform(self, X: np.ndarray) -> np.ndarray:
-        """Return expm1(X) / scale."""
+        """Return expm1(X)."""
         with np.errstate(over="ignore"):
-            return np.expm1(np.asarray(X, dtype=np.float64)) / self.scale
+            return np.expm1(np.asarray(X, dtype=np.float64))
 
 
 ZERO_INFLATED_TARGET_TRANSFORMS: dict[str, type[TransformerMixin]] = {
