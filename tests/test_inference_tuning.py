@@ -1253,3 +1253,53 @@ def test__find_regression_optimal_temperature__label_reliability_undoes_label_no
     assert temperature((logits, bardist, y_noisy)) - clean > 0.2
     corrected = temperature((logits, bardist, y_noisy, None, None, noise))
     assert abs(corrected - clean) <= 0.06
+
+
+def test__find_optimal_classification_thresholds__ignores_zero_reliability_rows() -> (
+    None
+):
+    y_true = np.array([0, 1, 1])
+    proba_1 = np.array([0.2, 0.8, 0.4])
+    y_pred_probas = np.stack([1 - proba_1, proba_1], axis=-1)
+
+    def thresholds(n_rows: int, reliability: np.ndarray) -> np.ndarray:
+        return find_optimal_classification_thresholds(
+            metric_name=ClassifierEvalMetrics.ACCURACY,
+            y_true=y_true[:n_rows],
+            y_pred_probas=y_pred_probas[:n_rows],
+            n_classes=2,
+            label_reliability=reliability,
+            label_marginal=np.array([0.5, 0.5]),
+        )
+
+    np.testing.assert_array_equal(
+        thresholds(3, np.array([1.0, 1.0, 0.0])), thresholds(2, np.ones(2))
+    )
+
+
+def test__find_regression_optimal_temperature__ignores_zero_reliability_rows() -> None:
+    bardist = FullSupportBarDistribution(torch.tensor([0.0, 1.0, 2.0, 3.0]))
+    logits = torch.tensor([[5.0, 0.0, -5.0], [0.0, 0.0, 0.0]])
+    y_true = torch.tensor([0.5, 2.5])
+    # No training target lies in the last bar, where the second target falls.
+    marginal = bar_marginal(bardist, torch.tensor([0.5, 1.5]))
+
+    def temperature(n_rows: int, reliability: torch.Tensor) -> float:
+        return find_regression_optimal_temperature(
+            holdout_folds=[
+                (
+                    logits[:n_rows],
+                    bardist,
+                    y_true[:n_rows],
+                    None,
+                    None,
+                    (reliability, marginal),
+                )
+            ],
+            metric_name=RegressorEvalMetrics.NLL,
+            current_default_temperature=1.0,
+        )
+
+    alone = temperature(1, torch.tensor([1.0]))
+    assert alone != 1.0
+    assert temperature(2, torch.tensor([1.0, 0.0])) == alone

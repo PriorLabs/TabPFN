@@ -319,11 +319,13 @@ def find_optimal_classification_thresholds(
     Classes with no positive (or no negative) rows in the holdout carry no signal
     to tune on and are assigned a neutral threshold instead of a searched one.
 
-    With `label_reliability`, the metric is computed on an unbiased estimate of
-    the clean labels' confusion matrix: since a noisy label is the clean one with
-    probability r and otherwise a draw from `label_marginal`, each row counts
-    as `onehot(y_true) - (1 - r) * label_marginal`, so as a positive and a
-    negative row whose weights can be negative.
+    With `label_reliability`, the metric is computed on an estimate of the clean
+    labels' confusion matrix in which each row counts in proportion to its
+    reliability r. A noisy label is the clean one with probability r and
+    otherwise a draw from `label_marginal`, so `onehot(y_true) - (1 - r) *
+    label_marginal` estimates `r * onehot(clean label)`. Each row thus counts as
+    a positive and a negative row whose weights can be negative. Rows with r = 0
+    carry no information and are dropped.
 
     Args:
         metric_name: The name of the metric to optimize.
@@ -343,6 +345,12 @@ def find_optimal_classification_thresholds(
 
     # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
+    if label_reliability is not None:
+        informative = label_reliability > 0
+        y_true, y_pred_probas = y_true[informative], y_pred_probas[informative]
+        label_reliability = label_reliability[informative]
+        if sample_weight is not None:
+            sample_weight = sample_weight[informative]
     n_samples = len(y_true)
     weight = np.ones(n_samples) if sample_weight is None else sample_weight
     for i in range(n_classes):
@@ -420,21 +428,31 @@ def find_optimal_classification_threshold_single_class(
     thresholds = np.linspace(0.01, 0.99, 198)
     thresholds_and_losses: list[tuple[float, float]] = []  # (threshold, metric)
 
-    # Every metric sees the rows only through the weighted 2x2 confusion matrix.
-    # Clipping its cells at 0 keeps it valid when noise-corrected weights, which
-    # can be negative, leave a cell slightly below 0.
+    # Noise-corrected weights can be negative and leave a cell of the confusion
+    # matrix below 0, which `roc_auc_score` rejects. Every metric sees the rows
+    # only through the weighted 2x2 confusion matrix, so score that matrix with
+    # its cells clipped at 0 instead.
+    has_negative_weight = sample_weight is not None and bool((sample_weight < 0).any())
     cell_y_true, cell_y_pred = np.array([0, 0, 1, 1]), np.array([0, 1, 0, 1])
     for threshold in thresholds:
         y_pred_tuned = (y_pred_probas >= threshold).astype(int)
-        cells = np.bincount(
-            2 * y_true + y_pred_tuned, weights=sample_weight, minlength=4
-        ).clip(min=0)
-        current_loss = compute_metric_to_minimize(
-            metric_name=metric_name,
-            y_true=cell_y_true,
-            y_pred=cell_y_pred,
-            sample_weight=cells,
-        )
+        if has_negative_weight:
+            cells = np.bincount(
+                2 * y_true + y_pred_tuned, weights=sample_weight, minlength=4
+            ).clip(min=0)
+            current_loss = compute_metric_to_minimize(
+                metric_name=metric_name,
+                y_true=cell_y_true,
+                y_pred=cell_y_pred,
+                sample_weight=cells,
+            )
+        else:
+            current_loss = compute_metric_to_minimize(
+                metric_name=metric_name,
+                y_true=y_true,
+                y_pred=y_pred_tuned,
+                sample_weight=sample_weight,
+            )
         thresholds_and_losses.append((float(threshold), current_loss))
 
     return select_robust_optimal_threshold(thresholds_and_losses=thresholds_and_losses)
@@ -626,30 +644,34 @@ def find_regression_optimal_temperature(
     # distributions clean.
     folds = []
     for fold in holdout_folds:
-        logits = fold[0]
-        if logits.shape[0] == 0:
-            continue
+        logits, y_true = fold[0], fold[2]
         sample_weight = fold[4] if len(fold) > 4 else None
         if sample_weight is None:
             sample_weight = torch.ones(logits.shape[0], device=logits.device)
         label_noise = fold[5] if len(fold) > 5 else None
+        if label_noise is not None:
+            # Rows with reliability 0 carry no information. Their target can also
+            # fall in a bar the marginal never reaches, where the loss is infinite
+            # at every temperature.
+            informative = label_noise[0] > 0
+            logits, y_true = logits[informative], y_true[informative]
+            sample_weight = sample_weight[informative]
+            label_noise = (label_noise[0][informative], label_noise[1])
+        if logits.shape[0] == 0:
+            continue
         folds.append(
             (
                 logits,
                 copy.deepcopy(fold[1]),
-                fold[2],
+                y_true,
                 fold[3] if len(fold) > 3 else None,
                 sample_weight,
                 label_noise,
             )
         )
-    informative_weight = sum(
-        float((fold[4] if fold[5] is None else fold[4] * (fold[5][0] > 0)).sum())
-        for fold in folds
-    )
-    if informative_weight == 0:
-        return current_default_temperature
     total_weight = sum(float(fold[4].sum()) for fold in folds)
+    if total_weight == 0:
+        return current_default_temperature
 
     temperatures = get_tuning_temperatures()
     best_loss = float("inf")
