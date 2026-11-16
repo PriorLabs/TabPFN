@@ -338,6 +338,7 @@ def find_optimal_classification_thresholds(
     if n_untuned:
         warnings.warn(
             f"{n_untuned} of {n_classes} classes have no rows in the tuning holdout, "
+            "or only rows with weight 0, "
             "so their decision thresholds could not be tuned and a neutral value is "
             "used instead. Set `tune_decision_thresholds=False` to skip threshold "
             "tuning entirely.",

@@ -1717,8 +1717,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self,
         X: XType,
         y: YType,
-        sample_weight: npt.ArrayLike | None = None,
-        label_reliability: npt.ArrayLike | None = None,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> None:
         """If a `tuning_config` was given, calibrate the ensemble temperature.
 

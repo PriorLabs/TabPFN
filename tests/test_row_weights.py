@@ -23,7 +23,11 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
 )
-from tabpfn.inference_tuning import get_tuning_split_indices
+from tabpfn.inference_tuning import (
+    find_optimal_temperature,
+    find_regression_optimal_temperature,
+    get_tuning_split_indices,
+)
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
@@ -447,12 +451,42 @@ def test__fit__with_tuning_config__gives_each_fold_its_rows_weights(
         "tuning_holdout_frac": 0.5,
         "tuning_n_folds": 2,
     }
+    metric_weights: list[np.ndarray] = []
+    if estimator_cls is TabPFNClassifier:
+
+        def find_temperature(*args: Any, sample_weight: Any, **kwargs: Any) -> float:
+            metric_weights.append(sample_weight)
+            return find_optimal_temperature(
+                *args, sample_weight=sample_weight, **kwargs
+            )
+
+        monkeypatch.setattr(
+            "tabpfn.classifier.find_optimal_temperature", find_temperature
+        )
+    else:
+
+        def find_temperature(*args: Any, holdout_folds: Any, **kwargs: Any) -> float:
+            metric_weights.extend(fold[4].cpu().numpy() for fold in holdout_folds)
+            return find_regression_optimal_temperature(
+                *args, holdout_folds=holdout_folds, **kwargs
+            )
+
+        monkeypatch.setattr(
+            "tabpfn.regressor.find_regression_optimal_temperature", find_temperature
+        )
 
     with pytest.warns(UserWarning, match="We recommend tuning only"):
         estimator.fit(
             X, y, sample_weight=sample_weight, label_reliability=label_reliability
         )
     estimator.predict(X[:4])
+
+    # The two folds hold out every row once, each weighted in the tuned metric.
+    np.testing.assert_allclose(
+        np.sort(np.concatenate(metric_weights)),
+        np.sort(sample_weight * label_reliability),
+        rtol=1e-6,
+    )
 
     fold_calls = [weights for weights, _ in calls if weights.shape[0] == n_train // 2]
     assert len(fold_calls) == 2
@@ -518,6 +552,42 @@ def test__compute_holdout_validation_data__skips_fold_with_zero_weight_class(
     ):
         estimator.fit(X, y, sample_weight=sample_weight)
     assert estimator.softmax_temperature_ == default_temperature
+
+
+def test__fit__regressor_skips_tuning_fold_whose_train_rows_have_weight_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = default_rng(seed=0)
+    X = rng.standard_normal((40, 3))
+    y = rng.standard_normal(40)
+    estimator = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=0,
+        inference_config={"SAMPLE_WEIGHT_MODE": "learned"},
+    )
+    _record_row_weights(monkeypatch, estimator, X, y)
+    ((first_train, _),) = get_tuning_split_indices(
+        X, y, holdout_frac=0.5, n_splits=1, random_state=0, task_type="regressor"
+    )
+    sample_weight = np.ones(40)
+    sample_weight[first_train] = 0.0
+
+    assert (
+        estimator._compute_holdout_validation_data(
+            X=X, y=y, holdout_frac=0.5, n_folds=1, sample_weight=sample_weight
+        )
+        == []
+    )
+
+    estimator.tuning_config = {
+        "calibrate_temperature": True,
+        "tuning_holdout_frac": 0.5,
+        "tuning_n_folds": 1,
+    }
+    with pytest.warns(UserWarning, match="We recommend tuning only"):
+        estimator.fit(X, y, sample_weight=sample_weight)
+    assert estimator.ensemble_softmax_temperature_ == 1.0
 
 
 def test__tuning_metric_row_weights__multiplies_what_is_given() -> None:

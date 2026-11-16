@@ -103,6 +103,7 @@ from tabpfn.preprocessing.group_ids import (
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.row_weights import (
+    classes_with_zero_weight,
     resolve_sample_weight_mode,
     tuning_metric_row_weights,
     validate_row_weights,
@@ -1544,8 +1545,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         X: XType,
         y: YType,
-        sample_weight: npt.ArrayLike | None = None,
-        label_reliability: npt.ArrayLike | None = None,
+        sample_weight: npt.ArrayLike | None,
+        label_reliability: npt.ArrayLike | None,
     ) -> None:
         """If this class was initialized with a 'tuning_config', calibrate and tune.
 
@@ -1730,9 +1731,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         row_weights = tuning_metric_row_weights(sample_weight, label_reliability)
 
         holdout_raw_logits = []
-        holdout_y_true = []
+        holdout_indices_kept: list[np.ndarray] = []
         holdout_weights: list[np.ndarray] = []
-        holdout_row_weights: list[np.ndarray] = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for train_indices, holdout_indices in split_indices:
             X_train_NtF, y_train_Nt = X[train_indices], y[train_indices]
@@ -1740,16 +1740,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             fit_kwargs: dict[str, np.ndarray] = {}
             if sample_weight is not None:
                 fit_kwargs["sample_weight"] = sample_weight[train_indices]
-                class_weight_totals = np.bincount(
-                    y_train_Nt.astype(np.int64), weights=fit_kwargs["sample_weight"]
-                )
-                if (class_weight_totals[np.unique(y_train_Nt).astype(int)] == 0).any():
+                if len(
+                    classes_with_zero_weight(fit_kwargs["sample_weight"], y_train_Nt)
+                ):
                     continue
             if label_reliability is not None:
                 fit_kwargs["label_reliability"] = label_reliability[train_indices]
-            holdout_y_true.append(y_holdout_Nh)
-            if row_weights is not None:
-                holdout_row_weights.append(row_weights[holdout_indices])
+            holdout_indices_kept.append(holdout_indices)
             calibration_classifier = self._get_tuning_classifier()
             with warnings.catch_warnings():
                 # Filter expected warnings during tuning
@@ -1773,16 +1770,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if not holdout_raw_logits:
             return None
         holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
-        holdout_y_true__all = np.concatenate(holdout_y_true, axis=0)
         holdout_weights_all = np.concatenate(holdout_weights, axis=0)
-        holdout_row_weights_all = (
-            None if row_weights is None else np.concatenate(holdout_row_weights)
-        )
+        kept = np.concatenate(holdout_indices_kept)
         return (
             holdout_raw_logits_all,
-            holdout_y_true__all,
+            y[kept],
             holdout_weights_all,
-            holdout_row_weights_all,
+            None if row_weights is None else row_weights[kept],
         )
 
     def _raw_predict(
@@ -1937,7 +1931,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         holdout_raw_logits: np.ndarray,
         holdout_y_true: np.ndarray,
         holdout_correction_weights: np.ndarray,
-        holdout_row_weights: np.ndarray | None = None,
+        holdout_row_weights: np.ndarray | None,
     ) -> float:
         """Calibrate temperature based on the holdout logits and true labels.
 
