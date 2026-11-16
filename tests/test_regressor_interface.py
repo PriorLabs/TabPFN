@@ -1786,11 +1786,58 @@ def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
         assert borders[0] < zero
 
 
-MEAN_READOUTS = ["single_clamp", "single_trunc"]
+@pytest.mark.parametrize("transform", ["log_qgap", "log_fixed_atom", "log1p_target"])
+def test__predict__zero_inflated_transform__outputs_are_nonnegative(
+    transform: str,
+) -> None:
+    """The grid bucket that holds 0 and every bucket below it are read at 0."""
+    X, y = _zero_inflated_regression_data()
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        inference_precision=torch.float32,
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X[:200], y[:200])
+    full = reg.predict(X[200:], output_type="full")
+
+    for output in (full["mean"], full["median"], full["mode"], *full["quantiles"]):
+        assert output.min() >= 0
+    assert (full["quantiles"][0] == 0).any()
 
 
-@pytest.mark.parametrize("readout", MEAN_READOUTS)
-def test__predict__mean_readout__averages_the_member_means(readout: str) -> None:
+def test__logits_to_output__nonnegative__reads_the_zero_bucket_at_zero() -> None:
+    criterion = FullSupportBarDistribution(
+        torch.tensor([-3.0, -2.0, -0.5, 1.5, 2.0, 3.0, 4.0], dtype=torch.float64)
+    )
+    # Rows: all mass in the bucket [-0.5, 1.5]; half there, half in [2, 3].
+    probs = torch.zeros(2, 6, dtype=torch.float64)
+    probs[0, 2] = 1.0
+    probs[1, 2] = probs[1, 4] = 0.5
+
+    def output(output_type: str, *, nonnegative: bool) -> typing.Any:
+        return regressor_module._logits_to_output(
+            output_type=output_type,
+            logits=probs.log(),
+            znorm_space_bardist=criterion,
+            y_mean=0.0,
+            y_std=1.0,
+            quantiles=[0.25, 0.75],
+            nonnegative=nonnegative,
+        )
+
+    np.testing.assert_allclose(output("mean", nonnegative=False), [0.5, 1.5])
+    np.testing.assert_allclose(output("mean", nonnegative=True), [0.0, 1.25])
+    np.testing.assert_array_equal(output("median", nonnegative=True), [0.0, 0.0])
+    low, high = output("quantiles", nonnegative=True)
+    np.testing.assert_array_equal(low, [0.0, 0.0])
+    np.testing.assert_allclose(high, [0.0, 2.5])
+    np.testing.assert_array_equal(output("mode", nonnegative=True), [0.0, 2.5])
+
+
+def test__predict__mean_readout__averages_the_member_means() -> None:
+    readout = "single_trunc"
     X, y = _zero_inflated_regression_data()
     config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_qgap",)}
     kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 42}
@@ -1825,10 +1872,10 @@ def test__fit__mean_readout_with_negative_targets__raises() -> None:
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
-        inference_config={"REGRESSION_MEAN_READOUT": "single_clamp"},
+        inference_config={"REGRESSION_MEAN_READOUT": "single_trunc"},
     )
 
-    with pytest.raises(ValueError, match=r"single_clamp.*nonnegative"):
+    with pytest.raises(ValueError, match=r"single_trunc.*nonnegative"):
         reg.fit(X, y)
 
 
@@ -1837,7 +1884,7 @@ def test__fit__mean_readout_with_temperature_calibration__raises() -> None:
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
-        inference_config={"REGRESSION_MEAN_READOUT": "single_clamp"},
+        inference_config={"REGRESSION_MEAN_READOUT": "single_trunc"},
         tuning_config={"calibrate_temperature": True},
     )
 

@@ -349,8 +349,8 @@ class InferenceConfig:
 
     The options are:
         - "ensemble": the mean of the ensemble's averaged distribution.
-        - "single_clamp", "single_trunc": the average of each member's own mean
-          of a nonnegative target, see `tabpfn.mean_readout`. They need y >= 0.
+        - "single_trunc": the average of each member's own mean of a
+          nonnegative target, see `tabpfn.mean_readout`. It needs y >= 0.
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False

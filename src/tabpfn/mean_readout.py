@@ -2,11 +2,10 @@
 
 """Mean readouts of nonnegative regression targets from each ensemble member.
 
-The default mean averages the members' probabilities on one shared grid, whose
-bucket at 0 can straddle 0. These readouts take each member's mean on its own
-borders instead, and average the member means:
+The default mean averages the members' probabilities on one shared grid. These
+readouts take each member's mean on its own borders instead, and average the
+member means:
 
-- "single_clamp": E[max(Y, 0)].
 - "single_trunc": E[max(Y, 0) | Y <= y_max], with y_max the largest training
   target. The mass above y_max is dropped and the rest renormalized.
 """
@@ -20,7 +19,7 @@ import torch
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 
-MeanReadout = Literal["ensemble", "single_clamp", "single_trunc"]
+MeanReadout = Literal["ensemble", "single_trunc"]
 
 ROWS_PER_CHUNK = 4096
 """Rows per float64 softmax, which holds rows x buckets values at once."""
@@ -52,11 +51,7 @@ class MemberMeans:
         """Add one member's mean."""
         b = torch.as_tensor(np.ascontiguousarray(borders), dtype=torch.float64)
         zero = (0.0 - self.y_mean) / self.y_std
-        cap = (
-            (self.y_max - self.y_mean) / self.y_std
-            if self.readout == "single_trunc"
-            else None
-        )
+        cap = (self.y_max - self.y_mean) / self.y_std
         mean_z = _clamped_member_mean(b, logits, zero=zero, cap=cap)
         mean = mean_z * self.y_std + self.y_mean
         self._sum = mean if self._sum is None else self._sum + mean
@@ -77,9 +72,9 @@ def _softmax_products(logits: torch.Tensor, columns: torch.Tensor) -> torch.Tens
 
 
 def _clamped_member_mean(
-    borders: torch.Tensor, logits: torch.Tensor, *, zero: float, cap: float | None
+    borders: torch.Tensor, logits: torch.Tensor, *, zero: float, cap: float
 ) -> torch.Tensor:
-    """E[max(Y, zero)] of one member, or E[max(Y, zero) | Y <= cap] with `cap`.
+    """E[max(Y, zero) | Y <= cap] of one member.
 
     Interior buckets are uniform and the end buckets half-normal, as in
     `FullSupportBarDistribution.mean`. A clamped end bucket is read at
@@ -100,8 +95,6 @@ def _clamped_member_mean(
     inside = torch.where(lower >= zero, values, straddle)
     clamped = torch.where(upper <= zero, zero, torch.where(widths > 0, inside, values))
     clamped[0], clamped[-1] = values[0].clamp(min=zero), values[-1].clamp(min=zero)
-    if cap is None:
-        return _softmax_products(logits, clamped[:, None])[:, 0]
     # A bucket straddling the cap keeps its share below it, uniform there.
     keep = torch.where(
         lower >= cap,
