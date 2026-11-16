@@ -1509,11 +1509,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 matter: scaling every weight changes nothing, and a weight of 2
                 is not the same as the row appearing twice. Rows with weight 0
                 stay in the context. Raises unless the model supports per-row
-                weights, see `InferenceConfig.SAMPLE_WEIGHT_MODE`. For a target
-                that accrues over an exposure, such as a claim cost over the
-                years a policy was in force, pass the rate, target / exposure, as
-                `y` and the exposure as `sample_weight`, not as a feature. The
-                predictions are then rates.
+                weights, see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
             label_reliability: Experimental. One value in [0, 1] per training row:
                 how much to trust that row's target, from 1 (known to be right)
                 to 0 (carries no information). Raises unless the model
