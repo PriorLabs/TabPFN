@@ -137,4 +137,15 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             ),
         )
-    return PreprocessingPipeline(steps)
+    # Steps that only select, reorder, compare and encode values give the same
+    # float32 results from a float32 copy as from a float64 one.
+    no_arithmetic = (
+        not use_poly_features
+        and not pconfig.differentiable
+        and (schedule_gpu_transform is not None or pconfig.name == "none")
+        and not any(
+            isinstance(step, (AddSVDFeaturesStep, AddFingerprintFeaturesStep))
+            for step in steps
+        )
+    )
+    return PreprocessingPipeline(steps, keep_float32=no_arithmetic)

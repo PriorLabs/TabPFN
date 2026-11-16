@@ -16,6 +16,7 @@ from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
 )
 from tabpfn.preprocessing.steps.add_svd_features_step import get_svd_n_components
 from tabpfn.preprocessing.torch.pipeline_interface import (
+    IN_PLACE_BLOCK_BYTES,
     TorchPreprocessingStep,
     TorchPreprocessingStepResult,
     _move_cache_to_device,
@@ -51,7 +52,10 @@ class TorchRandomSignFlipStep(TorchPreprocessingStep):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
+        del in_place  # Writes a new tensor.
         if fitted_cache is None:
             # Fitting needs only the shape; slicing avoids gathering the table.
             fitted_cache = self._fit(x[:0, :, : len(column_indices)])
@@ -184,6 +188,8 @@ class TorchSquashingScalerStep(TorchPreprocessingStep):
 class TorchSoftClipOutliersStep(TorchPreprocessingStep):
     """Pipeline step wrapper for TorchSoftClipOutliers."""
 
+    columnwise = True
+
     def __init__(self, n_sigma: float = 4.0) -> None:
         """Initialize the outlier removal step.
 
@@ -239,9 +245,11 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
         """Override to select only target columns for quantile transform."""
-        del column_indices
+        del column_indices, in_place
         orig_device = x.device
 
         # The quantile transform uses many small ops (searchsorted, gather,
@@ -309,9 +317,11 @@ class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
         """Override to select only target columns for squashing scaler."""
-        del column_indices
+        del column_indices, in_place
         orig_device = x.device
         target_x = x[:, :, self._target_column_indices]
 
@@ -417,6 +427,8 @@ class TorchShuffleFeaturesStep(TorchPreprocessingStep):
     ``ShuffleFeaturesStep`` to guarantee identical results.
     """
 
+    rowwise = True
+
     def __init__(
         self,
         shuffle_method: Literal["shuffle", "rotate"] | None,
@@ -435,14 +447,28 @@ class TorchShuffleFeaturesStep(TorchPreprocessingStep):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
-        """Override to apply permutation to the full tensor."""
+        """Override to apply permutation to the full tensor.
+
+        In place, a block of rows at a time, which bounds the permuted copy to one
+        block.
+        """
         del column_indices
         if fitted_cache is None:
             fitted_cache = self._fit(x[:num_train_rows])
 
         perm = fitted_cache["permutation"]
-        x_shuffled = x[:, :, perm.to(x.device)]
+        if in_place:
+            row_bytes = x.shape[1] * x.shape[2] * x.element_size()
+            rows = max(1, IN_PLACE_BLOCK_BYTES // max(1, row_bytes))
+            columns = perm.to(x.device)
+            for start in range(0, x.shape[0], rows):
+                x[start : start + rows] = x[start : start + rows][:, :, columns]
+            x_shuffled = x
+        else:
+            x_shuffled = x[:, :, perm.to(x.device)]
 
         return TorchPreprocessingStepResult(
             x=x_shuffled,
@@ -632,9 +658,11 @@ class TorchAddFingerprintFeaturesStep(TorchPreprocessingStep):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
         """Compute fingerprints and return them as added columns."""
-        del column_indices  # operates on all columns
+        del column_indices, in_place  # operates on all columns
 
         n_rows, batch_size, n_cols = x.shape
 

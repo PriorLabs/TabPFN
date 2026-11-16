@@ -1586,13 +1586,22 @@ def _call_model_on_members(  # noqa: PLR0913
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
     for member, X_test in zip(members, X_tests, strict=True):
         X_full, y_train = _prepare_model_inputs(
-            device, force_inference_dtype, member.X_train, X_test, member.y_train
+            device,
+            force_inference_dtype,
+            member.X_train,
+            X_test,
+            member.y_train,
+            x_device=_model_input_device(
+                model, device, member.X_train, X_test, force_inference_dtype
+            ),
         )
         X_full, feature_schema = _maybe_run_gpu_preprocessing(
             X_full,
             gpu_preprocessor=member.gpu_preprocessor,
             num_train_rows=member.X_train.shape[0],
             feature_schema=member.feature_schema,
+            consume_input=True,
+            compute_device=device,
         )
         prepared.append(
             (X_full, y_train, feature_schema.indices_for(FeatureModality.CATEGORICAL))
@@ -1637,13 +1646,59 @@ def _prepare_model_inputs(
     X_train: torch.Tensor | np.ndarray,
     X_test: torch.Tensor | np.ndarray,
     y_train: torch.Tensor | np.ndarray,
+    *,
+    x_device: torch.device | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """The train and test rows as one `(rows, 1, columns)` tensor, and the labels.
+
+    Written into one tensor on `x_device`, by default `device`, a block of rows at a
+    time, so that device holds the table once. The labels go to `device`.
+    """
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
-    X_train = torch.as_tensor(X_train, dtype=dtype, device=device)
-    X_test = torch.as_tensor(X_test, dtype=dtype, device=device)
-    X_full = torch.cat([X_train, X_test], dim=0).unsqueeze(1)
+    num_train, num_test = len(X_train), len(X_test)
+    num_columns = X_train.shape[1] if num_train else X_test.shape[1]
+    X_full = torch.empty(
+        (num_train + num_test, 1, num_columns),
+        dtype=dtype,
+        device=device if x_device is None else x_device,
+    )
+    rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
+    for offset, part in ((0, X_train), (num_train, X_test)):
+        for start in range(0, len(part), rows):
+            block = torch.as_tensor(part[start : start + rows])
+            X_full[offset + start : offset + start + len(block), 0].copy_(block)
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
+
+
+_MODEL_INPUT_BLOCK_BYTES = 1 << 28
+"""Bytes of rows `_prepare_model_inputs` converts and copies at a time."""
+
+HOST_MODEL_INPUT_MIN_BYTES = 16 << 30
+"""Model inputs at least this large stay in host memory, for a model that reads its
+input from there: one whose `accepts_host_input` is True."""
+
+
+def _model_input_device(
+    model: torch.nn.Module,
+    device: torch.device,
+    X_train: torch.Tensor | np.ndarray,
+    X_test: torch.Tensor | np.ndarray,
+    force_inference_dtype: torch.dtype | None,
+) -> torch.device:
+    """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
+
+    In host memory when the model reads its input from there and the input takes
+    `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`.
+    """
+    if not getattr(model, "accepts_host_input", False) or device.type == "cpu":
+        return device
+    dtype = force_inference_dtype if force_inference_dtype else torch.float32
+    num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
+    nbytes = (len(X_train) + len(X_test)) * num_columns * dtype.itemsize
+    if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:
+        return torch.device("cpu")
+    return device
 
 
 def _move_and_squeeze_output(
@@ -1661,6 +1716,8 @@ def _maybe_run_gpu_preprocessing(
     *,
     num_train_rows: int | None = None,
     use_fitted_cache: bool = False,
+    consume_input: bool = False,
+    compute_device: torch.device | None = None,
 ) -> tuple[torch.Tensor, FeatureSchema]:
     """Run GPU preprocessing if a pipeline is provided.
 
@@ -1670,6 +1727,9 @@ def _maybe_run_gpu_preprocessing(
         feature_schema: Feature schema from CPU preprocessing.
         num_train_rows: Number of training rows for fit.
         use_fitted_cache: Reuse previously fitted state.
+        consume_input: Whether the pipeline may write into `X`, which the caller
+            no longer reads.
+        compute_device: The device the pipeline computes on when `X` is elsewhere.
 
     Returns:
         Tuple of (transformed tensor, updated feature schema).
@@ -1682,6 +1742,8 @@ def _maybe_run_gpu_preprocessing(
         feature_schema=feature_schema,
         num_train_rows=num_train_rows,
         use_fitted_cache=use_fitted_cache,
+        consume_input=consume_input,
+        compute_device=compute_device,
     )
     return result.x, result.feature_schema
 

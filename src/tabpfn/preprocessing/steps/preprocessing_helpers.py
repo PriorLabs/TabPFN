@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from tabpfn.classifier import XType, YType
 
 _FLOAT64 = np.dtype(np.float64)
+_PLACEABLE_FLOATS = (np.dtype(np.float64), np.dtype(np.float32))
 
 
 def _input_columns(X: XType) -> pd.Index | range:
@@ -271,11 +272,11 @@ class EfficientColumnTransformer(ColumnTransformer):
             # can't assign columns by key if multiple share the same key
             return False
         taken = set(selected)
-        # columns the transformer does *not* take need to already be float64,
-        # otherwise an assignment into the output would be a conversion that could
-        # differ from the one ColumnTransformer would have done
+        # columns the transformer does *not* take need to be float64 or float32,
+        # whose assignment into the float64 output is the exact widening
+        # ColumnTransformer's stack does; any other conversion could differ from it
         return all(
-            dtype == _FLOAT64
+            dtype in _PLACEABLE_FLOATS
             for column, dtype in zip(X.columns, X.dtypes, strict=True)
             if column not in taken
         )
@@ -377,8 +378,8 @@ class EfficientColumnTransformer(ColumnTransformer):
         passthrough: list[tuple[int, int]],
     ) -> np.dtype:
         """The dtype `ColumnTransformer` would have stacked its way to."""
-        # a frame weighs in as float64, which `_can_assemble` has established every one
-        # of its passthrough columns already is
+        # a frame weighs in as float64: `_can_assemble` has established every one of its
+        # passthrough columns is float64 or float32, which widens to it exactly
         input_dtype = _FLOAT64 if isinstance(X, pd.DataFrame) else X.dtype
         if transformed is None:
             return input_dtype

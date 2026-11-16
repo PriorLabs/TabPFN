@@ -8,6 +8,7 @@ from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Literal
 
 import joblib
+import numpy as np
 import torch
 
 from tabpfn.constants import (
@@ -20,8 +21,6 @@ from tabpfn.preprocessing.ensemble import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from tabpfn.preprocessing.configs import EnsembleConfig
     from tabpfn.preprocessing.datamodel import FeatureSchema
     from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
@@ -66,14 +65,24 @@ def _fit_preprocessing_one(
     if row_indices is not None:
         X_train = X_train[row_indices]
         y_train = y_train[row_indices]
+    # A numpy table's columns are gathered straight into the pipeline's working copy,
+    # rather than into a subset that is then copied again.
+    gather = None
     if feature_indices is not None:
-        X_train = X_train[..., feature_indices]
+        if isinstance(X_train, np.ndarray) and X_train.ndim == 2:
+            gather = feature_indices
+        else:
+            X_train = X_train[..., feature_indices]
         feature_schema = feature_schema.slice_for_indices(feature_indices.tolist())
     if not isinstance(X_train, torch.Tensor):
         # PreprocessingPipeline._process_steps already copies X_train
         y_train = y_train.copy()
 
-    res = pipeline.fit_transform(X_train, feature_schema)
+    res = (
+        pipeline.fit_transform(X_train, feature_schema)
+        if gather is None
+        else pipeline.fit_transform(X_train, feature_schema, feature_indices=gather)
+    )
 
     y_train_processed = _transform_labels_one(config, y_train)
 

@@ -741,3 +741,26 @@ class TestGpuPipelineInfPassthrough:
         X_out, _ = _run_cpu_plus_gpu(X, schema, config, seed=0)
 
         assert not np.isinf(X_out).any()
+
+
+@pytest.mark.parametrize("name", ["none", "quantile_uni_coarse"])
+@pytest.mark.parametrize("categorical_name", ["ordinal", "onehot", "numeric"])
+def test__create_preprocessing_pipeline__no_cpu_arithmetic__float32_copy_matches(
+    sample_data: _DataWithSchema, name: str, categorical_name: str
+) -> None:
+    X, schema = sample_data
+    X = X.astype(np.float32)
+    config = _make_config(
+        PreprocessorConfig(name, categorical_name=categorical_name),
+        fingerprint=False,
+    )
+
+    def run(*, keep_float32: bool) -> npt.NDArray[np.float32]:
+        pipe = create_preprocessing_pipeline(
+            config, random_state=0, enable_gpu_preprocessing=True
+        )
+        assert pipe.keep_float32
+        pipe.keep_float32 = keep_float32
+        return pipe.fit_transform(X.copy(), schema).X.astype(np.float32)
+
+    np.testing.assert_array_equal(run(keep_float32=True), run(keep_float32=False))

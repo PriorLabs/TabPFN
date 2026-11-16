@@ -9,8 +9,9 @@ import pytest
 import torch
 
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.preprocessing import PreprocessingPipeline
+from tabpfn.preprocessing import PreprocessingPipeline, pipeline_interface
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.steps import remove_constant_features_step
 from tabpfn.preprocessing.steps.remove_constant_features_step import (
     RemoveConstantFeaturesStep,
 )
@@ -258,3 +259,25 @@ def test__pipeline__keeps_column_with_multiple_infinities() -> None:
     # ... and its infinities round-trip back into the output.
     np.testing.assert_array_equal(result.X[:, 0], np.array([inf, -inf, inf]))
     np.testing.assert_array_equal(result.X[:, 1], np.array([1.0, 2.0, 3.0]))
+
+
+def test__non_constant_columns__row_blocks_on_threads__match_the_whole_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((50, 10))
+    X[:, 1] = 3.0
+    X[:, 4] = np.nan
+    X[::2, 6] = np.nan
+    X[:, 7] = np.where(np.arange(50) % 2, np.nan, 5.0)
+    X[:, 8] = np.where(np.arange(50) == 0, np.nan, 2.0)
+    X[:, 9] = np.where(np.arange(50) == 49, 1.0, 2.0)
+    expected = np.logical_and(
+        (X[0:1, :] == X).mean(axis=0) < 1.0, ~np.all(np.isnan(X), axis=0)
+    )
+    monkeypatch.setattr(pipeline_interface, "ROW_SCAN_BLOCK_BYTES", 3 * 10 * X.itemsize)
+    monkeypatch.setattr(pipeline_interface, "ROW_SCAN_MAX_THREADS", 4)
+
+    actual = remove_constant_features_step._non_constant_columns(X)
+
+    np.testing.assert_array_equal(actual, expected)

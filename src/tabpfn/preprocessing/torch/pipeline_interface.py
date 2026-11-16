@@ -13,6 +13,13 @@ import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
+IN_PLACE_BLOCK_BYTES = 1 << 28
+"""Bytes of selected columns a columnwise step copies at a time when in place."""
+
+DEVICE_BLOCK_BYTES = 1 << 31
+"""Bytes of an input held elsewhere that the pipeline moves to its compute device at a
+time."""
+
 
 class TorchPreprocessingStep(abc.ABC):
     """Base class for preprocessing steps that can operate on specific columns.
@@ -26,12 +33,29 @@ class TorchPreprocessingStep(abc.ABC):
     cloning, and reassignment.
     """
 
+    columnwise: bool = False
+    """Whether each column's fit and transform read only that column.
+
+    Such a step fits and transforms an input it may write into a block of
+    columns at a time, its cache tensors' last dimension indexing the columns.
+    """
+
+    rowwise: bool = False
+    """Whether the step fits without reading cell values and transforms each row
+    alone.
+
+    The pipeline runs such a step on an input held off its compute device a block
+    of rows at a time.
+    """
+
     def fit_transform(
         self,
         x: torch.Tensor,
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
         """Fit on training data for the specified columns.
 
@@ -41,7 +65,12 @@ class TorchPreprocessingStep(abc.ABC):
             num_train_rows: Number of training rows (fit on x[:num_train_rows]).
             fitted_cache: Fitted cache from the previous step. If None, the step will
                 fit the cache on the training data.
+            in_place: Whether the step may write its result into `x`.
         """
+        if in_place and self.columnwise and column_indices:
+            return self._fit_transform_column_blocks(
+                x, column_indices, num_train_rows, fitted_cache
+            )
         x_cols_selected = x[:, :, column_indices]
 
         if fitted_cache is None:
@@ -51,7 +80,8 @@ class TorchPreprocessingStep(abc.ABC):
             x_cols_selected, fitted_cache=fitted_cache
         )
 
-        x = x.clone()
+        if not in_place:
+            x = x.clone()
         x[:, :, column_indices] = transformed
         return TorchPreprocessingStepResult(
             x=x,
@@ -59,6 +89,39 @@ class TorchPreprocessingStep(abc.ABC):
             added_modality=added_modality,
             fitted_cache=fitted_cache,
         )
+
+    def _fit_transform_column_blocks(
+        self,
+        x: torch.Tensor,
+        column_indices: list[int],
+        num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None,
+    ) -> TorchPreprocessingStepResult:
+        """`fit_transform` of a columnwise step into `x`, a block of columns at a time.
+
+        Bounds the selected columns' copies to one block.
+        """
+        columns = torch.as_tensor(column_indices, device=x.device)
+        row_bytes = x.shape[0] * x.shape[1] * x.element_size()
+        width = max(1, IN_PLACE_BLOCK_BYTES // max(1, row_bytes))
+        blocks = [
+            slice(start, min(start + width, len(column_indices)))
+            for start in range(0, len(column_indices), width)
+        ]
+        if fitted_cache is None:
+            parts = [self._fit(x[:num_train_rows, :, columns[b]]) for b in blocks]
+            fitted_cache = {
+                key: torch.cat([part[key] for part in parts], dim=-1)
+                for key in parts[0]
+            }
+        for block in blocks:
+            cache = {key: value[..., block] for key, value in fitted_cache.items()}
+            transformed, added_columns, _ = self._transform(
+                x[:, :, columns[block]], fitted_cache=cache
+            )
+            assert added_columns is None, "A columnwise step adds no columns."
+            x[:, :, columns[block]] = transformed
+        return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
     @override
     def __repr__(self) -> str:
@@ -156,6 +219,8 @@ class TorchPreprocessingPipeline:
         num_train_rows: int | None = None,
         *,
         use_fitted_cache: bool = False,
+        consume_input: bool = False,
+        compute_device: torch.device | None = None,
     ) -> TorchPreprocessingPipelineOutput:
         """Apply all steps to the input tensor.
 
@@ -169,6 +234,12 @@ class TorchPreprocessingPipeline:
             use_fitted_cache: Whether to use the fitted cache from the previous call
                 of the pipeline. If False, the processors are refit on the provided
                 data.
+            consume_input: Whether the steps may write into `x`, which the caller
+                no longer reads.
+            compute_device: The device to compute on when it is not `x`'s. With
+                `consume_input`, the infinity scan and the columnwise steps then
+                move `x` there a block at a time and write the results back into
+                `x`; the other steps run on `x`'s device.
 
         Returns:
             PipelineOutput with transformed tensor and updated schema.
@@ -189,7 +260,14 @@ class TorchPreprocessingPipeline:
         # Record any +/-inf positions (passed through from CPU preprocessing) and
         # replace them with NaN so SVD/quantile/scaler steps don't crash on or
         # corrupt from them; they are written back at the end.  No-op when finite.
-        inf_masks = _extract_inf_masks(x, feature_schema)
+        staged = (
+            consume_input
+            and compute_device is not None
+            and torch.device(compute_device) != x.device
+        )
+        inf_masks = _extract_inf_masks(
+            x, feature_schema, scan_device=compute_device if staged else None
+        )
 
         self.step_timings_ = {} if self.record_timings else None
         for i, (step, modalities) in enumerate(self.steps):
@@ -207,11 +285,14 @@ class TorchPreprocessingPipeline:
             if fitted_cache is not None:
                 fitted_cache = _move_cache_to_device(fitted_cache, x.device)
 
-            result = step.fit_transform(
+            result = _run_step(
+                step,
                 x,
-                column_indices=indices,
-                num_train_rows=num_train_rows,
-                fitted_cache=fitted_cache,
+                indices,
+                num_train_rows,
+                fitted_cache,
+                consume_input=consume_input,
+                compute_device=compute_device if staged else None,
             )
             x = result.x
 
@@ -308,9 +389,129 @@ def _move_cache_to_device(
     return {k: move(v) if isinstance(v, torch.Tensor) else v for k, v in cache.items()}
 
 
+def _run_step(
+    step: TorchPreprocessingStep,
+    x: torch.Tensor,
+    column_indices: list[int],
+    num_train_rows: int,
+    fitted_cache: dict[str, torch.Tensor] | None,
+    *,
+    consume_input: bool,
+    compute_device: torch.device | None,
+) -> TorchPreprocessingStepResult:
+    """`step.fit_transform`, by blocks moved to `compute_device` when one is given
+    and the step reads its input by columns or by rows.
+    """
+    if compute_device is not None and step.columnwise:
+        return _fit_transform_on_device(
+            step, x, column_indices, num_train_rows, fitted_cache, compute_device
+        )
+    if compute_device is not None and step.rowwise and x.shape[0] > 0:
+        return _fit_transform_rows_on_device(
+            step, x, column_indices, num_train_rows, fitted_cache, compute_device
+        )
+    # Passed only when set, so a step written without it still runs.
+    in_place = {"in_place": True} if consume_input else {}
+    return step.fit_transform(
+        x,
+        column_indices=column_indices,
+        num_train_rows=num_train_rows,
+        fitted_cache=fitted_cache,
+        **in_place,
+    )
+
+
+def _fit_transform_on_device(
+    step: TorchPreprocessingStep,
+    x: torch.Tensor,
+    column_indices: list[int],
+    num_train_rows: int,
+    fitted_cache: dict[str, torch.Tensor] | None,
+    device: torch.device,
+) -> TorchPreprocessingStepResult:
+    """A columnwise step's `fit_transform` into `x`, a block of columns at a time on
+    `device`.
+
+    Returns the fitted cache on `device`.
+    """
+    row_bytes = x.shape[0] * x.shape[1] * x.element_size()
+    width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
+    parts: list[dict[str, torch.Tensor] | None] = []
+    for start in range(0, len(column_indices), width):
+        selected = column_indices[start : start + width]
+        index = _column_index(selected)
+        cache = None
+        if fitted_cache is not None:
+            cache = {
+                key: value[..., start : start + len(selected)].to(device)
+                for key, value in fitted_cache.items()
+            }
+        result = step.fit_transform(
+            x[:, :, index].to(device),
+            column_indices=list(range(len(selected))),
+            num_train_rows=num_train_rows,
+            fitted_cache=cache,
+            in_place=True,
+        )
+        assert result.added_columns is None, "A columnwise step adds no columns."
+        x[:, :, index] = result.x.to(x.device)
+        parts.append(result.fitted_cache)
+    fitted = None
+    if parts and parts[0] is not None:
+        fitted = {
+            key: torch.cat([part[key] for part in parts if part is not None], dim=-1)
+            for key in parts[0]
+        }
+    return TorchPreprocessingStepResult(x=x, fitted_cache=fitted)
+
+
+def _fit_transform_rows_on_device(
+    step: TorchPreprocessingStep,
+    x: torch.Tensor,
+    column_indices: list[int],
+    num_train_rows: int,
+    fitted_cache: dict[str, torch.Tensor] | None,
+    device: torch.device,
+) -> TorchPreprocessingStepResult:
+    """A rowwise step's `fit_transform` into `x`, a block of rows at a time on
+    `device`.
+
+    The first block fits the step when `fitted_cache` is None; the others reuse it.
+    """
+    row_bytes = max(1, x[:1].numel() * x.element_size())
+    rows = max(1, DEVICE_BLOCK_BYTES // row_bytes)
+    cache = None
+    if fitted_cache is not None:
+        cache = _move_cache_to_device(fitted_cache, device)
+    permutation = None
+    for start in range(0, x.shape[0], rows):
+        result = step.fit_transform(
+            x[start : start + rows].to(device),
+            column_indices=column_indices,
+            num_train_rows=num_train_rows,
+            fitted_cache=cache,
+            in_place=True,
+        )
+        assert result.added_columns is None, "A rowwise step adds no columns."
+        x[start : start + rows] = result.x.to(x.device)
+        cache = result.fitted_cache
+        permutation = result.schema_permutation
+    return TorchPreprocessingStepResult(
+        x=x, fitted_cache=cache, schema_permutation=permutation
+    )
+
+
+def _column_index(columns: list[int]) -> slice | list[int]:
+    """`columns` as a slice when they are a contiguous ascending range."""
+    if columns == list(range(columns[0], columns[0] + len(columns))):
+        return slice(columns[0], columns[0] + len(columns))
+    return columns
+
+
 def _extract_inf_masks(
     x: torch.Tensor,
     feature_schema: FeatureSchema,
+    scan_device: torch.device | None = None,
 ) -> dict[str, torch.Tensor]:
     """Record per-feature +/-inf values and replace them with NaN in ``x``.
 
@@ -318,20 +519,41 @@ def _extract_inf_masks(
     (last) axis of an ``[num_rows, batch_size, num_columns]`` tensor. Returns a
     ``{feature_name: signed-inf slice}`` mapping for the columns that contained
     infinities (empty when ``x`` is finite, leaving ``x`` untouched). ``x`` is
-    mutated in place.
+    mutated in place. Columns are scanned a block at a time, so no table-sized
+    boolean mask is held. With `scan_device`, the scan moves blocks of rows there.
     """
-    inf_bool = torch.isinf(x)
-    if not bool(inf_bool.any()):
+    n_columns = x.shape[-1]
+    if n_columns == 0:
         return {}
-
+    if scan_device is not None:
+        row_bytes = max(1, x[:1].numel() * x.element_size())
+        rows = max(1, DEVICE_BLOCK_BYTES // row_bytes)
+        found = torch.zeros(n_columns, dtype=torch.bool, device=scan_device)
+        for start in range(0, x.shape[0], rows):
+            block = x[start : start + rows].to(scan_device)
+            found |= torch.isinf(block).flatten(0, -2).any(0)
+        has_inf = found.cpu().tolist()
+    else:
+        n_cells = x.numel() // max(1, n_columns)
+        width = max(1, _INF_SCAN_BLOCK_BYTES // max(1, n_cells * x.element_size()))
+        has_inf = torch.cat(
+            [
+                torch.isinf(x[..., start : start + width]).flatten(0, -2).any(0).cpu()
+                for start in range(0, n_columns, width)
+            ]
+        ).tolist()
     masks: dict[str, torch.Tensor] = {}
     for idx, feat in enumerate(feature_schema.features):
-        col_inf = inf_bool[..., idx]
-        if bool(col_inf.any()):
+        if has_inf[idx]:
             col = x[..., idx]
+            col_inf = torch.isinf(col)
             masks[feat.name] = torch.where(col_inf, col, 0)
-    x[inf_bool] = float("nan")
+            col[col_inf] = float("nan")
     return masks
+
+
+_INF_SCAN_BLOCK_BYTES = 1 << 28
+"""Bytes of columns `_extract_inf_masks` scans for infinities at a time."""
 
 
 def _restore_inf_masks(

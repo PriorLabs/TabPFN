@@ -32,6 +32,8 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
+    _model_input_device,
+    _prepare_model_inputs,
     _resolve_kv_cache_precision,
 )
 from tabpfn.preprocessing import (
@@ -1113,3 +1115,67 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             "int8", architecture=arch, device=torch.device("cpu")
         )
     assert resolved == "auto"
+
+
+def test__prepare_model_inputs__row_blocks__match_one_concatenation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = default_rng(0)
+    X_train = rng.standard_normal((300, 7))
+    X_test = rng.standard_normal((11, 7)).astype(np.float32)
+    y_train = rng.integers(0, 3, 300)
+    expected = torch.cat(
+        [torch.as_tensor(X_train, dtype=torch.float32), torch.as_tensor(X_test)]
+    ).unsqueeze(1)
+    monkeypatch.setattr("tabpfn.inference._MODEL_INPUT_BLOCK_BYTES", 7 * 4 * 64)
+
+    X_full, y = _prepare_model_inputs(
+        torch.device("cpu"), None, X_train, X_test, y_train
+    )
+
+    torch.testing.assert_close(X_full, expected, rtol=0, atol=0)
+    assert X_full.is_contiguous()
+    torch.testing.assert_close(y, torch.as_tensor(y_train, dtype=torch.float32))
+
+
+class _HostInputModel(nn.Module):
+    accepts_host_input = True
+
+
+@pytest.mark.parametrize(
+    ("model", "device", "min_bytes", "expected"),
+    [
+        (_HostInputModel(), "cuda", 0, "cpu"),
+        (_HostInputModel(), "cuda", 1 << 40, "cuda"),
+        (nn.Module(), "cuda", 0, "cuda"),
+        (_HostInputModel(), "cpu", 0, "cpu"),
+    ],
+)
+def test__model_input_device__large_input_of_a_host_input_model__stays_on_the_host(
+    model: nn.Module,
+    device: str,
+    min_bytes: int,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("tabpfn.inference.HOST_MODEL_INPUT_MIN_BYTES", min_bytes)
+    X_train, X_test = np.zeros((30, 4)), np.zeros((5, 4))
+
+    actual = _model_input_device(model, torch.device(device), X_train, X_test, None)
+
+    assert actual == torch.device(expected)
+
+
+def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() -> None:
+    rng = default_rng(0)
+    X_train = rng.standard_normal((40, 3))
+    X_test = rng.standard_normal((6, 3))
+    y_train = rng.integers(0, 2, 40)
+    cpu = torch.device("cpu")
+    expected, _ = _prepare_model_inputs(cpu, None, X_train, X_test, y_train)
+
+    X_full, y = _prepare_model_inputs(cpu, None, X_train, X_test, y_train, x_device=cpu)
+
+    torch.testing.assert_close(X_full, expected, rtol=0, atol=0)
+    assert X_full.device == cpu
+    assert y.device == cpu

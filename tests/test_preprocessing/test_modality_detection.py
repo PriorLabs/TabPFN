@@ -1032,3 +1032,54 @@ def test__count_distinct_per_column__bool_array__matches_nunique() -> None:
     np.testing.assert_array_equal(counts, expected)
     assert counts.dtype == np.int64
     np.testing.assert_array_equal(_count_distinct_per_column(X[:1]), [1, 1, 1, 1])
+
+
+def test__count_distinct_per_column__column_blocks__match_one_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.integers(0, 50, size=(300, 23)).astype(np.float64)
+    X[rng.random(X.shape) < 0.05] = np.nan
+    X[0, :6] = [np.inf, -np.inf, -0.0, 0.0, np.nan, 1.0]
+    expected = modality_detection._count_distinct_per_column(X)
+    monkeypatch.setattr(
+        modality_detection, "_DISTINCT_COUNT_BLOCK_BYTES", 2 * 300 * X.itemsize
+    )
+
+    actual = modality_detection._count_distinct_per_column(X)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test__count_distinct_per_column__memory_budget_of_one_thread__matches_one_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = np.random.default_rng(1)
+    X = rng.integers(0, 9, size=(200, 17)).astype(np.float64)
+    X[rng.random(X.shape) < 0.1] = np.nan
+    expected = modality_detection._count_distinct_per_column(X)
+    block_bytes = 3 * 200 * X.itemsize
+    monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_BLOCK_BYTES", block_bytes)
+    monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_BUDGET_BYTES", 1)
+
+    actual = modality_detection._count_distinct_per_column(X)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test__count_distinct_per_column__selected_columns__match_their_slice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = np.random.default_rng(2)
+    X = rng.integers(0, 30, size=(150, 19)).astype(np.float64)
+    X[rng.random(X.shape) < 0.05] = np.nan
+    columns = np.array([0, 1, 2, 5, 9, 10, 11, 18])
+    expected = modality_detection._count_distinct_per_column(X[:, columns])
+    monkeypatch.setattr(
+        modality_detection, "_DISTINCT_COUNT_BLOCK_BYTES", 3 * 150 * X.itemsize
+    )
+
+    actual = modality_detection._count_distinct_per_column(X, columns)
+
+    np.testing.assert_array_equal(actual, expected)
+    assert len(modality_detection._count_distinct_per_column(X, columns[:0])) == 0

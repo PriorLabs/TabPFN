@@ -21,6 +21,8 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
+    permute_columns_in_place,
+    step_owns_input,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
@@ -402,7 +404,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
         categorical_features = ct_cat_features
         if self.categorical_transform_name.startswith("ordinal"):
-            Xt = ct.fit_transform(X)
+            Xt = self._ordinal_fit_transform(ct, X, ct_cat_features)
             categorical_features = list(range(len(ct_cat_features)))
 
             self.random_mappings_ = {}
@@ -449,6 +451,34 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         return Xt, _carry_over_input_feature_metadata(
             feature_schema, out, ct, n_input_features
         )
+
+    @staticmethod
+    def _ordinal_fit_transform(
+        ct: ColumnTransformer, X: np.ndarray, categorical: list[int]
+    ) -> np.ndarray:
+        """`ct.fit_transform(X)`: the encoded columns first, the rest after them.
+
+        When the pipeline hands `X` over and the codes fit its dtype, the columns are
+        moved and the codes written within `X`. The values are the same: an ordinal
+        code is a small integer.
+        """
+        if not (step_owns_input() and X.dtype.kind == "f" and X.ndim == 2):
+            return ct.fit_transform(X)
+        ct.fit(X)
+        encoder = ct.named_transformers_["ordinal_encoder"]
+        if len(ct.transformers_) != 2 or len(categorical) > X.shape[1]:
+            return ct.transform(X)
+        codes = encoder.transform(X[:, categorical])
+        if codes.dtype != X.dtype and X.dtype.itemsize < codes.dtype.itemsize:
+            limit = 2 ** (np.finfo(X.dtype).nmant + 1)
+            finite = codes[np.isfinite(codes)]
+            if finite.size and np.abs(finite).max() >= limit:
+                return ct.transform(X)
+        taken = set(categorical)
+        order = list(categorical) + [i for i in range(X.shape[1]) if i not in taken]
+        X = permute_columns_in_place(X, order)
+        X[:, : len(categorical)] = codes
+        return X
 
     @override
     def fit_transform(

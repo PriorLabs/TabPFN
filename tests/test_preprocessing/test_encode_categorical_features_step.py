@@ -6,18 +6,23 @@ from __future__ import annotations
 
 import dataclasses
 from typing import Any
+from unittest import mock
 
 import numpy as np
 import pytest
 from sklearn.compose import ColumnTransformer
 
+from tabpfn.preprocessing import pipeline_interface
 from tabpfn.preprocessing.datamodel import (
     Feature,
     FeatureModality,
     FeatureSchema,
     GPUTransformType,
 )
-from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
+from tabpfn.preprocessing.pipeline_interface import (
+    _STEP_OWNS_INPUT,
+    PreprocessingPipeline,
+)
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
 from tabpfn.preprocessing.steps.preprocessing_helpers import EfficientColumnTransformer
 
@@ -701,3 +706,44 @@ def test__encode_categorical__ordinal__one_row_fit_learns_every_category() -> No
     assert len(fitted.categories_) == len(expected.categories_)
     for learned, wanted in zip(fitted.categories_, expected.categories_, strict=True):
         np.testing.assert_array_equal(learned, wanted)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("transform_name", ["ordinal", "ordinal_shuffled"])
+def test__fit_transform__input_handed_over__matches_a_fresh_output(
+    dtype: type, transform_name: str
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((500, 6)).astype(dtype)
+    X[:, 1] = rng.integers(0, 5, 500)
+    X[:, 4] = rng.integers(0, 3, 500)
+    X[7, 4] = np.nan
+    schema = FeatureSchema.from_only_categorical_indices([1, 4], 6)
+
+    fresh = EncodeCategoricalFeaturesStep(transform_name, random_state=0)
+    expected = fresh.fit_transform(X.copy(), schema)
+
+    owned = EncodeCategoricalFeaturesStep(transform_name, random_state=0)
+    token = _STEP_OWNS_INPUT.set(True)
+    try:
+        result = owned.fit_transform(X.copy(), schema)
+    finally:
+        _STEP_OWNS_INPUT.reset(token)
+
+    np.testing.assert_array_equal(result.X.astype(np.float64), expected.X)
+    assert result.feature_schema == expected.feature_schema
+    test = rng.standard_normal((40, 6)).astype(dtype)
+    test[:, 1] = rng.integers(0, 6, 40)
+    test[:, 4] = rng.integers(0, 3, 40)
+    np.testing.assert_array_equal(owned.transform(test).X, fresh.transform(test).X)
+
+
+def test__permute_columns_in_place__matches_fancy_indexing() -> None:
+    rng = np.random.default_rng(1)
+    X = rng.standard_normal((1000, 7)).astype(np.float32)
+    order = [3, 0, 6, 1, 5, 2, 4]
+    expected = X[:, order]
+    with mock.patch.object(pipeline_interface, "PERMUTE_BLOCK_BYTES", 7 * 4 * 33):
+        out = pipeline_interface.permute_columns_in_place(X, order)
+    assert out is X
+    np.testing.assert_array_equal(out, expected)
