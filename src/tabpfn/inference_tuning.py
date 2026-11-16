@@ -114,11 +114,6 @@ class RegressorTuningConfig(TuningConfig):
     and suits common zero-inflated datasets."""
 
     def __post_init__(self) -> None:
-        if self.mean_calibration_mode != "tweedie":
-            raise ValueError(
-                "`mean_calibration_mode` must be 'tweedie', got "
-                f"{self.mean_calibration_mode!r}."
-            )
         if not 1.0 <= self.mean_calibration_power <= 2.0:
             raise ValueError(
                 "`mean_calibration_power` must be in [1, 2], got "
@@ -537,9 +532,11 @@ fold's per-bar downsampling correction log weights, and an optional fifth entry
 holding the weight of each holdout row in the metric."""
 
 
-MEAN_CALIBRATION_MIN_MEAN = 1e-6
-"""Floor for the means the mean calibration constant is fitted on. A mean at or below
-zero has no Tweedie deviance for p > 1."""
+MEAN_CALIBRATION_MIN_MEAN_FRACTION = 1e-2
+"""Floor for the means the mean calibration constant is fitted on, as a fraction of
+the mean target. A mean at or below zero has no Tweedie deviance for p > 1. A floor
+relative to the targets keeps c independent of their units, and keeps one row with a
+positive target and a near-zero mean from dominating c."""
 
 
 def find_mean_calibration_scale(
@@ -550,19 +547,22 @@ def find_mean_calibration_scale(
     """Finds the constant c that minimizes the Tweedie deviance of `c * mean`.
 
     The minimizer has the closed form c = sum(y m^(1-p)) / sum(m^(2-p)), with the
-    means m floored at `MEAN_CALIBRATION_MIN_MEAN`. p = 1 gives
-    sum(y) / sum(m).
+    means m floored at `MEAN_CALIBRATION_MIN_MEAN_FRACTION` times the mean target.
+    p = 1 gives sum(y) / sum(m).
 
     Args:
-        y_true: The nonnegative targets, of shape [n_samples].
+        y_true: The nonnegative targets, of shape [n_samples], at least one of
+            them positive.
         mean: The predicted means, of shape [n_samples].
         power: The Tweedie power p.
 
     Returns:
         The constant c.
     """
-    m = np.maximum(mean.astype(np.float64), MEAN_CALIBRATION_MIN_MEAN)
     y = y_true.astype(np.float64)
+    m = np.maximum(
+        mean.astype(np.float64), MEAN_CALIBRATION_MIN_MEAN_FRACTION * y.mean()
+    )
     return float((y * m ** (1 - power)).sum() / (m ** (2 - power)).sum())
 
 

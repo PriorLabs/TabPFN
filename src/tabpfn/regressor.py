@@ -1821,10 +1821,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if tuning_config_resolved is None:
             return
 
-        calibrate_mean = (
-            isinstance(tuning_config_resolved, RegressorTuningConfig)
-            and tuning_config_resolved.calibrate_mean
-        )
+        assert isinstance(tuning_config_resolved, RegressorTuningConfig)
+        calibrate_mean = tuning_config_resolved.calibrate_mean
         if not (tuning_config_resolved.calibrate_temperature or calibrate_mean):
             return
 
@@ -1863,7 +1861,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Keeps the no-op scale if every fold was dropped.
         if calibrate_mean and holdout_folds:
-            assert isinstance(tuning_config_resolved, RegressorTuningConfig)
             y_holdout = (
                 torch.cat([y_fold for _, _, y_fold, *_ in holdout_folds]).cpu().numpy()
             )

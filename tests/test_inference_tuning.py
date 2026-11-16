@@ -13,7 +13,7 @@ from sklearn.metrics import mean_tweedie_deviance
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.inference_tuning import (
-    MEAN_CALIBRATION_MIN_MEAN,
+    MEAN_CALIBRATION_MIN_MEAN_FRACTION,
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
@@ -643,11 +643,6 @@ def test__regressor_tuning_config__calibrate_mean_is_off_by_default() -> None:
     assert RegressorTuningConfig().mean_calibration_mode == "tweedie"
 
 
-def test__regressor_tuning_config__rejects_an_unknown_mean_calibration_mode() -> None:
-    with pytest.raises(ValueError, match="must be 'tweedie'"):
-        RegressorTuningConfig(calibrate_mean=True, mean_calibration_mode="balance")  # type: ignore[arg-type]
-
-
 @pytest.mark.parametrize("power", [0.0, 0.99, 2.01])
 def test__regressor_tuning_config__rejects_mean_calibration_power_outside_1_2(
     power: float,
@@ -659,7 +654,8 @@ def test__regressor_tuning_config__rejects_mean_calibration_power_outside_1_2(
 @pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
 def test__find_mean_calibration_scale__recovers_a_known_scale(power: float) -> None:
     rng = np.random.default_rng(0)
-    mean = rng.gamma(shape=2.0, scale=3.0, size=10_000)
+    # Shifted by 1, so no mean falls below the floor of the mean calibration.
+    mean = 1.0 + rng.gamma(shape=2.0, scale=3.0, size=10_000)
     # Zero-inflated, multiplicative noise with mean 1: E[y] = 2.5 * mean.
     y = 2.5 * mean * rng.binomial(1, 0.2, size=mean.size) * 5.0
 
@@ -677,7 +673,8 @@ def test__find_mean_calibration_scale__minimizes_the_tweedie_deviance(
     power: float,
 ) -> None:
     rng = np.random.default_rng(1)
-    mean = rng.gamma(shape=2.0, scale=1.0, size=500)
+    # Shifted, so no mean falls below the floor of the mean calibration.
+    mean = 0.5 + rng.gamma(shape=2.0, scale=1.0, size=500)
     # Not proportional to `mean`, so each power has a different minimizer.
     y = rng.poisson(mean**2) + 1.0
 
@@ -693,13 +690,32 @@ def test__find_mean_calibration_scale__minimizes_the_tweedie_deviance(
 def test__find_mean_calibration_scale__floors_non_positive_means() -> None:
     y = np.array([0.0, 0.0, 4.0])
     mean = np.array([-0.5, 0.0, 2.0])
-    floor = MEAN_CALIBRATION_MIN_MEAN
+    floor = MEAN_CALIBRATION_MIN_MEAN_FRACTION * y.mean()
 
     # p = 1 is sum(y) / sum(m) with the floored means.
     assert find_mean_calibration_scale(y_true=y, mean=mean, power=1.0) == pytest.approx(
         4.0 / (2.0 + 2 * floor)
     )
     assert np.isfinite(find_mean_calibration_scale(y_true=y, mean=mean, power=1.5))
+
+
+@pytest.mark.parametrize("power", [1.5, 2.0])
+def test__find_mean_calibration_scale__floors_relative_to_the_targets(
+    power: float,
+) -> None:
+    # 1000 rows with m = y = 100 give c = 1. One more row has y = 100 and m = 0.
+    # With an absolute floor of 1e-6 this row moves c to about 11 at p = 1.5 and
+    # about 1e5 at p = 2.
+    y = np.full(1001, 100.0)
+    mean = np.append(np.full(1000, 100.0), 0.0)
+
+    scale = find_mean_calibration_scale(y_true=y, mean=mean, power=power)
+
+    assert 1.0 < scale < 1.15
+    # The floor scales with the targets, so c does not depend on their units.
+    assert find_mean_calibration_scale(
+        y_true=1e-4 * y, mean=1e-4 * mean, power=power
+    ) == pytest.approx(scale, rel=1e-12)
 
 
 def test__regressor_eval_metrics__round_trips_from_string() -> None:
