@@ -1666,7 +1666,7 @@ def _call_model_on_members(  # noqa: PLR0913
         kwargs = _model_forward_kwargs(
             model, task_type, [members[i].config.estimator_id for i in positions]
         )
-        x, x_kwargs = _model_input_arguments(X, device)
+        x, x_kwargs = _model_input_arguments(model, X, device)
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(inference_mode),
@@ -1749,16 +1749,25 @@ def _model_input_device(
 
 
 def _model_input_arguments(
-    X: torch.Tensor, device: torch.device
+    model: torch.nn.Module, X: torch.Tensor, device: torch.device
 ) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
     """The model's `x` and extra keyword arguments that pass it the input `X`.
 
-    An input that `_model_input_device` kept in host memory for a model on another
-    device goes as `x_host`, with `x` None.
+    A model whose `forward` takes no `x_host` argument gets `X` as `x`. One that takes
+    it always gets the input in host memory as `x_host`:
+
+    - An input that `_model_input_device` kept in host memory for a model on another
+      device goes as `x_host`, with `x` None.
+    - An input on the model's device goes as `x` and, copied to host memory, as
+      `x_host`. `x` is a buffer of this forward alone, so the model may free its
+      storage once it has read it.
+    - On a CPU device, `x` and `x_host` are the same tensor.
     """
+    if "x_host" not in _forward_parameters(model):
+        return X, {}
     if X.device.type == "cpu" and device.type != "cpu":
         return None, {"x_host": X}
-    return X, {}
+    return X, {"x_host": X if X.device.type == "cpu" else X.cpu()}
 
 
 def _move_and_squeeze_output(

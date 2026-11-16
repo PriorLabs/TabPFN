@@ -1339,23 +1339,70 @@ def test__model_input_device__large_input_of_a_host_input_model__stays_on_the_ho
     assert actual == torch.device(expected)
 
 
+class _RecordingHostInputModel(nn.Module):
+    """Records the `x` and `x_host` of each forward."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[torch.Tensor | None, torch.Tensor | None]] = []
+
+    def forward(
+        self,
+        x: torch.Tensor | None,
+        y: torch.Tensor,  # noqa: ARG002
+        *,
+        x_host: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        self.calls.append((x, x_host))
+        return x_host if x is None else x
+
+
 @pytest.mark.parametrize(
-    ("input_device", "device", "host"),
-    [("cpu", "cuda", True), ("cpu", "cpu", False), ("meta", "meta", False)],
+    ("input_device", "device"),
+    [("cpu", "cuda"), ("cpu", "cpu"), ("meta", "meta")],
 )
-def test__model_input_arguments__input_in_host_memory__passed_as_x_host(
-    input_device: str, device: str, *, host: bool
+def test__model_input_arguments__model_without_x_host__gets_the_input_as_x(
+    input_device: str, device: str
 ) -> None:
     X = torch.zeros((5, 1, 3), device=input_device)
 
-    x, kwargs = _model_input_arguments(X, torch.device(device))
+    x, kwargs = _model_input_arguments(_DeviceInputModel(), X, torch.device(device))
 
-    if host:
-        assert x is None
-        assert kwargs["x_host"] is X
-    else:
-        assert x is X
-        assert kwargs == {}
+    assert x is X
+    assert kwargs == {}
+
+
+def test__model_input_arguments__input_in_host_memory__x_none_and_x_host() -> None:
+    X = torch.zeros((5, 1, 3))
+
+    x, kwargs = _model_input_arguments(_HostInputModel(), X, torch.device("cuda"))
+
+    assert x is None
+    assert kwargs["x_host"] is X
+
+
+def test__model_input_arguments__cpu_device__x_and_x_host_are_the_input() -> None:
+    X = torch.zeros((5, 1, 3))
+
+    x, kwargs = _model_input_arguments(_HostInputModel(), X, torch.device("cpu"))
+
+    assert x is X
+    assert kwargs["x_host"] is X
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__model_input_arguments__input_on_the_device__x_and_a_host_copy() -> None:
+    X = torch.arange(30.0, device="cuda").view(5, 2, 3)
+    model = _RecordingHostInputModel()
+
+    x, kwargs = _model_input_arguments(model, X, torch.device("cuda"))
+    model(x, torch.zeros(2), **kwargs)
+
+    ((seen_x, seen_host),) = model.calls
+    assert seen_x is X
+    assert seen_host is not None
+    assert seen_host.device.type == "cpu"
+    torch.testing.assert_close(seen_host, X.cpu(), rtol=0, atol=0)
 
 
 def test__model_input_arguments__host_input_model__reads_the_table_from_x_host() -> (
@@ -1364,7 +1411,7 @@ def test__model_input_arguments__host_input_model__reads_the_table_from_x_host()
     model = _HostInputModel()
     X, y = torch.arange(6.0).view(3, 1, 2), torch.zeros(2)
 
-    x, kwargs = _model_input_arguments(X, torch.device("cuda"))
+    x, kwargs = _model_input_arguments(model, X, torch.device("cuda"))
 
     assert model(x, y, **kwargs) is X
 
