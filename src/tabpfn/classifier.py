@@ -22,7 +22,7 @@ import copy
 import dataclasses
 import logging
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 from typing_extensions import Self, deprecated
@@ -141,6 +141,69 @@ if TYPE_CHECKING:
         Tags = Any
 
 DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
+
+
+def reduce_classifier_member_logits(
+    raw_logits: torch.Tensor,
+    *,
+    softmax_temperature: float,
+    average_before_softmax: bool,
+    downsample_correction_weights: np.ndarray | None,
+    class_counts: np.ndarray | None,
+) -> torch.Tensor:
+    """Turn member logits into ensemble probabilities.
+
+    Args:
+        raw_logits: Logits with shape (n_estimators, n_samples, n_classes), as
+            `TabPFNClassifier.predict_raw_logits` returns them, or
+            (n_samples, n_classes). Three dimensions are averaged over dim 0.
+        softmax_temperature: The temperature the logits are divided by.
+        average_before_softmax: Whether to average logits rather than
+            probabilities.
+        downsample_correction_weights: Per-class weights that restore the
+            training prior, either one vector or one row per sample.
+        class_counts: Training class counts to balance the probabilities by;
+            `None` leaves them unbalanced.
+    """
+    if raw_logits.ndim < 2:
+        raise ValueError(f"Expected logits with 2 or more dims, got {raw_logits.ndim}")
+
+    output = raw_logits
+    if softmax_temperature != 1.0:
+        output = output / softmax_temperature
+    if output.ndim == 2:
+        output = torch.nn.functional.softmax(output, dim=-1)
+    elif average_before_softmax:
+        output = torch.nn.functional.softmax(output.mean(dim=0), dim=-1)
+    else:
+        output = torch.nn.functional.softmax(output, dim=-1).mean(dim=0)
+
+    # Restore the training prior first, so balancing (if requested) acts on
+    # probabilities that express the training prior rather than the context's.
+    if downsample_correction_weights is not None:
+        output = apply_class_weights(output, downsample_correction_weights)
+    if class_counts is not None:
+        output = balance_probas_by_class_counts(output, class_counts)
+    return output
+
+
+def finalize_classifier_probas(
+    probas: np.ndarray,
+    *,
+    classification_thresholds: np.ndarray | None,
+    use_sklearn_16_decimal_precision: bool,
+) -> np.ndarray:
+    """Apply tuned thresholds and rounding, then renormalise the probabilities."""
+    if classification_thresholds is not None:
+        probas = probas / np.maximum(classification_thresholds, 1e-8)
+        probas = probas / probas.sum(axis=1, keepdims=True)
+    if use_sklearn_16_decimal_precision:
+        probas = np.around(probas, decimals=SKLEARN_16_DECIMAL_PRECISION)
+        probas = np.where(probas < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, probas)
+
+    # Ensure probabilities sum to 1 in case of minor floating point inaccuracies
+    # going from torch to numpy
+    return probas / probas.sum(axis=1, keepdims=True)
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
@@ -1801,14 +1864,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         probas = (
             self._raw_predict(X, return_logits=False).float().detach().cpu().numpy()
         )
-        probas = self._maybe_reweight_probas(probas=probas)
-        if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
-            probas = np.around(probas, decimals=SKLEARN_16_DECIMAL_PRECISION)
-            probas = np.where(probas < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, probas)
-
-        # Ensure probabilities sum to 1 in case of minor floating point inaccuracies
-        # going from torch to numpy
-        return probas / probas.sum(axis=1, keepdims=True)  # type: ignore
+        return finalize_classifier_probas(
+            probas,
+            classification_thresholds=getattr(
+                self, "tuned_classification_thresholds_", None
+            ),
+            use_sklearn_16_decimal_precision=(
+                self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION
+            ),
+        )
 
     def _get_calibrated_softmax_temperature(
         self,
@@ -1849,27 +1913,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             current_default_temperature=self.softmax_temperature_,
         )
 
-    def _maybe_reweight_probas(self, probas: np.ndarray) -> np.ndarray:
-        """Reweights the probabilities if a target_metric is specified.
-
-        If a target metric is specified, the probabilities are reweighted based on
-        the true holdout sets labels and predicted logits. This is done to tune the
-        threshold for classification to the specified target metric.
-
-        Args:
-            probas: The predicted probabilities of the classes as a NumPy array.
-                Shape (n_samples, n_classes).
-
-        Returns:
-            The input probas if no tuning is done, otherwise the reweighted
-            probabilities.
-        """
-        if getattr(self, "tuned_classification_thresholds_", None) is None:
-            return probas
-
-        probas = probas / np.maximum(self.tuned_classification_thresholds_, 1e-8)
-        return probas / probas.sum(axis=1, keepdims=True)
-
     def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
         """Scales logits by the softmax temperature."""
         temp = resolved_softmax_temperature(self)
@@ -1880,17 +1923,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def _average_across_estimators(self, tensors: torch.Tensor) -> torch.Tensor:
         """Averages a tensor across the estimator dimension (dim=0)."""
         return tensors.mean(dim=0)
-
-    def _apply_softmax(self, logits: torch.Tensor) -> torch.Tensor:
-        """Applies the softmax function to the last dimension."""
-        return torch.nn.functional.softmax(logits, dim=-1)
-
-    def _apply_balancing(self, probas: torch.Tensor) -> torch.Tensor:
-        """Applies class balancing to a probability tensor."""
-        counts = getattr(self, "class_counts_", None)
-        if counts is None:
-            return probas
-        return balance_probas_by_class_counts(probas, counts)
 
     def logits_to_probabilities(
         self,
@@ -1924,66 +1956,30 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             if isinstance(raw_logits, torch.Tensor)
             else torch.from_numpy(np.asarray(raw_logits))
         )
-        used_temperature = (
-            resolved_softmax_temperature(self)
-            if softmax_temperature is None
-            else softmax_temperature
-        )
-        use_average_before_softmax = (
-            self.average_before_softmax
-            if average_before_softmax is None
-            else average_before_softmax
-        )
         use_balance = (
             self.balance_probabilities
             if balance_probabilities is None
             else balance_probabilities
         )
-
-        steps: list[Callable[[torch.Tensor], torch.Tensor]] = []
-
-        if used_temperature != 1.0:
-
-            def apply_temp(t: torch.Tensor) -> torch.Tensor:
-                return t / used_temperature
-
-            steps.append(apply_temp)
-
-        if raw_logits.ndim >= 3:
-            if use_average_before_softmax:
-                steps.append(self._average_across_estimators)
-                steps.append(self._apply_softmax)
-            else:
-                steps.append(self._apply_softmax)
-                steps.append(self._average_across_estimators)
-        elif raw_logits.ndim == 2:
-            steps.append(self._apply_softmax)
-        else:
-            raise ValueError(
-                f"Expected logits with 2 or more dims, got {raw_logits.ndim}"
-            )
-
-        # Restore the training prior first, so balancing (if requested) acts on
-        # probabilities that express the training prior rather than the context's.
-        correction_weights = (
-            getattr(self, "downsample_correction_weights_", None)
-            if downsample_correction_weights is None
-            else downsample_correction_weights
+        return reduce_classifier_member_logits(
+            raw_logits,
+            softmax_temperature=(
+                resolved_softmax_temperature(self)
+                if softmax_temperature is None
+                else softmax_temperature
+            ),
+            average_before_softmax=(
+                self.average_before_softmax
+                if average_before_softmax is None
+                else average_before_softmax
+            ),
+            downsample_correction_weights=(
+                getattr(self, "downsample_correction_weights_", None)
+                if downsample_correction_weights is None
+                else downsample_correction_weights
+            ),
+            class_counts=getattr(self, "class_counts_", None) if use_balance else None,
         )
-        if correction_weights is not None:
-
-            def apply_correction(probas: torch.Tensor) -> torch.Tensor:
-                return apply_class_weights(probas, correction_weights)
-
-            steps.append(apply_correction)
-        if use_balance:
-            steps.append(self._apply_balancing)
-
-        output = raw_logits
-        for fn in steps:
-            output = fn(output)
-
-        return output
 
     def forward(  # noqa: C901, PLR0912
         self,

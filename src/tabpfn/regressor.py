@@ -23,7 +23,7 @@ import logging
 import numbers
 import typing
 import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
@@ -201,6 +201,98 @@ def _unflip_member(
     if not config.flip_target:
         return output, std_borders
     return output.flip(-1), -std_borders[::-1]
+
+
+@dataclasses.dataclass(frozen=True)
+class RegressorMemberOutput:
+    """One ensemble member's logits and the z-normalised borders they belong to.
+
+    The logits are unflipped, in ascending bucket order, `-inf` on cancelled
+    buckets, and not yet divided by the softmax temperature.
+    """
+
+    logits: torch.Tensor
+    borders: np.ndarray
+
+
+def reduce_regressor_member_outputs(
+    members: Iterable[RegressorMemberOutput],
+    *,
+    znorm_borders: torch.Tensor,
+    softmax_temperature: float,
+    average_before_softmax: bool,
+    ensemble_softmax_temperature: float,
+    downsample_log_weights: torch.Tensor | None,
+) -> torch.Tensor:
+    """Aggregate member outputs into log-probabilities over `znorm_borders`.
+
+    `TabPFNRegressor.predict` streams its members through this function, so
+    stored member outputs reduce to the logits `predict` decodes.
+    """
+    n_estimators = 0
+    accumulated_logits: torch.Tensor | None = None
+    for member in members:
+        logits = member.logits
+        if softmax_temperature != 1:
+            logits = logits / softmax_temperature
+        transformed = translate_probs_across_borders(
+            logits,
+            frm=torch.as_tensor(member.borders, device=logits.device),
+            to=znorm_borders.to(logits.device),
+        )
+        if average_before_softmax:
+            transformed = transformed.log()
+        if accumulated_logits is None:
+            accumulated_logits = transformed
+        else:
+            accumulated_logits = accumulated_logits + transformed
+        n_estimators += 1
+
+    if accumulated_logits is None:
+        raise ValueError("Cannot make predictions, possibly due to `n_estimators=0`.")
+
+    return _average_accumulated_logits(
+        accumulated_logits,
+        n_estimators,
+        average_before_softmax=average_before_softmax,
+        ensemble_softmax_temperature=ensemble_softmax_temperature,
+        downsample_log_weights=downsample_log_weights,
+    )
+
+
+def _average_accumulated_logits(
+    accumulated_logits: torch.Tensor,
+    n_estimators: int,
+    *,
+    average_before_softmax: bool,
+    ensemble_softmax_temperature: float,
+    downsample_log_weights: torch.Tensor | None,
+) -> torch.Tensor:
+    """Average summed member outputs, then apply the temperature and correction.
+
+    `accumulated_logits` is already in log space if `average_before_softmax`.
+    """
+    if average_before_softmax:
+        logits = (accumulated_logits / n_estimators).softmax(dim=-1)
+    else:
+        logits = accumulated_logits / n_estimators
+
+    logits = logits.log()
+    if logits.dtype == torch.float16:
+        logits = logits.float()
+
+    # The calibrated temperature acts on the aggregated logits of n_estimators:
+    # softmax(log(sum(probs_i)/T)). The softmax is implicit, as
+    # `FullSupportBarDistribution.compute_scaled_log_probs` applies
+    # `log_softmax` to whatever it receives.
+    # Temperature first, then the per-bar downsampling correction; the bar
+    # distribution's log_softmax renormalizes afterwards. Tuning composes the
+    # same way through `temper_and_correct_logits`.
+    return temper_and_correct_logits(
+        logits,
+        temperature=ensemble_softmax_temperature,
+        log_weights=downsample_log_weights,
+    )
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
@@ -1578,16 +1670,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             The prediction, which can be a numpy array, a list of arrays (for
             quantiles), or a dictionary with detailed outputs.
         """
-        check_is_fitted(self)
-
-        # TODO: Move these at some point to InferenceEngine
-        check_input_shape_matches(X, estimator=self)
-        X = self.group_encoder_.transform(X)
-        X = self.date_transformer_.transform(X)
-        X = self.text_transformer_.transform(X)
-        X = ensure_compatible_predict_input_sklearn(X, self)
-
-        check_is_fitted(self)
+        X = self._prepare_predict_input(X)
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -1606,7 +1689,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Determine and return intended output type
         logit_to_output = partial(
-            _logits_to_output,
+            logits_to_output,
             logits=logits,
             znorm_space_bardist=self.znorm_space_bardist_,
             y_mean=self.y_train_mean_,
@@ -1644,6 +1727,34 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return main_outputs
 
         return logit_to_output(output_type=output_type)
+
+    @config_context(transform_output="default")
+    def predict_member_outputs(self, X: XType) -> list[RegressorMemberOutput]:
+        """Run the ensemble and return each member's output on the CPU.
+
+        `reduce_regressor_member_outputs` aggregates them into the logits that
+        `predict` decodes.
+        """
+        X = self._prepare_predict_input(X)
+        if getattr(self, "is_constant_target_", False):
+            raise TabPFNValidationError(
+                "A constant training target has no ensemble members."
+            )
+        return [
+            RegressorMemberOutput(logits=member.logits.cpu(), borders=member.borders)
+            for member in self._iter_predict_member_outputs(X)
+        ]
+
+    def _prepare_predict_input(self, X: XType) -> XType:
+        """Validate `X` and apply the fitted column encoders."""
+        check_is_fitted(self)
+
+        # TODO: Move these at some point to InferenceEngine
+        check_input_shape_matches(X, estimator=self)
+        X = self.group_encoder_.transform(X)
+        X = self.date_transformer_.transform(X)
+        X = self.text_transformer_.transform(X)
+        return ensure_compatible_predict_input_sklearn(X, self)
 
     def _maybe_calibrate_ensemble_temperature(self, X: XType, y: YType) -> None:
         """If a `tuning_config` was given, calibrate the ensemble temperature.
@@ -1839,6 +1950,35 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="regressor",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+        ):
+            return reduce_regressor_member_outputs(
+                tqdm(
+                    self._iter_predict_member_outputs(X),
+                    total=self.n_estimators_,
+                    desc="TabPFN inference",
+                    unit="estimator",
+                    disable=not self.show_progress_bar,
+                ),
+                znorm_borders=self.znorm_space_bardist_.borders,
+                softmax_temperature=resolved_softmax_temperature(self),
+                average_before_softmax=self.average_before_softmax,
+                ensemble_softmax_temperature=getattr(
+                    self, "ensemble_softmax_temperature_", 1.0
+                ),
+                downsample_log_weights=(
+                    getattr(self, "downsample_correction_log_weights_", None)
+                    if apply_downsample_correction
+                    else None
+                ),
+            )
+
+    def _iter_predict_member_outputs(self, X: XType) -> Iterator[RegressorMemberOutput]:
+        """Clean validated input and run the ensemble on it in inference mode."""
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
@@ -1848,49 +1988,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ord_encoder=getattr(self, "ordinal_encoder_", None),
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
-
-        n_estimators = 0
-        accumulated_logits: torch.Tensor | None = None
-        with handle_oom_errors(
-            self.devices_,
-            X,
-            model_type="regressor",
-            n_train_samples=getattr(self, "n_train_samples_", None),
-        ):
-            for borders_t, output in tqdm(
-                self._iter_forward_executor(X, use_inference_mode=True),
-                total=self.n_estimators_,
-                desc="TabPFN inference",
-                unit="estimator",
-                disable=not self.show_progress_bar,
-            ):
-                transformed = translate_probs_across_borders(
-                    output,
-                    frm=torch.as_tensor(borders_t, device=output.device),
-                    to=self.znorm_space_bardist_.borders.to(output.device),
-                )
-
-                if self.average_before_softmax:
-                    transformed = transformed.log()
-
-                if accumulated_logits is None:
-                    accumulated_logits = transformed
-                else:
-                    accumulated_logits = accumulated_logits + transformed
-                n_estimators += 1
-
-        assert n_estimators > 0
-
-        if accumulated_logits is None:
-            raise ValueError(
-                "Cannot make predictions, possibly due to `n_estimators=0`."
-            )
-
-        return self._reduce_accumulated_logits(
-            accumulated_logits,
-            n_estimators,
-            apply_downsample_correction=apply_downsample_correction,
-        )
+        return self._iter_member_outputs(X, use_inference_mode=True)
 
     def _reduce_accumulated_logits(
         self,
@@ -1913,29 +2011,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             A `[n_samples, n_buckets]` tensor of log-probabilities with
             `ensemble_softmax_temperature_` applied.
         """
-        if self.average_before_softmax:
-            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
-        else:
-            logits = accumulated_logits / n_estimators
-
-        # Post-process the logits
-        logits = logits.log()
-        if logits.dtype == torch.float16:
-            logits = logits.float()
-
-        # The calibrated temperature acts on the aggregated logits of n_estimators:
-        # softmax(log(sum(probs_i)/T)). The softmax is implicit, as
-        # `FullSupportBarDistribution.compute_scaled_log_probs` applies
-        # `log_softmax` to whatever it receives. `getattr` keeps models pickled
-        # before this attribute existed loadable; the guard keeps the
-        # uncalibrated path allocation-free and bit-identical.
-        # Temperature first, then the per-bar downsampling correction; the bar
-        # distribution's log_softmax renormalizes afterwards. Tuning composes the
-        # same way through `temper_and_correct_logits`.
-        return temper_and_correct_logits(
-            logits,
-            temperature=getattr(self, "ensemble_softmax_temperature_", 1.0),
-            log_weights=(
+        # `getattr` keeps models pickled before these attributes existed loadable.
+        return _average_accumulated_logits(
+            accumulated_logits,
+            n_estimators,
+            average_before_softmax=self.average_before_softmax,
+            ensemble_softmax_temperature=getattr(
+                self, "ensemble_softmax_temperature_", 1.0
+            ),
+            downsample_log_weights=(
                 getattr(self, "downsample_correction_log_weights_", None)
                 if apply_downsample_correction
                 else None
@@ -2294,7 +2378,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logits = self._reduce_accumulated_logits(accumulated_logits, n_estimators)
 
         logit_to_output = partial(
-            _logits_to_output,
+            logits_to_output,
             logits=logits,
             znorm_space_bardist=znorm_space_bardist,
             y_mean=y_mean,
@@ -2318,12 +2402,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return logit_to_output(output_type=output_type)
 
-    def _iter_forward_executor(
+    def _iter_member_outputs(
         self,
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
-    ) -> Iterator[tuple[np.ndarray, torch.Tensor]]:
+    ) -> Iterator[RegressorMemberOutput]:
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
             self.executor_, InferenceEngineBatchedNoPreprocessing
@@ -2362,7 +2446,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             actual_inference_mode = use_inference_mode and not self.differentiable_input
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
-        temperature = resolved_softmax_temperature(self)
         for output, config in self.executor_.iter_outputs(
             X, autocast=self.use_autocast_, task_type="regression"
         ):
@@ -2370,8 +2453,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # `inference_precision=torch.float64` asked for it.
             if output.dtype in (torch.float16, torch.bfloat16):
                 output = output.float()  # noqa: PLW2901
-            if temperature != 1:
-                output = output / temperature  # noqa: PLW2901
 
             # BSz.= 1 Scenario, the same as normal predict() function
             # Handled by first if-statement
@@ -2420,7 +2501,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 if logit_cancel_mask is not None:
                     output = output.clone()  # noqa: PLW2901
                     output[..., logit_cancel_mask] = float("-inf")
-                yield borders_t, output
+                yield RegressorMemberOutput(logits=output, borders=borders_t)
             else:
                 raise ValueError(
                     "Unexpected config format "
@@ -2455,15 +2536,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         outputs: list[torch.Tensor] = []
         borders: list[np.ndarray] = []
 
-        for border, output in tqdm(
-            self._iter_forward_executor(X, use_inference_mode=use_inference_mode),
+        temperature = resolved_softmax_temperature(self)
+        for member in tqdm(
+            self._iter_member_outputs(X, use_inference_mode=use_inference_mode),
             total=self.n_estimators_,
             desc="TabPFN inference",
             unit="estimator",
             disable=not self.show_progress_bar,
         ):
-            borders.append(border)
-            outputs.append(output)
+            borders.append(member.borders)
+            outputs.append(
+                member.logits / temperature if temperature != 1 else member.logits
+            )
 
         averaged_logits = None
         all_logits = None
@@ -2582,7 +2666,7 @@ def _place_raw_space_bardist(
     return bardist.to(device)
 
 
-def _logits_to_output(
+def logits_to_output(
     *,
     output_type: str,
     logits: torch.Tensor,
