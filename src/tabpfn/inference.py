@@ -1759,9 +1759,11 @@ def _model_input_arguments(
     - An input that `_model_input_device` kept in host memory for a model on another
       device goes as `x_host`, with `x` None.
     - An input on the model's device goes as `x` and, copied to host memory, as
-      `x_host`. `x` is a buffer of this forward alone, so the model may free its
-      storage once it has read it.
-    - On a CPU device, `x` and `x_host` are the same tensor.
+      `x_host`. `x` is a buffer of this forward alone, and the caller does not read it
+      after the forward returns, so the model may free its storage once it has read
+      it.
+    - On a CPU device, `x` and `x_host` are the same tensor, so the model must not free
+      `x`.
     """
     if "x_host" not in _forward_parameters(model):
         return X, {}
