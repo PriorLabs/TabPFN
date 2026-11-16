@@ -47,6 +47,7 @@ from tabpfn.architectures.shared.bar_distribution import (
     expected_value,
 )
 from tabpfn.base import (
+    GROUPED_PRESET,
     ModelSpecs,
     create_inference_engine,
     determine_precision,
@@ -56,6 +57,7 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
+    resolve_presets,
     resolved_average_before_softmax,
     resolved_n_estimators,
     resolved_softmax_temperature,
@@ -187,10 +189,7 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
-    "grouped": {
-        "APPEND_GROUP_AGGREGATES": True,
-        "POOL_GROUP_PREDICTIONS": "mean",
-    },
+    "grouped": GROUPED_PRESET,
 }
 """The named bundles of `inference_config` values that `presets` selects."""
 
@@ -2960,31 +2959,13 @@ def _apply_presets(
     On a model up to TabPFN-3.5, "zero_inflated" sets
     `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, and warns.
     """
-    if not isinstance(user_config, dict | None):
-        raise TabPFNValidationError(
-            "`presets` needs `inference_config` as a dict or None."
-        )
-    values: dict[str, Any] = {}
-    for name in [presets] if isinstance(presets, str) else presets:
-        if name not in REGRESSION_PRESETS:
-            raise TabPFNValidationError(
-                f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
-            )
-        if name == "zero_inflated" and any(
-            type(c) in ARCHITECTURES_CONFIGS_BEFORE_V4 for c in architecture_configs
-        ):
-            warnings.warn(
-                'presets="zero_inflated" on a model up to TabPFN-3.5 sets '
-                f"{BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG}.",
-                UserWarning,
-                # Past `_initialize_model_variables`, fit and the frame of its
-                # `config_context` decorator.
-                stacklevel=5,
-            )
-            values.update(BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG)
-        else:
-            values.update(REGRESSION_PRESETS[name])
-    values = {k: v for k, v in values.items() if k not in (user_config or {})}
+    registry = REGRESSION_PRESETS
+    if any(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs):
+        registry = {
+            **REGRESSION_PRESETS,
+            "zero_inflated": BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG,
+        }
+    values = resolve_presets(presets, user_config, registry)
     return dataclasses.replace(config, **values)
 
 

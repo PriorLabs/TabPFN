@@ -34,6 +34,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted, clone
 from tqdm.auto import tqdm
 
 from tabpfn.base import (
+    GROUPED_PRESET,
     ModelSpecs,
     create_inference_engine,
     determine_precision,
@@ -43,6 +44,7 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
+    resolve_presets,
     resolved_average_before_softmax,
     resolved_n_estimators,
     resolved_softmax_temperature,
@@ -151,6 +153,9 @@ if TYPE_CHECKING:
         Tags = Any
 
 DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
+
+CLASSIFICATION_PRESETS: dict[str, dict[str, Any]] = {"grouped": GROUPED_PRESET}
+"""The named bundles of `inference_config` values that `presets` selects."""
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
@@ -317,6 +322,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
+        presets: str | Sequence[str] | None = None,
         differentiable_input: bool = False,
         eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
@@ -619,6 +625,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   as a whole, so any field not set on it takes a class default
                   rather than the value the checkpoint declares. Deprecated.
 
+            presets:
+                Names of bundles of `inference_config` values, see
+                `CLASSIFICATION_PRESETS`. `None` uses the checkpoint's settings as
+                they are. The settings resolve in this order, a later one winning:
+                the checkpoint, the presets in list order, then the keys of an
+                `inference_config` dict. A preset never changes `tuning_config`.
+
+                - `"grouped"`: for `group_col` data. It sets
+                  `APPEND_GROUP_AGGREGATES=True` and
+                  `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
+                  passed to predict, so predict all rows of a group in one call.
+
             differentiable_input:
                 If true, the preprocessing will be adapted to be end-to-end
                 differentiable with PyTorch.
@@ -665,6 +683,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.kv_cache_precision = kv_cache_precision
         self.random_state = random_state
         self.inference_config = inference_config
+        self.presets = presets
         self.differentiable_input = differentiable_input
 
         if n_jobs is not None:
@@ -793,7 +812,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The determined byte_size.
         """
-        return initialize_model_variables_helper(self, self.estimator_type)
+        byte_size = initialize_model_variables_helper(self, self.estimator_type)
+        if self.presets is not None:
+            self.inference_config_ = dataclasses.replace(
+                self.inference_config_,
+                **resolve_presets(
+                    self.presets, self.inference_config, CLASSIFICATION_PRESETS
+                ),
+            )
+        return byte_size
 
     def _initialize_for_differentiable_input(
         self,
