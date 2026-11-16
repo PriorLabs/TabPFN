@@ -723,6 +723,22 @@ def test__find_mean_calibration_scale__floors_non_positive_means() -> None:
     assert np.isfinite(find_mean_calibration_scale(y_true=y, mean=mean, power=1.5))
 
 
+@pytest.mark.parametrize("power", [1.0, 1.5])
+def test__find_mean_calibration_scale__zero_weight_rows_do_not_move_the_floor(
+    power: float,
+) -> None:
+    y = np.array([0.0, 0.0, 4.0, 1e6])
+    mean = np.array([-0.5, 0.0, 2.0, 1.0])
+    weight = np.array([1.0, 1.0, 1.0, 0.0])
+
+    assert find_mean_calibration_scale(
+        y_true=y, mean=mean, power=power, sample_weight=weight
+    ) == pytest.approx(
+        find_mean_calibration_scale(y_true=y[:3], mean=mean[:3], power=power),
+        rel=1e-12,
+    )
+
+
 @pytest.mark.parametrize("power", [1.5, 2.0])
 def test__find_mean_calibration_scale__floors_relative_to_the_targets(
     power: float,

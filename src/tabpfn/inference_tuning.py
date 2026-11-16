@@ -549,12 +549,12 @@ def find_mean_calibration_scale(
     `c * mean`.
 
     The minimizer has the closed form c = sum(w y m^(1-p)) / sum(w m^(2-p)), with
-    the means m floored at `MEAN_CALIBRATION_MIN_MEAN_FRACTION` times the mean
-    target. p = 1 gives sum(w y) / sum(w m).
+    the means m floored at `MEAN_CALIBRATION_MIN_MEAN_FRACTION` times the
+    weighted mean target. p = 1 gives sum(w y) / sum(w m).
 
     Args:
         y_true: The nonnegative targets, of shape [n_samples], at least one of
-            them positive.
+            them positive with a positive weight.
         mean: The predicted means, of shape [n_samples].
         power: The Tweedie power p.
         sample_weight: The weight w of each row, of shape [n_samples], or `None`
@@ -564,10 +564,11 @@ def find_mean_calibration_scale(
         The constant c.
     """
     y = y_true.astype(np.float64)
-    m = np.maximum(
-        mean.astype(np.float64), MEAN_CALIBRATION_MIN_MEAN_FRACTION * y.mean()
-    )
     w = np.ones_like(y) if sample_weight is None else sample_weight.astype(np.float64)
+    m = np.maximum(
+        mean.astype(np.float64),
+        MEAN_CALIBRATION_MIN_MEAN_FRACTION * np.average(y, weights=w),
+    )
     return float((w * y * m ** (1 - power)).sum() / (w * m ** (2 - power)).sum())
 
 
