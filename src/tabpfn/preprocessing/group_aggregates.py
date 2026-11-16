@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -110,16 +111,18 @@ class GroupAggregator:
         if not self.aggregates_:
             return X
         grouped = X.groupby(groups)
-        # A group's aggregate sits at its code, so indexing by `groups` repeats it
-        # once per row.
-        columns = {
-            name: grouped[column].agg(aggregate).to_numpy()[groups]
+        # Columns are added to a shallow copy one by one: `pd.concat` would hold
+        # two more copies of `X` at its peak.
+        out = X.copy(deep=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
             for (column, aggregate), name in zip(
                 self.aggregates_, self.names_, strict=True
-            )
-        }
-        appended = pd.DataFrame(columns, index=X.index, copy=False)
-        return pd.concat([X, appended], axis=1)
+            ):
+                # A group's aggregate sits at its code, so indexing by `groups`
+                # repeats it once per row.
+                out[name] = grouped[column].agg(aggregate).to_numpy()[groups]
+        return out
 
 
 def pool_rows(
