@@ -121,8 +121,11 @@ def _assert_unchanged(after: Any, before: Any, what: str) -> None:
     "estimator_cls", [TabPFNClassifier, TabPFNRegressor], ids=lambda c: c.__name__
 )
 @pytest.mark.parametrize("input_kind", list(INPUTS), ids=list(INPUTS))
+@pytest.mark.parametrize(
+    "gpu_preprocessing", [False, True], ids=["cpu_preprocessing", "gpu_preprocessing"]
+)
 def test__fit_predict__leave_every_input_untouched(
-    estimator_cls: type, input_kind: str
+    estimator_cls: type, input_kind: str, *, gpu_preprocessing: bool
 ) -> None:
     """A whole fit + predict changes nothing the caller passed in."""
     X_train, X_test = _split(INPUTS[input_kind]())
@@ -143,7 +146,12 @@ def test__fit_predict__leave_every_input_untouched(
         n_estimators=2,
         device="cpu",
         random_state=0,
-        inference_config=PASSTHROUGH_INF,
+        inference_config={
+            **PASSTHROUGH_INF,
+            # GPU preprocessing (on CPU here) leaves the CPU pipelines without
+            # arithmetic, so they run on the caller's array without a copy.
+            "ENABLE_GPU_PREPROCESSING": gpu_preprocessing,
+        },
     ).fit(X_train, y_train)
     model.predict(X_test)
     if estimator_cls is TabPFNClassifier:
