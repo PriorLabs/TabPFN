@@ -328,7 +328,7 @@ def _row_weight_kwargs(
             torch.as_tensor(member.row_weights, device=x.device, dtype=x.dtype)
         )
     return {
-        "row_weights": torch.stack(row_weights, dim=1),
+        "row_weights_NB2": torch.stack(row_weights, dim=1),
         "sample_weight_mode": sample_weight_mode,
     }
 

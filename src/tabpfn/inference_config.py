@@ -373,7 +373,11 @@ class InferenceConfig:
     `"head"` scales each training row's vote in the decoder, for classification
     only. `None` means the model takes no per-row weights, and `fit` raises if it
     gets `sample_weight` or `label_reliability`. Checkpoints trained with per-row
-    weights set `"learned"`."""
+    weights set `"learned"`.
+
+    We generally recommend `"learned"`, but `"head"` can work better to weight a
+    few rows more strongly. In both, only the relative values matter, a weight of
+    m is not m copies of the row, and a weight of 0 does not remove it."""
 
     _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: float | None = None
     _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD: float = 12.0

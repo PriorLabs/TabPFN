@@ -2,11 +2,12 @@
 
 """Validate the per-row weights `fit` takes, and how the model applies them.
 
-`sample_weight` says how many rows a training row stands for. Only its relative
-values matter, so it is scaled to mean 1 over each estimator's train rows.
-`label_reliability` is the probability that a row's label is correct. The model
-receives both as one `(rows, 2)` array, `(sample_weight, label_reliability)` per
-row, where 1 is neutral in each column.
+`sample_weight` says roughly how many rows a training row stands for. Only its
+relative values matter, so it is scaled to mean 1 over each estimator's train
+rows. `label_reliability` says how much to trust a row's label, from 1 (known to
+be right) to 0 (carries no information). The model receives both as one
+`(rows, 2)` array, `(sample_weight, label_reliability)` per row, where 1 is
+neutral in each column.
 """
 
 from __future__ import annotations
@@ -84,8 +85,8 @@ def validate_row_weights(
         reliability = _per_row_values(label_reliability, "label_reliability", n_samples)
         if ((reliability < 0) | (reliability > 1)).any():
             raise TabPFNValidationError(
-                "`label_reliability` must lie in [0, 1]: it is the probability "
-                "that a row's label is correct."
+                "`label_reliability` must lie in [0, 1], from 0 (the label carries "
+                "no information) to 1 (the label is known to be right)."
             )
         row_weights[:, 1] = reliability
 

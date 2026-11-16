@@ -294,7 +294,7 @@ class Architecture(nn.Module, ABC):
 
         An architecture that lists any mode takes two more keyword arguments in
         `forward`, passed only when `fit` was given per-row weights:
-        `row_weights`, a tensor of shape `(train rows, batch size, 2)` in the
+        `row_weights_NB2`, a tensor of shape `(train rows, batch size, 2)` in the
         dtype of `x`, holding `(sample_weight, label_reliability)` per train
         row with 1 as neutral, and `sample_weight_mode`, one of the listed
         modes. A cached

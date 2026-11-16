@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import torch
 from numpy.random import default_rng
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 from torch import Tensor
 
@@ -55,12 +56,12 @@ class _RowWeightModel(_TestModelWithKVCache):
         x: Tensor | dict[str, Tensor],
         y: Tensor | dict[str, Tensor] | None,
         *,
-        row_weights: Tensor,
+        row_weights_NB2: Tensor,
         sample_weight_mode: str,
         **kwargs: Any,
     ) -> Tensor | tuple[Tensor, Any]:
         is_cached_predict = kwargs.get("x_is_test_only", False)
-        self.calls.append((row_weights, sample_weight_mode, is_cached_predict))
+        self.calls.append((row_weights_NB2, sample_weight_mode, is_cached_predict))
         return super().forward(x, y, **kwargs)
 
 
@@ -284,16 +285,51 @@ def test__fit__raises_for_a_model_without_row_weights(estimator_cls: type) -> No
     ("bagging_cls", "estimator_cls"),
     [(BaggingClassifier, TabPFNClassifier), (BaggingRegressor, TabPFNRegressor)],
 )
+@pytest.mark.parametrize(
+    "bagging_params",
+    [{}, {"bootstrap": False, "max_samples": 0.5}],
+)
 def test__bagging__raises_for_a_model_without_row_weights(
-    bagging_cls: type, estimator_cls: type
+    bagging_cls: type, estimator_cls: type, bagging_params: dict
 ) -> None:
-    """Bagging passes bootstrap counts as `sample_weight` once `fit` accepts it."""
+    """Bagging passes its row counts as `sample_weight` once `fit` accepts it."""
     rng = default_rng(seed=0)
     X = rng.standard_normal((20, 3))
     y = np.arange(20) % 2
-    bagging = bagging_cls(estimator_cls(n_estimators=1, device="cpu"), n_estimators=2)
+    bagging = bagging_cls(
+        estimator_cls(n_estimators=1, device="cpu"), n_estimators=2, **bagging_params
+    )
     with pytest.raises(TabPFNValidationError, match="does not support"):
         bagging.fit(X, y)
+
+
+def test__calibrated_classifier_cv__raises_when_given_sample_weight() -> None:
+    rng = default_rng(seed=0)
+    X = rng.standard_normal((30, 3))
+    y = np.arange(30) % 2
+    calibrated = CalibratedClassifierCV(
+        TabPFNClassifier(n_estimators=1, device="cpu"), cv=2
+    )
+    with pytest.raises(TabPFNValidationError, match="does not support"):
+        calibrated.fit(X, y, sample_weight=np.ones(30))
+
+
+@pytest.mark.parametrize(
+    "fit_mode", ["low_memory", "fit_preprocessors", "fit_with_cache"]
+)
+def test__preprocessor_pickled_without_row_weight_attributes__still_predicts(
+    fit_mode: str,
+) -> None:
+    rng = default_rng(seed=0)
+    X = rng.standard_normal((30, 3))
+    y = np.arange(30) % 2
+    estimator = TabPFNClassifier(n_estimators=2, fit_mode=fit_mode, device="cpu")
+    estimator.fit(X, y)
+    expected = estimator.predict_proba(X[:5])
+    preprocessor = estimator.executor_.ensemble_preprocessor
+    del preprocessor.sample_weight_mode
+    del preprocessor.member_row_weights
+    np.testing.assert_array_equal(estimator.predict_proba(X[:5]), expected)
 
 
 def _record_row_weights(
@@ -309,13 +345,13 @@ def _record_row_weights(
     def forward(
         self: Any,
         *args: Any,
-        row_weights: Tensor | None = None,
+        row_weights_NB2: Tensor | None = None,
         sample_weight_mode: str | None = None,
         **kwargs: Any,
     ) -> Any:
-        if row_weights is not None:
+        if row_weights_NB2 is not None:
             assert sample_weight_mode is not None
-            calls.append((row_weights.cpu(), sample_weight_mode))
+            calls.append((row_weights_NB2.cpu(), sample_weight_mode))
         return original_forward(self, *args, **kwargs)
 
     monkeypatch.setattr(model_cls, "forward", forward)

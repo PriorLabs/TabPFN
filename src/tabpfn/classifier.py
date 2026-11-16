@@ -1056,14 +1056,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X: The input data.
             y: The target variable.
             sample_weight: Experimental. One non-negative weight per training row,
-                saying how many rows it stands for. Only relative values matter:
-                scaling every weight changes nothing, and a weight of 2 is not
-                the same as the row appearing twice. Rows with weight 0 stay in
-                the context. Raises unless the model supports per-row weights,
-                see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
+                roughly saying how many rows it stands for. Only relative values
+                matter: scaling every weight changes nothing, and a weight of 2
+                is not the same as the row appearing twice. Rows with weight 0
+                stay in the context. Raises unless the model supports per-row
+                weights, see `InferenceConfig.SAMPLE_WEIGHT_MODE`.
             label_reliability: Experimental. One value in [0, 1] per training row:
-                the probability that the row's label is correct. Raises unless
-                the model supports `SAMPLE_WEIGHT_MODE="learned"`.
+                how much to trust that row's label, from 1 (known to be right)
+                to 0 (carries no information). Not a class probability or a
+                soft label. Raises unless the model supports
+                `SAMPLE_WEIGHT_MODE="learned"`.
 
         Returns:
             self

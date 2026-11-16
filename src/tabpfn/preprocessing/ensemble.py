@@ -93,6 +93,11 @@ class TabPFNEnsemblePreprocessor:
        (e.g. sample/feature subsampling) per ensemble member.
     """
 
+    # Class-level defaults, so preprocessors pickled before per-row weights
+    # existed still load.
+    sample_weight_mode: SampleWeightMode | None = None
+    member_row_weights: list[np.ndarray] | None = None
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -274,7 +279,7 @@ class TabPFNEnsemblePreprocessor:
             y=y_train,
             task_type=task_type,
         )
-        self.member_row_weights: list[np.ndarray] | None = None
+        self.member_row_weights = None
         if row_weights is not None:
             member_rows = self.subsample_row_indices or [None] * len(self.configs)
             self.member_row_weights = [
