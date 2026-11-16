@@ -340,15 +340,16 @@ class InferenceConfig:
     their target pipeline. Their predicted distributions are mirrored back. Ignored
     for classification."""
 
-    REGRESSION_MEAN_READOUT: Literal["ensemble", "clamp"] = "ensemble"
-    """How the regressor reads out the `"mean"` prediction from the ensemble's
-    averaged distribution. The other outputs are unchanged.
+    REGRESSION_READOUT: Literal["ensemble", "ensemble_truncated"] = "ensemble"
+    """How the regressor reads its outputs from the ensemble's averaged
+    distribution.
 
     The options are:
-        - "ensemble": the mean of the distribution.
-        - "clamp": E[max(Y, 0) | Y <= y_max], with y_max the largest training
-          target. The grid bucket that holds 0 and every bucket below it are read
-          at 0, and the mass above y_max is dropped. It needs y >= 0.
+        - "ensemble": the distribution as it is.
+        - "ensemble_truncated": the distribution of max(Y, 0) given Y <= y_max,
+          with y_max the largest training target. The mass above y_max is dropped,
+          and the grid bucket that holds 0 and every bucket below it are read at 0.
+          It needs y >= 0. The `"full"` output keeps the untruncated logits.
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False

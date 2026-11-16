@@ -118,7 +118,6 @@ from tabpfn.preprocessing.steps import (
 from tabpfn.preprocessing.target_transform import (
     ZERO_INFLATED_TARGET_TRANSFORMS,
     StandardizeTarget,
-    decodes_nonnegative,
     make_target_transform,
 )
 from tabpfn.preprocessing.text import TextTransformer
@@ -327,8 +326,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     declares unless it was overridden."""
 
     y_train_max_: float
-    """The largest training target, above which the "clamp" mean readout drops
-    the predicted mass."""
+    """The largest training target, above which the "ensemble_truncated" readout
+    drops the predicted mass."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -1644,8 +1643,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             output_type:
                 Determines the type of output to return.
 
-                - If `"mean"`, we return the mean over the predicted distribution,
-                    read out as `InferenceConfig.REGRESSION_MEAN_READOUT` says.
+                - If `"mean"`, we return the mean over the predicted distribution.
                 - If `"median"`, we return the median over the predicted distribution.
                 - If `"mode"`, we return the mode over the predicted distribution.
                 - If `"quantiles"`, we return the quantiles of the predicted
@@ -1703,8 +1701,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raw_space_bardist=self.raw_space_bardist_,
             y_mean=self.y_train_mean_,
             y_std=self.y_train_std_,
-            nonnegative=self._members_are_nonnegative(),
-            clamp_max=self.y_train_max_ if self._mean_readout() == "clamp" else None,
+            truncate_above=self._truncate_above(),
         )
         block_rows = settings.tabpfn.max_regressor_predict_rows
         use_blocks = (
@@ -1739,26 +1736,25 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         speed_metrics["predict_model_forward_seconds"] = forward_seconds
         return _concat_block_outputs(parts, output_type)
 
-    def _members_are_nonnegative(self) -> bool:
-        """Whether every member's target transform decodes to y >= 0."""
-        return all(
-            decodes_nonnegative(config.target_transform)
-            for config in self.ensemble_configs_
-        )
+    def _truncate_above(self) -> float | None:
+        """The largest training target for the "ensemble_truncated" readout, or
+        None.
+        """
+        return self.y_train_max_ if self._readout() == "ensemble_truncated" else None
 
-    def _mean_readout(self) -> str:
+    def _readout(self) -> str:
         # `getattr` keeps models pickled before this field existed loadable.
-        return getattr(self.inference_config_, "REGRESSION_MEAN_READOUT", "ensemble")
+        return getattr(self.inference_config_, "REGRESSION_READOUT", "ensemble")
 
     def _fit_mean_readout(self, y: np.ndarray) -> None:
-        """Check that the mean readout applies to `y`."""
-        readout = self._mean_readout()
+        """Check that the readout applies to `y`."""
+        readout = self._readout()
         self.y_train_max_ = float(np.max(y))
         if readout == "ensemble":
             return
         if np.any(y < 0):
             raise TabPFNValidationError(
-                f"The '{readout}' mean readout requires nonnegative targets (y >= 0)."
+                f"The '{readout}' readout requires nonnegative targets (y >= 0)."
             )
 
     def _maybe_calibrate_ensemble_temperature(
@@ -2200,11 +2196,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "correction is fitted per dataset. Score datasets individually "
                 "with predict."
             )
-        if self.get_inference_config().REGRESSION_MEAN_READOUT != "ensemble":
+        if self.get_inference_config().REGRESSION_READOUT != "ensemble":
             raise NotImplementedError(
-                "predict_batched supports only REGRESSION_MEAN_READOUT='ensemble'; "
-                "the 'clamp' readout needs each dataset's largest target. Score "
-                "datasets individually with predict."
+                "predict_batched supports only REGRESSION_READOUT='ensemble'; the "
+                "'ensemble_truncated' readout needs each dataset's largest target. "
+                "Score datasets individually with predict."
             )
         if self.tuning_config is not None:
             raise NotImplementedError(
@@ -2488,9 +2484,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raw_space_bardist=raw_space_bardist,
             y_mean=y_mean,
             y_std=y_std,
-            nonnegative=self._members_are_nonnegative(),
-            # `predict_batched` rejects the "clamp" readout.
-            clamp_max=None,
+            # `predict_batched` rejects the "ensemble_truncated" readout.
+            truncate_above=None,
         )
 
     def _iter_forward_executor(
@@ -2766,7 +2761,7 @@ def _decode_logits(
     raw_space_bardist: FullSupportBarDistribution,
     y_mean: float,
     y_std: float,
-    nonnegative: bool,
+    truncate_above: float | None,
 ) -> RegressionResultType:
     """Turn aggregated log-probabilities into the output `predict` returns.
 
@@ -2780,7 +2775,7 @@ def _decode_logits(
         y_mean=y_mean,
         y_std=y_std,
         quantiles=quantiles,
-        nonnegative=nonnegative,
+        truncate_above=truncate_above,
     )
     if output_type not in _OUTPUT_TYPES_COMPOSITE:
         return logit_to_output(output_type=output_type)
@@ -2831,55 +2826,52 @@ def _logits_to_output(
     y_mean: float,
     y_std: float,
     quantiles: list[float],
-    nonnegative: bool,
-    clamp_max: float | None,
+    truncate_above: float | None,
 ) -> np.ndarray | list[np.ndarray]:
     """Converts raw model logits to the desired prediction format.
 
     Decodes in z-normalised space and undoes the normalisation in float64, so
     the decode never has to resolve the target's magnitude.
 
-    With `nonnegative`, every member decodes to y >= 0, and the grid bucket that
-    holds 0 holds the members' mass at 0. That bucket and every bucket below it
-    are read as a point at 0. The buckets below it only hold the tails of the
-    members' outer buckets, which the border repair widens below 0.
-
-    With `clamp_max`, the mean is E[max(Y, 0) | Y <= clamp_max]: the buckets up
-    to the one that holds 0 are read at 0, and the buckets that start at or above
-    `clamp_max` are dropped. The bucket that holds `clamp_max` is kept whole.
+    With `truncate_above`, every output is read from the distribution of
+    max(Y, 0) given Y <= `truncate_above`. The buckets that start at or above
+    `truncate_above` are dropped; the bucket that holds it is kept whole. The
+    grid bucket that holds 0 and every bucket below it are read as a point at 0:
+    `translate_probs_across_borders` moves a member's mass at 0 into that bucket.
     """
     criterion = znorm_space_bardist
 
     def to_raw(output: torch.Tensor) -> np.ndarray:
         return output.cpu().detach().numpy().astype(np.float64) * y_std + y_mean
 
-    if nonnegative or clamp_max is not None:
+    zero_bucket = None
+    if truncate_above is not None:
         raw_borders = to_raw(criterion.borders)
-        # The bucket `translate_probs_across_borders` moves a point at 0 into.
         zero_bucket = int(np.searchsorted(raw_borders, 0.0, side="right")) - 1
-        zero_bucket_top = raw_borders[zero_bucket + 1]
+        above = torch.as_tensor(
+            raw_borders[:-1] >= truncate_above, device=logits.device
+        )
+        logits = logits.masked_fill(above, float("-inf"))
 
-    def at_zero(raw: np.ndarray) -> np.ndarray:
-        if not nonnegative:
+    def decode(output: torch.Tensor) -> np.ndarray:
+        raw = to_raw(output)
+        if zero_bucket is None:
             return raw
-        return np.where(raw <= zero_bucket_top, 0.0, raw)
+        return np.where(raw <= raw_borders[zero_bucket + 1], 0.0, raw)
 
     if output_type == "quantiles":
-        return [at_zero(to_raw(criterion.icdf(logits, q))) for q in quantiles]
+        return [decode(criterion.icdf(logits, q)) for q in quantiles]
 
     # TODO: support
     #   "pi": criterion.pi(logits, np.max(self.y)),
     #   "ei": criterion.ei(logits),
     if output_type == "mean":
-        if not nonnegative and clamp_max is None:
+        if zero_bucket is None:
             return to_raw(criterion.mean(logits))
-        return _mean_with_zero_bucket(
-            logits,
-            raw_bucket_means=to_raw(criterion.bucket_means()),
-            raw_borders=raw_borders,
-            zero_bucket=zero_bucket,
-            clamp_max=clamp_max,
-        )
+        # In target units, so the buckets read at 0 add exactly 0.
+        values = torch.as_tensor(to_raw(criterion.bucket_means()))
+        values[: zero_bucket + 1] = 0.0
+        return expected_value(logits.detach().cpu(), values).numpy()
     if output_type == "median":
         output = criterion.median(logits)
     elif output_type == "mode":
@@ -2887,28 +2879,7 @@ def _logits_to_output(
     else:
         raise ValueError(f"Invalid output type: {output_type}")
 
-    return at_zero(to_raw(output))
-
-
-def _mean_with_zero_bucket(
-    logits: torch.Tensor,
-    *,
-    raw_bucket_means: np.ndarray,
-    raw_borders: np.ndarray,
-    zero_bucket: int,
-    clamp_max: float | None,
-) -> np.ndarray:
-    """The mean in target units, with the buckets up to `zero_bucket` read at 0
-    and, with `clamp_max`, without the buckets that start at or above it.
-    """
-    # In target units, so the buckets read at 0 add exactly 0.
-    values = torch.as_tensor(raw_bucket_means)
-    values[: zero_bucket + 1] = 0.0
-    logits = logits.detach().cpu()
-    if clamp_max is not None:
-        above = torch.as_tensor(raw_borders[:-1] >= clamp_max)
-        logits = logits.masked_fill(above, float("-inf"))
-    return expected_value(logits, values).numpy()
+    return decode(output)
 
 
 def _validate_eval_metric(
