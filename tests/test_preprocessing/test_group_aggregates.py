@@ -133,7 +133,7 @@ def test__several_jobs__select_the_same_aggregates_as_one_job() -> None:
         aggregator = GroupAggregator(append=True, pool=False, n_jobs=n_jobs)
         outs.append(aggregator.fit_transform(X, groups % 2, groups, exclude=None))
 
-    assert len(aggregator.aggregates_) == 50
+    assert len(aggregator.aggregates_) == aggregator.max_features
     pd.testing.assert_frame_equal(outs[0], outs[1])
 
 
