@@ -326,6 +326,8 @@ class InferenceConfig:
         - None: no preprocessing is done.
         - One of the options from
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
+        - One of the options for nonnegative targets from
+          `tabpfn.preprocessing.target_transform.ZERO_INFLATED_TARGET_TRANSFORMS`.
     """
 
     REGRESSION_TARGET_SIGN_FLIP: bool = False

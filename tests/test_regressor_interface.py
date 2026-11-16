@@ -1714,6 +1714,77 @@ def test__predict__target_transform__predictions_are_finite_and_accurate(
     assert r2_score(y_test, pred) > 0.7
 
 
+def _zero_inflated_regression_data() -> tuple[np.ndarray, np.ndarray]:
+    r = np.random.RandomState(0)
+    X = r.randn(300, 3)
+    y = np.where(X[:, 0] < 0.5, 0.0, np.exp(4.0 + X[:, 1] + 0.3 * r.randn(300)))
+    return X, y
+
+
+@pytest.mark.parametrize(
+    "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
+)
+def test__fit__zero_inflated_transform__sees_the_raw_target(transform: str) -> None:
+    """The transform must find the exact zeros of the raw target, not a z-score."""
+    X, y = _zero_inflated_regression_data()
+    y = 1e3 * y
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,),
+        },
+    )
+    reg.fit(X, y)
+
+    logs = np.log(y[y > 0])
+    if transform == "log1p_target":
+        t = np.log1p(y)
+        expected = (t - t.mean()) / t.std()
+    elif transform == "log_quantile_gap":
+        t = np.where(y > 0, np.log(np.where(y > 0, y, 1.0)), 0.0)
+        t[y == 0] = np.quantile(logs, 0.01) - logs.std()
+        expected = (t - t.mean()) / t.std()
+    else:
+        t = (np.log(np.where(y > 0, y, 1.0)) - logs.mean()) / logs.std()
+        expected = np.where(y > 0, np.maximum(t, -3.5), -4.0)
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    np.testing.assert_allclose(member_y, expected, rtol=1e-8)
+    zero_code = member_y[y == 0][0]
+    assert (member_y == zero_code).mean() == (y == 0).mean()
+
+
+@pytest.mark.parametrize(
+    "transform", ["log_quantile_gap", "log_fixed_atom", "log1p_target"]
+)
+def test__predict__zero_inflated_transform__members_decode_low_borders_to_zero(
+    transform: str,
+) -> None:
+    """Each member's low borders decode to exactly raw 0.
+
+    Only the outer border lies below 0: the border repair widens the collapsed
+    outer bucket.
+    """
+    X, y = _zero_inflated_regression_data()
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        inference_precision=torch.float32,
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X[:200], y[:200])
+    _, _, member_borders = reg.forward(X[200:], use_inference_mode=True)
+
+    for borders in member_borders:
+        zero = np.asarray(-reg.y_train_mean_ / reg.y_train_std_, borders.dtype)
+        assert borders[1] == borders[2] == zero
+        assert borders[1:].min() == zero
+        assert borders[0] < zero
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test__fit__target_frame_is_independent_of_the_target_units(dtype: str) -> None:
     """Rescaling the target changes its frame but preserves standardized inputs."""
@@ -2417,6 +2488,9 @@ def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
         ("log", -1.0, "strictly positive"),
         ("1_plus_log", -1.0, "greater than -1"),
         ("1_plus_log", -2.0, "greater than -1"),
+        ("log_quantile_gap", -1.0, "nonnegative"),
+        ("log_fixed_atom", -1.0, "nonnegative"),
+        ("log1p_target", -1.0, "nonnegative"),
     ],
 )
 def test__fit__invalid_log_target__raises_clear_error(
