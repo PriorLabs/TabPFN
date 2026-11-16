@@ -26,6 +26,7 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
 from tabpfn.preprocessing.torch.torch_quantile_transformer import (
     TorchQuantileTransformer,
 )
+from tabpfn.preprocessing.torch.torch_robust_scaler import TorchRobustScaler
 from tabpfn.preprocessing.torch.torch_safe_power_transformer import (
     TorchSafePowerTransformer,
 )
@@ -417,6 +418,66 @@ class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
         fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
         return self._transformer.transform(x, fitted_cache=fitted_cache), None, None
+
+
+class TorchSelectiveRobustScalerStep(TorchPreprocessingStep):
+    """Robust scaler that only transforms specified column indices.
+
+    Register with ``modalities=None``, like
+    :class:`TorchSelectiveQuantileTransformerStep`.
+    """
+
+    def __init__(
+        self,
+        target_column_indices: list[int],
+        random_state: int | np.random.Generator | None,
+    ) -> None:
+        super().__init__()
+        seed, _ = infer_random_state(random_state)
+        self._scaler = TorchRobustScaler(random_state=seed)
+        self._target_column_indices = target_column_indices
+
+    @override
+    def fit_transform(
+        self,
+        x: torch.Tensor,
+        column_indices: list[int],
+        num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None = None,
+    ) -> TorchPreprocessingStepResult:
+        """Override to select only target columns for the robust scaler."""
+        del column_indices
+        orig_device = x.device
+        target_x = x[:, :, self._target_column_indices]
+
+        # As for the squashing scaler, the sort-based fit is faster on CPU than MPS.
+        if orig_device.type == "mps":
+            target_x = target_x.cpu()
+
+        if fitted_cache is None:
+            fitted_cache = self._scaler.fit(target_x[:num_train_rows])
+        else:
+            fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
+
+        transformed = self._scaler.transform(target_x, fitted_cache=fitted_cache)
+        del target_x
+
+        x = x.clone()
+        x[:, :, self._target_column_indices] = transformed.to(orig_device)
+
+        return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        return self._scaler.fit(x)
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
 class TorchShuffleFeaturesStep(TorchPreprocessingStep):

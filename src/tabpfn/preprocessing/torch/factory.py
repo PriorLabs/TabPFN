@@ -24,6 +24,7 @@ from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
     TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveRobustScalerStep,
     TorchSelectiveSafePowerStep,
     TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
@@ -33,7 +34,7 @@ from tabpfn.preprocessing.torch.steps import (
 if TYPE_CHECKING:
     import numpy as np
 
-    from tabpfn.preprocessing.configs import EnsembleConfig
+    from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
@@ -63,62 +64,9 @@ def create_gpu_preprocessing_pipeline(
     pconfig = config.preprocess_config
 
     if enable_gpu_preprocessing and feature_schema is not None:
-        # Quantile transform — target columns are annotated in the schema
-        # by ReshapeFeatureDistributionsStep with
-        # schedule_gpu_transform=GPUTransformType.QUANTILE.
-        quantile_target_indices = (
-            feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        steps.extend(
+            _reshape_steps(pconfig, feature_schema, n_train_samples, random_state)
         )
-        quantile_on_gpu = len(quantile_target_indices) > 0
-        if quantile_on_gpu and n_train_samples is not None:
-            n_quantiles = compute_effective_n_quantiles(pconfig.name, n_train_samples)
-            extrapolate_ratio = get_extrapolate_ratio_for_preset(pconfig.name)
-            steps.append(
-                (
-                    TorchSelectiveQuantileTransformerStep(
-                        n_quantiles=n_quantiles,
-                        target_column_indices=quantile_target_indices,
-                        random_state=random_state,
-                        extrapolate_ratio=extrapolate_ratio,
-                        output_distribution=get_quantile_output_distribution(
-                            pconfig.name
-                        ),
-                    ),
-                    None,  # operates on explicit indices, receives full tensor
-                )
-            )
-
-        # Squashing scaler — target columns are annotated in the schema
-        # by ReshapeFeatureDistributionsStep with
-        # schedule_gpu_transform=GPUTransformType.SQUASHING_SCALER.
-        squashing_scaler_target_indices = (
-            feature_schema.get_indices_marked_for_gpu_squashing_scaler_transform()
-        )
-        if squashing_scaler_target_indices:
-            max_absolute_value = get_squashing_scaler_max_absolute_value(pconfig.name)
-            steps.append(
-                (
-                    TorchSelectiveSquashingScalerStep(
-                        max_absolute_value=max_absolute_value,
-                        target_column_indices=squashing_scaler_target_indices,
-                    ),
-                    None,  # operates on explicit indices, receives full tensor
-                )
-            )
-
-        safe_power_target_indices = (
-            feature_schema.get_indices_marked_for_gpu_safe_power_transform()
-        )
-        if safe_power_target_indices:
-            steps.append(
-                (
-                    TorchSelectiveSafePowerStep(
-                        target_column_indices=safe_power_target_indices,
-                        random_state=random_state,
-                    ),
-                    None,  # operates on explicit indices, receives full tensor
-                )
-            )
 
         # SVD features — gating mirrors the CPU pipeline's ``has_svd``.
         has_svd = (
@@ -180,3 +128,82 @@ def create_gpu_preprocessing_pipeline(
         return TorchPreprocessingPipeline(steps, keep_fitted_cache=keep_fitted_cache)
 
     return None
+
+
+def _reshape_steps(
+    pconfig: PreprocessorConfig,
+    feature_schema: FeatureSchema,
+    n_train_samples: int | None,
+    random_state: int | np.random.Generator | None,
+) -> list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]]:
+    """Steps for the reshape transforms that the CPU pipeline scheduled on GPU."""
+    steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]] = []
+    # Quantile transform — target columns are annotated in the schema
+    # by ReshapeFeatureDistributionsStep with
+    # schedule_gpu_transform=GPUTransformType.QUANTILE.
+    quantile_target_indices = (
+        feature_schema.get_indices_marked_for_gpu_quantile_transform()
+    )
+    quantile_on_gpu = len(quantile_target_indices) > 0
+    if quantile_on_gpu and n_train_samples is not None:
+        n_quantiles = compute_effective_n_quantiles(pconfig.name, n_train_samples)
+        extrapolate_ratio = get_extrapolate_ratio_for_preset(pconfig.name)
+        steps.append(
+            (
+                TorchSelectiveQuantileTransformerStep(
+                    n_quantiles=n_quantiles,
+                    target_column_indices=quantile_target_indices,
+                    random_state=random_state,
+                    extrapolate_ratio=extrapolate_ratio,
+                    output_distribution=get_quantile_output_distribution(pconfig.name),
+                ),
+                None,  # operates on explicit indices, receives full tensor
+            )
+        )
+
+    # Squashing scaler — target columns are annotated in the schema
+    # by ReshapeFeatureDistributionsStep with
+    # schedule_gpu_transform=GPUTransformType.SQUASHING_SCALER.
+    squashing_scaler_target_indices = (
+        feature_schema.get_indices_marked_for_gpu_squashing_scaler_transform()
+    )
+    if squashing_scaler_target_indices:
+        max_absolute_value = get_squashing_scaler_max_absolute_value(pconfig.name)
+        steps.append(
+            (
+                TorchSelectiveSquashingScalerStep(
+                    max_absolute_value=max_absolute_value,
+                    target_column_indices=squashing_scaler_target_indices,
+                ),
+                None,  # operates on explicit indices, receives full tensor
+            )
+        )
+
+    safe_power_target_indices = (
+        feature_schema.get_indices_marked_for_gpu_safe_power_transform()
+    )
+    if safe_power_target_indices:
+        steps.append(
+            (
+                TorchSelectiveSafePowerStep(
+                    target_column_indices=safe_power_target_indices,
+                    random_state=random_state,
+                ),
+                None,  # operates on explicit indices, receives full tensor
+            )
+        )
+
+    robust_scaler_target_indices = (
+        feature_schema.get_indices_marked_for_gpu_robust_scaler_transform()
+    )
+    if robust_scaler_target_indices:
+        steps.append(
+            (
+                TorchSelectiveRobustScalerStep(
+                    target_column_indices=robust_scaler_target_indices,
+                    random_state=random_state,
+                ),
+                None,  # operates on explicit indices, receives full tensor
+            )
+        )
+    return steps

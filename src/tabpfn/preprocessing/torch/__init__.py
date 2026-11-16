@@ -15,6 +15,7 @@ from .steps import (
     TorchAddFingerprintFeaturesStep,
     TorchQuantileTransformerStep,
     TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveRobustScalerStep,
     TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
     TorchSoftClipOutliersStep,
@@ -22,6 +23,7 @@ from .steps import (
     TorchStandardScalerStep,
 )
 from .torch_quantile_transformer import TorchQuantileTransformer
+from .torch_robust_scaler import TorchRobustScaler
 from .torch_soft_clip_outliers import TorchSoftClipOutliers
 from .torch_squashing_scaler import TorchSquashingScaler
 from .torch_standard_scaler import TorchStandardScaler
@@ -35,7 +37,9 @@ __all__ = [
     "TorchPreprocessingStepResult",
     "TorchQuantileTransformer",
     "TorchQuantileTransformerStep",
+    "TorchRobustScaler",
     "TorchSelectiveQuantileTransformerStep",
+    "TorchSelectiveRobustScalerStep",
     "TorchSelectiveSquashingScalerStep",
     "TorchShuffleFeaturesStep",
     "TorchSoftClipOutliers",

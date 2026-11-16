@@ -379,6 +379,9 @@ class TestPipelineConsistency:
         append_original=True,
         max_features_per_estimator=680,
     )
+    ROBUST_NUMERIC = PreprocessorConfig(
+        "robust", categorical_name="numeric", max_features_per_estimator=680
+    )
     # v2 regressor config
     V2_SAFEPOWER_ONEHOT = PreprocessorConfig("safepower", categorical_name="onehot")
     SAFEPOWER_NUMERIC_APPEND_ORIGINAL = PreprocessorConfig(
@@ -440,6 +443,7 @@ class TestPipelineConsistency:
             QUANTILE_NORM_COARSE_APPEND_ORIGINAL,
             V2_SAFEPOWER_ONEHOT,
             SAFEPOWER_NUMERIC_APPEND_ORIGINAL,
+            ROBUST_NUMERIC,
             pytest.param(V26_QUANTILE_SVD, marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT),
             pytest.param(V25_SQUASHING_SVD, marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT),
             V25_SQUASHING_NO_SVD,
@@ -454,6 +458,7 @@ class TestPipelineConsistency:
             "quantile_norm_coarse_append_original",
             "v2_safepower_onehot",
             "safepower_numeric_append_original",
+            "robust_numeric",
             "v26_quantile_svd",
             "v25_squashing_svd",
             "v25_squashing_no_svd",
@@ -694,7 +699,8 @@ class TestGpuPipelineInfPassthrough:
     """
 
     @pytest.mark.parametrize(
-        "preset", ["quantile_uni_coarse", "squashing_scaler_default", "safepower"]
+        "preset",
+        ["quantile_uni_coarse", "squashing_scaler_default", "safepower", "robust"],
     )
     @pytest.mark.parametrize("global_transformer_name", [None, "svd"])
     def test_infinities_survive_cpu_plus_gpu_pipeline(
