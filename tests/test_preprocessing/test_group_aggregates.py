@@ -24,8 +24,8 @@ def _frame() -> pd.DataFrame:
 
 @pytest.mark.parametrize(
     ("y", "groups"),
-    [([0, 1, 1, 1, 1], GROUPS), ([0, 1, 2, 3, 4], np.arange(5))],
-    ids=["label_varies_in_a_group", "one_row_per_group"],
+    [([0, 1, 1, 1, 1], GROUPS), ([0, 1, 2, 3, 4], np.arange(5)), ([0, 0], GROUPS)],
+    ids=["label_varies_in_a_group", "one_row_per_group", "y_of_another_length"],
 )
 def test__no_one_label_per_group__adds_nothing(y: list, groups: np.ndarray) -> None:
     X = _frame()
@@ -33,6 +33,16 @@ def test__no_one_label_per_group__adds_nothing(y: list, groups: np.ndarray) -> N
     out = GroupAggregator(append=True).fit_transform(X, y, groups, exclude=None)
 
     assert out is X
+
+
+def test__column_vector_y__is_read_as_one_label_per_row() -> None:
+    aggregator = GroupAggregator(append=True)
+
+    aggregator.fit_transform(
+        _frame(), np.array([[0, 0, 1, 1, 1]]).T, GROUPS, exclude=None
+    )
+
+    assert aggregator.one_label_per_group_
 
 
 def test__aggregates__per_group_values() -> None:

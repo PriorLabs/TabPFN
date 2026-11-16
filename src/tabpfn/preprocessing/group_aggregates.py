@@ -147,7 +147,12 @@ def pool_rows(
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
     """Whether `y` is constant within every group and some group has two rows."""
-    labels = pd.Series(np.asarray(y)).groupby(groups).nunique(dropna=False)
+    # `y` is not validated yet: a column vector is flattened, and a wrong length
+    # is left for the validation to report.
+    y = np.ravel(y)
+    if len(y) != len(groups):
+        return False
+    labels = pd.Series(y).groupby(groups).nunique(dropna=False)
     return bool(labels.max() <= 1 and np.bincount(groups).max() > 1)
 
 
