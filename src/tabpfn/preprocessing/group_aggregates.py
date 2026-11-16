@@ -155,23 +155,30 @@ class GroupAggregator:
 
 
 def pool_rows(
-    values: torch.Tensor, groups: np.ndarray | None, *, logits: bool
+    values: torch.Tensor, groups: np.ndarray | None, *, logits: bool, geometric: bool
 ) -> torch.Tensor:
-    """Replace each row, along dim -2, by the mean over its group's rows.
+    """Replace each row, along dim -2, by the mean distribution of its group.
 
-    `logits` are averaged as probabilities, so the result is the log of the
-    group's mean distribution. `groups=None` returns `values` unchanged.
+    The arithmetic mean averages the rows' probabilities; the `geometric` one
+    averages their logs and normalises the result. `logits` says whether
+    `values` holds logits or probabilities; the result holds the same.
+    `groups=None` returns `values` unchanged.
     """
     if groups is None:
         return values
-    if logits:
-        values = values.softmax(dim=-1)
+    # The geometric mean is taken on logs, the arithmetic one on probabilities.
+    if logits != geometric:
+        values = values.log() if geometric else values.softmax(dim=-1)
     index = torch.as_tensor(groups, device=values.device)
     shape = (*values.shape[:-2], int(index.max()) + 1, values.shape[-1])
     sums = values.new_zeros(shape).index_add_(-2, index, values)
     counts = torch.bincount(index).to(values.dtype)
     pooled = (sums / counts[:, None]).index_select(-2, index)
-    return pooled.log() if logits else pooled
+    if geometric:
+        pooled = pooled.log_softmax(dim=-1)
+    if logits != geometric:
+        pooled = pooled.exp() if geometric else pooled.log()
+    return pooled
 
 
 def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:

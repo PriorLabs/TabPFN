@@ -132,18 +132,26 @@ def test__row_groups__codes_composite_keys_within_the_input() -> None:
 def test__pool_rows__replaces_each_row_by_its_group_mean() -> None:
     values = torch.tensor([[[1.0], [7.0], [5.0]], [[0.0], [9.0], [4.0]]])
 
-    out = pool_rows(values, np.array([0, 1, 0]), logits=False)
+    out = pool_rows(values, np.array([0, 1, 0]), logits=False, geometric=False)
 
     expected = torch.tensor([[[3.0], [7.0], [3.0]], [[2.0], [9.0], [2.0]]])
     torch.testing.assert_close(out, expected)
 
 
-def test__pool_rows__averages_logits_as_probabilities() -> None:
+@pytest.mark.parametrize(
+    ("geometric", "expected"), [(False, [0.7, 0.3]), (True, [0.75, 0.25])]
+)
+@pytest.mark.parametrize("logits", [True, False])
+def test__pool_rows__pools_logits_and_probabilities_alike(
+    geometric: bool, expected: list[float], logits: bool
+) -> None:
     probabilities = torch.tensor([[0.9, 0.1], [0.5, 0.5]])
+    values = probabilities.log() + 3.0 if logits else probabilities
 
-    out = pool_rows(probabilities.log() + 3.0, np.array([0, 0]), logits=True)
+    out = pool_rows(values, np.array([0, 0]), logits=logits, geometric=geometric)
 
-    torch.testing.assert_close(out.exp(), torch.tensor([[0.7, 0.3], [0.7, 0.3]]))
+    out = out.softmax(dim=-1) if logits else out
+    torch.testing.assert_close(out, torch.tensor([expected, expected]))
 
 
 def _grouped_data() -> tuple[pd.DataFrame, np.ndarray]:
@@ -152,7 +160,7 @@ def _grouped_data() -> tuple[pd.DataFrame, np.ndarray]:
     return pd.DataFrame({"num": rng.normal(size=40), "g": groups}), groups % 2
 
 
-def _fit(estimator_cls: type, y: np.ndarray, **inference_config: bool) -> Any:
+def _fit(estimator_cls: type, y: np.ndarray, **inference_config: Any) -> Any:
     X, _ = _grouped_data()
     return estimator_cls(
         n_estimators=1, group_col="g", inference_config=inference_config
@@ -171,9 +179,11 @@ ESTIMATORS = pytest.mark.parametrize(
 
 
 @ESTIMATORS
-@pytest.mark.parametrize(("append", "pool"), [(True, False), (False, True)])
+@pytest.mark.parametrize(
+    ("append", "pool"), [(True, None), (False, "mean"), (False, "geometric_mean")]
+)
 def test__estimator__each_flag_switches_on_its_own_mode(
-    estimator_cls: type, method: str, append: bool, pool: bool
+    estimator_cls: type, method: str, append: bool, pool: str | None
 ) -> None:
     X, y = _grouped_data()
     estimator = _fit(
@@ -185,7 +195,7 @@ def test__estimator__each_flag_switches_on_its_own_mode(
     names = [f.name for f in estimator.inferred_feature_schema_.features]
     assert ("input_num_mean" in names) is append
     assert estimator.group_feature_index_ is not None
-    assert _pooled(pred) is pool
+    assert _pooled(pred) is (pool is not None)
     assert len(np.unique(pred.round(5), axis=0)) > 1
 
 
@@ -199,16 +209,17 @@ def test__estimator__several_labels_in_a_group__get_aggregates_but_no_pooling(
             estimator_cls,
             np.arange(40) % 2,
             APPEND_GROUP_AGGREGATES=True,
-            POOL_GROUP_PREDICTIONS=True,
+            POOL_GROUP_PREDICTIONS="mean",
         )
 
     assert "num_mean" in estimator.group_aggregator_.names_
     assert not _pooled(getattr(estimator, method)(X))
 
 
-def test__classifier__pooled_logits_match_the_pooled_probabilities() -> None:
+@pytest.mark.parametrize("pool", ["mean", "geometric_mean"])
+def test__classifier__pooled_logits_match_the_pooled_probabilities(pool: str) -> None:
     X, y = _grouped_data()
-    classifier = _fit(TabPFNClassifier, y, POOL_GROUP_PREDICTIONS=True)
+    classifier = _fit(TabPFNClassifier, y, POOL_GROUP_PREDICTIONS=pool)
 
     from_logits = torch.as_tensor(classifier.predict_logits(X)).softmax(dim=-1)
 

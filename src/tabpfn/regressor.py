@@ -1097,7 +1097,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.group_aggregator_ = GroupAggregator(
             append=self.inference_config_.APPEND_GROUP_AGGREGATES,
-            pool=self.inference_config_.POOL_GROUP_PREDICTIONS,
+            pool=self.inference_config_.POOL_GROUP_PREDICTIONS is not None,
         )
         X = self.group_aggregator_.fit_transform(
             X, y, groups, exclude=self.group_encoder_.feature_name_
@@ -1747,8 +1747,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             and groups is None
         )
         if not use_blocks:
-            logits = self._compute_aggregated_logits(X)
-            return decode(pool_rows(logits, groups, logits=True))
+            logits = pool_rows(
+                self._compute_aggregated_logits(X),
+                groups,
+                logits=True,
+                geometric=self.inference_config_.POOL_GROUP_PREDICTIONS
+                == "geometric_mean",
+            )
+            return decode(logits)
 
         # Each test row only attends to the cached training context, and every
         # later step is per row, so blocks give the same result as one call.

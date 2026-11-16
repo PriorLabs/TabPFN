@@ -884,7 +884,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.group_aggregator_ = GroupAggregator(
             append=self.inference_config_.APPEND_GROUP_AGGREGATES,
-            pool=self.inference_config_.POOL_GROUP_PREDICTIONS,
+            pool=self.inference_config_.POOL_GROUP_PREDICTIONS is not None,
         )
         X = self.group_aggregator_.fit_transform(
             X, y, groups, exclude=self.group_encoder_.feature_name_
@@ -1850,7 +1850,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
-        return pool_rows(output, groups, logits=return_logits or return_raw_logits)
+        return pool_rows(
+            output,
+            groups,
+            logits=return_logits or return_raw_logits,
+            geometric=self.inference_config_.POOL_GROUP_PREDICTIONS == "geometric_mean",
+        )
 
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.

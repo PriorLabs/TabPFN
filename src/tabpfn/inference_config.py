@@ -148,13 +148,19 @@ class InferenceConfig:
     rows of its group in the predict input, so the other rows passed in change
     its prediction. Predict all rows of a group in one call."""
 
-    POOL_GROUP_PREDICTIONS: bool = False
-    """Whether the rows of a group get one shared prediction, for `group_col` data
+    POOL_GROUP_PREDICTIONS: Literal["mean", "geometric_mean"] | None = None
+    """How the rows of a group get one shared prediction, for `group_col` data
     with one label per group: the target is constant within every training group
-    and some group has more than one row. Ignored with a warning otherwise. Each
-    row's predicted distribution, over the classes or over the target, is
-    replaced by the mean distribution of the rows of its group in the predict
-    input.
+    and some group has more than one row. Ignored with a warning otherwise.
+
+    - If `None`, every row keeps its own prediction.
+    - If `"mean"`, each row's predicted distribution, over the classes or over
+      the target, is replaced by the mean distribution of the rows of its group
+      in the predict input.
+    - If `"geometric_mean"`, by their geometric mean, normalised: the rows'
+      log-probabilities are averaged. This is sharper than `"mean"` when the
+      rows agree, and a class or value that one row rules out is ruled out for
+      the group.
 
     This is transductive too: predict all rows of a group in one call."""
 
