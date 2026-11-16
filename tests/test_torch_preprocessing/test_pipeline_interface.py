@@ -18,6 +18,11 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
 )
 from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
+    TorchRandomSignFlipStep,
+    TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveRobustScalerStep,
+    TorchSelectiveSafePowerStep,
+    TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
     TorchStandardScalerStep,
 )
@@ -678,3 +683,91 @@ def test__fit_transform_rows_on_device__row_blocks__match_fit_transform(
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
     assert actual.schema_permutation == expected.schema_permutation
+
+
+def _blockwise_pipeline() -> TorchPreprocessingPipeline:
+    """One step of each kind the block runners handle, on 10 numerical columns."""
+    return TorchPreprocessingPipeline(
+        steps=[
+            (TorchSelectiveQuantileTransformerStep(20, [0, 1, 2]), None),
+            (TorchSelectiveSafePowerStep([3, 4]), None),
+            (TorchSelectiveSquashingScalerStep(3.0, [5, 6]), None),
+            (TorchSelectiveRobustScalerStep([7, 8]), None),
+            (TorchRandomSignFlipStep(random_state=0), {FeatureModality.NUMERICAL}),
+            (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
+        ]
+    )
+
+
+def _wide_input() -> torch.Tensor:
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(64, 1, 10, generator=generator) * torch.linspace(0.5, 20, 10)
+    x[3, 0, 4] = float("nan")
+    return x
+
+
+_TARGETS = [0, 2, 3, 5, 7, 8, 9]
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        TorchSelectiveQuantileTransformerStep(20, _TARGETS),
+        TorchSelectiveSafePowerStep(_TARGETS),
+        TorchSelectiveSquashingScalerStep(3.0, _TARGETS),
+        TorchSelectiveRobustScalerStep(_TARGETS),
+    ],
+    ids=["quantile", "safepower", "squashing", "robust"],
+)
+def test__fit_transform_on_device__selective_step__matches_fit_transform(
+    step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Three columns of 64 float32 rows per block: three blocks for seven targets.
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 64 * 4)
+    x = _wide_input()
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = pipeline_interface._fit_transform_on_device(
+        step, x, _TARGETS, 50, None, torch.device("cpu")
+    )
+
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+    assert actual.fitted_cache is not None
+    assert expected.fitted_cache is not None
+    for key, value in expected.fitted_cache.items():
+        torch.testing.assert_close(actual.fitted_cache[key], value, rtol=0, atol=0)
+
+
+def test__fit_transform_rows_on_device__sign_flip__matches_fit_transform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 10 * 10 * 4)
+    x = _wide_input()
+    step = TorchRandomSignFlipStep(random_state=0)
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = pipeline_interface._fit_transform_rows_on_device(
+        step, x, _TARGETS, 50, None, torch.device("cpu")
+    )
+
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__call__host_table__matches_the_device_table() -> None:
+    x = _wide_input()
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    device = torch.device("cuda")
+    expected = _blockwise_pipeline()(x.to(device), schema, num_train_rows=50)
+
+    actual = _blockwise_pipeline()(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=device,
+    )
+
+    assert actual.x.device.type == "cpu"
+    torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True)

@@ -92,6 +92,15 @@ def columnwise_nanmean_nanstd(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tens
     return mean, torch.sqrt(variance)
 
 
+def columnwise_sum(x: torch.Tensor) -> torch.Tensor:
+    """Sum over dimension 0, ignoring NaN.
+
+    Each column's sum depends only on that column, so it comes out the same
+    whichever other columns `x` holds.
+    """
+    return _pairwise_sum(torch.where(torch.isnan(x), 0, x))
+
+
 def _pairwise_sum(x: torch.Tensor) -> torch.Tensor:
     """Sum over dimension 0 by a pairwise tree of elementwise additions.
 

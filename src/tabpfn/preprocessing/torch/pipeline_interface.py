@@ -52,6 +52,12 @@ class TorchPreprocessingStep(abc.ABC):
     of rows at a time.
     """
 
+    shared_cache_keys: frozenset[str] = frozenset()
+    """Keys of a columnwise step's fitted cache whose value is shared by all columns.
+
+    Every other key holds one entry per column, along its last dimension.
+    """
+
     def fit_transform(
         self,
         x: torch.Tensor,
@@ -114,12 +120,9 @@ class TorchPreprocessingStep(abc.ABC):
         ]
         if fitted_cache is None:
             parts = [self._fit(x[:num_train_rows, :, columns[b]]) for b in blocks]
-            fitted_cache = {
-                key: torch.cat([part[key] for part in parts], dim=-1)
-                for key in parts[0]
-            }
+            fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
         for block in blocks:
-            cache = {key: value[..., block] for key, value in fitted_cache.items()}
+            cache = _slice_column_cache(fitted_cache, block, self.shared_cache_keys)
             transformed, added_columns, _ = self._transform(
                 x[:, :, columns[block]], fitted_cache=cache
             )
@@ -483,32 +486,24 @@ def _fit_transform_on_device(
     """
     row_bytes = x.shape[0] * x.shape[1] * x.element_size()
     width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
-    parts: list[dict[str, torch.Tensor] | None] = []
+    parts: list[dict[str, torch.Tensor]] = []
     for start in range(0, len(column_indices), width):
         selected = column_indices[start : start + width]
         index = _column_index(selected)
-        cache = None
-        if fitted_cache is not None:
-            cache = {
-                key: value[..., start : start + len(selected)].to(device)
-                for key, value in fitted_cache.items()
-            }
-        result = step.fit_transform(
-            x[:, :, index].to(device),
-            column_indices=list(range(len(selected))),
-            num_train_rows=num_train_rows,
-            fitted_cache=cache,
-            **_in_place_kwargs(step),
-        )
-        assert result.added_columns is None, "A columnwise step adds no columns."
-        x[:, :, index] = result.x.to(x.device)
-        parts.append(result.fitted_cache)
-    fitted = None
-    if parts and parts[0] is not None:
-        fitted = {
-            key: torch.cat([part[key] for part in parts if part is not None], dim=-1)
-            for key in parts[0]
-        }
+        block = x[:, :, index].to(device)
+        if fitted_cache is None:
+            cache = step._fit(block[:num_train_rows])
+        else:
+            cache = _slice_column_cache(
+                _move_cache_to_device(fitted_cache, device),
+                slice(start, start + len(selected)),
+                step.shared_cache_keys,
+            )
+        transformed, added_columns, _ = step._transform(block, fitted_cache=cache)
+        assert added_columns is None, "A columnwise step adds no columns."
+        x[:, :, index] = transformed.to(x.device)
+        parts.append(cache)
+    fitted = _join_column_caches(parts, step.shared_cache_keys) if parts else None
     return TorchPreprocessingStepResult(x=x, fitted_cache=fitted)
 
 
@@ -546,6 +541,28 @@ def _fit_transform_rows_on_device(
     return TorchPreprocessingStepResult(
         x=x, fitted_cache=cache, schema_permutation=permutation
     )
+
+
+def _join_column_caches(
+    parts: list[dict[str, torch.Tensor]], shared_keys: frozenset[str]
+) -> dict[str, torch.Tensor]:
+    """Joins the caches fitted on consecutive blocks of columns into one."""
+    return {
+        key: parts[0][key]
+        if key in shared_keys
+        else torch.cat([part[key] for part in parts], dim=-1)
+        for key in parts[0]
+    }
+
+
+def _slice_column_cache(
+    cache: dict[str, torch.Tensor], columns: slice, shared_keys: frozenset[str]
+) -> dict[str, torch.Tensor]:
+    """Takes the part of a columnwise step's cache that covers a block of columns."""
+    return {
+        key: value if key in shared_keys else value[..., columns]
+        for key, value in cache.items()
+    }
 
 
 def _column_index(columns: list[int]) -> slice | list[int]:
