@@ -131,6 +131,20 @@ class TorchPreprocessingStep(abc.ABC):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}"
 
+    def target_columns(
+        self,
+        feature_schema: FeatureSchema,
+        modalities: set[FeatureModality] | None,
+    ) -> list[int]:
+        """The columns this step transforms, which the pipeline passes as
+        `column_indices`.
+
+        These are the columns of `modalities`, or all columns if it is None.
+        """
+        if modalities is None:
+            return list(range(feature_schema.num_columns))
+        return feature_schema.indices_for_modalities(modalities)
+
     def added_feature_prefix(self) -> str:
         """Name prefix for features this step appends via ``added_columns``.
 
@@ -278,10 +292,7 @@ class TorchPreprocessingPipeline:
             if self.record_timings:
                 t0 = time.perf_counter()
 
-            if modalities is None:
-                indices = list(range(x.shape[-1]))
-            else:
-                indices = feature_schema.indices_for_modalities(modalities)
+            indices = step.target_columns(feature_schema, modalities)
             if not indices:
                 continue
 

@@ -10,7 +10,7 @@ from typing_extensions import override
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
@@ -24,6 +24,7 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
 from tabpfn.preprocessing.torch.torch_quantile_transformer import (
     TorchQuantileTransformer,
 )
+from tabpfn.preprocessing.torch.torch_robust_scaler import TorchRobustScaler
 from tabpfn.preprocessing.torch.torch_safe_power_transformer import (
     TorchSafePowerTransformer,
 )
@@ -35,6 +36,25 @@ from tabpfn.preprocessing.torch.torch_svd import (
     TorchTruncatedSVD,
 )
 from tabpfn.utils import infer_random_state
+
+
+class TorchSelectiveStep(TorchPreprocessingStep):
+    """A step that transforms only the columns CPU preprocessing marked for it.
+
+    The marked columns are known when the step is built, and the pipeline passes
+    them as `column_indices`. Steps that override `fit_transform` read their marked
+    columns directly.
+    """
+
+    _target_column_indices: list[int]
+
+    @override
+    def target_columns(
+        self,
+        feature_schema: FeatureSchema,
+        modalities: set[FeatureModality] | None,
+    ) -> list[int]:
+        return list(self._target_column_indices)
 
 
 class TorchRandomSignFlipStep(TorchPreprocessingStep):
@@ -214,7 +234,7 @@ class TorchSoftClipOutliersStep(TorchPreprocessingStep):
         return self._outlier_remover.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
+class TorchSelectiveQuantileTransformerStep(TorchSelectiveStep):
     """Quantile transformer that only transforms specified column indices.
 
     This step needs to be registered with ``modalities=None`` in the GPU pipeline so it
@@ -287,7 +307,7 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         return self._qt.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
+class TorchSelectiveSquashingScalerStep(TorchSelectiveStep):
     """Squashing scaler that only transforms specified column indices.
 
     Mirrors :class:`TorchSelectiveQuantileTransformerStep`: this step needs to be
@@ -360,7 +380,7 @@ class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
         return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
+class TorchSelectiveSafePowerStep(TorchSelectiveStep):
     """Safe power transform that only transforms specified column indices.
 
     Register with ``modalities=None``, like
@@ -416,6 +436,33 @@ class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
         fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
         return self._transformer.transform(x, fitted_cache=fitted_cache), None, None
+
+
+class TorchSelectiveRobustScalerStep(TorchSelectiveStep):
+    """Robust scaling of the specified column indices.
+
+    Register with ``modalities=None``, like
+    :class:`TorchSelectiveQuantileTransformerStep`.
+    """
+
+    columnwise = True
+
+    def __init__(self, target_column_indices: list[int]) -> None:
+        super().__init__()
+        self._scaler = TorchRobustScaler()
+        self._target_column_indices = target_column_indices
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        return self._scaler.fit(x)
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
 class TorchShuffleFeaturesStep(TorchPreprocessingStep):

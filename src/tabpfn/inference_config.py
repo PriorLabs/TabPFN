@@ -267,10 +267,14 @@ class InferenceConfig:
     the model, which can be significantly faster for large datasets (>10 k rows).
     When ``False`` (default), all preprocessing runs on CPU / sklearn as before.
 
-    Only the ``quantile_uni*``, ``quantile_norm*``, ``squashing_scaler_*`` and
-    ``safepower`` transforms are accelerated.  Other transforms stay on CPU
-    regardless of this flag.  SVD and shuffle always move to GPU / torch when
-    this flag is set."""
+    Only the ``quantile_uni*``, ``quantile_norm*``, ``squashing_scaler_*``,
+    ``safepower`` and ``robust`` transforms are accelerated.  Other transforms stay
+    on CPU regardless of this flag.  SVD and shuffle always move to GPU / torch when
+    this flag is set.
+
+    The GPU transforms read the table in float32, while the CPU ones compute in
+    float64. A column whose spread is small against its magnitude, such as a
+    timestamp or an ID, keeps fewer distinct values on the GPU."""
 
     FEATURE_SUBSAMPLING_METHOD: Literal[
         "balanced",
