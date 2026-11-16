@@ -40,7 +40,6 @@ from tabpfn.inference_tuning import (
     RegressorTuningConfig,
     get_tuning_temperatures,
 )
-from tabpfn.mean_readout import MemberMeans
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -1828,6 +1827,7 @@ def test__logits_to_output__nonnegative__reads_the_zero_bucket_at_zero() -> None
             y_std=1.0,
             quantiles=[0.25, 0.75],
             nonnegative=nonnegative,
+            clamp_max=None,
         )
 
     np.testing.assert_allclose(output("mean", nonnegative=False)[:2], [0.5, 1.5])
@@ -1839,34 +1839,65 @@ def test__logits_to_output__nonnegative__reads_the_zero_bucket_at_zero() -> None
     np.testing.assert_array_equal(output("mode", nonnegative=True), [0.0, 2.5, 2.5])
 
 
-def test__predict__mean_readout__averages_the_member_means() -> None:
-    readout = "single_trunc"
+@pytest.mark.parametrize("nonnegative", [False, True])
+def test__logits_to_output__clamp__drops_the_mass_above_clamp_max(
+    nonnegative: bool,
+) -> None:
+    """Members need not be nonnegative: "clamp" reads the zero bucket at 0 itself."""
+    criterion = FullSupportBarDistribution(
+        torch.tensor([-3.0, -2.0, -0.5, 1.5, 2.0, 3.0, 4.0], dtype=torch.float64)
+    )
+    # Rows: a quarter below 0, a quarter in [-0.5, 1.5], half in [3, 4], the
+    # outer bucket above 3; half in [1.5, 2], half in [2, 3], which holds 2.5.
+    probs = torch.zeros(2, 6, dtype=torch.float64)
+    probs[0, 1] = probs[0, 2] = 0.25
+    probs[0, 5] = 0.5
+    probs[1, 3] = probs[1, 4] = 0.5
+
+    mean = regressor_module._logits_to_output(
+        output_type="mean",
+        logits=probs.log(),
+        znorm_space_bardist=criterion,
+        y_mean=0.0,
+        y_std=1.0,
+        quantiles=[],
+        nonnegative=nonnegative,
+        clamp_max=2.5,
+    )
+
+    # Row 0: the mass above 3 is dropped, and the rest reads at 0. Row 1: the
+    # bucket [2, 3] holds 2.5 and is kept whole.
+    np.testing.assert_allclose(mean, [0.0, (1.75 + 2.5) / 2])
+
+
+def test__predict__clamp_readout__changes_only_the_mean() -> None:
     X, y = _zero_inflated_regression_data()
-    config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_qgap",)}
+    config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)}
     kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 42}
     reg = TabPFNRegressor(
-        **kwargs, inference_config={**config, "REGRESSION_MEAN_READOUT": readout}
+        **kwargs, inference_config={**config, "REGRESSION_MEAN_READOUT": "clamp"}
     ).fit(X[:200], y[:200])
     plain = TabPFNRegressor(**kwargs, inference_config=config).fit(X[:200], y[:200])
 
-    mean = reg.predict(X[200:])
+    full = reg.predict(X[200:], output_type="full")
+    full_plain = plain.predict(X[200:], output_type="full")
 
-    member_means = MemberMeans(
-        readout,  # type: ignore[arg-type]
+    expected = regressor_module._logits_to_output(
+        output_type="mean",
+        logits=full["logits"],
+        znorm_space_bardist=reg.znorm_space_bardist_,
         y_mean=reg.y_train_mean_,
         y_std=reg.y_train_std_,
-        y_max=float(y[:200].max()),
+        quantiles=[],
+        nonnegative=False,
+        clamp_max=float(y[:200].max()),
     )
-    _, outputs, borders = reg.forward(X[200:], use_inference_mode=True)
-    for member_borders, output in zip(borders, outputs, strict=False):
-        member_means.add(member_borders, output)
-    np.testing.assert_allclose(mean, member_means.mean(), rtol=1e-12)
-    assert (mean >= 0).all()
-    # Only the mean is read out differently.
-    main, main_plain = (r.predict(X[200:], output_type="main") for r in (reg, plain))
-    np.testing.assert_array_equal(main["mean"], mean)
-    assert not np.allclose(mean, main_plain["mean"])
-    np.testing.assert_array_equal(main["median"], main_plain["median"])
+    np.testing.assert_array_equal(full["mean"], expected)
+    np.testing.assert_array_equal(reg.predict(X[200:]), expected)
+    assert (full["mean"] >= 0).all()
+    assert not np.allclose(full["mean"], full_plain["mean"])
+    np.testing.assert_array_equal(full["median"], full_plain["median"])
+    torch.testing.assert_close(full["logits"], full_plain["logits"])
 
 
 def test__fit__mean_readout_with_negative_targets__raises() -> None:
@@ -1875,23 +1906,10 @@ def test__fit__mean_readout_with_negative_targets__raises() -> None:
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
-        inference_config={"REGRESSION_MEAN_READOUT": "single_trunc"},
+        inference_config={"REGRESSION_MEAN_READOUT": "clamp"},
     )
 
-    with pytest.raises(ValueError, match=r"single_trunc.*nonnegative"):
-        reg.fit(X, y)
-
-
-def test__fit__mean_readout_with_temperature_calibration__raises() -> None:
-    X, y = _zero_inflated_regression_data()
-    reg = TabPFNRegressor(
-        n_estimators=1,
-        device="cpu",
-        inference_config={"REGRESSION_MEAN_READOUT": "single_trunc"},
-        tuning_config={"calibrate_temperature": True},
-    )
-
-    with pytest.raises(ValueError, match="calibrate_temperature=False"):
+    with pytest.raises(ValueError, match=r"clamp.*nonnegative"):
         reg.fit(X, y)
 
 

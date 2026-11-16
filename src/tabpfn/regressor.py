@@ -23,7 +23,7 @@ import logging
 import numbers
 import typing
 import warnings
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
@@ -41,7 +41,10 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
-from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.bar_distribution import (
+    FullSupportBarDistribution,
+    expected_value,
+)
 from tabpfn.base import (
     ModelSpecs,
     create_inference_engine,
@@ -76,7 +79,6 @@ from tabpfn.inference_tuning import (
     get_tuning_split_indices,
     resolve_tuning_config,
 )
-from tabpfn.mean_readout import MemberMeans
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -325,8 +327,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     declares unless it was overridden."""
 
     y_train_max_: float
-    """The largest training target, where the "single_trunc" mean readout
-    truncates each member's distribution."""
+    """The largest training target, above which the "clamp" mean readout drops
+    the predicted mass."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -1702,6 +1704,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y_mean=self.y_train_mean_,
             y_std=self.y_train_std_,
             nonnegative=self._members_are_nonnegative(),
+            clamp_max=self.y_train_max_ if self._mean_readout() == "clamp" else None,
         )
         block_rows = settings.tabpfn.max_regressor_predict_rows
         use_blocks = (
@@ -1757,24 +1760,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raise TabPFNValidationError(
                 f"The '{readout}' mean readout requires nonnegative targets (y >= 0)."
             )
-        if self._uses_majority_downsample():
-            raise TabPFNValidationError(
-                f"The '{readout}' mean readout does not apply the "
-                "SAMPLE_SUBSAMPLING_METHOD='majority_downsample' correction. Use "
-                "REGRESSION_MEAN_READOUT='ensemble' or another subsampling method."
-            )
-
-    def _member_means(self) -> MemberMeans | None:
-        """A fresh accumulator for the mean readout, or None for "ensemble"."""
-        readout = self._mean_readout()
-        if readout == "ensemble":
-            return None
-        return MemberMeans(
-            typing.cast("Any", readout),
-            y_mean=self.y_train_mean_,
-            y_std=self.y_train_std_,
-            y_max=self.y_train_max_,
-        )
 
     def _maybe_calibrate_ensemble_temperature(
         self,
@@ -1820,14 +1805,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if not tuning_config_resolved.calibrate_temperature:
             return
-
-        if self._mean_readout() != "ensemble":
-            raise TabPFNValidationError(
-                f"The '{self._mean_readout()}' mean readout averages the members' "
-                "own means and does not apply a calibrated ensemble temperature. "
-                "Set `calibrate_temperature=False` or "
-                "REGRESSION_MEAN_READOUT='ensemble'."
-            )
 
         if self.group_encoder_.group_columns_:
             raise TabPFNValidationError(
@@ -1994,7 +1971,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: XType,
         *,
         apply_downsample_correction: bool = True,
-        member_hook: Callable[[np.ndarray, torch.Tensor], None] | None = None,
     ) -> torch.Tensor:
         """Run the ensemble and aggregate it into one log-probability tensor.
 
@@ -2015,8 +1991,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
-            member_hook: Called with each member's borders and logits before
-                aggregation.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
@@ -2072,8 +2046,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 unit="estimator",
                 disable=not show_progress_bar,
             ):
-                if member_hook is not None:
-                    member_hook(borders_t, output)
                 transformed = translate_probs_across_borders(
                     output,
                     frm=torch.as_tensor(borders_t, device=output.device),
@@ -2230,8 +2202,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         if self.get_inference_config().REGRESSION_MEAN_READOUT != "ensemble":
             raise NotImplementedError(
-                "predict_batched supports only REGRESSION_MEAN_READOUT='ensemble'. "
-                "Score datasets individually with predict."
+                "predict_batched supports only REGRESSION_MEAN_READOUT='ensemble'; "
+                "the 'clamp' readout needs each dataset's largest target. Score "
+                "datasets individually with predict."
             )
         if self.tuning_config is not None:
             raise NotImplementedError(
@@ -2516,6 +2489,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y_mean=y_mean,
             y_std=y_std,
             nonnegative=self._members_are_nonnegative(),
+            # `predict_batched` rejects the "clamp" readout.
+            clamp_max=None,
         )
 
     def _iter_forward_executor(
@@ -2857,6 +2832,7 @@ def _logits_to_output(
     y_std: float,
     quantiles: list[float],
     nonnegative: bool,
+    clamp_max: float | None,
 ) -> np.ndarray | list[np.ndarray]:
     """Converts raw model logits to the desired prediction format.
 
@@ -2867,13 +2843,17 @@ def _logits_to_output(
     holds 0 holds the members' mass at 0. That bucket and every bucket below it
     are read as a point at 0. The buckets below it only hold the tails of the
     members' outer buckets, which the border repair widens below 0.
+
+    With `clamp_max`, the mean is E[max(Y, 0) | Y <= clamp_max]: the buckets up
+    to the one that holds 0 are read at 0, and the buckets that start at or above
+    `clamp_max` are dropped. The bucket that holds `clamp_max` is kept whole.
     """
     criterion = znorm_space_bardist
 
     def to_raw(output: torch.Tensor) -> np.ndarray:
         return output.cpu().detach().numpy().astype(np.float64) * y_std + y_mean
 
-    if nonnegative:
+    if nonnegative or clamp_max is not None:
         raw_borders = to_raw(criterion.borders)
         # The bucket `translate_probs_across_borders` moves a point at 0 into.
         zero_bucket = int(np.searchsorted(raw_borders, 0.0, side="right")) - 1
@@ -2891,16 +2871,15 @@ def _logits_to_output(
     #   "pi": criterion.pi(logits, np.max(self.y)),
     #   "ei": criterion.ei(logits),
     if output_type == "mean":
-        mean = to_raw(criterion.mean(logits))
-        if not nonnegative:
-            return mean
-        # Take out the buckets up to the zero bucket; read at 0, they add nothing.
-        up_to_zero = logits.clone()
-        up_to_zero[..., zero_bucket + 1 :] = float("-inf")
-        mass = logits.softmax(-1)[..., : zero_bucket + 1].sum(-1)
-        mass = mass.cpu().detach().numpy().astype(np.float64)
-        # A row without mass there gets NaN from `up_to_zero`; `np.where` drops it.
-        return mean - np.where(mass > 0, mass * to_raw(criterion.mean(up_to_zero)), 0)
+        if not nonnegative and clamp_max is None:
+            return to_raw(criterion.mean(logits))
+        return _mean_with_zero_bucket(
+            logits,
+            raw_bucket_means=to_raw(criterion.bucket_means()),
+            raw_borders=raw_borders,
+            zero_bucket=zero_bucket,
+            clamp_max=clamp_max,
+        )
     if output_type == "median":
         output = criterion.median(logits)
     elif output_type == "mode":
@@ -2909,6 +2888,27 @@ def _logits_to_output(
         raise ValueError(f"Invalid output type: {output_type}")
 
     return at_zero(to_raw(output))
+
+
+def _mean_with_zero_bucket(
+    logits: torch.Tensor,
+    *,
+    raw_bucket_means: np.ndarray,
+    raw_borders: np.ndarray,
+    zero_bucket: int,
+    clamp_max: float | None,
+) -> np.ndarray:
+    """The mean in target units, with the buckets up to `zero_bucket` read at 0
+    and, with `clamp_max`, without the buckets that start at or above it.
+    """
+    # In target units, so the buckets read at 0 add exactly 0.
+    values = torch.as_tensor(raw_bucket_means)
+    values[: zero_bucket + 1] = 0.0
+    logits = logits.detach().cpu()
+    if clamp_max is not None:
+        above = torch.as_tensor(raw_borders[:-1] >= clamp_max)
+        logits = logits.masked_fill(above, float("-inf"))
+    return expected_value(logits, values).numpy()
 
 
 def _validate_eval_metric(

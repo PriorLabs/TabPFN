@@ -13,9 +13,6 @@ from typing import Literal
 import pydantic
 
 from tabpfn.constants import ModelVersion, TaskType
-from tabpfn.mean_readout import (
-    MeanReadout,  # noqa: TC001 (pydantic reads it at runtime)
-)
 from tabpfn.preprocessing import (
     PreprocessorConfig,
     v2_5_classifier_preprocessor_configs,
@@ -343,14 +340,15 @@ class InferenceConfig:
     their target pipeline. Their predicted distributions are mirrored back. Ignored
     for classification."""
 
-    REGRESSION_MEAN_READOUT: MeanReadout = "ensemble"
-    """How the regressor reads out the `"mean"` prediction. The other outputs are
-    unchanged.
+    REGRESSION_MEAN_READOUT: Literal["ensemble", "clamp"] = "ensemble"
+    """How the regressor reads out the `"mean"` prediction from the ensemble's
+    averaged distribution. The other outputs are unchanged.
 
     The options are:
-        - "ensemble": the mean of the ensemble's averaged distribution.
-        - "single_trunc": the average of each member's own mean of a
-          nonnegative target, see `tabpfn.mean_readout`. It needs y >= 0.
+        - "ensemble": the mean of the distribution.
+        - "clamp": E[max(Y, 0) | Y <= y_max], with y_max the largest training
+          target. The grid bucket that holds 0 and every bucket below it are read
+          at 0, and the mass above y_max is dropped. It needs y >= 0.
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
