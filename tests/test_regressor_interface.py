@@ -1811,10 +1811,13 @@ def test__logits_to_output__nonnegative__reads_the_zero_bucket_at_zero() -> None
     criterion = FullSupportBarDistribution(
         torch.tensor([-3.0, -2.0, -0.5, 1.5, 2.0, 3.0, 4.0], dtype=torch.float64)
     )
-    # Rows: all mass in the bucket [-0.5, 1.5]; half there, half in [2, 3].
-    probs = torch.zeros(2, 6, dtype=torch.float64)
+    # Rows: all mass in the bucket [-0.5, 1.5] that holds 0; half there, half in
+    # [2, 3]; a quarter each in the two buckets below it, half in [2, 3].
+    probs = torch.zeros(3, 6, dtype=torch.float64)
     probs[0, 2] = 1.0
     probs[1, 2] = probs[1, 4] = 0.5
+    probs[2, 0] = probs[2, 1] = 0.25
+    probs[2, 4] = 0.5
 
     def output(output_type: str, *, nonnegative: bool) -> typing.Any:
         return regressor_module._logits_to_output(
@@ -1827,13 +1830,13 @@ def test__logits_to_output__nonnegative__reads_the_zero_bucket_at_zero() -> None
             nonnegative=nonnegative,
         )
 
-    np.testing.assert_allclose(output("mean", nonnegative=False), [0.5, 1.5])
-    np.testing.assert_allclose(output("mean", nonnegative=True), [0.0, 1.25])
-    np.testing.assert_array_equal(output("median", nonnegative=True), [0.0, 0.0])
+    np.testing.assert_allclose(output("mean", nonnegative=False)[:2], [0.5, 1.5])
+    np.testing.assert_allclose(output("mean", nonnegative=True), [0.0, 1.25, 1.25])
+    np.testing.assert_array_equal(output("median", nonnegative=True), [0.0, 0.0, 0.0])
     low, high = output("quantiles", nonnegative=True)
-    np.testing.assert_array_equal(low, [0.0, 0.0])
-    np.testing.assert_allclose(high, [0.0, 2.5])
-    np.testing.assert_array_equal(output("mode", nonnegative=True), [0.0, 2.5])
+    np.testing.assert_array_equal(low, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(high, [0.0, 2.5, 2.5])
+    np.testing.assert_array_equal(output("mode", nonnegative=True), [0.0, 2.5, 2.5])
 
 
 def test__predict__mean_readout__averages_the_member_means() -> None:

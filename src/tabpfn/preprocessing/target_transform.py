@@ -169,6 +169,14 @@ def _positive_logs(X: np.ndarray, name: str) -> np.ndarray:
     return logs
 
 
+def decodes_nonnegative(target_transform: Transformer | Pipeline) -> bool:
+    """Whether a member's target pipeline decodes to y >= 0."""
+    return isinstance(target_transform, Pipeline) and isinstance(
+        target_transform.named_steps.get(TARGET_TRANSFORM_STEP),
+        tuple(ZERO_INFLATED_TARGET_TRANSFORMS.values()),
+    )
+
+
 def make_target_transform(transform: Transformer | Pipeline | None) -> Pipeline:
     """Apply the optional preset to raw targets, then standardize.
 
@@ -198,5 +206,6 @@ __all__ = [
     "Log1pTransformer",
     "QuantileGapTransformer",
     "StandardizeTarget",
+    "decodes_nonnegative",
     "make_target_transform",
 ]

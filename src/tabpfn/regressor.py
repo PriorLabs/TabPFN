@@ -1737,7 +1737,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return _concat_block_outputs(parts, output_type)
 
     def _members_are_nonnegative(self) -> bool:
-        """Whether every member's target transform puts no mass below 0."""
+        """Whether every member's target transform decodes to y >= 0."""
         return all(
             decodes_nonnegative(config.target_transform)
             for config in self.ensemble_configs_
@@ -2863,8 +2863,10 @@ def _logits_to_output(
     Decodes in z-normalised space and undoes the normalisation in float64, so
     the decode never has to resolve the target's magnitude.
 
-    With `nonnegative`, no member puts mass below 0, and the grid bucket that
-    holds 0 holds the members' mass at 0. That bucket is read as a point at 0.
+    With `nonnegative`, every member decodes to y >= 0, and the grid bucket that
+    holds 0 holds the members' mass at 0. That bucket and every bucket below it
+    are read as a point at 0. The buckets below it only hold the tails of the
+    members' outer buckets, which the border repair widens below 0.
     """
     criterion = znorm_space_bardist
 
@@ -2875,12 +2877,12 @@ def _logits_to_output(
         raw_borders = to_raw(criterion.borders)
         # The bucket `translate_probs_across_borders` moves a point at 0 into.
         zero_bucket = int(np.searchsorted(raw_borders, 0.0, side="right")) - 1
-        low, high = raw_borders[zero_bucket], raw_borders[zero_bucket + 1]
+        zero_bucket_top = raw_borders[zero_bucket + 1]
 
     def at_zero(raw: np.ndarray) -> np.ndarray:
         if not nonnegative:
             return raw
-        return np.where((raw >= low) & (raw <= high), 0.0, raw)
+        return np.where(raw <= zero_bucket_top, 0.0, raw)
 
     if output_type == "quantiles":
         return [at_zero(to_raw(criterion.icdf(logits, q))) for q in quantiles]
@@ -2892,11 +2894,13 @@ def _logits_to_output(
         mean = to_raw(criterion.mean(logits))
         if not nonnegative:
             return mean
-        only_zero_bucket = torch.full_like(logits[..., :1, :], float("-inf"))
-        only_zero_bucket[..., zero_bucket] = 0.0
-        zero_bucket_mean = to_raw(criterion.mean(only_zero_bucket))
-        zero_bucket_prob = logits.softmax(-1)[..., zero_bucket].cpu().detach().numpy()
-        return mean - zero_bucket_prob.astype(np.float64) * zero_bucket_mean
+        # Take out the buckets up to the zero bucket; read at 0, they add nothing.
+        up_to_zero = logits.clone()
+        up_to_zero[..., zero_bucket + 1 :] = float("-inf")
+        mass = logits.softmax(-1)[..., : zero_bucket + 1].sum(-1)
+        mass = mass.cpu().detach().numpy().astype(np.float64)
+        # A row without mass there gets NaN from `up_to_zero`; `np.where` drops it.
+        return mean - np.where(mass > 0, mass * to_raw(criterion.mean(up_to_zero)), 0)
     if output_type == "median":
         output = criterion.median(logits)
     elif output_type == "mode":
