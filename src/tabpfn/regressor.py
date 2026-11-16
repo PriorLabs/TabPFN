@@ -1970,10 +1970,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return holdout_folds
 
     def _compute_aggregated_logits(
-        self,
-        X: XType,
-        *,
-        apply_downsample_correction: bool = True,
+        self, X: XType, *, apply_downsample_correction: bool = True
     ) -> torch.Tensor:
         """Run the ensemble and aggregate it into one log-probability tensor.
 
