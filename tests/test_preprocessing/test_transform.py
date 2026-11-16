@@ -6,12 +6,17 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
 
 from tabpfn.preprocessing import pipeline_interface
 from tabpfn.preprocessing.configs import ClassifierEnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-from tabpfn.preprocessing.pipeline_interface import gather_columns
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingPipeline,
+    gather_columns,
+)
+from tabpfn.preprocessing.steps import RemoveConstantFeaturesStep
 from tabpfn.preprocessing.transform import _fit_preprocessing_one
 
 
@@ -101,3 +106,23 @@ def test__fit_preprocessing_one__feature_subset__matches_the_subset_array(
     np.testing.assert_array_equal(fused[3], subset[3])
     np.testing.assert_array_equal(fused[4], subset[4])
     assert fused[5] == subset[5]
+
+
+def test__pipeline_fit_transform__feature_indices__torch_matches_numpy() -> None:
+    X = np.random.default_rng(0).normal(size=(50, 6)).astype(np.float32)
+    X[:, 3] = 2.0
+    schema = FeatureSchema.from_only_categorical_indices([], 3)
+    keep = np.array([4, 0, 3])
+
+    def run(data: np.ndarray | torch.Tensor) -> tuple[np.ndarray, int]:
+        result = PreprocessingPipeline([RemoveConstantFeaturesStep()]).fit_transform(
+            data, schema, feature_indices=keep
+        )
+        return np.asarray(result.X), result.feature_schema.num_columns
+
+    expected, expected_columns = run(X)
+    actual, actual_columns = run(torch.from_numpy(X))
+
+    assert actual.shape == expected.shape == (50, 2)
+    assert actual_columns == expected_columns == 2
+    np.testing.assert_array_equal(actual, expected)

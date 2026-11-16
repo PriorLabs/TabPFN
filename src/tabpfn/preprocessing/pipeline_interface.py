@@ -453,8 +453,6 @@ class PreprocessingPipeline:
     def __init__(
         self,
         steps: list[PreprocessingStep | StepWithModalities],
-        *,
-        keep_float32: bool = False,
     ) -> None:
         """Initialize the pipeline with preprocessing steps.
 
@@ -463,14 +461,19 @@ class PreprocessingPipeline:
                 (receives all columns) or a tuple of (PreprocessingStep,
                 set[FeatureModality]) where the step receives only columns
                 matching the specified modalities.
-            keep_float32: Copy a float32 input as float32 rather than float64. For
-                steps that only select, reorder, compare and encode values: their
-                float32 results equal the float64 ones cast back.
         """
         super().__init__()
         self._raw_steps = steps
         self.steps = self._validate_steps(steps)
-        self.keep_float32 = keep_float32
+
+    @property
+    def keep_float32(self) -> bool:
+        """Whether a float32 input is copied as float32 rather than float64.
+
+        True when every step only selects, reorders, compares and encodes values:
+        their float32 results equal the float64 ones cast back.
+        """
+        return all(step.no_arithmetic for step, _ in self.steps)
 
     step_timings_: dict[str, float] | None
     """Per-step wall-clock time (seconds) from the last ``fit_transform`` or
@@ -492,8 +495,8 @@ class PreprocessingPipeline:
         Args:
             X: 2d array of shape (n_samples, n_features).
             feature_schema: feature schema, of the columns the pipeline reads.
-            feature_indices: The columns of a numpy `X` the pipeline reads, gathered
-                into its working copy; None for all of them.
+            feature_indices: The columns of `X` the pipeline reads, gathered into
+                its working copy; None for all of them.
 
         Returns:
             PreprocessingPipelineResult with transformed data and updated schema.
@@ -556,8 +559,11 @@ class PreprocessingPipeline:
         is fused with it.
         """
         if not isinstance(X, np.ndarray):
-            return X.clone()
-        keep = getattr(self, "keep_float32", False) and X.dtype == np.float32
+            if feature_indices is None:
+                return X.clone()
+            index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
+            return X.index_select(-1, index)
+        keep = self.keep_float32 and X.dtype == np.float32
         dtype = np.float32 if keep else np.float64
         if feature_indices is None:
             return X.astype(dtype, order="C", copy=True)
@@ -577,7 +583,7 @@ class PreprocessingPipeline:
             X: Input array of shape (n_samples, n_features).
             feature_schema: Feature schema.
             is_fitting: If True, call fit_transform on steps; otherwise transform.
-            feature_indices: Columns of a numpy `X` to gather into the working copy.
+            feature_indices: Columns of `X` to gather into the working copy.
 
         Returns:
             Tuple of (transformed array, updated feature schema).

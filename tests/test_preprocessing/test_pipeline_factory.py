@@ -15,12 +15,14 @@ import pytest
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
+from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.presets import (
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
+from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     get_gpu_transform_type,
 )
@@ -143,3 +145,15 @@ def test__create_preprocessing_pipeline__keep_float32__matches_step_types(
             config, enable_gpu_preprocessing=enable_gpu_preprocessing
         )
         assert pipeline.keep_float32 == expected, dataclasses.asdict(pconfig)
+
+
+def test__reshape_step__no_arithmetic__follows_a_changed_transform_name() -> None:
+    step = ReshapeFeatureDistributionsStep(transform_name="none")
+    pipeline = PreprocessingPipeline([step])
+    assert step.no_arithmetic
+    assert pipeline.keep_float32
+
+    step.transform_name = "quantile_uni"
+
+    assert not step.no_arithmetic
+    assert not pipeline.keep_float32

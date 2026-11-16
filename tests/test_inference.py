@@ -32,6 +32,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
+    _model_input_arguments,
     _model_input_device,
     _prepare_model_inputs,
     _resolve_kv_cache_precision,
@@ -1138,8 +1139,20 @@ def test__prepare_model_inputs__row_blocks__match_one_concatenation(
     torch.testing.assert_close(y, torch.as_tensor(y_train, dtype=torch.float32))
 
 
+class _DeviceInputModel(nn.Module):
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+        return x
+
+
 class _HostInputModel(nn.Module):
-    accepts_host_input = True
+    def forward(
+        self,
+        x: torch.Tensor | None,
+        y: torch.Tensor,  # noqa: ARG002
+        *,
+        x_host: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return x_host if x is None else x
 
 
 @pytest.mark.parametrize(
@@ -1147,7 +1160,7 @@ class _HostInputModel(nn.Module):
     [
         (_HostInputModel(), "cuda", 0, "cpu"),
         (_HostInputModel(), "cuda", 1 << 40, "cuda"),
-        (nn.Module(), "cuda", 0, "cuda"),
+        (_DeviceInputModel(), "cuda", 0, "cuda"),
         (_HostInputModel(), "cpu", 0, "cpu"),
     ],
 )
@@ -1164,6 +1177,36 @@ def test__model_input_device__large_input_of_a_host_input_model__stays_on_the_ho
     actual = _model_input_device(model, torch.device(device), X_train, X_test, None)
 
     assert actual == torch.device(expected)
+
+
+@pytest.mark.parametrize(
+    ("input_device", "device", "host"),
+    [("cpu", "cuda", True), ("cpu", "cpu", False), ("meta", "meta", False)],
+)
+def test__model_input_arguments__input_in_host_memory__passed_as_x_host(
+    input_device: str, device: str, *, host: bool
+) -> None:
+    X = torch.zeros((5, 1, 3), device=input_device)
+
+    x, kwargs = _model_input_arguments(X, torch.device(device))
+
+    if host:
+        assert x is None
+        assert kwargs["x_host"] is X
+    else:
+        assert x is X
+        assert kwargs == {}
+
+
+def test__model_input_arguments__host_input_model__reads_the_table_from_x_host() -> (
+    None
+):
+    model = _HostInputModel()
+    X, y = torch.arange(6.0).view(3, 1, 2), torch.zeros(2)
+
+    x, kwargs = _model_input_arguments(X, torch.device("cuda"))
+
+    assert model(x, y, **kwargs) is X
 
 
 def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() -> None:

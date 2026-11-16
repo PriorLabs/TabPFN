@@ -1334,3 +1334,40 @@ def test__is_identity_transformer__is_what_both_callers_use() -> None:
     ):
         # Declining the remainder has to cost the assembly, not go unnoticed.
         assert not encoder._may_assemble(_mixed_frame(), {})
+
+
+@pytest.mark.parametrize("order_preserving", [False, True])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test__fit_transform_into__in_the_input__equals_fit_transform(
+    *, order_preserving: bool, dtype: type
+) -> None:
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((40, 5)).astype(dtype)
+    X[:, 1] = rng.integers(0, 4, 40)
+    X[:, 3] = rng.integers(10, 13, 40)
+    cls = (
+        OrderPreservingColumnTransformer
+        if order_preserving
+        else (EfficientColumnTransformer)
+    )
+
+    def make() -> EfficientColumnTransformer:
+        return cls([("encoder", OrdinalEncoder(), [3, 1])], remainder="passthrough")
+
+    expected = make().fit_transform(X.copy())
+    out = X.copy()
+    actual = make().fit_transform_into(out, out=out)
+
+    assert actual is out
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test__fit_transform_into__code_out_of_the_dtype__returns_none() -> None:
+    X = np.stack([np.arange(3000.0), np.zeros(3000)], axis=1).astype(np.float16)
+    ct = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), [0])], remainder="passthrough"
+    )
+    out = X.copy()
+
+    assert ct.fit_transform_into(X, out=out) is None
+    np.testing.assert_array_equal(out, X)

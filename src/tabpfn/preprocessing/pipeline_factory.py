@@ -137,7 +137,4 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             ),
         )
-    no_arithmetic = all(
-        (step[0] if isinstance(step, tuple) else step).no_arithmetic for step in steps
-    )
-    return PreprocessingPipeline(steps, keep_float32=no_arithmetic)
+    return PreprocessingPipeline(steps)

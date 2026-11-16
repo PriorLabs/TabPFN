@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, overload
 from typing_extensions import Self, override
 
 import numpy as np
@@ -19,6 +19,7 @@ from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 
 from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
+from tabpfn.preprocessing.pipeline_interface import permute_columns_in_place
 from tabpfn.preprocessing.steps.utils import is_identity_transformer
 
 if TYPE_CHECKING:
@@ -131,6 +132,23 @@ class EfficientColumnTransformer(ColumnTransformer):
             )
 
         return self._assemble(X, name, selected)
+
+    def fit_transform_into(self, X: XType, out: np.ndarray) -> np.ndarray | None:
+        """`fit_transform(X)`'s values, written into `out` rather than a new array.
+
+        `out` holds `X`'s values, column for column, and may be `X` itself; its
+        columns are moved to their output places and the transformed ones written
+        over theirs. None, with `out` untouched, when the output cannot be assembled
+        column by column or a transformed value would change in `out`'s dtype; the
+        transformer is then to be fitted again.
+        """
+        if not self._may_assemble_a_fit(X, None, {}):
+            return None
+        probe = self._fit_column_bookkeeping(X)
+        name, selected = self._named_selection()
+        if selected is None or not self._can_assemble(X, probe, selected):
+            return None
+        return self._assemble(X, name, selected, out=out)
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:
@@ -302,15 +320,38 @@ class EfficientColumnTransformer(ColumnTransformer):
             transformed.toarray() if sparse.issparse(transformed) else transformed
         )
 
-    def _assemble(self, X: XType, name: str | None, selected: list[Any]) -> np.ndarray:
+    @overload
+    def _assemble(
+        self, X: XType, name: str | None, selected: list[Any]
+    ) -> np.ndarray: ...
+
+    @overload
+    def _assemble(
+        self, X: XType, name: str | None, selected: list[Any], *, out: np.ndarray
+    ) -> np.ndarray | None: ...
+
+    def _assemble(
+        self,
+        X: XType,
+        name: str | None,
+        selected: list[Any],
+        *,
+        out: np.ndarray | None = None,
+    ) -> np.ndarray | None:
         """Write the transformed columns and all the others to their final place.
 
         The array returned is one nothing else has ever referenced, which is what lets a
-        caller write into what it gets back.
+        caller write into what it gets back. With `out`, which holds `X`'s values column
+        for column, the columns are moved within `out` instead; see
+        `fit_transform_into`.
         """
         destination, passthrough = self._output_positions(X, name, selected)
         # computed here rather than handed in, so it can be dropped once written
         transformed = self._transformed_block(X, name, selected)
+        if out is not None:
+            return _assemble_into(
+                out, transformed, X, selected, destination, passthrough
+            )
         dtype = self._assembled_dtype(X, transformed, passthrough)
         order = self._assembled_order(X, transformed, passthrough)
 
@@ -467,6 +508,49 @@ class EfficientColumnTransformer(ColumnTransformer):
             return X
         # restore the column order from before the transformer has been applied
         return X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
+
+
+def _assemble_into(
+    out: np.ndarray,
+    transformed: np.ndarray | None,
+    X: XType,
+    selected: list[Any],
+    destination: Any,
+    passthrough: list[tuple[int, int]],
+) -> np.ndarray | None:
+    """`out`, holding `X`'s values column for column, rearranged into the output.
+
+    None, with `out` untouched, when a transformed value would change in its dtype.
+    """
+    if transformed is not None and not _holds_exactly(transformed, out.dtype):
+        return None
+    n_columns = out.shape[1]
+    positions = {column: index for index, column in enumerate(_input_columns(X))}
+    targets = (
+        range(n_columns)[destination]
+        if isinstance(destination, slice)
+        else (destination)
+    )
+    order = list(range(n_columns))
+    for position, source in passthrough:
+        order[position] = source
+    for position, column in zip(targets, selected, strict=True):
+        order[position] = positions[column]
+    if order != list(range(n_columns)):
+        out = permute_columns_in_place(out, order)
+    if transformed is not None:
+        out[:, destination] = transformed
+    return out
+
+
+def _holds_exactly(values: np.ndarray, dtype: np.dtype) -> bool:
+    """Whether every value of `values` is unchanged when cast to `dtype`."""
+    if np.can_cast(values.dtype, dtype, casting="safe"):
+        return True
+    if dtype.kind != "f" or values.dtype.kind not in "fiu":
+        return False
+    finite = values[np.isfinite(values)] if values.dtype.kind == "f" else values
+    return bool(np.array_equal(finite, finite.astype(dtype)))
 
 
 class OrderPreservingColumnTransformer(EfficientColumnTransformer):

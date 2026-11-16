@@ -65,6 +65,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
             # Selecting every column with a boolean mask still builds a full copy of
             # the array
             return X, None, None
+        if isinstance(X, np.ndarray):
+            return X.compress(np.asarray(self.sel_, dtype=bool), axis=1), None, None
         return X[:, self.sel_], None, None
 
     def _keeps_every_column(self) -> bool:

@@ -26,6 +26,7 @@ from tabpfn.preprocessing.datamodel import (
     FeatureSchema,
 )
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
+from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.torch.factory import create_gpu_preprocessing_pipeline
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     compute_effective_n_quantiles,
@@ -746,7 +747,10 @@ class TestGpuPipelineInfPassthrough:
 @pytest.mark.parametrize("name", ["none", "quantile_uni_coarse"])
 @pytest.mark.parametrize("categorical_name", ["ordinal", "onehot", "numeric"])
 def test__create_preprocessing_pipeline__no_cpu_arithmetic__float32_copy_matches(
-    sample_data: _DataWithSchema, name: str, categorical_name: str
+    sample_data: _DataWithSchema,
+    name: str,
+    categorical_name: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     X, schema = sample_data
     X = X.astype(np.float32)
@@ -760,7 +764,11 @@ def test__create_preprocessing_pipeline__no_cpu_arithmetic__float32_copy_matches
             config, random_state=0, enable_gpu_preprocessing=True
         )
         assert pipe.keep_float32
-        pipe.keep_float32 = keep_float32
+        if not keep_float32:
+            monkeypatch.setattr(
+                PreprocessingPipeline, "keep_float32", property(lambda _: False)
+            )
         return pipe.fit_transform(X.copy(), schema).X.astype(np.float32)
 
-    np.testing.assert_array_equal(run(keep_float32=True), run(keep_float32=False))
+    kept = run(keep_float32=True)
+    np.testing.assert_array_equal(kept, run(keep_float32=False))

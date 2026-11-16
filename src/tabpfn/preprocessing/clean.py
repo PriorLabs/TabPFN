@@ -303,16 +303,10 @@ def _encode_categoricals(
     layout cannot be written column by column.
     """
     frame = _with_categoricals(X, cat_indices)
-    ord_encoder.fit(frame)
-    name, selected = ord_encoder._named_selection()
-    if name is None or not selected:
+    out = ord_encoder.fit_transform_into(frame, out=X if in_place else X.copy())
+    if out is None or not ord_encoder.selected_columns():
         return None
-    codes = ord_encoder.named_transformers_[name].transform(frame[selected])
-    positions = frame.columns.get_indexer(selected)
-    del frame
-    out = X if in_place else X.copy()
-    out[:, positions] = codes
-    if in_place:
+    if out is X:
         _OVERWRITTEN_FIT_INPUTS[id(X)] = X
     return out
 

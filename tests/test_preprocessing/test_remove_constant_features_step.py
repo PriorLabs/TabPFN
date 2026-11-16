@@ -281,3 +281,17 @@ def test__non_constant_columns__row_blocks_on_threads__match_the_whole_table(
     actual = remove_constant_features_step._non_constant_columns(X)
 
     np.testing.assert_array_equal(actual, expected)
+
+
+def test__remove_constant_features_step__numpy_output__stays_c_contiguous() -> None:
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((50, 6))
+    X[:, 2] = 1.0
+    X[:, 4] = 3.0
+    schema = _numerical_metadata(num_features=6)
+
+    result = RemoveConstantFeaturesStep().fit_transform(X, schema)
+
+    assert isinstance(result.X, np.ndarray)
+    assert result.X.flags.c_contiguous
+    np.testing.assert_array_equal(result.X, X[:, [0, 1, 3, 5]])

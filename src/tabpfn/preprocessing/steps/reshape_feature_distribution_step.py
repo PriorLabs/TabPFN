@@ -260,7 +260,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             raise ValueError("max_features_per_estimator must be a positive integer.")
 
         self.transform_name = transform_name
-        self.no_arithmetic = transform_name == "none"
         self.apply_to_categorical = apply_to_categorical
         self.append_to_original = append_to_original
         self.random_state = random_state
@@ -273,6 +272,11 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         "not fitted yet" stays distinguishable from "fitted to a no-op"."""
         self.column_order_: list[int] | None = None
         """Input columns in output order, when this step only reorders them."""
+
+    @property
+    def no_arithmetic(self) -> bool:  # type: ignore[override]
+        """Whether the step only selects and reorders values: with no transform."""
+        return self.transform_name == "none"
 
     def _create_transformers_and_new_schema(
         self,

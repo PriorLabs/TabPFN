@@ -8,10 +8,10 @@ import dataclasses
 import time
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import copy, deepcopy
 from functools import partial
-from inspect import signature
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
@@ -83,11 +83,16 @@ class _TimedIterator(Iterator[_T]):
         return self
 
 
+def _forward_parameters(model: torch.nn.Module) -> Mapping[str, Parameter]:
+    """The parameters of `model.forward`, by name."""
+    return signature(model.forward).parameters
+
+
 def _model_forward_kwargs(
     model: Architecture, task_type: str, estimator_ids: list[int]
 ) -> dict[str, str | list[int]]:
     """Return the metadata arguments accepted by the architecture."""
-    parameters = signature(model.forward).parameters
+    parameters = _forward_parameters(model)
     kwargs: dict[str, str | list[int]] = {}
     if "task_type" in parameters:
         kwargs["task_type"] = task_type
@@ -1624,16 +1629,18 @@ def _call_model_on_members(  # noqa: PLR0913
         kwargs = _model_forward_kwargs(
             model, task_type, [members[i].config.estimator_id for i in positions]
         )
+        x, x_kwargs = _model_input_arguments(X, device)
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(inference_mode),
         ):
             output = model(
-                X,
+                x,
                 y,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=[prepared[i][2] for i in positions],
                 performance_options=performance_options,
+                **x_kwargs,
                 **kwargs,
             )
         outputs.append((positions, output))
@@ -1676,7 +1683,7 @@ _MODEL_INPUT_BLOCK_BYTES = 1 << 28
 
 HOST_MODEL_INPUT_MIN_BYTES = 16 << 30
 """Model inputs at least this large stay in host memory, for a model that reads its
-input from there: one whose `accepts_host_input` is True."""
+input from there: one whose `forward` takes an `x_host` argument."""
 
 
 def _model_input_device(
@@ -1688,10 +1695,10 @@ def _model_input_device(
 ) -> torch.device:
     """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
 
-    In host memory when the model reads its input from there and the input takes
-    `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`.
+    In host memory when the model's `forward` takes an `x_host` argument and the input
+    takes `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`.
     """
-    if not getattr(model, "accepts_host_input", False) or device.type == "cpu":
+    if "x_host" not in _forward_parameters(model) or device.type == "cpu":
         return device
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
     num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
@@ -1699,6 +1706,19 @@ def _model_input_device(
     if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:
         return torch.device("cpu")
     return device
+
+
+def _model_input_arguments(
+    X: torch.Tensor, device: torch.device
+) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
+    """The model's `x` and extra keyword arguments that pass it the input `X`.
+
+    An input that `_model_input_device` kept in host memory for a model on another
+    device goes as `x_host`, with `x` None.
+    """
+    if X.device.type == "cpu" and device.type != "cpu":
+        return None, {"x_host": X}
+    return X, {}
 
 
 def _move_and_squeeze_output(
