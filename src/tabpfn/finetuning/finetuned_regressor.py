@@ -442,7 +442,13 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         X_val: np.ndarray,
         y_val: np.ndarray,
     ) -> EvalResult:
-        """Evaluate the regressor using MSE."""
+        """Evaluate the regressor using MSE.
+
+        With several targets, each target's error is measured in standard
+        deviations of its training values and the MSE is averaged over targets.
+        Every target then counts equally whatever its scale, as it does in
+        training. A target that is constant in training keeps its raw error.
+        """
         eval_regressor = clone_model_for_evaluation(
             self.finetuned_estimator_,
             eval_config,
@@ -452,7 +458,17 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         try:
             predictions = eval_regressor.predict(X_val)  # type: ignore
-            mse = mean_squared_error(y_val, predictions)
+            if y_val.ndim == 2:
+                # A constant target's std is ~0 and would blow its error up to
+                # inf, so that no later epoch could ever count as an improvement.
+                is_constant = np.ptp(y_train, axis=0) == 0
+                scale = np.where(is_constant, 1.0, np.std(y_train, axis=0))
+                per_target = mean_squared_error(
+                    y_val, predictions, multioutput="raw_values"
+                )
+                mse = float(np.mean(per_target / scale**2))
+            else:
+                mse = mean_squared_error(y_val, predictions)
         except (ValueError, RuntimeError, AttributeError) as e:
             logger.warning(f"An error occurred during evaluation: {e}")
             mse = np.nan
@@ -522,7 +538,12 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         Args:
             X: The training input samples of shape (n_samples, n_features).
-            y: The target values of shape (n_samples,).
+            y: The target values of shape (n_samples,), or (n_samples, n_targets)
+                to finetune one model on several targets at once. Each training
+                step then uses one target, with its own normalization, so an
+                epoch has as many times the steps as there are targets.
+                Validation then measures each target's error in standard
+                deviations of its training values and averages over targets.
             X_val: Optional validation input samples.
             y_val: Optional validation target values.
             output_dir: Directory path for saving checkpoints. If None, no
@@ -548,7 +569,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
                 inference regressor (e.g., output_type, quantiles).
 
         Returns:
-            The predicted target values with shape (n_samples,).
+            The predicted target values with shape (n_samples,), or
+            (n_samples, n_targets) after a fit on several targets.
         """
         check_is_fitted(self)
 

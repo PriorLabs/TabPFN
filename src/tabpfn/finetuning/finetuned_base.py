@@ -37,6 +37,7 @@ from tqdm.auto import tqdm
 
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.finetuning._torch_compat import GradScaler, autocast, sdpa_kernel_context
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
@@ -57,6 +58,7 @@ from tabpfn.validation import (
     check_input_shape_matches,
     ensure_compatible_fit_inputs_sklearn,
     extract_input_shape,
+    has_several_targets,
 )
 
 logger = logging.getLogger(__name__)
@@ -890,11 +892,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self.finetuned_estimator_._initialize_model_variables()
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
+        # Several regression targets are validated as one 2D target here and
+        # trained as one task per column below.
+        multi_target = self._model_type == "regressor" and has_several_targets(y)
         X_validated, y_validated = ensure_compatible_fit_inputs_sklearn(
             X,
             y,
             estimator=self.finetuned_estimator_,
             ensure_y_numeric=self._model_type == "regressor",
+            multi_output=multi_target,
         )
         self.X_ = X
         self.y_ = y
@@ -910,7 +916,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 y_val,
                 estimator=self.finetuned_estimator_,
                 ensure_y_numeric=self._model_type == "regressor",
+                multi_output=multi_target,
             )
+            # Checked up front: a mismatch would otherwise fail inside every
+            # evaluation, which only logs it and leaves the model as it was.
+            if y_val.shape[1:] != y.shape[1:]:
+                raise TabPFNValidationError(
+                    f"y_val has shape {y_val.shape}, which does not match the "
+                    f"targets of y with shape {y.shape}."
+                )
         elif self.validation_split_ratio:
             X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
         else:
@@ -1044,6 +1058,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             query_size=1,
             y_train=y_train,
         )
+        # One task per target column; each keeps its own target normalization
+        # and transform, and all of them update the same model.
+        y_tasks = list(y_train.T) if multi_target else [y_train]
         for epoch in range(epoch_to_start_from, self.epochs):
             epoch_start_time = _synchronize_epoch_timer()
             # Per-epoch aggregates for cleaner learning curves.
@@ -1062,8 +1079,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
             training_datasets = get_preprocessed_dataset_chunks(
                 calling_instance=self.finetuned_estimator_,
-                X_raw=X_train,
-                y_raw=y_train,
+                X_raw=[X_train] * len(y_tasks),
+                y_raw=y_tasks,
                 split_fn=training_splitter,
                 max_data_size=n_finetune_ctx_plus_query_samples,
                 model_type=self._model_type,
