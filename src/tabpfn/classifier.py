@@ -888,6 +888,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             append=self.inference_config_.APPEND_GROUP_AGGREGATES,
             pool=self.inference_config_.POOL_GROUP_PREDICTIONS is not None,
             n_jobs=self.n_preprocessing_jobs,
+            # float64 is needed, which MPS lacks; on CPU pandas is faster.
+            device=self.devices_[0] if self.devices_[0].type == "cuda" else None,
         )
         X = self.group_aggregator_.fit_transform(
             X, y, groups, exclude=self.group_encoder_.feature_name_

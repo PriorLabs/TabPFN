@@ -44,6 +44,8 @@ class GroupAggregator:
         max_features: How many aggregates to keep at most.
         n_jobs: The number of threads that select the aggregates at fit, as
             in `joblib.Parallel`.
+        device: A device to select the aggregates of the numeric columns on,
+            with torch in float64. `None` selects them with pandas.
 
     Attributes:
         aggregates_: The kept `(column, aggregate)` pairs. Empty when none are
@@ -57,12 +59,19 @@ class GroupAggregator:
     pool_: bool
 
     def __init__(
-        self, *, append: bool, pool: bool, max_features: int = 64, n_jobs: int = 1
+        self,
+        *,
+        append: bool,
+        pool: bool,
+        max_features: int = 64,
+        n_jobs: int = 1,
+        device: torch.device | None = None,
     ) -> None:
         self.append = append
         self.pool = pool
         self.max_features = max_features
         self.n_jobs = n_jobs
+        self.device = device
 
     def fit_transform(
         self,
@@ -107,31 +116,7 @@ class GroupAggregator:
         if not (self.append and several_rows):
             return X
 
-        sizes = np.bincount(groups)
-        grouped = X.groupby(groups)
-
-        def column_spread(column: str) -> dict[tuple[str, str], float]:
-            numeric = pd.api.types.is_numeric_dtype(X[column])
-            aggregates = _NUMERIC_AGGREGATES if numeric else _OTHER_AGGREGATES
-            table = grouped[column].agg(list(aggregates))
-            spread = {}
-            for aggregate in aggregates:
-                values = table[aggregate]
-                if not pd.api.types.is_numeric_dtype(values):
-                    codes = values.astype("category").cat.codes
-                    values = codes.astype(float).where(codes >= 0)
-                spread[column, aggregate] = _row_variance(values.to_numpy(float), sizes)
-            return spread
-
-        columns = X.columns[X.columns != exclude]
-        # The first column runs alone: it fills the lazy caches of `grouped`,
-        # which the threads then only read. pandas releases the GIL in the
-        # numeric aggregations.
-        spread = column_spread(columns[0]) if len(columns) else {}
-        for column_result in joblib.Parallel(n_jobs=self.n_jobs, prefer="threads")(
-            joblib.delayed(column_spread)(column) for column in columns[1:]
-        ):
-            spread.update(column_result)
+        spread = self._spread(X, groups, exclude)
 
         # Rounded so that equal spreads tie on the name, not on summation order.
         # A NaN spread, from at most one row with a value, ranks last.
@@ -153,6 +138,46 @@ class GroupAggregator:
             len(self.names_),
         )
         return self.transform(X, groups)
+
+    def _spread(
+        self, X: pd.DataFrame, groups: np.ndarray, exclude: str | None
+    ) -> dict[tuple[str, str], float]:
+        """The `_row_variance` of every aggregate of every column."""
+        sizes = np.bincount(groups)
+        grouped = X.groupby(groups)
+
+        def column_spread(column: str) -> dict[tuple[str, str], float]:
+            numeric = pd.api.types.is_numeric_dtype(X[column])
+            aggregates = _NUMERIC_AGGREGATES if numeric else _OTHER_AGGREGATES
+            table = grouped[column].agg(list(aggregates))
+            spread = {}
+            for aggregate in aggregates:
+                values = table[aggregate]
+                if not pd.api.types.is_numeric_dtype(values):
+                    codes = values.astype("category").cat.codes
+                    values = codes.astype(float).where(codes >= 0)
+                spread[column, aggregate] = _row_variance(values.to_numpy(float), sizes)
+            return spread
+
+        columns = X.columns[X.columns != exclude]
+        spread: dict[tuple[str, str], float] = {}
+        if self.device is not None:
+            numeric = np.array(
+                [pd.api.types.is_numeric_dtype(X[column]) for column in columns],
+                dtype=bool,
+            )
+            spread = _numeric_spread(X[columns[numeric]], groups, sizes, self.device)
+            columns = columns[~numeric]
+        if len(columns):
+            # The first column runs alone: it fills the lazy caches of `grouped`,
+            # which the threads then only read. pandas releases the GIL in the
+            # numeric aggregations.
+            spread.update(column_spread(columns[0]))
+        for column_result in joblib.Parallel(n_jobs=self.n_jobs, prefer="threads")(
+            joblib.delayed(column_spread)(column) for column in columns[1:]
+        ):
+            spread.update(column_result)
+        return spread
 
     def transform(self, X: pd.DataFrame, groups: np.ndarray) -> pd.DataFrame:
         """Append the kept aggregates, each computed over its group's rows in `X`."""
@@ -213,6 +238,74 @@ def _one_label_per_group(y: YType, groups: np.ndarray) -> bool:
     if len(y) != len(groups):
         return False
     return bool(pd.Series(y).groupby(groups).nunique(dropna=False).max() <= 1)
+
+
+def _numeric_spread(
+    X: pd.DataFrame, groups: np.ndarray, sizes: np.ndarray, device: torch.device
+) -> dict[tuple[str, str], float]:
+    """The `_row_variance` of every numeric aggregate of every column, with torch."""
+    index = torch.as_tensor(groups, device=device)[:, None]
+    weights = torch.as_tensor(sizes, dtype=torch.float64, device=device)[:, None]
+    # Bounds the device memory: a chunk of 2**26 float64 values is 0.5 GB, and
+    # its temporaries peak at about 4 times that.
+    step = max(1, 2**26 // len(X))
+    spread = {}
+    for start in range(0, X.shape[1], step):
+        columns = X.columns[start : start + step]
+        values = torch.as_tensor(
+            X[columns].to_numpy(np.float64, na_value=np.nan), device=device
+        )
+        tables = _numeric_aggregates(values, index.expand_as(values), len(sizes))
+        keep = ~tables.isnan()
+        n = (weights * keep).sum(dim=1)
+        tables = tables.where(keep, 0)
+        mean = (weights * tables).sum(dim=1, keepdim=True) / n[:, None]
+        variance = (weights * keep * (tables - mean) ** 2).sum(dim=1) / (n - 1)
+        variance = variance.where(n > 1, torch.nan).tolist()
+        for aggregate, of_columns in zip(_NUMERIC_AGGREGATES, variance, strict=True):
+            for column, value in zip(columns, of_columns, strict=True):
+                spread[column, aggregate] = value
+    return spread
+
+
+def _numeric_aggregates(
+    values: torch.Tensor, index: torch.Tensor, n_groups: int
+) -> torch.Tensor:
+    """The `_NUMERIC_AGGREGATES` of each column of `values`, as pandas computes them.
+
+    NaN is skipped, the std has one degree of freedom less than values, and a
+    group without a value gives NaN.
+
+    Args:
+        values: The rows, of shape `(n_rows, n_columns)`.
+        index: Each value's group, of the shape of `values`.
+        n_groups: The number of groups.
+
+    Returns:
+        A tensor of shape `(n_aggregates, n_groups, n_columns)`.
+    """
+
+    def per_group(source: torch.Tensor, reduce: str, initial: float) -> torch.Tensor:
+        out = source.new_full((n_groups, source.shape[1]), initial)
+        return out.scatter_reduce_(0, index, source, reduce)
+
+    valid = ~values.isnan()
+    count = per_group(valid.double(), "sum", 0)
+    mean = per_group(values.where(valid, 0), "sum", 0) / count
+    # Deviations from the group's mean: a difference of sums would cancel.
+    deviation = (values - mean.gather(0, index)).where(valid, 0)
+    std = (per_group(deviation**2, "sum", 0) / (count - 1)).sqrt()
+    rows = torch.arange(len(values), device=values.device)[:, None]
+    last = per_group(rows.where(valid, -1), "amax", -1).clamp(min=0)
+    return torch.stack(
+        [
+            mean,
+            std.where(count > 1, torch.nan),
+            per_group(values.where(valid, torch.inf), "amin", torch.inf),
+            per_group(values.where(valid, -torch.inf), "amax", -torch.inf),
+            values.gather(0, last),
+        ]
+    ).where(count > 0, torch.nan)
 
 
 def _row_variance(values: np.ndarray, sizes: np.ndarray) -> float:

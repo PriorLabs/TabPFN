@@ -110,22 +110,48 @@ def test__exclude__is_not_aggregated() -> None:
     assert all(name.startswith("num_") for name in aggregator.names_)
 
 
-def test__several_jobs__select_the_same_aggregates_as_one_job() -> None:
+def _mixed_frame() -> tuple[pd.DataFrame, np.ndarray]:
     rng = np.random.default_rng(0)
-    groups = rng.integers(0, 20, size=200)
-    X = pd.DataFrame(rng.normal(size=(200, 8)), columns=[f"n{i}" for i in range(8)])
-    X["cat"] = rng.choice(["a", "b", "c"], size=200)
-    y = groups % 2
+    groups = rng.integers(0, 40, size=400)
+    X = pd.DataFrame(rng.normal(size=(400, 12)), columns=[f"n{i}" for i in range(12)])
+    X = X.mask(rng.random(X.shape) < 0.3)
+    # One group without a value and one with a single value.
+    X.loc[groups == 0, "n0"] = np.nan
+    X.loc[(groups == 1).cumsum() > 1, "n0"] = np.nan
+    X["int"] = rng.integers(0, 5, size=400)
+    X["nullable"] = pd.array(rng.integers(0, 9, size=400), dtype="Int64")
+    X.loc[::3, "nullable"] = pd.NA
+    X["cat"] = rng.choice(["a", "b", "c"], size=400)
+    return X, groups
+
+
+def test__several_jobs__select_the_same_aggregates_as_one_job() -> None:
+    X, groups = _mixed_frame()
 
     outs = []
     for n_jobs in (1, 4):
-        aggregator = GroupAggregator(
-            append=True, pool=False, max_features=10, n_jobs=n_jobs
-        )
-        outs.append(aggregator.fit_transform(X, y, groups, exclude=None))
+        aggregator = GroupAggregator(append=True, pool=False, n_jobs=n_jobs)
+        outs.append(aggregator.fit_transform(X, groups % 2, groups, exclude=None))
 
-    assert len(aggregator.aggregates_) == 10
+    assert len(aggregator.aggregates_) == 50
     pd.testing.assert_frame_equal(outs[0], outs[1])
+
+
+def test__torch__selects_the_aggregates_pandas_selects() -> None:
+    X, groups = _mixed_frame()
+    with_pandas = GroupAggregator(append=True, pool=False)
+    with_torch = GroupAggregator(append=True, pool=False, device=torch.device("cpu"))
+
+    with_pandas.fit_transform(X, groups % 2, groups, exclude=None)
+    with_torch.fit_transform(X, groups % 2, groups, exclude=None)
+
+    spread = with_pandas._spread(X, groups, exclude=None)
+    spread_torch = with_torch._spread(X, groups, exclude=None)
+    assert spread_torch.keys() == spread.keys()
+    np.testing.assert_allclose(
+        [spread_torch[key] for key in spread], list(spread.values()), rtol=1e-9
+    )
+    assert set(with_torch.aggregates_) == set(with_pandas.aggregates_)
 
 
 def test__transform__aggregates_over_the_rows_passed_in() -> None:
