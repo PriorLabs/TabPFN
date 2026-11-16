@@ -1904,9 +1904,15 @@ def test__predict__ensemble_truncated__reads_every_output_truncated() -> None:
     torch.testing.assert_close(full["logits"], full_plain["logits"])
 
 
-def test__fit__ensemble_truncated_with_negative_targets__raises() -> None:
+@pytest.mark.parametrize("constant", [False, True])
+def test__fit__ensemble_truncated_with_negative_targets__raises(
+    constant: bool,
+) -> None:
     X, y = _zero_inflated_regression_data()
     y[0] = -1.0
+    if constant:
+        # A constant target skips the model, but not the check.
+        y[:] = -1.0
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
@@ -1915,6 +1921,38 @@ def test__fit__ensemble_truncated_with_negative_targets__raises() -> None:
 
     with pytest.raises(ValueError, match=r"ensemble_truncated.*nonnegative"):
         reg.fit(X, y)
+
+
+def _ensemble_truncated_regressor(**kwargs: typing.Any) -> TabPFNRegressor:
+    return TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"REGRESSION_READOUT": "ensemble_truncated"},
+        **kwargs,
+    )
+
+
+def test__fit_with_differentiable_input__ensemble_truncated__raises() -> None:
+    """Only `fit` stores the largest training target that the readout needs."""
+    reg = _ensemble_truncated_regressor(differentiable_input=True)
+
+    with pytest.raises(NotImplementedError, match="ensemble_truncated"):
+        reg.fit_with_differentiable_input(torch.randn(20, 3), torch.rand(20))
+
+
+def test__fit_from_preprocessed__ensemble_truncated__raises() -> None:
+    reg = _ensemble_truncated_regressor()
+
+    with pytest.raises(NotImplementedError, match="ensemble_truncated"):
+        reg.fit_from_preprocessed(
+            [torch.zeros(20, 3)],
+            [torch.zeros(20)],
+            [[[]]],
+            [[]],
+            performance_options=typing.cast("typing.Any", None),
+            y_train_mean=0.0,
+            y_train_std=1.0,
+        )
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])

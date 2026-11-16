@@ -1334,6 +1334,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
+        if self._readout() != "ensemble":
+            raise NotImplementedError(
+                "fit_from_preprocessed supports only "
+                "REGRESSION_READOUT='ensemble'; the 'ensemble_truncated' readout "
+                "needs the largest training target. Use fit instead."
+            )
 
         feature_schema = convert_batch_of_cat_ix_to_schema(
             batch_of_cat_indices=cat_ix,
@@ -1411,6 +1417,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Mirror classifier.py: re-assert n_estimators_ from cached
             # configs so a subsequent call after pickling restores it.
             self.n_estimators_ = len(ensemble_configs)
+        if self._readout() != "ensemble":
+            raise NotImplementedError(
+                "fit_with_differentiable_input supports only "
+                "REGRESSION_READOUT='ensemble'; the 'ensemble_truncated' readout "
+                "needs the largest training target. Use fit instead."
+            )
 
         # Refresh target stats and rebuild the raw-space bardist on every
         # call so they track the current fit data; cached state is only the
@@ -1534,6 +1546,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
+        self.y_train_max_ = float(np.max(y))
+        if self._readout() == "ensemble_truncated" and np.any(y < 0):
+            raise TabPFNValidationError(
+                "The 'ensemble_truncated' readout requires nonnegative targets "
+                "(y >= 0)."
+            )
         row_weights, sample_weight_mode = self._resolve_row_weights(
             sample_weight, label_reliability, n_samples=len(y)
         )
@@ -1560,8 +1578,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             # No need to create an inference engine for a constant prediction
             return self
-
-        self._fit_mean_readout(y)
 
         # Each tuning fold must derive its target statistics from its own raw targets.
         self._maybe_calibrate_ensemble_temperature(
@@ -1745,17 +1761,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def _readout(self) -> str:
         # `getattr` keeps models pickled before this field existed loadable.
         return getattr(self.inference_config_, "REGRESSION_READOUT", "ensemble")
-
-    def _fit_mean_readout(self, y: np.ndarray) -> None:
-        """Check that the readout applies to `y`."""
-        readout = self._readout()
-        self.y_train_max_ = float(np.max(y))
-        if readout == "ensemble":
-            return
-        if np.any(y < 0):
-            raise TabPFNValidationError(
-                f"The '{readout}' readout requires nonnegative targets (y >= 0)."
-            )
 
     def _maybe_calibrate_ensemble_temperature(
         self,
