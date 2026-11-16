@@ -99,10 +99,7 @@ class RegressorTuningConfig(TuningConfig):
     calibrate_mean: bool = False
     """Whether to scale the `"mean"` output by a constant c fitted on the tuning
     holdout rows, as `mean_calibration_mode` says. The predictive distribution, and
-    with it every other output, is unchanged. A holdout row counts in proportion
-    to its `sample_weight * label_reliability` from `fit`, so with an exposure as
-    `sample_weight` and the rate as the target, c fits the exposure-weighted
-    rate. Set to True to enable."""
+    with it every other output, is unchanged. Set to True to enable."""
 
     mean_calibration_mode: Literal["tweedie"] = "tweedie"
     """How `calibrate_mean` fits c.
