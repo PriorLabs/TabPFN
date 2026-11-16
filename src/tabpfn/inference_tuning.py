@@ -94,12 +94,36 @@ class ClassifierTuningConfig(TuningConfig):
 class RegressorTuningConfig(TuningConfig):
     """Configuration for tuning the model during fit/predict calls
     for regression tasks.
-
-    This currently adds no fields beyond the ones inherited from
-    [TuningConfig][tabpfn.inference_tuning.TuningConfig]. It exists so that the
-    task type can be recovered from the configuration alone, and so that
-    regression-only tuning options have a place to live as they are added.
     """
+
+    calibrate_mean: bool = False
+    """Whether to scale the `"mean"` output by a constant c fitted on the tuning
+    holdout rows, as `mean_calibration_mode` says. The predictive distribution, and
+    with it every other output, is unchanged. Set to True to enable."""
+
+    mean_calibration_mode: Literal["tweedie"] = "tweedie"
+    """How `calibrate_mean` fits c.
+
+    - "tweedie": c minimizes the Tweedie deviance with power
+      `mean_calibration_power` on the holdout rows. Needs nonnegative targets.
+    """
+
+    mean_calibration_power: float = 1.5
+    """Power parameter p of the "tweedie" mode, in [1, 2]. Set it to the power of
+    the Tweedie deviance you evaluate with. 1.5 sits in the middle of that range
+    and suits common zero-inflated datasets."""
+
+    def __post_init__(self) -> None:
+        if self.mean_calibration_mode != "tweedie":
+            raise ValueError(
+                "`mean_calibration_mode` must be 'tweedie', got "
+                f"{self.mean_calibration_mode!r}."
+            )
+        if not 1.0 <= self.mean_calibration_power <= 2.0:
+            raise ValueError(
+                "`mean_calibration_power` must be in [1, 2], got "
+                f"{self.mean_calibration_power}."
+            )
 
 
 class ClassifierEvalMetrics(str, Enum):
@@ -511,6 +535,35 @@ RegressionHoldoutFold = (
 """`(logits, raw_space_bardist, y_true)` with an optional fourth entry holding the
 fold's per-bar downsampling correction log weights, and an optional fifth entry
 holding the weight of each holdout row in the metric."""
+
+
+MEAN_CALIBRATION_MIN_MEAN = 1e-6
+"""Floor for the means the mean calibration constant is fitted on. A mean at or below
+zero has no Tweedie deviance for p > 1."""
+
+
+def find_mean_calibration_scale(
+    y_true: np.ndarray,
+    mean: np.ndarray,
+    power: float,
+) -> float:
+    """Finds the constant c that minimizes the Tweedie deviance of `c * mean`.
+
+    The minimizer has the closed form c = sum(y m^(1-p)) / sum(m^(2-p)), with the
+    means m floored at `MEAN_CALIBRATION_MIN_MEAN`. p = 1 gives
+    sum(y) / sum(m).
+
+    Args:
+        y_true: The nonnegative targets, of shape [n_samples].
+        mean: The predicted means, of shape [n_samples].
+        power: The Tweedie power p.
+
+    Returns:
+        The constant c.
+    """
+    m = np.maximum(mean.astype(np.float64), MEAN_CALIBRATION_MIN_MEAN)
+    y = y_true.astype(np.float64)
+    return float((y * m ** (1 - power)).sum() / (m ** (2 - power)).sum())
 
 
 def find_regression_optimal_temperature(
