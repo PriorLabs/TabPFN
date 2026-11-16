@@ -58,6 +58,29 @@ class TorchPreprocessingStep(abc.ABC):
     Every other key holds one entry per column, along its last dimension.
     """
 
+    appends_from_rows: bool = False
+    """Whether the step adds new columns, where a row's new values depend only on
+    that row once the step is fitted.
+
+    When the input is held off the compute device, the pipeline fits such a step
+    with `fit_on_device` and computes the new columns a block of rows at a time.
+    """
+
+    def num_added_columns(self, num_columns: int, num_train_rows: int) -> int:
+        """How many columns the step adds to an input of `num_columns` columns."""
+        del num_columns, num_train_rows
+        return 0
+
+    def fit_on_device(
+        self, x: torch.Tensor, device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Fits an `appends_from_rows` step on the train rows `x`, computing on
+        `device`.
+
+        `x` may live on another device, or be stored below float32 precision.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not append from rows.")
+
     def fit_transform(
         self,
         x: torch.Tensor,
@@ -242,6 +265,7 @@ class TorchPreprocessingPipeline:
         use_fitted_cache: bool = False,
         consume_input: bool = False,
         compute_device: torch.device | None = None,
+        spare_columns: int = 0,
     ) -> TorchPreprocessingPipelineOutput:
         """Apply all steps to the input tensor.
 
@@ -263,6 +287,9 @@ class TorchPreprocessingPipeline:
                 `x`; the other steps run on `x`'s device. The same happens when
                 `x` is stored below float32 precision: the blocks are computed in
                 float32 and stored back at `x`'s dtype.
+            spare_columns: Unused columns at the end of `x`. Steps that append
+                columns write them there instead of growing the tensor, which
+                would copy it. `feature_schema` describes the other columns.
 
         Returns:
             PipelineOutput with transformed tensor and updated schema.
@@ -274,8 +301,17 @@ class TorchPreprocessingPipeline:
             x = x.unsqueeze(1)
             squeeze_batch_dim = True
 
-        num_columns = x.shape[-1]
-        self._validate_metadata(feature_schema=feature_schema, num_columns=num_columns)
+        if spare_columns and not consume_input:
+            raise ValueError(
+                "spare_columns needs consume_input=True: new columns are written "
+                "into x."
+            )
+        # `table` is the whole tensor, spare columns included. `x` is the part the
+        # steps have filled so far.
+        table = x
+        width = x.shape[-1] - spare_columns
+        x = table[..., :width]
+        self._validate_metadata(feature_schema=feature_schema, num_columns=width)
 
         if num_train_rows is None:
             num_train_rows = x.shape[0]
@@ -310,6 +346,7 @@ class TorchPreprocessingPipeline:
 
             result = _run_step(
                 step,
+                table,
                 x,
                 indices,
                 num_train_rows,
@@ -317,15 +354,14 @@ class TorchPreprocessingPipeline:
                 consume_input=consume_input,
                 compute_device=compute_device if staged else None,
             )
-            x = result.x
-
+            table, width = _store_result(table, x, width, result)
             if result.added_columns is not None:
-                x = torch.cat([x, result.added_columns], dim=-1)
                 feature_schema = feature_schema.append_columns(
                     result.added_modality or FeatureModality.NUMERICAL,
                     result.added_columns.shape[-1],
                     name_prefix=step.added_feature_prefix(),
                 )
+            x = table[..., :width]
 
             if result.schema_permutation is not None:
                 feature_schema = feature_schema.apply_permutation(
@@ -353,6 +389,13 @@ class TorchPreprocessingPipeline:
         feature_schema = feature_schema.clear_gpu_transform_marks()
 
         return TorchPreprocessingPipelineOutput(x=x, feature_schema=feature_schema)
+
+    def num_added_columns(self, num_columns: int, num_train_rows: int) -> int:
+        """How many columns the steps add to an input of `num_columns` columns."""
+        added = 0
+        for step, _ in self.steps:
+            added += step.num_added_columns(num_columns + added, num_train_rows)
+        return added
 
     def _maybe_update_fitted_cache(
         self, i: int, result: TorchPreprocessingStepResult
@@ -447,6 +490,7 @@ def _move_cache_to_device(
 
 def _run_step(
     step: TorchPreprocessingStep,
+    table: torch.Tensor,
     x: torch.Tensor,
     column_indices: list[int],
     num_train_rows: int,
@@ -455,9 +499,21 @@ def _run_step(
     consume_input: bool,
     compute_device: torch.device | None,
 ) -> TorchPreprocessingStepResult:
-    """`step.fit_transform`, by blocks moved to `compute_device` when one is given
-    and the step reads its input by columns or by rows.
+    """Runs `step.fit_transform` on `x`, the filled columns at the start of `table`.
+
+    With a `compute_device`, a step that reads its input by columns or by rows runs
+    by blocks moved there.
     """
+    if compute_device is not None and step.appends_from_rows:
+        return _append_from_rows_on_device(
+            step,
+            table,
+            x.shape[-1],
+            column_indices,
+            num_train_rows,
+            fitted_cache,
+            torch.device(compute_device),
+        )
     if compute_device is not None and step.columnwise:
         return _fit_transform_on_device(
             step, x, column_indices, num_train_rows, fitted_cache, compute_device
@@ -546,6 +602,84 @@ def _fit_transform_rows_on_device(
     return TorchPreprocessingStepResult(
         x=x, fitted_cache=cache, schema_permutation=permutation
     )
+
+
+def _append_from_rows_on_device(
+    step: TorchPreprocessingStep,
+    table: torch.Tensor,
+    width: int,
+    column_indices: list[int],
+    num_train_rows: int,
+    fitted_cache: dict[str, torch.Tensor] | None,
+    device: torch.device,
+) -> TorchPreprocessingStepResult:
+    """Runs an `appends_from_rows` step on the first `width` columns of `table`, a
+    block of rows at a time on `device`.
+
+    The new columns are written into the spare columns of `table` if it has enough
+    of them. Otherwise they go into a new tensor.
+    """
+    x = table[..., :width]
+    columns = _column_index(column_indices)
+    if fitted_cache is None:
+        fitted_cache = step.fit_on_device(x[:num_train_rows, :, columns], device)
+    else:
+        fitted_cache = _move_cache_to_device(fitted_cache, device)
+    row_bytes = max(1, table[:1].numel() * table.element_size())
+    rows = max(1, DEVICE_BLOCK_BYTES // row_bytes)
+    added: torch.Tensor | None = None
+    for start in range(0, x.shape[0], rows):
+        # Move whole rows of `table`: they are one contiguous range of memory,
+        # which copies fastest.
+        block = _to_compute(table[start : start + rows], device)[..., :width]
+        _, new_columns, _ = step._transform(
+            block[..., columns], fitted_cache=fitted_cache
+        )
+        if new_columns is None:
+            return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+        if added is None:
+            count = new_columns.shape[-1]
+            added = (
+                table[..., width : width + count]
+                if table.shape[-1] >= width + count
+                else table.new_empty((*table.shape[:-1], count))
+            )
+        added[start : start + rows] = _to_storage(new_columns, table)
+    return TorchPreprocessingStepResult(
+        x=x,
+        added_columns=added,
+        added_modality=FeatureModality.NUMERICAL,
+        fitted_cache=fitted_cache,
+    )
+
+
+def _store_result(
+    table: torch.Tensor,
+    x: torch.Tensor,
+    width: int,
+    result: TorchPreprocessingStepResult,
+) -> tuple[torch.Tensor, int]:
+    """Puts a step's result into `table`. Returns the table and its filled width.
+
+    `x` is the first `width` columns of `table`, which the step ran on.
+    """
+    if result.x is not x:
+        if table.shape[-1] > width:
+            # The spare columns are still needed, so copy the step's new tensor
+            # into the table rather than replacing the table.
+            table[..., :width] = result.x
+        else:
+            table = result.x
+    added = result.added_columns
+    if added is None:
+        return table, width
+    count = added.shape[-1]
+    if table.shape[-1] < width + count:
+        return torch.cat([table[..., :width], added], dim=-1), width + count
+    # A block runner may already have written the new columns in place.
+    if added.data_ptr() != table[..., width:].data_ptr():
+        table[..., width : width + count] = added
+    return table, width + count
 
 
 def _compute_dtype(dtype: torch.dtype) -> torch.dtype:

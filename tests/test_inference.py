@@ -1181,7 +1181,7 @@ def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() ->
     assert y.device == cpu
 
 
-def test__prepare_model_inputs__x_dtype() -> None:
+def test__prepare_model_inputs__x_dtype_and_spare_columns() -> None:
     rng = default_rng(0)
     X_train = rng.standard_normal((40, 3)).astype(np.float32)
     X_test = rng.standard_normal((6, 3)).astype(np.float32)
@@ -1190,26 +1190,33 @@ def test__prepare_model_inputs__x_dtype() -> None:
     expected, _ = _prepare_model_inputs(cpu, None, X_train, X_test, y_train)
 
     X_full, y = _prepare_model_inputs(
-        cpu, None, X_train, X_test, y_train, x_dtype=torch.bfloat16
+        cpu, None, X_train, X_test, y_train, x_dtype=torch.bfloat16, spare_columns=2
     )
 
+    assert X_full.shape == (46, 1, 5)
     assert X_full.dtype == torch.bfloat16
-    torch.testing.assert_close(X_full, expected.to(torch.bfloat16))
+    torch.testing.assert_close(X_full[..., :3], expected.to(torch.bfloat16))
     assert y.dtype == torch.float32
 
 
-def test__model_input_device__counts_bytes_at_x_dtype(
+def test__model_input_device__counts_spare_columns_at_x_dtype(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     X_train, X_test = np.zeros((30, 4)), np.zeros((10, 4))
-    # 40 rows of 4 columns: 320 bytes in bfloat16, 640 in float32.
+    # 40 rows of 4 bfloat16 columns, plus 4 spare: 640 bytes.
     monkeypatch.setattr("tabpfn.inference.HOST_MODEL_INPUT_MIN_BYTES", 640)
     cuda = torch.device("cuda")
 
-    def device_for(x_dtype: torch.dtype) -> torch.device:
+    def device_for(spare_columns: int) -> torch.device:
         return _model_input_device(
-            _HostInputModel(), cuda, X_train, X_test, None, x_dtype=x_dtype
+            _HostInputModel(),
+            cuda,
+            X_train,
+            X_test,
+            None,
+            x_dtype=torch.bfloat16,
+            spare_columns=spare_columns,
         )
 
-    assert device_for(torch.float32) == torch.device("cpu")
-    assert device_for(torch.bfloat16) == cuda
+    assert device_for(4) == torch.device("cpu")
+    assert device_for(3) == cuda

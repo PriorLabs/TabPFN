@@ -695,6 +695,7 @@ def _blockwise_pipeline() -> TorchPreprocessingPipeline:
             (TorchSelectiveRobustScalerStep([7, 8]), None),
             (TorchRandomSignFlipStep(random_state=0), {FeatureModality.NUMERICAL}),
             (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
+            (TorchAddSVDFeaturesStep("svd"), None),
         ]
     )
 
@@ -706,6 +707,29 @@ def _wide_input() -> tuple[torch.Tensor, FeatureSchema]:
     return x, FeatureSchema.from_only_categorical_indices([], num_columns=10)
 
 
+def _table_with_spare_columns(
+    x: torch.Tensor, spare_columns: int, dtype: torch.dtype
+) -> torch.Tensor:
+    table = torch.full((*x.shape[:-1], x.shape[-1] + spare_columns), torch.nan)
+    table[..., : x.shape[-1]] = x
+    return table.to(dtype)
+
+
+def test__call__spare_columns__match_appending_by_concatenation() -> None:
+    x, schema = _wide_input()
+    expected = _blockwise_pipeline()(x.clone(), schema, num_train_rows=50)
+    spare = expected.x.shape[-1] - x.shape[-1]
+    table = _table_with_spare_columns(x, spare, torch.float32)
+
+    actual = _blockwise_pipeline()(
+        table, schema, num_train_rows=50, consume_input=True, spare_columns=spare
+    )
+
+    assert actual.x.data_ptr() == table.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
+    assert actual.feature_schema == expected.feature_schema
+
+
 def test__call__bfloat16_table__computes_by_blocks_in_float32(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -715,7 +739,8 @@ def test__call__bfloat16_table__computes_by_blocks_in_float32(
     x, schema = _wide_input()
     x = x.to(torch.bfloat16).to(torch.float32)
     expected = _blockwise_pipeline()(x.clone(), schema, num_train_rows=50)
-    table = x.to(torch.bfloat16)
+    spare = expected.x.shape[-1] - x.shape[-1]
+    table = _table_with_spare_columns(x, spare, torch.bfloat16)
 
     actual = _blockwise_pipeline()(
         table,
@@ -723,6 +748,7 @@ def test__call__bfloat16_table__computes_by_blocks_in_float32(
         num_train_rows=50,
         consume_input=True,
         compute_device=torch.device("cpu"),
+        spare_columns=spare,
     )
 
     assert actual.x.dtype == torch.bfloat16
@@ -737,13 +763,16 @@ def test__call__host_table__matches_the_device_table() -> None:
     x, schema = _wide_input()
     device = torch.device("cuda")
     expected = _blockwise_pipeline()(x.to(device), schema, num_train_rows=50)
+    spare = expected.x.shape[-1] - x.shape[-1]
+    table = _table_with_spare_columns(x, spare, torch.float32)
 
     actual = _blockwise_pipeline()(
-        x.clone(),
+        table,
         schema,
         num_train_rows=50,
         consume_input=True,
         compute_device=device,
+        spare_columns=spare,
     )
 
     assert actual.x.device.type == "cpu"

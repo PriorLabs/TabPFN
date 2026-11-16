@@ -1658,6 +1658,15 @@ def _prepare_member_inputs(
     """
     assert member.X_train is not None
     num_train_rows = member.X_train.shape[0]
+    num_columns = member.X_train.shape[1] if num_train_rows else X_test.shape[1]
+    pipeline = member.gpu_preprocessor
+    # Leave room for the columns the GPU steps add, so the table is never copied
+    # to grow.
+    spare_columns = (
+        0
+        if pipeline is None
+        else pipeline.num_added_columns(num_columns, num_train_rows)
+    )
     # With a forced dtype, or when gradients are needed, store the table in the
     # dtype the model computes in.
     x_dtype = (
@@ -1678,16 +1687,19 @@ def _prepare_member_inputs(
             X_test,
             force_inference_dtype,
             x_dtype=x_dtype,
+            spare_columns=spare_columns,
         ),
         x_dtype=x_dtype,
+        spare_columns=spare_columns,
     )
     X_full, feature_schema = _maybe_run_gpu_preprocessing(
         X_full,
-        gpu_preprocessor=member.gpu_preprocessor,
+        gpu_preprocessor=pipeline,
         num_train_rows=num_train_rows,
         feature_schema=member.feature_schema,
         consume_input=True,
         compute_device=device,
+        spare_columns=spare_columns,
     )
     return X_full, y_train, feature_schema
 
@@ -1701,6 +1713,7 @@ def _prepare_model_inputs(
     *,
     x_device: torch.device | None = None,
     x_dtype: torch.dtype | None = None,
+    spare_columns: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """The train and test rows as one `(rows, 1, columns)` tensor, and the labels.
 
@@ -1708,6 +1721,8 @@ def _prepare_model_inputs(
     time, so that device holds the table once. The labels go to `device`.
 
     The table is stored at `x_dtype`, by default the dtype the model computes in.
+    It gets `spare_columns` more columns at the end, left unset, for the columns GPU
+    preprocessing adds.
     """
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
     x_dtype = x_dtype or dtype
@@ -1715,7 +1730,7 @@ def _prepare_model_inputs(
     num_train, num_test = len(X_train), len(X_test)
     num_columns = X_train.shape[1] if num_train else X_test.shape[1]
     X_full = torch.empty(
-        (num_train + num_test, 1, num_columns),
+        (num_train + num_test, 1, num_columns + spare_columns),
         dtype=x_dtype,
         device=x_device,
         # Pinned host memory copies to the GPU faster, a block at a time.
@@ -1725,7 +1740,9 @@ def _prepare_model_inputs(
     for offset, part in ((0, X_train), (num_train, X_test)):
         for start in range(0, len(part), rows):
             block = torch.as_tensor(part[start : start + rows])
-            X_full[offset + start : offset + start + len(block), 0].copy_(block)
+            X_full[offset + start : offset + start + len(block), 0, :num_columns].copy_(
+                block
+            )
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
 
@@ -1746,17 +1763,19 @@ def _model_input_device(
     force_inference_dtype: torch.dtype | None,
     *,
     x_dtype: torch.dtype | None = None,
+    spare_columns: int = 0,
 ) -> torch.device:
     """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
 
     In host memory when the model reads its input from there and the input takes
-    `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`. `x_dtype` is the one given to
-    `_prepare_model_inputs`.
+    `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`. `x_dtype` and `spare_columns`
+    are those given to `_prepare_model_inputs`.
     """
     if not getattr(model, "accepts_host_input", False) or device.type == "cpu":
         return device
     dtype = x_dtype or force_inference_dtype or torch.float32
     num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
+    num_columns += spare_columns
     nbytes = (len(X_train) + len(X_test)) * num_columns * dtype.itemsize
     if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:
         return torch.device("cpu")
@@ -1780,6 +1799,7 @@ def _maybe_run_gpu_preprocessing(
     use_fitted_cache: bool = False,
     consume_input: bool = False,
     compute_device: torch.device | None = None,
+    spare_columns: int = 0,
 ) -> tuple[torch.Tensor, FeatureSchema]:
     """Run GPU preprocessing if a pipeline is provided.
 
@@ -1792,11 +1812,14 @@ def _maybe_run_gpu_preprocessing(
         consume_input: Whether the pipeline may write into `X`, which the caller
             no longer reads.
         compute_device: The device the pipeline computes on when `X` is elsewhere.
+        spare_columns: Unused columns at the end of `X`, for the columns the
+            pipeline adds.
 
     Returns:
         Tuple of (transformed tensor, updated feature schema).
     """
     if gpu_preprocessor is None:
+        assert spare_columns == 0, "Only a pipeline fills spare columns."
         return X, feature_schema
 
     result = gpu_preprocessor(
@@ -1806,6 +1829,7 @@ def _maybe_run_gpu_preprocessing(
         use_fitted_cache=use_fitted_cache,
         consume_input=consume_input,
         compute_device=compute_device,
+        spare_columns=spare_columns,
     )
     return result.x, result.feature_schema
 
