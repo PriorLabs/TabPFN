@@ -1616,3 +1616,21 @@ def test__overwrite_fit_input__float32_with_categoricals__codes_in_place() -> No
         ).fit(handed, y)
     assert set(np.unique(handed[:, 3])) <= {0.0, 1.0, 2.0, 3.0}
     np.testing.assert_array_equal(model.predict_proba(X), expected)
+
+
+def test__clean_data__float32_infinity_in_categorical__matches_float64() -> None:
+    """With `passthrough_inf`, an infinity in a categorical column of a float32
+    array is carried through as the float64 array's is.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.integers(0, 4, size=(40, 4)).astype(np.float32)
+    X[7, 1] = np.inf
+    X[9, 3] = -np.inf
+    schema = _numeric_schema(4, cat_indices=(1, 3))
+
+    out32, _, _ = clean_data(X=X, feature_schema=schema, passthrough_inf=True)
+    out64, _, _ = clean_data(
+        X=X.astype(np.float64), feature_schema=schema, passthrough_inf=True
+    )
+
+    np.testing.assert_array_equal(np.asarray(out32, dtype=np.float64), out64)

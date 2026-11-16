@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import functools
+import inspect
 import time
 from typing_extensions import override
 
@@ -373,6 +375,20 @@ class TorchPreprocessingPipeline:
             )
 
 
+@functools.cache
+def _accepts_in_place(step_type: type) -> bool:
+    """Whether `step_type.fit_transform` takes an `in_place` keyword."""
+    parameters = inspect.signature(step_type.fit_transform).parameters
+    return "in_place" in parameters or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+    )
+
+
+def _in_place_kwargs(step: TorchPreprocessingStep) -> dict[str, bool]:
+    """`in_place=True` for a step whose `fit_transform` takes it, else nothing."""
+    return {"in_place": True} if _accepts_in_place(type(step)) else {}
+
+
 def _move_cache_to_device(
     cache: dict[str, torch.Tensor], device: torch.device
 ) -> dict[str, torch.Tensor]:
@@ -410,8 +426,7 @@ def _run_step(
         return _fit_transform_rows_on_device(
             step, x, column_indices, num_train_rows, fitted_cache, compute_device
         )
-    # Passed only when set, so a step written without it still runs.
-    in_place = {"in_place": True} if consume_input else {}
+    in_place = _in_place_kwargs(step) if consume_input else {}
     return step.fit_transform(
         x,
         column_indices=column_indices,
@@ -451,7 +466,7 @@ def _fit_transform_on_device(
             column_indices=list(range(len(selected))),
             num_train_rows=num_train_rows,
             fitted_cache=cache,
-            in_place=True,
+            **_in_place_kwargs(step),
         )
         assert result.added_columns is None, "A columnwise step adds no columns."
         x[:, :, index] = result.x.to(x.device)
@@ -490,7 +505,7 @@ def _fit_transform_rows_on_device(
             column_indices=column_indices,
             num_train_rows=num_train_rows,
             fitted_cache=cache,
-            in_place=True,
+            **_in_place_kwargs(step),
         )
         assert result.added_columns is None, "A rowwise step adds no columns."
         x[start : start + rows] = result.x.to(x.device)

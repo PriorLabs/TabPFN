@@ -102,6 +102,13 @@ ROW_SCAN_MAX_THREADS = 16
 """Threads `any_per_column` runs at most."""
 
 
+def _usable_cpus() -> int:
+    """The CPUs this process may run on."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def any_per_column(
     X: np.ndarray | torch.Tensor,
     tests: list[Callable[[Any], Any]],
@@ -126,7 +133,7 @@ def any_per_column(
         ]
 
     found = [np.zeros(n_columns, dtype=bool) for _ in tests]
-    threads = min(len(starts), ROW_SCAN_MAX_THREADS, len(os.sched_getaffinity(0)))
+    threads = min(len(starts), ROW_SCAN_MAX_THREADS, _usable_cpus())
     with ThreadPoolExecutor(max(1, threads)) as pool:
         for part in pool.map(scan, starts):
             for index, flags in enumerate(part):

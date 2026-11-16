@@ -258,8 +258,8 @@ def _encodes_categoricals_only(
 
     The general path makes a float64 frame of the whole array, and a float64 output
     from it. Encoding only the categorical columns into a float32 copy gives the same
-    values and the same fitted encoder. With `passthrough_inf`, an infinity in a
-    numerical column takes the general path, which carries it through the encoder.
+    values and the same fitted encoder. With `passthrough_inf`, an array holding an
+    infinity takes the general path, which carries it through the encoder.
     """
     if not (
         isinstance(X, np.ndarray)
@@ -270,9 +270,8 @@ def _encodes_categoricals_only(
         return False
     if not passthrough_inf:
         return True
-    numerical = np.setdiff1d(np.arange(X.shape[1]), np.asarray(cat_indices))
-    for start in range(0, len(numerical), _INF_SCAN_COLUMNS):
-        if np.isinf(X[:, numerical[start : start + _INF_SCAN_COLUMNS]]).any():
+    for start in range(0, X.shape[1], _INF_SCAN_COLUMNS):
+        if np.isinf(X[:, start : start + _INF_SCAN_COLUMNS]).any():
             return False
     return True
 

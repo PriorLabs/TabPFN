@@ -14,6 +14,7 @@ from tabpfn.preprocessing.torch import TorchSoftClipOutliersStep, pipeline_inter
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
+    TorchPreprocessingStepResult,
 )
 from tabpfn.preprocessing.torch.steps import (
     TorchAddSVDFeaturesStep,
@@ -509,6 +510,34 @@ def test__call__consume_input__same_output_written_into_the_input(
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
     assert actual.feature_schema == expected.feature_schema
+
+
+class LegacySignatureStep(MockStep):
+    """A step whose `fit_transform` override predates the `in_place` keyword."""
+
+    @override
+    def fit_transform(
+        self,
+        x: torch.Tensor,
+        column_indices: list[int],
+        num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None = None,
+    ) -> TorchPreprocessingStepResult:
+        return super().fit_transform(x, column_indices, num_train_rows, fitted_cache)
+
+
+def test__call__consume_input__step_without_in_place_keyword_runs() -> None:
+    schema = get_test_feature_schema(num_numericals=2, num_categoricals=1)
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(LegacySignatureStep(factor=3.0), {FeatureModality.NUMERICAL})]
+    )
+
+    expected = pipeline(torch.ones(10, 1, 3), schema, num_train_rows=5)
+    actual = pipeline(
+        torch.ones(10, 1, 3), schema, num_train_rows=5, consume_input=True
+    )
+
+    torch.testing.assert_close(actual.x, expected.x)
 
 
 @pytest.mark.parametrize("use_cache", [False, True])

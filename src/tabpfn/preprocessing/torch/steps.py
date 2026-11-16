@@ -379,9 +379,11 @@ class TorchSelectiveSafePowerStep(TorchPreprocessingStep):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None = None,
+        *,
+        in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
         """Override to select only target columns for the power transform."""
-        del column_indices
+        del column_indices, in_place
         orig_device = x.device
         target_x = x[:, :, self._target_column_indices]
 

@@ -56,6 +56,7 @@ def _config(pconfig: PreprocessorConfig) -> ClassifierEnsembleConfig:
         feature_shift_decoder="shuffle",
         outlier_removal_std=None,
         _model_index=0,
+        estimator_id=0,
         passthrough_inf=False,
     )
 
