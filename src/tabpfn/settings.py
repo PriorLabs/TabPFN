@@ -69,6 +69,16 @@ class TabPFNSettings(BaseSettings):
         "are chunked. Performance is close to optimal at the default of 32768. "
         "Set to 0 to disable chunking.",
     )
+    max_regressor_predict_rows: int = Field(
+        default=65536,
+        ge=0,
+        description="Maximum number of test rows TabPFNRegressor.predict decodes at "
+        "once during cached ('fit_with_cache') inference. Larger test sets are "
+        "predicted block by block, so the per-row bucket distributions "
+        "([rows, n_buckets]) never exist for all test rows at the same time. "
+        "Results are unchanged up to floating-point noise. Not used for "
+        "output_type='full', which returns the distributions. Set to 0 to disable.",
+    )
     max_batched_estimator_rows: int | None = Field(
         default=None,
         ge=0,
