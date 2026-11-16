@@ -76,11 +76,12 @@ class GroupAggregator:
             return X
 
         sizes = np.bincount(groups)
+        grouped = X.groupby(groups)
         spread: dict[tuple[str, str], float] = {}
         for column in X.columns[X.columns != exclude]:
             numeric = pd.api.types.is_numeric_dtype(X[column])
             aggregates = _NUMERIC_AGGREGATES if numeric else _OTHER_AGGREGATES
-            table = X[column].groupby(groups).agg(list(aggregates))
+            table = grouped[column].agg(list(aggregates))
             for aggregate in aggregates:
                 values = table[aggregate]
                 if not pd.api.types.is_numeric_dtype(values):
@@ -108,13 +109,17 @@ class GroupAggregator:
         """Append the kept aggregates, each computed over its group's rows in `X`."""
         if not self.aggregates_:
             return X
+        grouped = X.groupby(groups)
+        # A group's aggregate sits at its code, so indexing by `groups` repeats it
+        # once per row.
         columns = {
-            name: X[column].groupby(groups).transform(aggregate).to_numpy()
+            name: grouped[column].agg(aggregate).to_numpy()[groups]
             for (column, aggregate), name in zip(
                 self.aggregates_, self.names_, strict=True
             )
         }
-        return pd.concat([X, pd.DataFrame(columns, index=X.index)], axis=1)
+        appended = pd.DataFrame(columns, index=X.index, copy=False)
+        return pd.concat([X, appended], axis=1)
 
 
 def pool_rows(
