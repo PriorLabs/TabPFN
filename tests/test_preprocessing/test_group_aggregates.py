@@ -110,6 +110,24 @@ def test__exclude__is_not_aggregated() -> None:
     assert all(name.startswith("num_") for name in aggregator.names_)
 
 
+def test__several_jobs__select_the_same_aggregates_as_one_job() -> None:
+    rng = np.random.default_rng(0)
+    groups = rng.integers(0, 20, size=200)
+    X = pd.DataFrame(rng.normal(size=(200, 8)), columns=[f"n{i}" for i in range(8)])
+    X["cat"] = rng.choice(["a", "b", "c"], size=200)
+    y = groups % 2
+
+    outs = []
+    for n_jobs in (1, 4):
+        aggregator = GroupAggregator(
+            append=True, pool=False, max_features=10, n_jobs=n_jobs
+        )
+        outs.append(aggregator.fit_transform(X, y, groups, exclude=None))
+
+    assert len(aggregator.aggregates_) == 10
+    pd.testing.assert_frame_equal(outs[0], outs[1])
+
+
 def test__transform__aggregates_over_the_rows_passed_in() -> None:
     aggregator = _aggregator()
     aggregator.fit_transform(_frame(), [0, 0, 1, 1, 1], GROUPS, exclude=None)

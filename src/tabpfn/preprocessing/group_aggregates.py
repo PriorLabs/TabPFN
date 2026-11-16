@@ -9,6 +9,7 @@ import math
 import warnings
 from typing import TYPE_CHECKING
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -41,6 +42,8 @@ class GroupAggregator:
         pool: Whether to pool the predictions per group. This needs one label
             per group too: `y` constant within every training group.
         max_features: How many aggregates to keep at most.
+        n_jobs: The number of threads that select the aggregates at fit, as
+            in `joblib.Parallel`.
 
     Attributes:
         aggregates_: The kept `(column, aggregate)` pairs. Empty when none are
@@ -53,10 +56,13 @@ class GroupAggregator:
     names_: list[str]
     pool_: bool
 
-    def __init__(self, *, append: bool, pool: bool, max_features: int = 64) -> None:
+    def __init__(
+        self, *, append: bool, pool: bool, max_features: int = 64, n_jobs: int = 1
+    ) -> None:
         self.append = append
         self.pool = pool
         self.max_features = max_features
+        self.n_jobs = n_jobs
 
     def fit_transform(
         self,
@@ -103,17 +109,29 @@ class GroupAggregator:
 
         sizes = np.bincount(groups)
         grouped = X.groupby(groups)
-        spread: dict[tuple[str, str], float] = {}
-        for column in X.columns[X.columns != exclude]:
+
+        def column_spread(column: str) -> dict[tuple[str, str], float]:
             numeric = pd.api.types.is_numeric_dtype(X[column])
             aggregates = _NUMERIC_AGGREGATES if numeric else _OTHER_AGGREGATES
             table = grouped[column].agg(list(aggregates))
+            spread = {}
             for aggregate in aggregates:
                 values = table[aggregate]
                 if not pd.api.types.is_numeric_dtype(values):
                     codes = values.astype("category").cat.codes
                     values = codes.astype(float).where(codes >= 0)
                 spread[column, aggregate] = _row_variance(values.to_numpy(float), sizes)
+            return spread
+
+        columns = X.columns[X.columns != exclude]
+        # The first column runs alone: it fills the lazy caches of `grouped`,
+        # which the threads then only read. pandas releases the GIL in the
+        # numeric aggregations.
+        spread = column_spread(columns[0]) if len(columns) else {}
+        for column_result in joblib.Parallel(n_jobs=self.n_jobs, prefer="threads")(
+            joblib.delayed(column_spread)(column) for column in columns[1:]
+        ):
+            spread.update(column_result)
 
         # Rounded so that equal spreads tie on the name, not on summation order.
         # A NaN spread, from at most one row with a value, ranks last.
