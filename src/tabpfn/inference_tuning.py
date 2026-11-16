@@ -319,13 +319,12 @@ def find_optimal_classification_thresholds(
     Classes with no positive (or no negative) rows in the holdout carry no signal
     to tune on and are assigned a neutral threshold instead of a searched one.
 
-    With `label_reliability`, the metric is computed on an estimate of the clean
-    labels' confusion matrix in which each row counts in proportion to its
-    reliability r. A noisy label is the clean one with probability r and
-    otherwise a draw from `label_marginal`, so `onehot(y_true) - (1 - r) *
-    label_marginal` estimates `r * onehot(clean label)`. Each row thus counts as
-    a positive and a negative row whose weights can be negative. Rows with r = 0
-    carry no information and are dropped.
+    With `label_reliability`, the metric is computed on an unbiased estimate of
+    the clean labels' confusion matrix. A noisy label is the clean one with
+    probability r and otherwise a draw from `label_marginal`, so
+    `(onehot(y_true) - (1 - r) * label_marginal) / r` estimates
+    `onehot(clean label)`. Each row counts as a positive and a negative row whose
+    weights can be negative. Rows with r = 0 carry no information and are dropped.
 
     Args:
         metric_name: The name of the metric to optimize.
@@ -353,6 +352,8 @@ def find_optimal_classification_thresholds(
             sample_weight = sample_weight[informative]
     n_samples = len(y_true)
     weight = np.ones(n_samples) if sample_weight is None else sample_weight
+    if label_reliability is not None:
+        weight = weight / label_reliability
     for i in range(n_classes):
         is_class_i = (y_true == i).astype(float)
         if label_reliability is None:

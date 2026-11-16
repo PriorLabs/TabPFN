@@ -1255,6 +1255,40 @@ def test__find_regression_optimal_temperature__label_reliability_undoes_label_no
     assert abs(corrected - clean) <= 0.06
 
 
+def test__find_optimal_classification_thresholds__varying_reliability() -> None:
+    proba_1 = np.array([0.1, 0.3, 0.7, 0.9])
+    probas = np.stack([1 - proba_1, proba_1], axis=-1)
+    y_clean = np.array([0, 1, 0, 1])
+    mass = np.array([1.0, 3.0, 2.0, 1.0])
+    reliability = np.array([1.0, 0.1, 1.0, 1.0])
+    marginal = np.bincount(y_clean, weights=mass) / mass.sum()
+
+    clean = find_optimal_classification_thresholds(
+        metric_name=ClassifierEvalMetrics.ACCURACY,
+        y_true=y_clean,
+        y_pred_probas=probas,
+        n_classes=2,
+        sample_weight=mass,
+    )
+    np.testing.assert_allclose(clean, [0.796, 0.199], atol=0.001)
+
+    # Represent both possible noisy labels with their exact probability masses.
+    noisy_mass = mass[:, None] * (
+        reliability[:, None] * np.eye(2)[y_clean]
+        + (1 - reliability[:, None]) * marginal
+    )
+    corrected = find_optimal_classification_thresholds(
+        metric_name=ClassifierEvalMetrics.ACCURACY,
+        y_true=np.tile([0, 1], len(y_clean)),
+        y_pred_probas=np.repeat(probas, 2, axis=0),
+        n_classes=2,
+        sample_weight=noisy_mass.ravel(),
+        label_reliability=np.repeat(reliability, 2),
+        label_marginal=marginal,
+    )
+    np.testing.assert_allclose(corrected, clean)
+
+
 def test__find_optimal_classification_thresholds__ignores_zero_reliability_rows() -> (
     None
 ):
