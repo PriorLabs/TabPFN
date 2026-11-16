@@ -280,7 +280,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     group_aggregator_: GroupAggregator
     """Detects one label per `group_col` group, and appends the per-group
-    aggregates then."""
+    aggregates then. Inactive unless `USE_GROUP_AGGREGATES` is on."""
 
     group_feature_index_: int | None
     """Where the encoded group feature sits in the cleaned input, or `None`
@@ -407,14 +407,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 Combining it with `tuning_config`, `differentiable_input=True`
                 or `fit_from_preprocessed` raises `ValueError` too.
 
-                With one label per group (the target is constant within every
-                training group and some group has more than one row),
-                prediction is transductive. The rows of a group in the predict
-                input all get their averaged prediction, and per-group
-                aggregates of the features, computed over those rows, are
-                appended (see `APPEND_GROUP_AGGREGATES` in `inference_config`).
-                So the other rows passed to predict change a row's prediction:
-                predict all rows of a group in one call.
+                `USE_GROUP_AGGREGATES` in `inference_config` adds a
+                transductive mode for data with one label per group.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -1037,11 +1031,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 inference_config=self.inference_config_,
             )
         )
-        self.group_aggregator_ = GroupAggregator(
-            append=self.inference_config_.APPEND_GROUP_AGGREGATES
-        )
+        self.group_aggregator_ = GroupAggregator()
         X = self.group_aggregator_.fit_transform(
-            X, y, groups, exclude=self.group_encoder_.feature_name_
+            X,
+            y,
+            groups if self.inference_config_.USE_GROUP_AGGREGATES else None,
+            exclude=self.group_encoder_.feature_name_,
         )
         if feature_names is not None:
             feature_names = [*feature_names, *self.group_aggregator_.names_]
