@@ -57,6 +57,7 @@ from tabpfn.base import (
     resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
+    transform_columns,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -102,6 +103,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.group_aggregates import GroupAggregator, pool_rows
 from tabpfn.preprocessing.group_ids import (
     GroupIdEncoder,
     as_group_feature,
@@ -304,6 +306,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The encoder that replaced the `group_col` columns with one categorical
     feature, holding the key-to-code mapping fitted on the training rows."""
 
+    group_aggregator_: GroupAggregator
+    """Appends the per-group aggregates (`APPEND_GROUP_AGGREGATES`) and decides
+    whether predictions are pooled per group (`POOL_GROUP_PREDICTIONS`)."""
+
     group_feature_index_: int | None
     """Where the encoded group feature sits in the cleaned input, or `None`
     without `group_col`."""
@@ -433,9 +439,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 The codes are fitted on the training rows alone, every group
                 keeping its own; a key `fit` did not see becomes a missing
                 value. When set, `fit` and `predict` take a DataFrame holding
-                those columns and raise `ValueError` otherwise.
+                those columns, without missing values, and raise `ValueError`
+                otherwise.
                 Combining it with `tuning_config`, `differentiable_input=True`
                 or `fit_from_preprocessed` raises `ValueError` too.
+
+                `APPEND_GROUP_AGGREGATES` and `POOL_GROUP_PREDICTIONS` in
+                `inference_config` add transductive modes for grouped data.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -1080,7 +1090,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Before the expansion below, so each group key is read as the caller
         # passed it rather than as the features a date or text column becomes.
         self.group_encoder_ = GroupIdEncoder(group_col=self.group_col)
-        X = self.group_encoder_.fit_transform(X)
+        groups = self.group_encoder_.fit(X).row_groups(X)
+        X = self.group_encoder_.transform(X)
         categorical_indices = self.group_encoder_.output_indices(categorical_indices)
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
@@ -1089,6 +1100,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 inference_config=self.inference_config_,
             )
         )
+        self.group_aggregator_ = GroupAggregator(
+            append=self.inference_config_.APPEND_GROUP_AGGREGATES,
+            pool=self.inference_config_.POOL_GROUP_PREDICTIONS is not None,
+        )
+        X = self.group_aggregator_.fit_transform(
+            X, y, groups, exclude=self.group_encoder_.feature_name_
+        )
+        if feature_names is not None:
+            feature_names = [*feature_names, *self.group_aggregator_.names_]
 
         X, y, _ = ensure_compatible_fit_inputs(
             X,
@@ -1689,7 +1709,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         With `fit_mode="fit_with_cache"`, test sets larger than the
         `TABPFN_MAX_REGRESSOR_PREDICT_ROWS` setting are predicted block by
         block, so peak memory does not grow with the number of test rows.
-        `output_type="full"` always runs in one pass.
+        `output_type="full"` and predictions pooled per group always run in one
+        pass.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
@@ -1699,9 +1720,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # TODO: Move these at some point to InferenceEngine
         check_input_shape_matches(X, estimator=self)
-        X = self.group_encoder_.transform(X)
-        X = self.date_transformer_.transform(X)
-        X = self.text_transformer_.transform(X)
+        X, groups = transform_columns(self, X)
         X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
@@ -1737,9 +1756,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             and output_type != "full"
             and X.shape[0] > block_rows
             and isinstance(self.executor_, InferenceEngineExplicitKVCache)
+            # Pooling needs all rows of a group in one pass.
+            and groups is None
         )
         if not use_blocks:
-            return decode(self._compute_aggregated_logits(X))
+            logits = pool_rows(
+                self._compute_aggregated_logits(X),
+                groups,
+                logits=True,
+                geometric=self.inference_config_.POOL_GROUP_PREDICTIONS
+                == "geometric_mean",
+            )
+            return decode(logits)
 
         # Each test row only attends to the cached training context, and every
         # later step is per row, so blocks give the same result as one call.
@@ -1990,9 +2018,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
             check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
-            X_holdout_NhF = tuning_regressor.group_encoder_.transform(X_holdout_NhF)
-            X_holdout_NhF = tuning_regressor.date_transformer_.transform(X_holdout_NhF)
-            X_holdout_NhF = tuning_regressor.text_transformer_.transform(X_holdout_NhF)
+            X_holdout_NhF, _ = transform_columns(tuning_regressor, X_holdout_NhF)
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(
                 X_holdout_NhF, tuning_regressor
             )
@@ -2337,9 +2363,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             check_input_shape_matches(X_test, estimator=worker)
-            X_test = worker.group_encoder_.transform(X_test)  # noqa: PLW2901
-            X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
-            X_test = worker.text_transformer_.transform(X_test)  # noqa: PLW2901
+            X_test, _ = transform_columns(worker, X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,

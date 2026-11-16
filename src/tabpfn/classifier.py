@@ -45,6 +45,7 @@ from tabpfn.base import (
     resolve_categorical_features_indices,
     resolved_n_estimators,
     resolved_softmax_temperature,
+    transform_columns,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -95,6 +96,7 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.group_aggregates import GroupAggregator, pool_rows
 from tabpfn.preprocessing.group_ids import (
     GroupIdEncoder,
     as_group_feature,
@@ -241,6 +243,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The encoder that replaced the `group_col` columns with one categorical
     feature, holding the key-to-code mapping fitted on the training rows."""
 
+    group_aggregator_: GroupAggregator
+    """Appends the per-group aggregates (`APPEND_GROUP_AGGREGATES`) and decides
+    whether predictions are pooled per group (`POOL_GROUP_PREDICTIONS`)."""
+
     group_feature_index_: int | None
     """Where the encoded group feature sits in the cleaned input, or `None`
     without `group_col`."""
@@ -373,9 +379,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 The codes are fitted on the training rows alone, every group
                 keeping its own; a key `fit` did not see becomes a missing
                 value. When set, `fit` and `predict` take a DataFrame holding
-                those columns and raise `ValueError` otherwise.
+                those columns, without missing values, and raise `ValueError`
+                otherwise.
                 Combining it with `tuning_config`, `differentiable_input=True`
                 or `fit_from_preprocessed` raises `ValueError` too.
+
+                `APPEND_GROUP_AGGREGATES` and `POOL_GROUP_PREDICTIONS` in
+                `inference_config` add transductive modes for grouped data.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -862,7 +872,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Before the expansion below, so each group key is read as the caller
         # passed it rather than as the features a date or text column becomes.
         self.group_encoder_ = GroupIdEncoder(group_col=self.group_col)
-        X = self.group_encoder_.fit_transform(X)
+        groups = self.group_encoder_.fit(X).row_groups(X)
+        X = self.group_encoder_.transform(X)
         categorical_indices = self.group_encoder_.output_indices(categorical_indices)
         X, date_transformer, text_transformer, feature_names, categorical_indices = (
             expand_dates_and_text(
@@ -871,6 +882,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 inference_config=self.inference_config_,
             )
         )
+        self.group_aggregator_ = GroupAggregator(
+            append=self.inference_config_.APPEND_GROUP_AGGREGATES,
+            pool=self.inference_config_.POOL_GROUP_PREDICTIONS is not None,
+        )
+        X = self.group_aggregator_.fit_transform(
+            X, y, groups, exclude=self.group_encoder_.feature_name_
+        )
+        if feature_names is not None:
+            feature_names = [*feature_names, *self.group_aggregator_.names_]
 
         # Data validation and cleaning
         X, y, original_y_name = ensure_compatible_fit_inputs(
@@ -1390,9 +1410,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             check_input_shape_matches(X_test, estimator=worker)
-            X_test = worker.group_encoder_.transform(X_test)  # noqa: PLW2901
-            X_test = worker.date_transformer_.transform(X_test)  # noqa: PLW2901
-            X_test = worker.text_transformer_.transform(X_test)  # noqa: PLW2901
+            X_test, _ = transform_columns(worker, X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
@@ -1806,11 +1824,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
+        groups = None
         if not self.differentiable_input:
             check_input_shape_matches(X, estimator=self)
-            X = self.group_encoder_.transform(X)
-            X = self.date_transformer_.transform(X)
-            X = self.text_transformer_.transform(X)
+            X, groups = transform_columns(self, X)
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = clean_data_transform(
                 X,
@@ -1827,12 +1844,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             model_type="classifier",
             n_train_samples=getattr(self, "n_train_samples_", None),
         ):
-            return self.forward(
+            output = self.forward(
                 X,
                 use_inference_mode=True,
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
+        return pool_rows(
+            output,
+            groups,
+            logits=return_logits or return_raw_logits,
+            geometric=self.inference_config_.POOL_GROUP_PREDICTIONS == "geometric_mean",
+        )
 
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.

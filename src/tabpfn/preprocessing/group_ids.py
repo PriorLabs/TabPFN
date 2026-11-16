@@ -12,7 +12,7 @@ not by closeness, so two floats that differ in the last bit are two groups.
 Only `TabPFNClassifier` and `TabPFNRegressor` run this, before `DateTransformer`,
 so a group column is read as the caller passed it. Columns are selected by label
 here, unlike everywhere else in the preprocessing, because that is what
-`group_col` names. A label that repeats is refused.
+`group_col` names. A label that repeats is refused, and so is a missing key.
 """
 
 from __future__ import annotations
@@ -92,7 +92,8 @@ class GroupIdEncoder:
 
         Raises:
             TabPFNValidationError: If a column is selected and `X` is not a
-                `DataFrame`, or does not hold every selected label exactly once.
+                `DataFrame`, does not hold every selected label exactly once, or
+                holds a missing value in a selected column.
         """
         codes = self._fit(X)
         if codes is None:
@@ -117,6 +118,17 @@ class GroupIdEncoder:
         codes = indexer.astype(np.float64)
         codes[indexer < 0] = np.nan
         return self._replace(X, codes)
+
+    def row_groups(self, X: XType) -> np.ndarray | None:
+        """Each row's group in `X`, coded `0..n_groups - 1` within `X` alone.
+
+        Unlike `transform`, a key `fit` did not see gets a code too. `None`
+        when no column is selected.
+        """
+        self._check_is_fitted()
+        if self.keys_ is None:
+            return None
+        return pd.factorize(self._keys(X)[1])[0]
 
     def output_indices(self, indices: Sequence[int] | None) -> list[int] | None:
         """Where each of `indices`, input positions, sits in the replaced frame.
@@ -182,6 +194,12 @@ class GroupIdEncoder:
                 f"fit and predict input has to be a DataFrame; got {type(X).__name__}."
             )
         positions = _locate(X, self.group_columns_)
+        missing = [label for label in self.group_columns_ if X[label].isna().any()]
+        if missing:
+            raise TabPFNValidationError(
+                f"`group_col` columns must not hold missing values, but these do: "
+                f"{missing}. Give every row a group key."
+            )
         return positions, pd.MultiIndex.from_frame(X.loc[:, self.group_columns_])
 
     def _replace(self, X: pd.DataFrame, codes: np.ndarray) -> pd.DataFrame:
