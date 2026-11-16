@@ -468,7 +468,8 @@ class PreprocessingPipeline:
 
     @property
     def keep_float32(self) -> bool:
-        """Whether a float32 input is copied as float32 rather than float64.
+        """Whether a float32 input is copied as float32 rather than float64, and not
+        copied at all when nothing would write into it.
 
         True when every step only selects, reorders, compares and encodes values:
         their float32 results equal the float64 ones cast back.
@@ -553,7 +554,8 @@ class PreprocessingPipeline:
     def _working_copy(
         self, X: np.ndarray | torch.Tensor, feature_indices: np.ndarray | None
     ) -> np.ndarray | torch.Tensor:
-        """The array the steps write into: a copy of `X`, or of its `feature_indices`.
+        """The array the steps run on: a copy of `X` or of its `feature_indices`, or
+        `X` itself when nothing would write into it.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -564,10 +566,23 @@ class PreprocessingPipeline:
             index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
             return X.index_select(-1, index)
         keep = self.keep_float32 and X.dtype == np.float32
+        if keep and feature_indices is None and self._writes_only_owned_input(X):
+            return X
         dtype = np.float32 if keep else np.float64
         if feature_indices is None:
             return X.astype(dtype, order="C", copy=True)
         return gather_columns(X, feature_indices, dtype)
+
+    def _writes_only_owned_input(self, X: np.ndarray) -> bool:
+        """Whether, without a copy of `X`, nothing would write into `X`.
+
+        The pipeline writes the output of a step with modalities back into its array,
+        and replaces infinities in place; a step writes only into an array it owns.
+        """
+        if any(modalities for _, modalities in self.steps):
+            return False
+        (has_inf,) = any_per_column(X, [np.isinf])
+        return not has_inf.any()
 
     def _process_steps(
         self,
@@ -588,7 +603,9 @@ class PreprocessingPipeline:
         Returns:
             Tuple of (transformed array, updated feature schema).
         """
+        given = X
         X = self._working_copy(X, feature_indices)
+        owns_input = X is not given
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
@@ -638,7 +655,7 @@ class PreprocessingPipeline:
                 # We still have preprocessing steps that don't change the columns
                 # internally (will be deprecated going forward). For backwards
                 # compatibility, we still handle these here.
-                owned = _STEP_OWNS_INPUT.set(True)
+                owned = _STEP_OWNS_INPUT.set(owns_input)
                 try:
                     result = (
                         step.fit_transform(X, feature_schema)
@@ -660,6 +677,10 @@ class PreprocessingPipeline:
         if inf_masks:
             _restore_inf_masks(X, feature_schema, inf_masks)
 
+        if not owns_input and isinstance(X, np.ndarray) and X.dtype == np.float64:
+            # A step that may not write into `X` returns a new float64 array; its
+            # values are float32 ones, as on the copied path.
+            X = X.astype(np.float32)
         return X, feature_schema
 
     def _validate_expected_dtype(
