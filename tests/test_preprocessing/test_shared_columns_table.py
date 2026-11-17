@@ -24,6 +24,16 @@ def test__selecting_columns__matches_the_array() -> None:
     assert len(table) == 6
 
 
+def test__selecting_columns__with_32_bit_sources__matches_the_array() -> None:
+    # `np.arange` gives int32 on Windows with numpy 1.
+    base = _base()
+    table = SharedColumnsTable(
+        base, np.arange(5, dtype=np.int32), np.empty((6, 0), np.float32)
+    )[:, [3, 0, 4]]
+
+    np.testing.assert_array_equal(np.asarray(table), base[:, [3, 0, 4]])
+
+
 def test__with_columns__places_own_values() -> None:
     base = _base()
     values = np.full((6, 2), -1.0, dtype=np.float32)

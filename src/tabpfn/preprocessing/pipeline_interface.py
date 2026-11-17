@@ -221,11 +221,16 @@ class SharedColumnsTable:
         """Per column, its source in `base` (column 0 for an own column); then where
         the own columns go, and which of `own` they are.
         """
+
+        def index(values: np.ndarray) -> torch.Tensor:
+            # int64: torch 2.5 rejects the int32 that numpy 1 gives on Windows.
+            return torch.as_tensor(values, dtype=torch.long).view(1, -1)
+
         shared = self.sources >= 0
         return (
-            torch.as_tensor(np.where(shared, self.sources, 0)).view(1, -1),
-            torch.as_tensor(np.flatnonzero(~shared)).view(1, -1),
-            torch.as_tensor(-1 - self.sources[~shared]).view(1, -1),
+            index(np.where(shared, self.sources, 0)),
+            index(np.flatnonzero(~shared)),
+            index(-1 - self.sources[~shared]),
         )
 
     def __array__(self, dtype: Any = None, *, copy: bool | None = None) -> np.ndarray:
