@@ -22,6 +22,12 @@ _STEP_OWNS_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_step_owns_input", default=False
 )
 
+_OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "tabpfn_overwrite_fit_input", default=False
+)
+"""Set inside `clean.overwrite_fit_input()`: a `fit` may write into the caller's
+array and keep it."""
+
 PERMUTE_BLOCK_BYTES = 1 << 26
 """Bytes of rows `permute_columns_in_place` moves at a time."""
 
@@ -44,8 +50,8 @@ def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray
 def step_owns_input() -> bool:
     """Whether the running step may write into the array it was handed.
 
-    True only inside `PreprocessingPipeline`, which hands each step a working copy
-    nobody else holds.
+    True only inside `PreprocessingPipeline`, for an array nobody outside the
+    pipeline holds.
     """
     return _STEP_OWNS_INPUT.get()
 
@@ -469,7 +475,8 @@ class PreprocessingPipeline:
     @property
     def keep_float32(self) -> bool:
         """Whether a float32 input is copied as float32 rather than float64, and not
-        copied at all when nothing would write into it.
+        copied at all when nothing would write into it (at fit, only inside
+        `overwrite_fit_input()`).
 
         True when every step only selects, reorders, compares and encodes values:
         their float32 results equal the float64 ones cast back.
@@ -552,12 +559,17 @@ class PreprocessingPipeline:
         )
 
     def _working_copy(
-        self, X: np.ndarray | torch.Tensor, feature_indices: np.ndarray | None
+        self,
+        X: np.ndarray | torch.Tensor,
+        feature_indices: np.ndarray | None,
+        *,
+        is_fitting: bool,
     ) -> np.ndarray | torch.Tensor:
         """The array the steps run on.
 
         This is a copy of `X`, or of its `feature_indices` columns. It is `X` itself
-        when nothing would write into it.
+        when nothing would write into it and, at fit, the caller lets the fitted
+        model keep it.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -568,7 +580,15 @@ class PreprocessingPipeline:
             index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
             return X.index_select(-1, index)
         keep = self.keep_float32 and X.dtype == np.float32
-        if keep and feature_indices is None and self._writes_only_owned_input(X):
+        if (
+            keep
+            and feature_indices is None
+            # A fitted model may keep its training data past the call.
+            and (not is_fitting or _OVERWRITE_FIT_INPUT.get())
+            # The copy is C-ordered, and `torch.as_tensor` rejects negative strides.
+            and X.flags.c_contiguous
+            and self._writes_only_owned_input(X)
+        ):
             return X
         dtype = np.float32 if keep else np.float64
         if feature_indices is None:
@@ -607,15 +627,16 @@ class PreprocessingPipeline:
             Tuple of (transformed array, updated feature schema).
         """
         given = X
-        X = self._working_copy(X, feature_indices)
-        owns_input = X is not given
+        X = self._working_copy(X, feature_indices, is_fitting=is_fitting)
+        copied = X is not given
+        owns_input = copied
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
         # end.  Computed per call so train and test each restore their own
         # pattern.  A no-op when the input is already finite.
         # Without a copy, `_working_copy` has already found `X` free of infinities.
-        inf_masks = _extract_inf_masks(X, feature_schema) if owns_input else {}
+        inf_masks = _extract_inf_masks(X, feature_schema) if copied else {}
         if is_fitting:
             feature_schema = _flag_non_constant_with_infs(feature_schema, inf_masks)
 
@@ -673,6 +694,8 @@ class PreprocessingPipeline:
                 X, feature_schema = self._maybe_append_added_columns(
                     X, feature_schema, result, step.added_feature_prefix()
                 )
+                # A new array from a step is the pipeline's to hand on.
+                owns_input = owns_input or not np.may_share_memory(X, given)
 
             if self.record_timings:
                 step_key = f"{step_idx}_{step.__class__.__name__}"
@@ -681,7 +704,7 @@ class PreprocessingPipeline:
         if inf_masks:
             _restore_inf_masks(X, feature_schema, inf_masks)
 
-        if not owns_input and isinstance(X, np.ndarray) and X.dtype == np.float64:
+        if not copied and isinstance(X, np.ndarray) and X.dtype == np.float64:
             # A step that could not write into `X` may return a new float64 array.
             # Its values fit in float32, as on the path that copies `X`.
             X = X.astype(np.float32)
