@@ -9,7 +9,6 @@ import dataclasses
 import functools
 import inspect
 import time
-from collections.abc import Callable
 from typing_extensions import override
 
 import torch
@@ -308,7 +307,7 @@ class TorchPreprocessingPipeline:
             whole = [
                 type(step).__name__
                 for step, _ in self.steps
-                if _staged_runner(step) is None
+                if not (step.columnwise or step.runs_on_input_device)
             ]
             if whole:
                 svd_hint = (
@@ -485,15 +484,13 @@ def _run_step(
     consume_input: bool,
     compute_device: torch.device | None,
 ) -> TorchPreprocessingStepResult:
-    """`step.fit_transform`, run as `_staged_runner` says when `compute_device` is
-    given.
+    """`step.fit_transform`; with a `compute_device`, a columnwise step moves its
+    blocks there, and a step that runs on its input's device writes into `x`.
     """
-    if compute_device is not None:
+    if compute_device is not None and not step.runs_on_input_device:
         if compute_device.type == "mps" and step.computes_on_cpu_for_mps:
             compute_device = torch.device("cpu")
-        runner = _staged_runner(step)
-        assert runner is not None, "`__call__` rejects a step without a runner."
-        return runner(
+        return _fit_transform_on_device(
             step, x, column_indices, num_train_rows, fitted_cache, compute_device
         )
     in_place = _in_place_kwargs(step) if consume_input else {}
@@ -503,36 +500,6 @@ def _run_step(
         num_train_rows=num_train_rows,
         fitted_cache=fitted_cache,
         **in_place,
-    )
-
-
-def _staged_runner(
-    step: TorchPreprocessingStep,
-) -> Callable[..., TorchPreprocessingStepResult] | None:
-    """How `step` runs on an input held off the compute device; None if it cannot."""
-    if step.runs_on_input_device:
-        return _fit_transform_where_input_is
-    if step.columnwise:
-        return _fit_transform_on_device
-    return None
-
-
-def _fit_transform_where_input_is(
-    step: TorchPreprocessingStep,
-    x: torch.Tensor,
-    column_indices: list[int],
-    num_train_rows: int,
-    fitted_cache: dict[str, torch.Tensor] | None,
-    device: torch.device,
-) -> TorchPreprocessingStepResult:
-    """`step.fit_transform` into `x`, on `x`'s own device rather than `device`."""
-    del device
-    return step.fit_transform(
-        x,
-        column_indices=column_indices,
-        num_train_rows=num_train_rows,
-        fitted_cache=fitted_cache,
-        in_place=True,
     )
 
 

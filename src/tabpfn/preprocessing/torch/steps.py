@@ -84,31 +84,26 @@ class TorchRandomSignFlipStep(TorchPreprocessingStep):
             fitted_cache = self._fit(x[:0, :, : len(column_indices)])
 
         signs = fitted_cache["signs"].to(x)
-        if column_indices == list(range(x.shape[-1])):
-            transformed = (
-                x.mul_(signs) if in_place else self._transform(x, fitted_cache)[0]
+        # Runs of evenly spaced columns, multiplied where they are, leave the other
+        # columns' bits as they were.
+        transformed = x if in_place else x.clone()
+        start = 0
+        while start < len(column_indices):
+            end = start + 1
+            stride = (
+                max(1, column_indices[end] - column_indices[start])
+                if end < len(column_indices)
+                else 1
             )
-        else:
-            # Runs of evenly spaced columns, multiplied where they are, leave the
-            # other columns' bits as they were.
-            transformed = x if in_place else x.clone()
-            start = 0
-            while start < len(column_indices):
-                end = start + 1
-                stride = (
-                    max(1, column_indices[end] - column_indices[start])
-                    if end < len(column_indices)
-                    else 1
-                )
-                while (
-                    end < len(column_indices)
-                    and column_indices[end] == column_indices[end - 1] + stride
-                ):
-                    end += 1
-                transformed[
-                    ..., column_indices[start] : column_indices[end - 1] + 1 : stride
-                ].mul_(signs[..., start:end])
-                start = end
+            while (
+                end < len(column_indices)
+                and column_indices[end] == column_indices[end - 1] + stride
+            ):
+                end += 1
+            transformed[
+                ..., column_indices[start] : column_indices[end - 1] + 1 : stride
+            ].mul_(signs[..., start:end])
+            start = end
 
         return TorchPreprocessingStepResult(x=transformed, fitted_cache=fitted_cache)
 
