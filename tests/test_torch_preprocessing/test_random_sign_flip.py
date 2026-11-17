@@ -110,6 +110,17 @@ def test_selected_columns_preserve_values_gradients_and_input(
     torch.testing.assert_close(x.grad, expected_gradient, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("indices", [[3, 0, 2], [0, 2], [0, 1, 2, 3]])
+def test_in_place__writes_into_x_and_matches_the_copy(indices: list[int]) -> None:
+    x = torch.randn(5, 2, 4, generator=torch.Generator().manual_seed(0))
+    expected = TorchRandomSignFlipStep(42).fit_transform(x.clone(), indices, 1)
+
+    result = TorchRandomSignFlipStep(42).fit_transform(x, indices, 1, in_place=True)
+
+    assert result.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(result.x, expected.x, rtol=0, atol=0)
+
+
 def test_categorical_nan_bits_are_unchanged() -> None:
     bits = torch.tensor([0x7F800001, 0x7FC00001], dtype=torch.int32)
     x = bits.view(torch.float32).reshape(1, 1, 2)
