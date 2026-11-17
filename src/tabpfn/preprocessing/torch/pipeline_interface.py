@@ -302,9 +302,15 @@ class TorchPreprocessingPipeline:
                 if not (step.columnwise or step.rowwise)
             ]
             if whole:
+                svd_hint = (
+                    " A block runner for the SVD is in "
+                    "https://github.com/PriorLabs/TabPFN/pull/1427."
+                    if "TorchAddSVDFeaturesStep" in whole
+                    else ""
+                )
                 raise ValueError(
                     f"{', '.join(whole)} cannot run by blocks, so this pipeline "
-                    f"cannot preprocess a table held off {compute_device}."
+                    f"cannot preprocess a table held off {compute_device}.{svd_hint}"
                 )
         inf_masks = _extract_inf_masks(
             x, feature_schema, scan_device=compute_device if staged else None

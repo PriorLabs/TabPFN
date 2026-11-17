@@ -790,7 +790,9 @@ def test__call__staged__rejects_a_step_without_a_block_runner_before_any_step(
     )
     schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
 
-    with pytest.raises(ValueError, match="TorchAddSVDFeaturesStep cannot run by"):
+    with pytest.raises(
+        ValueError, match=r"TorchAddSVDFeaturesStep cannot run by .*pull/1427"
+    ):
         pipeline(
             _wide_input(),
             schema,
