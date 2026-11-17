@@ -1667,6 +1667,27 @@ def test__overwrite_fit_input__read_only_array__is_copied() -> None:
     )
 
 
+@pytest.mark.parametrize("n_preprocessing_jobs", [1, 2])
+def test__overwrite_fit_input__preprocessing_on_threads__keeps_the_array(
+    n_preprocessing_jobs: int,
+) -> None:
+    """The opt-in reaches the preprocessing threads, so no member copies `X`."""
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 4)).astype(np.float32)
+
+    with clean_module.overwrite_fit_input():
+        model = TabPFNRegressor(
+            n_estimators=4,
+            device="cpu",
+            random_state=0,
+            n_preprocessing_jobs=n_preprocessing_jobs,
+            inference_config={"ENABLE_GPU_PREPROCESSING": True},
+        ).fit(X, rng.standard_normal(60))
+
+    members = model.executor_.ensemble_members
+    assert all(np.shares_memory(member.X_train, X) for member in members)
+
+
 def test__clean_data__float32_infinity_in_categorical__matches_float64() -> None:
     """With `passthrough_inf`, an infinity in a categorical column of a float32
     array is carried through as the float64 array's is.

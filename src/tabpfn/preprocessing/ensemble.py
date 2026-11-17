@@ -76,7 +76,10 @@ class TabPFNEnsembleMember:
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
     ) -> np.ndarray | torch.Tensor:
-        """Transform the test data."""
+        """Transform the test data.
+
+        The result may be `X` itself, so the caller must not write into it.
+        """
         if self.feature_indices is not None:
             X = X[..., self.feature_indices]
         return self.cpu_preprocessor.transform(X).X

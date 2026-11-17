@@ -13,7 +13,7 @@ from copy import copy, deepcopy
 from functools import partial
 from inspect import Parameter, signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -1458,7 +1458,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         ys: list[torch.Tensor] = []
         categorical_inds: list[list[int]] = []
         for member, X_test in zip(members, X_tests, strict=True):
-            X_test_tensor = torch.as_tensor(X_test, dtype=dtype, device=device)
+            X_test_tensor = _as_tensor_to_read(X_test, dtype=dtype, device=device)
             X_test_tensor = X_test_tensor.unsqueeze(1)
             y_train = torch.as_tensor(member.y_train, dtype=dtype, device=device)
             X_test_tensor, feature_schema = _maybe_run_gpu_preprocessing(
@@ -1687,6 +1687,19 @@ def _call_model_on_members(  # noqa: PLR0913
     return outputs
 
 
+def _as_tensor_to_read(array: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    """`torch.as_tensor` of an array the caller only reads, which may be read-only.
+
+    Preprocessing can hand back the caller's own array, a read-only memmap among
+    them; torch warns about any read-only array it does not copy.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="The given NumPy array is not writable"
+        )
+        return torch.as_tensor(array, **kwargs)
+
+
 def _prepare_model_inputs(
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
@@ -1712,7 +1725,7 @@ def _prepare_model_inputs(
     rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
     for offset, part in ((0, X_train), (num_train, X_test)):
         for start in range(0, len(part), rows):
-            block = torch.as_tensor(part[start : start + rows])
+            block = _as_tensor_to_read(part[start : start + rows])
             X_full[offset + start : offset + start + len(block), 0].copy_(block)
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train

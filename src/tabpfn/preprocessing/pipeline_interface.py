@@ -297,7 +297,8 @@ class PreprocessingStep:
     """Whether the step only selects, reorders, compares and encodes values.
 
     Such a step gives the same float32 results from a float32 copy of its input as
-    from a float64 one.
+    from a float64 one. It may be handed the caller's array, so it writes into its
+    input only when `step_owns_input()`.
     """
 
     @abstractmethod
@@ -524,6 +525,7 @@ class PreprocessingPipeline:
 
         Returns:
             PreprocessingPipelineResult with transformed data and feature schema.
+            Its array may be `X` itself, so the caller must not write into it.
         """
         assert self.initial_feature_schema_ is not None, (
             "The pipeline must be fit before it can be used to transform."

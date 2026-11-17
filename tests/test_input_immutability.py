@@ -57,6 +57,11 @@ def _numeric_with_non_finite() -> np.ndarray:
     return X
 
 
+def _read_only(X: np.ndarray) -> np.ndarray:
+    X.flags.writeable = False
+    return X
+
+
 def _object_mixed() -> np.ndarray:
     rng = np.random.default_rng(1)
     n = N_ROWS + N_TEST
@@ -88,6 +93,8 @@ INPUTS = {
     "numeric_float32": lambda: _numeric("float32"),
     # Negative strides, which `torch.as_tensor` rejects.
     "numeric_float32_reversed": lambda: _numeric("float32")[::-1],
+    # A memmap opened read-only, say; preprocessing may hand it on without a copy.
+    "numeric_float32_read_only": lambda: _read_only(_numeric("float32")),
     "numeric_float64": lambda: _numeric("float64"),
     "numeric_with_nan_and_inf": _numeric_with_non_finite,
     "object_mixed": _object_mixed,
@@ -126,6 +133,8 @@ def _assert_unchanged(after: Any, before: Any, what: str) -> None:
 @pytest.mark.parametrize(
     "gpu_preprocessing", [False, True], ids=["cpu_preprocessing", "gpu_preprocessing"]
 )
+# torch warns once per process, so this catches the warning only in a fresh one.
+@pytest.mark.filterwarnings("error:The given NumPy array is not writable")
 def test__fit_predict__leave_every_input_untouched(
     estimator_cls: type, input_kind: str, *, gpu_preprocessing: bool
 ) -> None:

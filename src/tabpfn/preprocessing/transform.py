@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextvars
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -214,8 +215,13 @@ def fit_preprocessing(
             n_jobs=n_preprocessing_jobs, batch_size="auto", prefer="threads"
         )
 
+    # A worker thread starts with an empty context, so each task runs in a copy of
+    # the caller's, which holds `overwrite_fit_input()`. A context can be entered by
+    # one thread at a time, hence a copy per task.
+    context = contextvars.copy_context()
     yield from executor(  # type: ignore[misc]
-        joblib.delayed(_fit_preprocessing_one)(
+        joblib.delayed(context.copy().run)(
+            _fit_preprocessing_one,
             config_index,
             config,
             X_train,
