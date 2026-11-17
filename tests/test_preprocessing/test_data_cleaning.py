@@ -1507,18 +1507,23 @@ def test__clean_data__float32_with_categoricals__matches_the_float64_frame_path(
     *, passthrough_inf: bool, numerical_inf: bool
 ) -> None:
     rng = np.random.default_rng(0)
-    X = rng.normal(size=(300, 6)).astype(np.float32)
+    X = rng.normal(size=(300, 7)).astype(np.float32)
     X[:, 4] = rng.integers(0, 4, 300)
     X[:, 5] = rng.integers(0, 7, 300) / 3
     X[3, 5] = np.nan
+    X[:, 6] = 2.5
     if numerical_inf:
         X[9, 0] = np.inf
         X[11, 2] = -np.inf
     before = X.copy()
-    schema = _get_schema(n_numerical_features=4, n_categorical_features=2)
-    X_test = rng.normal(size=(50, 6)).astype(np.float32)
+    schema = _get_schema(
+        n_numerical_features=4, n_categorical_features=2, n_constant_features=1
+    )
+    X_test = rng.normal(size=(50, 7)).astype(np.float32)
     X_test[:, 4] = rng.integers(0, 6, 50)
     X_test[:, 5] = rng.integers(0, 7, 50) / 3
+    # Set back to its fit-time value, which makes the cleaning's own copy.
+    X_test[:, 6] = 7.0
 
     out32, encoder32, _ = clean_data(
         X=X, feature_schema=schema, passthrough_inf=passthrough_inf
@@ -1721,8 +1726,9 @@ def _two_categoricals_table(
     """
     rng = np.random.default_rng(0)
     X = rng.standard_normal((300, 8)).astype(np.float32)
-    X[:, 3] = rng.integers(0, 5, 300)
-    X[:, 6] = rng.integers(0, 3, 300)
+    # Categories other than their codes, so an encoding written into a table shows.
+    X[:, 3] = rng.integers(10, 15, 300)
+    X[:, 6] = rng.integers(20, 23, 300)
     y = (
         rng.integers(0, 2, 200)
         if estimator_cls is TabPFNClassifier
@@ -1789,6 +1795,7 @@ def test__predict__float32_with_categoricals__members_share_the_test_table(
     X_train, X_test, y = _two_categoricals_table(estimator_cls)
     X_test[:5, 3] = 7  # a category unseen at fit
     X_test[5, 6] = np.nan
+    given = X_test.copy()
     model = _encoding_only_members(estimator_cls, fit_mode).fit(X_train, y)
     predict = (
         model.predict_proba if estimator_cls is TabPFNClassifier else model.predict
@@ -1816,6 +1823,7 @@ def test__predict__float32_with_categoricals__members_share_the_test_table(
         assert isinstance(out, SharedColumnsTable)
         assert out.base is X_cleaned
         assert out.own.shape[1] == 2
+    np.testing.assert_array_equal(X_test, given)
     np.testing.assert_array_equal(shared, predict(X_test.astype(np.float64)))
 
 
