@@ -160,9 +160,9 @@ def _prepare_train_inputs(
     tensor_dtype = force_inference_dtype or torch.float32
     X_train, y_train = member.X_train, member.y_train
     if isinstance(X_train, SharedColumnsTable) and not X_train.is_base():
-        table = X_train
-        X_train = torch.empty(table.shape, dtype=tensor_dtype, device=device)
-        _copy_rows_into(table, X_train)
+        X_device = torch.empty(X_train.shape, dtype=tensor_dtype, device=device)
+        _copy_rows_into(X_train, X_device)
+        X_train = X_device
     elif not isinstance(X_train, torch.Tensor):
         # An array, or a table that is its base, is read in place.
         X_train = as_tensor_to_read(
@@ -1756,8 +1756,7 @@ def _copy_rows_into(
 
 
 _MODEL_INPUT_BLOCK_BYTES = 1 << 28
-"""Bytes of rows `_prepare_model_inputs` and `_prepare_train_inputs` convert and copy
-at a time."""
+"""Bytes of rows `_copy_rows_into` converts and copies at a time."""
 
 HOST_MODEL_INPUT_MIN_BYTES = 16 << 30
 """Model inputs at least this large stay in host memory, for a model that reads its

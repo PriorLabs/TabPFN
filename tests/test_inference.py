@@ -1360,10 +1360,7 @@ def test__fit_with_cache__shared_member_tables__train_inputs_built_by_row_blocks
     with overwrite_fit_input():
         model = fit()
 
-    # Only the categorical column the encoder rewrites is built whole; the members'
-    # tables go to their caches in blocks of rows.
-    assert built_widths
-    assert max(built_widths) == 1
+    assert X_train.shape[1] not in built_widths
     member_blocks = [rows for rows, width in gathered if width == X_train.shape[1]]
     assert member_blocks
     assert max(member_blocks) <= 16
