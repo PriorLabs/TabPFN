@@ -41,7 +41,7 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
-from tabpfn.architectures import ARCHITECTURES_CONFIGS_BEFORE_V4
+from tabpfn.architectures import UP_TO_3_5_ARCHITECTURE_CONFIGS
 from tabpfn.architectures.shared.bar_distribution import (
     FullSupportBarDistribution,
     expected_value,
@@ -193,7 +193,7 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
 }
 """The named bundles of `inference_config` values that `presets` selects."""
 
-BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG: dict[str, Any] = {
+UP_TO_3_5_ZERO_INFLATED_INFERENCE_CONFIG: dict[str, Any] = {
     "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
     "REGRESSION_READOUT": "nonnegative_and_capped",
 }
@@ -2953,13 +2953,13 @@ def _apply_presets(
     """`config` with the presets' values, except the keys `user_config` names.
 
     On a model up to TabPFN-3.5, "zero_inflated" sets
-    `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead.
+    `UP_TO_3_5_ZERO_INFLATED_INFERENCE_CONFIG` instead.
     """
     registry = REGRESSION_PRESETS
-    if any(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs):
+    if any(type(c) in UP_TO_3_5_ARCHITECTURE_CONFIGS for c in architecture_configs):
         registry = {
             **REGRESSION_PRESETS,
-            "zero_inflated": BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG,
+            "zero_inflated": UP_TO_3_5_ZERO_INFLATED_INFERENCE_CONFIG,
         }
     values = resolve_presets(presets, user_config, registry)
     return dataclasses.replace(config, **values)

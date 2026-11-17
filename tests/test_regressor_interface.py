@@ -2769,7 +2769,7 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
 
 
 class _OtherArchitectureConfig(tabpfn_v2_5.TabPFNV2p5Config):
-    """Stands for an architecture outside `ARCHITECTURES_CONFIGS_BEFORE_V4`."""
+    """Stands for an architecture outside `UP_TO_3_5_ARCHITECTURE_CONFIGS`."""
 
 
 def _other_architecture_specs() -> ModelSpecs:
@@ -2800,7 +2800,7 @@ def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only() -> No
     assert sklearn.base.clone(regressor).presets == "zero_inflated"
 
 
-def test__fit__zero_inflated_preset_on_a_builtin_model__sets_the_builtin_config() -> (
+def test__fit__zero_inflated_preset_on_a_model_up_to_3_5__sets_log_quantile_gap() -> (
     None
 ):
     X, y = _zero_inflated_tuning_data()
@@ -2880,7 +2880,7 @@ def test__fit__grouped_preset__appends_aggregates_and_pools_predictions() -> Non
 
 
 def _zero_inflated_checkpoint_specs(transform: str) -> ModelSpecs:
-    """A checkpoint outside the built-in architectures that stores a zero-inflated
+    """A checkpoint beyond TabPFN-3.5 that stores a zero-inflated
     target transform and readout.
     """
     specs = _other_architecture_specs()
@@ -2982,7 +2982,7 @@ def test__fit__zero_inflated_target__suggests_a_zero_inflated_setup(
     y[-1] = minimum if minimum < 0 else y[-1]
     regressor = TabPFNRegressor(
         inference_config=(
-            regressor_module.BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG
+            regressor_module.UP_TO_3_5_ZERO_INFLATED_INFERENCE_CONFIG
             if zero_inflated_config
             else None
         ),
