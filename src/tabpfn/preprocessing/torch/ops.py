@@ -86,26 +86,16 @@ def columnwise_nanmean_nanstd(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tens
     """
     nan_mask = torch.isnan(x)
     num_valid = (~nan_mask).sum(dim=0).to(x.dtype)
-    mean = pairwise_sum(torch.where(nan_mask, 0, x)) / num_valid.clamp(min=1.0)
-    sq_diff = pairwise_sum((x - mean).square_().masked_fill_(nan_mask, 0))
+    mean = _pairwise_sum(torch.where(nan_mask, 0, x)) / num_valid.clamp(min=1.0)
+    sq_diff = _pairwise_sum((x - mean).square_().masked_fill_(nan_mask, 0))
     variance = sq_diff / (num_valid - 1).clamp(min=1.0)
     return mean, torch.sqrt(variance)
 
 
-def columnwise_sum(x: torch.Tensor) -> torch.Tensor:
-    """Sum over dimension 0, ignoring NaN.
-
-    Each column's sum depends only on that column, so it comes out the same
-    whichever other columns `x` holds.
-    """
-    return pairwise_sum(torch.where(torch.isnan(x), 0, x), consume=True)
-
-
-def pairwise_sum(x: torch.Tensor, *, consume: bool = False) -> torch.Tensor:
+def _pairwise_sum(x: torch.Tensor) -> torch.Tensor:
     """Sum over dimension 0 by a pairwise tree of elementwise additions.
 
     Each column's sum reads only that column, in an order set by `x.shape[0]`.
-    With `consume`, `x` is overwritten.
     """
     leftovers = []
     while x.shape[0] > 1:
@@ -113,13 +103,7 @@ def pairwise_sum(x: torch.Tensor, *, consume: bool = False) -> torch.Tensor:
             leftovers.append(x[-1])
             x = x[:-1]
         half = x.shape[0] // 2
-        if consume:
-            # Rows past `half`, the leftovers among them, are never written.
-            x[:half] += x[half:]
-            x = x[:half]
-        else:
-            x = x[:half] + x[half:]
-            consume = True
+        x = x[:half] + x[half:]
     total = x.sum(dim=0)
     for leftover in leftovers:
         total = total + leftover

@@ -9,8 +9,6 @@ from collections.abc import Callable
 
 import torch
 
-from tabpfn.preprocessing.torch.ops import columnwise_sum, pairwise_sum
-
 _INV_GOLDEN = (math.sqrt(5) - 1) / 2
 # scipy.optimize.fminbound's xtol, as used by SafePowerTransformer.
 _XTOL = 1.48e-8
@@ -66,13 +64,11 @@ def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
     lambdas = _fit_lambdas(x)
     y = _yeo_johnson(x, torch.log1p(x.abs()), lambdas)
     y.masked_fill_(torch.isinf(y), torch.nan)
-    num_finite = (~torch.isnan(y)).sum(dim=0)
-    impute_mean = torch.nan_to_num(columnwise_sum(y) / num_finite, nan=0.0)
+    impute_mean = torch.nan_to_num(y.nanmean(dim=0), nan=0.0)
     torch.where(torch.isnan(y), impute_mean, y, out=y)
 
-    # `y` holds no NaN from here on.
-    mean = pairwise_sum(y) / y.shape[0]
-    var = pairwise_sum((y - mean).square_(), consume=True) / y.shape[0]
+    mean = y.mean(dim=0)
+    var = y.var(dim=0, correction=0)
     scale = torch.where(_is_constant(var, mean, x.shape[0]), 1.0, var.sqrt())
     return {
         "lambdas": lambdas,
@@ -97,8 +93,8 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     abs_max = x.abs().nan_to_num_(nan=0.0).amax(dim=0)
     n_neg = (x < 0).sum(dim=0)
     # Near-constant observed values, as in SafePowerTransformer; False when all-NaN.
-    obs_mean = columnwise_sum(x) / n_valid
-    obs_var = columnwise_sum((x - obs_mean).square_()) / n_valid
+    obs_mean = x.nansum(dim=0) / n_valid
+    obs_var = (x - obs_mean).square_().nansum(dim=0) / n_valid
     constant = _is_constant(obs_var, obs_mean, n_valid)
     any_neg, all_neg = n_neg > 0, n_neg == n_valid
 
@@ -120,14 +116,13 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
 
     # Lambda-independent terms of the log-likelihood, computed once.
     log1p_abs = torch.log1p(x.abs())
-    sum_log = columnwise_sum(log1p_abs.copysign(x))
+    sum_log = log1p_abs.copysign(x).nansum(dim=0)
 
     def neg_llf(lambdas: torch.Tensor) -> torch.Tensor:
-        # The bounds keep `y` finite, and the NaN cells are zeroed.
         y = _yeo_johnson(x, log1p_abs, lambdas).masked_fill_(invalid, 0.0)
-        mean = pairwise_sum(y) / n_valid
+        mean = y.sum(dim=0) / n_valid
         y.sub_(mean).masked_fill_(invalid, 0.0)
-        var = pairwise_sum(y.square_(), consume=True) / n_valid
+        var = y.square_().sum(dim=0) / n_valid
         llf = -n_valid / 2 * var.log() + (lambdas - 1) * sum_log
         # scipy rejects near-zero variance as an infinite likelihood.
         return torch.where(var < finfo.tiny, torch.inf, -llf)
@@ -164,22 +159,16 @@ def _golden_section_search(
 ) -> torch.Tensor:
     """Minimise ``f`` elementwise on ``[lb, ub]`` to within ``_XTOL``."""
     a, b = lb.clone(), ub.clone()
-    # Each column takes as many steps as its own interval needs, then stops moving.
-    # So a column's result does not depend on which other columns are searched.
-    steps = torch.ceil(
-        torch.log((b - a).clamp(min=_XTOL) / _XTOL) / -math.log(_INV_GOLDEN)
-    )
-    n_iter = int(steps.max()) if steps.numel() else 0
+    width = float((b - a).max()) if a.numel() else 0.0
+    n_iter = math.ceil(math.log(max(width, _XTOL) / _XTOL) / -math.log(_INV_GOLDEN))
     c = b - _INV_GOLDEN * (b - a)
     d = a + _INV_GOLDEN * (b - a)
     fc, fd = f(c), f(d)
-    for i in range(n_iter):
+    for _ in range(n_iter):
         # Ties move right, as in fminbound.
         left = fc < fd
-        # A stopped column's `c` and `d` drift on but never reach `a` or `b` again.
-        moves = i < steps
-        a = torch.where(moves & ~left, c, a)
-        b = torch.where(moves & left, d, b)
+        a = torch.where(left, a, c)
+        b = torch.where(left, d, b)
         new = torch.where(left, b - _INV_GOLDEN * (b - a), a + _INV_GOLDEN * (b - a))
         f_new = f(new)
         c, d = torch.where(left, new, d), torch.where(left, c, new)

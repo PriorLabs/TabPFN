@@ -712,6 +712,10 @@ def _wide_input() -> torch.Tensor:
 
 _TARGETS = [0, 2, 3, 5, 7, 8, 9]
 
+_ROUNDING = {"rtol": 1e-6, "atol": 1e-6}
+"""How far safepower's fit may move with the columns fitted beside it: its sums round
+differently, and its lambda search stops within its tolerance."""
+
 
 @pytest.mark.parametrize(
     "step",
@@ -736,12 +740,18 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
         x, _TARGETS, 50, None, torch.device("cpu")
     )
 
+    # Safepower's fit moves slightly with the columns fitted beside it.
+    tolerance = (
+        _ROUNDING
+        if isinstance(step, TorchSelectiveSafePowerStep)
+        else {"rtol": 0, "atol": 0}
+    )
     assert actual.x.data_ptr() == x.data_ptr()
-    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **tolerance)
     assert actual.fitted_cache is not None
     assert expected.fitted_cache is not None
     for key, value in expected.fitted_cache.items():
-        torch.testing.assert_close(actual.fitted_cache[key], value, rtol=0, atol=0)
+        torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
 
 
 def test__fit_transform_rows_on_device__sign_flip__matches_fit_transform(
@@ -775,9 +785,7 @@ def test__call__host_table__matches_the_device_table() -> None:
     )
 
     assert actual.x.device.type == "cpu"
-    torch.testing.assert_close(
-        actual.x, expected.x.cpu(), rtol=0, atol=0, equal_nan=True
-    )
+    torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True, **_ROUNDING)
 
 
 @pytest.mark.parametrize("use_fitted_cache", [False, True])
@@ -815,7 +823,8 @@ def test__call__staged_on_the_cpu__matches_the_whole_table(
             compute_device=torch.device("cpu"),
         )
 
-    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+    # Safepower's fit moves slightly with the columns fitted beside it.
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **_ROUNDING)
     assert actual.feature_schema == expected.feature_schema
 
 

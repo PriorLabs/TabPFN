@@ -41,9 +41,9 @@ class TorchPreprocessingStep(abc.ABC):
 
     Such a step fits and transforms an input it may write into a block of
     columns at a time, its cache tensors' last dimension indexing the columns
-    (but for `shared_cache_keys`). A
-    column's fitted values are bitwise the same whichever other columns it is
-    fitted with.
+    (but for `shared_cache_keys`). A column's fitted values are the same whichever
+    other columns it is fitted with, up to float rounding and the tolerance of any
+    search the fit runs.
     """
 
     rowwise: bool = False
