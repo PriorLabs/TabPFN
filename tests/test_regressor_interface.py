@@ -2955,6 +2955,29 @@ def test__fit__zero_inflated_target__suggests_the_preset_once(
     assert len(suggestions) == 1
 
 
+def test__fit__tuning_folds__do_not_suggest_what_the_full_fit_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fold whose holdout rows hold the one negative target passes the check."""
+    monkeypatch.setattr(regressor_module, "_zero_share_warning_issued", False)
+    X, y = _zero_inflated_tuning_data()
+    y[0] = -1.0
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        TabPFNRegressor(
+            tuning_config={
+                "calibrate_temperature": True,
+                "tuning_holdout_frac": 0.5,
+                "tuning_n_folds": 2,
+            },
+            **_tuning_regressor_kwargs(),
+        ).fit(X, y)
+
+    suggestions = [w for w in record if 'presets="zero_inflated"' in str(w.message)]
+    assert suggestions == []
+
+
 @pytest.mark.parametrize(
     ("eval_metric", "expected"),
     [

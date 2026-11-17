@@ -2060,6 +2060,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
                 )
+                # Only the full fit suggests the zero_inflated preset.
+                warnings.filterwarnings(
+                    "ignore", message=".*zero-inflated targets.*", category=UserWarning
+                )
                 tuning_regressor.fit(X_train_NtF, y_train_Nt, **fit_kwargs)
 
             if tuning_regressor.is_constant_target_:
