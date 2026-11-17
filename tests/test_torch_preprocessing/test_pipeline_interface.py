@@ -762,6 +762,49 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
         torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
 
 
+_SELECTIVE_STEPS = [
+    lambda: TorchSelectiveQuantileTransformerStep(20, _TARGETS),
+    lambda: TorchSelectiveSafePowerStep(_TARGETS),
+    lambda: TorchSelectiveSquashingScalerStep(3.0, _TARGETS),
+    lambda: TorchSelectiveRobustScalerStep(_TARGETS),
+]
+_SELECTIVE_IDS = ["quantile", "safepower", "squashing", "robust"]
+
+
+@pytest.mark.parametrize("make_step", _SELECTIVE_STEPS, ids=_SELECTIVE_IDS)
+def test__fit_transform__selective_step_in_place__writes_into_x(
+    make_step: typing.Callable[[], TorchPreprocessingStep],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
+    x = _wide_input()
+    expected = make_step().fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = make_step().fit_transform(x, _TARGETS, num_train_rows=50, in_place=True)
+
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("make_step", _SELECTIVE_STEPS, ids=_SELECTIVE_IDS)
+def test__fit_transform__selective_step_on_mps__matches_cpu(
+    make_step: typing.Callable[[], TorchPreprocessingStep], *, in_place: bool
+) -> None:
+    x = _wide_input()
+    expected = make_step().fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = make_step().fit_transform(
+        x.to("mps"), _TARGETS, num_train_rows=50, in_place=in_place
+    )
+
+    assert actual.x.device.type == "mps"
+    torch.testing.assert_close(
+        actual.x.cpu(), expected.x, rtol=0, atol=0, equal_nan=True
+    )
+
+
 def test__run_step__staged__sign_flip_writes_into_the_host_table() -> None:
     x = _wide_input()
     step = TorchRandomSignFlipStep(random_state=0)
