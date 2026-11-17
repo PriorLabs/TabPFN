@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
+    from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
+
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
 
@@ -723,12 +725,17 @@ def convert_batch_of_cat_ix_to_schema(
     return feature_schema
 
 
-def as_tensor_to_read(array: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
+def as_tensor_to_read(
+    array: np.ndarray | torch.Tensor | SharedColumnsTable, **kwargs: Any
+) -> torch.Tensor:
     """`torch.as_tensor` of an array the caller only reads, which may be read-only.
 
     Preprocessing can hand back the caller's own array, a read-only memmap among
-    them; torch warns about any read-only array it does not copy.
+    them; torch warns about any read-only array it does not copy. A
+    `SharedColumnsTable` is built whole.
     """
+    if not isinstance(array, (np.ndarray, torch.Tensor)):
+        array = np.asarray(array)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="The given NumPy array is not writable"

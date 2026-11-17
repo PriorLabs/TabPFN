@@ -17,6 +17,7 @@ from sklearn.preprocessing import OrdinalEncoder
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import (
+    PreprocessorConfig,
     clean as clean_module,
     clean_data,
 )
@@ -28,6 +29,7 @@ from tabpfn.preprocessing.clean import (
     process_text_na_dataframe,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
     get_ordinal_encoder,
@@ -1704,6 +1706,60 @@ def test__overwrite_fit_input__preprocessing_in_processes__fits() -> None:
         ).fit(X.copy(), y)
 
     np.testing.assert_array_equal(model.predict(X), expected.predict(X))
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "fit_with_cache"])
+def test__overwrite_fit_input__categoricals__members_share_the_array(
+    estimator_cls: type, fit_mode: str
+) -> None:
+    """Members hold their encoded columns and read the rest from the caller's
+    array, and predict as members that copied it.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((300, 8)).astype(np.float32)
+    X[:, 3] = rng.integers(0, 5, 300)
+    X[:, 6] = rng.integers(0, 3, 300)
+    X_train, X_test = X[:200].copy(), X[200:]
+    y = (
+        rng.integers(0, 2, 200)
+        if estimator_cls is TabPFNClassifier
+        else rng.standard_normal(200)
+    )
+    transforms = [
+        PreprocessorConfig("none", categorical_name="ordinal"),
+        PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
+    ]
+
+    def estimator() -> TabPFNClassifier | TabPFNRegressor:
+        return estimator_cls(
+            n_estimators=2,
+            device="cpu",
+            random_state=0,
+            fit_mode=fit_mode,
+            categorical_features_indices=[3, 6],
+            inference_config={
+                "ENABLE_GPU_PREPROCESSING": True,
+                "PREPROCESS_TRANSFORMS": transforms,
+            },
+        )
+
+    expected = estimator().fit(X_train.copy(), y)
+    with clean_module.overwrite_fit_input():
+        model = estimator().fit(X_train, y)
+
+    if fit_mode == "fit_preprocessors":
+        # `fit_with_cache` drops the members' tables once their cache is built.
+        for member in model.executor_.ensemble_members:
+            assert isinstance(member.X_train, SharedColumnsTable)
+            assert member.X_train.base is X_train
+            assert member.X_train.own.shape[1] == 2
+    if estimator_cls is TabPFNClassifier:
+        np.testing.assert_array_equal(
+            model.predict_proba(X_test), expected.predict_proba(X_test)
+        )
+    else:
+        np.testing.assert_array_equal(model.predict(X_test), expected.predict(X_test))
 
 
 def test__clean_data__float32_infinity_in_categorical__matches_float64() -> None:

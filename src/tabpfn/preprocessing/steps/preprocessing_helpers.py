@@ -19,7 +19,10 @@ from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 
 from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
-from tabpfn.preprocessing.pipeline_interface import permute_columns_in_place
+from tabpfn.preprocessing.pipeline_interface import (
+    SharedColumnsTable,
+    permute_columns_in_place,
+)
 from tabpfn.preprocessing.steps.utils import is_identity_transformer
 
 if TYPE_CHECKING:
@@ -149,6 +152,64 @@ class EfficientColumnTransformer(ColumnTransformer):
         if selected is None or not self._can_assemble(X, probe, selected):
             return None
         return self._assemble(X, name, selected, out=out)
+
+    def fit_transform_shared(self, X: SharedColumnsTable) -> SharedColumnsTable | None:
+        """`fit_transform(X)`'s values, as a table that shares `X`'s base columns.
+
+        None when `fit_transform_into` would return None; the transformer is then to
+        be fitted again.
+        """
+        head = X[:1]
+        if not self._may_assemble_a_fit(head, None, {}):
+            return None
+        probe = self._fit_column_bookkeeping(head)
+        name, selected = self._named_selection()
+        if selected is None or not self._can_assemble(X, probe, selected):
+            return None
+        transformed = (
+            None
+            if not selected
+            else np.asarray(
+                self.named_transformers_[name].fit_transform(np.asarray(X[:, selected]))
+            )
+        )
+        return self._shared_output(X, name, selected, transformed)
+
+    def transform_shared(self, X: SharedColumnsTable) -> SharedColumnsTable | None:
+        """`transform(X)`'s values, as a table that shares `X`'s base columns.
+
+        None when the output cannot be assembled column by column; `transform` is then
+        to be called on the whole array, with its checks.
+        """
+        if not hasattr(self, "transformers_") or self.n_features_in_ != X.shape[1]:
+            return None
+        name, selected = self._named_selection()
+        if selected is None or self.sparse_output_ or not self._may_assemble(X[:1], {}):
+            return None
+        transformed = (
+            None
+            if not selected
+            else np.asarray(
+                self.named_transformers_[name].transform(np.asarray(X[:, selected]))
+            )
+        )
+        return self._shared_output(X, name, selected, transformed)
+
+    def _shared_output(
+        self,
+        X: SharedColumnsTable,
+        name: str | None,
+        selected: list[Any],
+        transformed: np.ndarray | None,
+    ) -> SharedColumnsTable | None:
+        """The output laid out as `_assemble` lays it, sharing `X`'s base columns.
+
+        None when a transformed value would change in `X`'s dtype.
+        """
+        if transformed is not None and not _holds_exactly(transformed, X.dtype):
+            return None
+        destination, passthrough = self._output_positions(X, name, selected)
+        return X.with_columns(transformed, destination, passthrough)
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:
