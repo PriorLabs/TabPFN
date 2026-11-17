@@ -119,7 +119,7 @@ class TorchRandomSignFlipStep(TorchPreprocessingStep):
     def _transform(
         self, x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
     ) -> tuple[torch.Tensor, None, None]:
-        return x * fitted_cache["signs"].to(x), None, None
+        raise NotImplementedError("`fit_transform` applies the signs.")
 
 
 class TorchQuantileTransformerStep(TorchPreprocessingStep):
