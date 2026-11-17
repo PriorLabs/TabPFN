@@ -848,7 +848,7 @@ def test__call__staged__rejects_a_step_without_a_block_runner_before_any_step(
     assert ran == []
 
 
-def test__run_step__staged__moves_in_place_blocks(
+def test__run_step__staged__moves_wide_blocks_and_computes_in_narrow_ones(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 6 * 64 * 4)
@@ -865,8 +865,16 @@ def test__run_step__staged__moves_in_place_blocks(
         widths.append(x.shape[-1])
         return transform(x, **kwargs)
 
+    moved: list[int] = []
+    run_blocks = step._fit_transform_column_blocks
+
+    def spy_blocks(x: torch.Tensor, *args: typing.Any) -> typing.Any:
+        moved.append(x.shape[-1])
+        return run_blocks(x, *args)
+
     monkeypatch.setattr(step, "_fit", spy_fit)
     monkeypatch.setattr(step, "_transform", spy_transform)
+    monkeypatch.setattr(step, "_fit_transform_column_blocks", spy_blocks)
 
     pipeline_interface._run_step(
         step,
@@ -878,6 +886,7 @@ def test__run_step__staged__moves_in_place_blocks(
         compute_device=torch.device("cpu"),
     )
 
+    assert moved == [6, 1]
     assert max(widths) == 2
 
 

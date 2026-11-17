@@ -496,8 +496,8 @@ def _run_step(
     ):
         compute_device = torch.device("cpu")
     if compute_device is not None and step.columnwise:
-        return step._fit_transform_column_blocks(
-            x, column_indices, num_train_rows, fitted_cache, compute_device
+        return _fit_transform_on_device(
+            step, x, column_indices, num_train_rows, fitted_cache, compute_device
         )
     if compute_device is not None and step.rowwise and x.shape[0] > 0:
         return _fit_transform_rows_on_device(
@@ -511,6 +511,51 @@ def _run_step(
         fitted_cache=fitted_cache,
         **in_place,
     )
+
+
+def _fit_transform_on_device(
+    step: TorchPreprocessingStep,
+    x: torch.Tensor,
+    column_indices: list[int],
+    num_train_rows: int,
+    fitted_cache: dict[str, torch.Tensor] | None,
+    device: torch.device,
+) -> TorchPreprocessingStepResult:
+    """A columnwise step's `fit_transform` into `x`, a block of columns at a time on
+    `device`.
+
+    Returns the fitted cache on `device`.
+    """
+    # Wide blocks, sliced where the columns are contiguous, keep the host-side
+    # copies fast; the step's own blocks then bound its intermediates on `device`.
+    row_bytes = x.shape[0] * x.shape[1] * x.element_size()
+    width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
+    if fitted_cache is not None:
+        fitted_cache = _move_cache_to_device(fitted_cache, device)
+    parts: list[dict[str, torch.Tensor]] = []
+    for start in range(0, len(column_indices), width):
+        selected = column_indices[start : start + width]
+        index = _column_index(selected)
+        cache = None
+        if fitted_cache is not None:
+            cache = _slice_column_cache(
+                fitted_cache,
+                slice(start, start + len(selected)),
+                step.shared_cache_keys,
+            )
+        result = step._fit_transform_column_blocks(
+            x[:, :, index].to(device),
+            list(range(len(selected))),
+            num_train_rows,
+            cache,
+            device,
+        )
+        x[:, :, index] = result.x.to(x.device)
+        assert result.fitted_cache is not None
+        parts.append(result.fitted_cache)
+    if fitted_cache is None:
+        fitted_cache = _join_column_caches(parts, step.shared_cache_keys)
+    return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
 
 def _fit_transform_rows_on_device(
@@ -569,6 +614,13 @@ def _slice_column_cache(
         key: value if key in shared_keys else value[..., columns]
         for key, value in cache.items()
     }
+
+
+def _column_index(columns: list[int]) -> slice | list[int]:
+    """`columns` as a slice when they are a contiguous ascending range."""
+    if columns == list(range(columns[0], columns[0] + len(columns))):
+        return slice(columns[0], columns[0] + len(columns))
+    return columns
 
 
 def _extract_inf_masks(
