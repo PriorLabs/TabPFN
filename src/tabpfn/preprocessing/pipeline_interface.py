@@ -164,7 +164,8 @@ class SharedColumnsTable:
             rows, columns = key
             if rows != slice(None):
                 raise IndexError("A table selects rows or columns, not both.")
-            return self.take(np.arange(self.shape[1])[columns])
+            selected = np.arange(self.shape[1])[columns]
+            return SharedColumnsTable(self.base, self.sources[selected], self.own)
         rows = range(self.shape[0])[key]
         if not isinstance(rows, range) or rows.step != 1:
             raise IndexError("A table reads a contiguous slice of rows.")
@@ -173,12 +174,6 @@ class SharedColumnsTable:
         out = np.empty((len(rows), self.shape[1]), dtype=self.dtype)
         self.copy_rows_into(rows.start, rows.stop, torch.from_numpy(out))
         return out
-
-    def take(self, columns: np.ndarray | list[int]) -> SharedColumnsTable:
-        """The given columns, in the given order."""
-        return SharedColumnsTable(
-            self.base, self.sources[np.asarray(columns, dtype=np.intp)], self.own
-        )
 
     def own_column(self, column: int) -> np.ndarray:
         """Column `column`, which the table holds itself, as a writeable view."""
@@ -195,40 +190,42 @@ class SharedColumnsTable:
     ) -> SharedColumnsTable:
         """A table of `values` at positions `at` and, per `(position, column)` in
         `passthrough`, this table's `column` at `position`.
+
+        `values`, in `base`'s dtype, become the table's own columns; a table takes
+        own columns once.
         """
-        n_columns = len(passthrough) + values.shape[1]
-        sources = np.empty(n_columns, dtype=np.intp)
+        if self.own.shape[1] or values.dtype != self.dtype:
+            raise ValueError("A table takes its own columns once, in its base's dtype.")
+        sources = np.empty(len(passthrough) + values.shape[1], dtype=np.intp)
         for position, column in passthrough:
             sources[position] = self.sources[column]
-        sources[at] = -1 - (self.own.shape[1] + np.arange(values.shape[1]))
-        if self.own.shape[1] == 0 and values.dtype == self.dtype:
-            own = values  # the caller's to give away
-        else:
-            own = np.concatenate([self.own, values], axis=1, dtype=self.dtype)
-        return SharedColumnsTable(self.base, sources, own)
+        sources[at] = -1 - np.arange(values.shape[1])
+        return SharedColumnsTable(self.base, sources, values)
 
     def copy_rows_into(self, start: int, stop: int, out: torch.Tensor) -> None:
-        """Writes rows `start:stop` into `out`, a CPU tensor of their shape."""
-        shared_at, shared_from, own_at, own_from = self._column_indices
+        """Writes rows `start:stop` into `out`, a contiguous CPU tensor of their
+        shape in `base`'s dtype.
+        """
+        from_base, own_at, own_from = self._gather_indices
+        rows = stop - start
+        # Every column from `base` in one gather, then the own ones over theirs.
         base = as_tensor_to_read(self.base[start:stop])
-        out.index_copy_(1, shared_at, base.index_select(1, shared_from))
-        if len(own_at):
+        torch.gather(base, 1, from_base.expand(rows, -1), out=out)
+        if own_at.numel():
             own = torch.from_numpy(self.own[start:stop])
-            out.index_copy_(1, own_at, own.index_select(1, own_from))
+            values = torch.gather(own, 1, own_from.expand(rows, -1))
+            out.scatter_(1, own_at.expand(rows, -1), values)
 
     @functools.cached_property
-    def _column_indices(
-        self,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Where the shared columns go and come from in `base`, then the same for
-        the own columns.
+    def _gather_indices(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Per column, its source in `base` (column 0 for an own column); then where
+        the own columns go, and which of `own` they are.
         """
         shared = self.sources >= 0
         return (
-            torch.as_tensor(np.flatnonzero(shared)),
-            torch.as_tensor(self.sources[shared]),
-            torch.as_tensor(np.flatnonzero(~shared)),
-            torch.as_tensor(-1 - self.sources[~shared]),
+            torch.as_tensor(np.where(shared, self.sources, 0)).view(1, -1),
+            torch.as_tensor(np.flatnonzero(~shared)).view(1, -1),
+            torch.as_tensor(-1 - self.sources[~shared]).view(1, -1),
         )
 
     def __array__(self, dtype: Any = None, *, copy: bool | None = None) -> np.ndarray:

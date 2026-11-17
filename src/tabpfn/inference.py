@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
+import numpy as np
 import torch
 
 from tabpfn.architectures.interface import EstimatorBatchBudget
@@ -28,12 +29,11 @@ from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
 from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.settings import settings
 from tabpfn.utils import as_tensor_to_read, get_autocast_context
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from tabpfn.architectures.interface import Architecture, PerformanceOptions
     from tabpfn.architectures.kv_cache import KVCache
     from tabpfn.preprocessing import EnsembleConfig
@@ -41,7 +41,6 @@ if TYPE_CHECKING:
         TabPFNEnsembleMember,
         TabPFNEnsemblePreprocessor,
     )
-    from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
     from tabpfn.preprocessing.torch import (
         FeatureSchema,
         TorchPreprocessingPipeline,
@@ -161,7 +160,10 @@ def _prepare_train_inputs(
     tensor_dtype = force_inference_dtype or torch.float32
     X_train, y_train = member.X_train, member.y_train
     if not isinstance(X_train, torch.Tensor):
-        X_train = as_tensor_to_read(X_train, dtype=tensor_dtype, device=device)
+        # A `SharedColumnsTable` is built whole here.
+        X_train = as_tensor_to_read(
+            np.asarray(X_train), dtype=tensor_dtype, device=device
+        )
     else:
         X_train = X_train.to(device)
     X = X_train.unsqueeze(1)
@@ -1459,7 +1461,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         ys: list[torch.Tensor] = []
         categorical_inds: list[list[int]] = []
         for member, X_test in zip(members, X_tests, strict=True):
-            X_test_tensor = as_tensor_to_read(X_test, dtype=dtype, device=device)
+            X_test_tensor = as_tensor_to_read(
+                X_test if isinstance(X_test, torch.Tensor) else np.asarray(X_test),
+                dtype=dtype,
+                device=device,
+            )
             X_test_tensor = X_test_tensor.unsqueeze(1)
             y_train = torch.as_tensor(member.y_train, dtype=dtype, device=device)
             X_test_tensor, feature_schema = _maybe_run_gpu_preprocessing(
@@ -1713,8 +1719,18 @@ def _prepare_model_inputs(
     rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
     for offset, part in ((0, X_train), (num_train, X_test)):
         for start in range(0, len(part), rows):
-            block = as_tensor_to_read(part[start : start + rows])
-            X_full[offset + start : offset + start + len(block), 0].copy_(block)
+            stop = min(start + rows, len(part))
+            target = X_full[offset + start : offset + stop, 0]
+            if (
+                isinstance(part, SharedColumnsTable)
+                and target.device.type == "cpu"
+                # A table's base is float32, as the no-copy path requires.
+                and target.dtype == torch.float32
+            ):
+                # Straight from the table into the model input, with no block between.
+                part.copy_rows_into(start, stop, target)
+            else:
+                target.copy_(as_tensor_to_read(part[start:stop]))
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
 

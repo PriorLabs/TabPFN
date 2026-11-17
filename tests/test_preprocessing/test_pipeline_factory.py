@@ -403,3 +403,39 @@ def test__keep_float32_pipeline__may_keep_input__appending_reshape__matches() ->
         np.asarray(sharing.transform(X, may_keep_input=True).X),
         copying.transform(X.copy()).X,
     )
+
+
+@pytest.mark.parametrize("encoding", ["ordinal", "ordinal_shuffled"])
+def test__keep_float32_pipeline__may_keep_input__all_categorical__leaves_x(
+    encoding: str,
+) -> None:
+    """With every column encoded, the encoding still writes into its own columns."""
+
+    def pipeline() -> PreprocessingPipeline:
+        return PreprocessingPipeline(
+            [
+                RemoveConstantFeaturesStep(),
+                ReshapeFeatureDistributionsStep(transform_name="none", random_state=0),
+                EncodeCategoricalFeaturesStep(encoding, random_state=0),
+            ]
+        )
+
+    rng = np.random.default_rng(0)
+    # Category values that are not their codes, so writing codes changes them.
+    X, X_test = (
+        (10 * rng.integers(1, 6, (rows, 3))).astype(np.float32) for rows in (200, 40)
+    )
+    X_before, X_test_before = X.copy(), X_test.copy()
+    schema = FeatureSchema.from_only_categorical_indices([0, 1, 2], num_columns=3)
+    copying, sharing = pipeline(), pipeline()
+
+    expected = copying.fit_transform(X.copy(), schema)
+    actual = sharing.fit_transform(X, schema, may_keep_input=True)
+    shared = sharing.transform(X_test, may_keep_input=True).X
+
+    np.testing.assert_array_equal(X, X_before)
+    np.testing.assert_array_equal(X_test, X_test_before)
+    np.testing.assert_array_equal(np.asarray(actual.X), expected.X)
+    np.testing.assert_array_equal(
+        np.asarray(shared), copying.transform(X_test.copy()).X
+    )

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
+from tabpfn.utils import as_tensor_to_read
 
 
 def _base() -> np.ndarray:
@@ -25,15 +26,32 @@ def test__selecting_columns__matches_the_array() -> None:
 
 def test__with_columns__places_own_values() -> None:
     base = _base()
-    values = np.full((6, 2), -1.0)
+    values = np.full((6, 2), -1.0, dtype=np.float32)
     table = SharedColumnsTable.of(base).with_columns(values, slice(0, 2), [(2, 4)])
 
     np.testing.assert_array_equal(
         np.asarray(table), np.column_stack([values, base[:, 4]])
     )
-    assert table.own.dtype == base.dtype
+    np.testing.assert_array_equal(
+        table[1:4], np.column_stack([values, base[:, 4]])[1:4]
+    )
     table.own_column(1)[:] = 7.0
     np.testing.assert_array_equal(np.asarray(table)[:, 1], np.full(6, 7.0))
+
+
+def test__with_columns__once_and_in_the_base_dtype() -> None:
+    table = SharedColumnsTable.of(_base())
+    owning = table.with_columns(np.zeros((6, 1), np.float32), [0], [(1, 0)])
+
+    with pytest.raises(ValueError, match="once"):
+        owning.with_columns(np.zeros((6, 1), np.float32), [0], [(1, 0)])
+    with pytest.raises(ValueError, match="dtype"):
+        table.with_columns(np.zeros((6, 1)), [0], [(1, 0)])
+
+
+def test__as_tensor_to_read__a_table__raises() -> None:
+    with pytest.raises(TypeError, match="SharedColumnsTable"):
+        as_tensor_to_read(SharedColumnsTable.of(_base()))
 
 
 def test__is_base__only_for_every_column_in_order() -> None:

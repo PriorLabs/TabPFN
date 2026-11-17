@@ -33,16 +33,6 @@ ONE_HOT_ENCODER_NAME = "one_hot_encoder"
 ORDINAL_ENCODER_NAME = "ordinal_encoder"
 
 
-def _keeps_a_shared_table(transform_name: str) -> bool:
-    """Whether the encoding keeps a `SharedColumnsTable` input one, sharing the
-    columns it does not encode; any other builds the whole array first.
-    """
-    return transform_name.startswith("ordinal") or transform_name in (
-        "numeric",
-        "none",
-    )
-
-
 def _column(X: np.ndarray | SharedColumnsTable, column: int) -> np.ndarray:
     """Column `column` of `X`, as a 1-D array."""
     if isinstance(X, SharedColumnsTable):
@@ -265,17 +255,15 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 name = name[len("_common_categories") :]
                 categorical_features = [
                     i
-                    for i in range(X.shape[1])
-                    if i in categorical_features
-                    and _get_least_common_category_count(_column(X, i)) >= 10
+                    for i in categorical_features
+                    if _get_least_common_category_count(_column(X, i)) >= 10
                 ]
             elif name.startswith("_very_common_categories"):
                 name = name[len("_very_common_categories") :]
                 categorical_features = [
                     i
-                    for i in range(X.shape[1])
-                    if i in categorical_features
-                    and _get_least_common_category_count(column := _column(X, i)) >= 10
+                    for i in categorical_features
+                    if _get_least_common_category_count(column := _column(X, i)) >= 10
                     and len(np.unique(column)) < (len(X) // 10)
                 ]
 
@@ -413,9 +401,10 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
-        if isinstance(X, SharedColumnsTable) and not _keeps_a_shared_table(
-            self.categorical_transform_name
+        if isinstance(X, SharedColumnsTable) and self.categorical_transform_name == (
+            "onehot"
         ):
+            # Onehot changes the number of columns, which a table cannot follow.
             X = np.asarray(X)
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         input_names = [f.name for f in feature_schema.features]
@@ -523,16 +512,18 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             return X, None, None
 
         ct = self.categorical_transformer_
+        if isinstance(X, SharedColumnsTable) and self.categorical_transform_name == (
+            "onehot"
+        ):
+            X = np.asarray(X)
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", message=".*Found unknown categories in col.*"
             )  # These warnings are expected when transforming test data
             if isinstance(X, SharedColumnsTable):
-                transformed = (
-                    ct.transform_shared(X)
-                    if isinstance(ct, EfficientColumnTransformer)
-                    else ct.transform(np.asarray(X))
-                )
+                # An encoding other than onehot is this transformer.
+                assert isinstance(ct, EfficientColumnTransformer)
+                transformed = ct.transform_shared(X)
             else:
                 transformed = ct.transform(X)
         if self.categorical_transform_name.endswith("_shuffled"):

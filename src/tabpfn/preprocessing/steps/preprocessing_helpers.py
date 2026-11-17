@@ -74,6 +74,14 @@ def to_numpy_may_alias(X: pd.DataFrame) -> bool:
     return blocks is None or len(blocks) <= 1
 
 
+def _columns_to_encode(X: SharedColumnsTable, selected: list[Any]) -> np.ndarray:
+    """`X`'s `selected` columns as an array of their own, which the encoding may
+    write over: never `X`'s base, even when they are all of it.
+    """
+    columns = X[:, selected]
+    return np.array(columns) if columns.is_base() else np.asarray(columns)
+
+
 class EfficientColumnTransformer(ColumnTransformer):
     """A `ColumnTransformer` that assembles its output into one preallocated array.
 
@@ -167,7 +175,7 @@ class EfficientColumnTransformer(ColumnTransformer):
             probe = self._fit_column_bookkeeping(head)
             name, selected = self._named_selection()
             if selected and self._can_assemble(X, probe, selected):
-                codes = np.asarray(X[:, selected])
+                codes = _columns_to_encode(X, selected)
                 self.named_transformers_[name].fit(codes)
                 shared = self._shared_output(X, name, selected, codes)
                 if shared is not None:
@@ -189,7 +197,9 @@ class EfficientColumnTransformer(ColumnTransformer):
             and not self.sparse_output_
             and self._may_assemble(X[:1], {})
         ):
-            shared = self._shared_output(X, name, selected, np.asarray(X[:, selected]))
+            shared = self._shared_output(
+                X, name, selected, _columns_to_encode(X, selected)
+            )
             if shared is not None:
                 return shared
         return self.transform(np.asarray(X))
