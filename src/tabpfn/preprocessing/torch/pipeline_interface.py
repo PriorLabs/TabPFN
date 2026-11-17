@@ -9,6 +9,7 @@ import dataclasses
 import functools
 import inspect
 import time
+from typing import Any
 from typing_extensions import override
 
 import torch
@@ -43,7 +44,8 @@ class TorchPreprocessingStep(abc.ABC):
     columns at a time, its cache tensors' last dimension indexing the columns
     (but for `shared_cache_keys`). A column's fitted values are the same whichever
     other columns it is fitted with, up to float rounding and the tolerance of any
-    search the fit runs.
+    search the fit runs. Its `_fit` and `_transform` say all it does: the block
+    runners call them directly, so it does not override `fit_transform`.
     """
 
     runs_on_input_device: bool = False
@@ -61,6 +63,17 @@ class TorchPreprocessingStep(abc.ABC):
     computes_on_cpu_for_mps: bool = False
     """Whether the step computes on the CPU in place of MPS: it needs float64, or its
     many small kernels run faster there."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if (
+            cls.columnwise
+            and cls.fit_transform is not TorchPreprocessingStep.fit_transform
+        ):
+            raise TypeError(
+                f"{cls.__name__} is columnwise, so its block runners call `_fit` and "
+                "`_transform` directly and would skip its `fit_transform`."
+            )
 
     def fit_transform(
         self,

@@ -1001,3 +1001,14 @@ def test__run_step__mps__computes_safepower_on_the_cpu() -> None:
     )
 
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+
+
+def test__columnwise_step__overriding_fit_transform__raises() -> None:
+    with pytest.raises(TypeError, match="columnwise"):
+
+        class _Overriding(TorchSelectiveRobustScalerStep):
+            @override
+            def fit_transform(
+                self, *args: typing.Any, **kwargs: typing.Any
+            ) -> TorchPreprocessingStepResult:
+                return super().fit_transform(*args, **kwargs)
