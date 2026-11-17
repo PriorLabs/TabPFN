@@ -373,6 +373,38 @@ def test__keep_float32_pipeline__may_keep_input__shares_the_columns_it_leaves(
     )
 
 
+def test__keep_float32_pipeline__feature_indices__shares_the_gathered_columns() -> None:
+    """A pipeline reading some of `X`'s columns shares its own copy of them."""
+    pipeline = PreprocessingPipeline(
+        [
+            RemoveConstantFeaturesStep(),
+            ReshapeFeatureDistributionsStep(transform_name="none", random_state=0),
+            EncodeCategoricalFeaturesStep("ordinal_shuffled", random_state=0),
+        ]
+    )
+    rng = np.random.default_rng(0)
+    X, X_test = (
+        rng.standard_normal((rows, 9)).astype(np.float32) for rows in (3000, 500)
+    )
+    for table in (X, X_test):
+        table[:, 2] = rng.integers(10, 15, len(table))
+        table[:, 6] = rng.integers(20, 23, len(table))
+    indices = np.array([0, 2, 3, 6, 8])
+    schema = FeatureSchema.from_only_categorical_indices([1, 3], num_columns=5)
+    pipeline.fit_transform(X, schema, feature_indices=indices)
+    before = X_test.copy()
+
+    shared = pipeline.transform(X_test, feature_indices=indices, may_keep_input=True).X
+
+    assert isinstance(shared, SharedColumnsTable)
+    assert not np.shares_memory(shared.base, X_test)
+    assert shared.own.shape[1] == 2
+    np.testing.assert_array_equal(X_test, before)
+    np.testing.assert_array_equal(
+        np.asarray(shared), pipeline.transform(X_test[:, indices].copy()).X
+    )
+
+
 def test__keep_float32_pipeline__may_keep_input__appending_reshape__matches() -> None:
     """A reshape that appends the original columns hands sklearn an array."""
 

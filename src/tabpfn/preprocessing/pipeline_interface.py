@@ -735,10 +735,10 @@ class PreprocessingPipeline:
     ) -> np.ndarray | torch.Tensor | SharedColumnsTable:
         """The array the steps run on.
 
-        This is a copy of `X`, or of its `feature_indices` columns. It is `X` itself,
-        as a `SharedColumnsTable`, when nothing would write into it and
-        `may_keep_input`: a step that would copy `X` to move or rewrite its columns
-        then shares the columns it leaves alone.
+        This is a copy of `X`, or of its `feature_indices` columns. It is a
+        `SharedColumnsTable` over `X` itself, or over the gathered columns, when
+        nothing would write into it and `may_keep_input`: a step that would copy it
+        to move or rewrite its columns then shares the columns it leaves alone.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -749,19 +749,20 @@ class PreprocessingPipeline:
             index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
             return X.index_select(-1, index)
         keep = self.keep_float32 and X.dtype == np.float32
+        dtype = np.float32 if keep else np.float64
+        if feature_indices is not None:
+            X = gather_columns(X, feature_indices, dtype)
         if (
             keep
-            and feature_indices is None
             and may_keep_input
             # The copy is C-ordered, and `torch.as_tensor` rejects negative strides.
             and X.flags.c_contiguous
             and self._writes_only_owned_input(X)
         ):
             return SharedColumnsTable.of(X)
-        dtype = np.float32 if keep else np.float64
-        if feature_indices is None:
-            return X.astype(dtype, order="C", copy=True)
-        return gather_columns(X, feature_indices, dtype)
+        if feature_indices is not None:
+            return X
+        return X.astype(dtype, order="C", copy=True)
 
     def _writes_only_owned_input(self, X: np.ndarray) -> bool:
         """Whether the steps can run on `X` itself without anything writing into it.
