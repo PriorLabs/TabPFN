@@ -27,6 +27,16 @@ ARCHITECTURES: dict[str, ArchitectureModule] = {
 }
 """Map from architecture names to the corresponding module."""
 
+BUILTIN_ARCHITECTURE_CONFIGS = (
+    tabpfn_v2.TabPFNV2Config,
+    tabpfn_v2_5.TabPFNV2p5Config,
+    tabpfn_v2_6.TabPFNV2p6Config,
+    tabpfn_v3.TabPFNV3Config,
+    tabpfn_v3_5.TabPFNV3p5Config,
+)
+"""The config classes of the architectures in this package, the models up to
+TabPFN-3.5."""
+
 
 def register_architecture(name: str, module: ArchitectureModule) -> None:
     """Add an architecture, from an external source, to the available architectures.

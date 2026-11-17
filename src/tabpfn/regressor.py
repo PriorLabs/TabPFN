@@ -41,6 +41,7 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
+from tabpfn.architectures import BUILTIN_ARCHITECTURE_CONFIGS
 from tabpfn.architectures.shared.bar_distribution import (
     FullSupportBarDistribution,
     expected_value,
@@ -183,15 +184,15 @@ OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": {
-            "TabPFNV4Config": ("log_fixed_atom",),
-            "default": ("log_quantile_gap",),
+            "builtin": ("log_quantile_gap",),
+            "other": ("log_fixed_atom",),
         },
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
 }
 """The named bundles of `inference_config` values that `presets` selects. A value
-that is a dict holds one value for models with a `TabPFNV4Config` and a "default"
-one for all other models."""
+that is a dict holds one value for models on
+`tabpfn.architectures.BUILTIN_ARCHITECTURE_CONFIGS` and one for all other models."""
 
 ZERO_SHARE_WARNING_THRESHOLD = 0.2
 """`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
@@ -702,10 +703,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
-                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_fixed_atom",)`
-                  for models with a `TabPFNV4Config` and to
-                  `("log_quantile_gap",)` for all others, and
-                  `REGRESSION_READOUT` to `"nonnegative_and_capped"`.
+                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_quantile_gap",)`
+                  for the models up to TabPFN-3.5 and to `("log_fixed_atom",)`
+                  for other models, and `REGRESSION_READOUT` to
+                  `"nonnegative_and_capped"`.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -2924,7 +2925,7 @@ def _apply_presets(
         raise TabPFNValidationError(
             "`presets` needs `inference_config` as a dict or None."
         )
-    v4 = all(type(c).__name__ == "TabPFNV4Config" for c in architecture_configs)
+    builtin = all(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs)
     values: dict[str, Any] = {}
     for name in [presets] if isinstance(presets, str) else presets:
         if name not in REGRESSION_PRESETS:
@@ -2933,7 +2934,7 @@ def _apply_presets(
             )
         for key, value in REGRESSION_PRESETS[name].items():
             values[key] = (
-                value["TabPFNV4Config" if v4 else "default"]
+                value["builtin" if builtin else "other"]
                 if isinstance(value, dict)
                 else value
             )

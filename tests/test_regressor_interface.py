@@ -2767,13 +2767,13 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
     assert regressor.mean_calibration_scale_ == 1.0
 
 
-class TabPFNV4Config(tabpfn_v2_5.TabPFNV2p5Config):
-    """Stands for the TabPFN-4 architecture config, which the preset finds by name."""
+class _OtherArchitectureConfig(tabpfn_v2_5.TabPFNV2p5Config):
+    """Stands for an architecture outside `BUILTIN_ARCHITECTURE_CONFIGS`."""
 
 
-def _v4_specs() -> ModelSpecs:
+def _other_architecture_specs() -> ModelSpecs:
     specs = _create_dummy_regressor_model_specs()
-    config = TabPFNV4Config(**dataclasses.asdict(specs.architecture_config))
+    config = _OtherArchitectureConfig(**dataclasses.asdict(specs.architecture_config))
     return dataclasses.replace(
         specs,
         model=tabpfn_v2_5.get_architecture(config=config),
@@ -2782,14 +2782,18 @@ def _v4_specs() -> ModelSpecs:
 
 
 @pytest.mark.parametrize(
-    ("v4", "transform"),
+    ("other_architecture", "transform"),
     [(False, "log_quantile_gap"), (True, "log_fixed_atom")],
 )
 def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only(
-    v4: bool, transform: str
+    other_architecture: bool, transform: str
 ) -> None:
     X, y = _zero_inflated_tuning_data()
-    model_path = _v4_specs() if v4 else _create_dummy_regressor_model_specs()
+    model_path = (
+        _other_architecture_specs()
+        if other_architecture
+        else _create_dummy_regressor_model_specs()
+    )
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=".*zero-inflated targets.*")
         regressor = TabPFNRegressor(
@@ -2850,10 +2854,10 @@ def test__fit__unknown_preset__raises() -> None:
 
 
 def _zero_inflated_checkpoint_specs(transform: str) -> ModelSpecs:
-    """A TabPFN-4 checkpoint that stores a zero-inflated target transform and
-    readout.
+    """A checkpoint outside the built-in architectures that stores a zero-inflated
+    target transform and readout.
     """
-    specs = _v4_specs()
+    specs = _other_architecture_specs()
     return dataclasses.replace(
         specs,
         inference_config=dataclasses.replace(
