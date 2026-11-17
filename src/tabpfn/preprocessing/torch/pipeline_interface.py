@@ -9,6 +9,7 @@ import dataclasses
 import functools
 import inspect
 import time
+from collections.abc import Callable
 from typing_extensions import override
 
 import torch
@@ -44,14 +45,6 @@ class TorchPreprocessingStep(abc.ABC):
     (but for `shared_cache_keys`). A column's fitted values are the same whichever
     other columns it is fitted with, up to float rounding and the tolerance of any
     search the fit runs.
-    """
-
-    rowwise: bool = False
-    """Whether the step fits without reading cell values and transforms each row
-    alone.
-
-    The pipeline runs such a step on an input held off its compute device a block
-    of rows at a time.
     """
 
     runs_on_input_device: bool = False
@@ -315,7 +308,7 @@ class TorchPreprocessingPipeline:
             whole = [
                 type(step).__name__
                 for step, _ in self.steps
-                if not (step.columnwise or step.rowwise or step.runs_on_input_device)
+                if _staged_runner(step) is None
             ]
             if whole:
                 svd_hint = (
@@ -492,29 +485,15 @@ def _run_step(
     consume_input: bool,
     compute_device: torch.device | None,
 ) -> TorchPreprocessingStepResult:
-    """`step.fit_transform`, by blocks moved to `compute_device` when one is given
-    and the step reads its input by columns or by rows.
+    """`step.fit_transform`, run as `_staged_runner` says when `compute_device` is
+    given.
     """
-    if (
-        compute_device is not None
-        and compute_device.type == "mps"
-        and step.computes_on_cpu_for_mps
-    ):
-        compute_device = torch.device("cpu")
-    if compute_device is not None and step.runs_on_input_device:
-        return step.fit_transform(
-            x,
-            column_indices=column_indices,
-            num_train_rows=num_train_rows,
-            fitted_cache=fitted_cache,
-            in_place=True,
-        )
-    if compute_device is not None and step.columnwise:
-        return _fit_transform_on_device(
-            step, x, column_indices, num_train_rows, fitted_cache, compute_device
-        )
-    if compute_device is not None and step.rowwise and x.shape[0] > 0:
-        return _fit_transform_rows_on_device(
+    if compute_device is not None:
+        if compute_device.type == "mps" and step.computes_on_cpu_for_mps:
+            compute_device = torch.device("cpu")
+        runner = _staged_runner(step)
+        assert runner is not None, "`__call__` rejects a step without a runner."
+        return runner(
             step, x, column_indices, num_train_rows, fitted_cache, compute_device
         )
     in_place = _in_place_kwargs(step) if consume_input else {}
@@ -524,6 +503,36 @@ def _run_step(
         num_train_rows=num_train_rows,
         fitted_cache=fitted_cache,
         **in_place,
+    )
+
+
+def _staged_runner(
+    step: TorchPreprocessingStep,
+) -> Callable[..., TorchPreprocessingStepResult] | None:
+    """How `step` runs on an input held off the compute device; None if it cannot."""
+    if step.runs_on_input_device:
+        return _fit_transform_where_input_is
+    if step.columnwise:
+        return _fit_transform_on_device
+    return None
+
+
+def _fit_transform_where_input_is(
+    step: TorchPreprocessingStep,
+    x: torch.Tensor,
+    column_indices: list[int],
+    num_train_rows: int,
+    fitted_cache: dict[str, torch.Tensor] | None,
+    device: torch.device,
+) -> TorchPreprocessingStepResult:
+    """`step.fit_transform` into `x`, on `x`'s own device rather than `device`."""
+    del device
+    return step.fit_transform(
+        x,
+        column_indices=column_indices,
+        num_train_rows=num_train_rows,
+        fitted_cache=fitted_cache,
+        in_place=True,
     )
 
 
@@ -570,42 +579,6 @@ def _fit_transform_on_device(
     if fitted_cache is None:
         fitted_cache = _join_column_caches(parts, step.shared_cache_keys)
     return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
-
-
-def _fit_transform_rows_on_device(
-    step: TorchPreprocessingStep,
-    x: torch.Tensor,
-    column_indices: list[int],
-    num_train_rows: int,
-    fitted_cache: dict[str, torch.Tensor] | None,
-    device: torch.device,
-) -> TorchPreprocessingStepResult:
-    """A rowwise step's `fit_transform` into `x`, a block of rows at a time on
-    `device`.
-
-    The first block fits the step when `fitted_cache` is None; the others reuse it.
-    """
-    row_bytes = max(1, x[:1].numel() * x.element_size())
-    rows = max(1, DEVICE_BLOCK_BYTES // row_bytes)
-    cache = None
-    if fitted_cache is not None:
-        cache = _move_cache_to_device(fitted_cache, device)
-    permutation = None
-    for start in range(0, x.shape[0], rows):
-        result = step.fit_transform(
-            x[start : start + rows].to(device),
-            column_indices=column_indices,
-            num_train_rows=num_train_rows,
-            fitted_cache=cache,
-            **_in_place_kwargs(step),
-        )
-        assert result.added_columns is None, "A rowwise step adds no columns."
-        x[start : start + rows] = result.x.to(x.device)
-        cache = result.fitted_cache
-        permutation = result.schema_permutation
-    return TorchPreprocessingStepResult(
-        x=x, fitted_cache=cache, schema_permutation=permutation
-    )
 
 
 def _join_column_caches(

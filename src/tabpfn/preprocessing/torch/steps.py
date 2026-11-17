@@ -85,7 +85,9 @@ class TorchRandomSignFlipStep(TorchPreprocessingStep):
 
         signs = fitted_cache["signs"].to(x)
         if column_indices == list(range(x.shape[-1])):
-            transformed = x.mul_(signs) if in_place else x * signs
+            transformed = (
+                x.mul_(signs) if in_place else self._transform(x, fitted_cache)[0]
+            )
         else:
             # Runs of evenly spaced columns, multiplied where they are, leave the
             # other columns' bits as they were.
@@ -486,7 +488,7 @@ class TorchShuffleFeaturesStep(TorchPreprocessingStep):
     ``ShuffleFeaturesStep`` to guarantee identical results.
     """
 
-    rowwise = True
+    runs_on_input_device = True
 
     def __init__(
         self,
