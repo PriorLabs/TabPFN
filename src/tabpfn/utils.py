@@ -10,7 +10,7 @@ import math
 import os
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -721,3 +721,16 @@ def convert_batch_of_cat_ix_to_schema(
             feature_schema[-1].append(FeatureSchema(features=features))
 
     return feature_schema
+
+
+def as_tensor_to_read(array: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    """`torch.as_tensor` of an array the caller only reads, which may be read-only.
+
+    Preprocessing can hand back the caller's own array, a read-only memmap among
+    them; torch warns about any read-only array it does not copy.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="The given NumPy array is not writable"
+        )
+        return torch.as_tensor(array, **kwargs)

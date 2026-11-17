@@ -65,7 +65,6 @@ from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCachePreprocessing,
-    _as_tensor_to_read,
     _maybe_run_gpu_preprocessing,
 )
 from tabpfn.inference_tuning import (
@@ -115,6 +114,7 @@ from tabpfn.preprocessing.row_weights import (
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
+    as_tensor_to_read,
     balance_probas_by_class_counts,
     convert_batch_of_cat_ix_to_schema,
     infer_random_state,
@@ -1447,10 +1447,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ]
             device = worker.devices_[0]
             for member in members:
-                x_tr = _as_tensor_to_read(
+                x_tr = as_tensor_to_read(
                     np.asarray(member.X_train), dtype=torch.float32
                 )
-                x_te = _as_tensor_to_read(
+                x_te = as_tensor_to_read(
                     np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
                 )
                 full, schema = _maybe_run_gpu_preprocessing(

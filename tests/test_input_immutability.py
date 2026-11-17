@@ -30,6 +30,7 @@ import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import pipeline_interface
+from tabpfn.preprocessing.clean import overwrite_fit_input
 
 N_ROWS = 12
 N_TEST = 6
@@ -171,6 +172,42 @@ def test__fit_predict__leave_every_input_untouched(
     after = {"X_train": X_train, "X_test": X_test, "y_train": y_train}
     for name, original in before.items():
         _assert_unchanged(after[name], original, name)
+
+
+@pytest.mark.parametrize(
+    "estimator_cls", [TabPFNClassifier, TabPFNRegressor], ids=lambda c: c.__name__
+)
+@pytest.mark.parametrize("path", ["batched", "fit_with_cache"])
+# torch warns once per process, so this catches the warning only in a fresh one.
+@pytest.mark.filterwarnings("error:The given NumPy array is not writable")
+def test__predict__read_only_input__reaches_torch_without_a_warning(
+    estimator_cls: type, path: str
+) -> None:
+    X_train, X_test = _split(_read_only(_numeric("float32")))
+    y_train = np.random.default_rng(3).integers(0, 3, N_ROWS)
+    config = {"ENABLE_GPU_PREPROCESSING": True}
+    if path == "batched":
+        model = estimator_cls(
+            n_estimators=2, device="cpu", random_state=0, inference_config=config
+        )
+        predict_batched = (
+            model.predict_proba_batched
+            if estimator_cls is TabPFNClassifier
+            else model.predict_batched
+        )
+        predict_batched([X_train], [y_train], [X_test])
+    else:
+        model = estimator_cls(
+            n_estimators=2,
+            device="cpu",
+            random_state=0,
+            fit_mode="fit_with_cache",
+            inference_config=config,
+        )
+        # Inside the opt-in, the members keep the caller's read-only array.
+        with overwrite_fit_input():
+            model.fit(X_train, y_train)
+        model.predict(X_test)
 
 
 @pytest.mark.parametrize(

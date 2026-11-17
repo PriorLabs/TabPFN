@@ -9,6 +9,7 @@ e.g. NaN mapping and dtype conversion.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import typing
 import warnings
 import weakref
@@ -20,7 +21,6 @@ from packaging.version import Version
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.pipeline_interface import _OVERWRITE_FIT_INPUT
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     get_ordinal_encoder,
     to_numpy_may_alias,
@@ -311,6 +311,10 @@ def _encode_categoricals(
     return out
 
 
+_OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "tabpfn_overwrite_fit_input", default=False
+)
+
 _OVERWRITTEN_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
     weakref.WeakValueDictionary()
 )
@@ -335,6 +339,11 @@ def overwrite_fit_input() -> Iterator[None]:
         yield
     finally:
         _OVERWRITE_FIT_INPUT.reset(token)
+
+
+def overwriting_fit_input() -> bool:
+    """Whether the caller is inside `overwrite_fit_input()`."""
+    return _OVERWRITE_FIT_INPUT.get()
 
 
 def may_overwrite_fit_input(X: Any, given: Any) -> bool:

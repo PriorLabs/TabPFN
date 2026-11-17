@@ -13,7 +13,6 @@ from typing import Literal
 import numpy as np
 import pytest
 
-from tabpfn.preprocessing.clean import overwrite_fit_input
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
@@ -169,7 +168,7 @@ def test__reshape_step__no_arithmetic__follows_a_changed_transform_name() -> Non
 
 def test__keep_float32_pipeline__runs_on_a_finite_input_itself() -> None:
     """Nothing writes into a finite float32 input, so a transform does not copy it,
-    and neither does a fit inside `overwrite_fit_input()`.
+    and neither does a fit that may keep it.
     """
     pipeline = PreprocessingPipeline(
         [ReshapeFeatureDistributionsStep(transform_name="none")]
@@ -177,8 +176,7 @@ def test__keep_float32_pipeline__runs_on_a_finite_input_itself() -> None:
     X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
     schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
 
-    with overwrite_fit_input():
-        fitted = pipeline.fit_transform(X, schema)
+    fitted = pipeline.fit_transform(X, schema, may_keep_input=True)
     transformed = pipeline.transform(X)
 
     assert np.shares_memory(fitted.X, X)
@@ -229,8 +227,7 @@ def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
     X[0, 0] = np.inf
     schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
 
-    with overwrite_fit_input():
-        result = pipeline.fit_transform(X, schema)
+    result = pipeline.fit_transform(X, schema, may_keep_input=True)
 
     assert not np.shares_memory(result.X, X)
     assert np.isinf(X[0, 0])
@@ -262,8 +259,7 @@ def test__keep_float32_pipeline__a_steps_new_array__is_written_in_place(
     X[:, 2] = rng.integers(0, 3, size=X.shape[0])
     schema = FeatureSchema.from_only_categorical_indices([2], num_columns=4)
 
-    with overwrite_fit_input():
-        pipeline.fit_transform(X, schema)
+    pipeline.fit_transform(X, schema, may_keep_input=True)
 
     assert owned == [True]
 
@@ -286,8 +282,7 @@ def test__keep_float32_pipeline__encodes_a_finite_input_without_a_float64_table(
 
     tracemalloc.start()
     try:
-        with overwrite_fit_input():
-            result = pipeline.fit_transform(X, schema)
+        result = pipeline.fit_transform(X, schema, may_keep_input=True)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()

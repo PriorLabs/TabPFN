@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from unittest import mock
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
@@ -1686,6 +1687,23 @@ def test__overwrite_fit_input__preprocessing_on_threads__keeps_the_array(
 
     members = model.executor_.ensemble_members
     assert all(np.shares_memory(member.X_train, X) for member in members)
+
+
+def test__overwrite_fit_input__preprocessing_in_processes__fits() -> None:
+    """Preprocessing tasks sent to worker processes must pickle."""
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 4)).astype(np.float32)
+    y = rng.standard_normal(60)
+    expected = TabPFNRegressor(n_estimators=2, device="cpu", random_state=0).fit(
+        X.copy(), y
+    )
+
+    with joblib.parallel_config(backend="loky"), clean_module.overwrite_fit_input():
+        model = TabPFNRegressor(
+            n_estimators=2, device="cpu", random_state=0, n_preprocessing_jobs=2
+        ).fit(X.copy(), y)
+
+    np.testing.assert_array_equal(model.predict(X), expected.predict(X))
 
 
 def test__clean_data__float32_infinity_in_categorical__matches_float64() -> None:

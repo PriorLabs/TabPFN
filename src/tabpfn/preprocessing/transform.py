@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import contextvars
 from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -16,6 +15,7 @@ from tabpfn.constants import (
     PARALLEL_MODE_TO_RETURN_AS,
     SUPPORTS_RETURN_AS,
 )
+from tabpfn.preprocessing.clean import overwriting_fit_input
 from tabpfn.preprocessing.ensemble import (
     ClassifierEnsembleConfig,
     RegressorEnsembleConfig,
@@ -37,6 +37,7 @@ def _fit_preprocessing_one(
     pipeline: PreprocessingPipeline,
     feature_indices: np.ndarray | None = None,
     row_indices: np.ndarray | None = None,
+    may_keep_input: bool = False,
 ) -> tuple[
     int,
     EnsembleConfig,
@@ -57,6 +58,7 @@ def _fit_preprocessing_one(
         feature_indices: Indices of features to select. If not provided, all features
             are used.
         row_indices: Indices of rows to select. If not provided, all rows are used.
+        may_keep_input: Whether the transformed data may be `X_train` itself.
 
     Returns:
         Tuple containing the config index, ensemble configuration, the fitted
@@ -79,10 +81,11 @@ def _fit_preprocessing_one(
         # PreprocessingPipeline._process_steps already copies X_train
         y_train = y_train.copy()
 
-    res = (
-        pipeline.fit_transform(X_train, feature_schema)
-        if gather is None
-        else pipeline.fit_transform(X_train, feature_schema, feature_indices=gather)
+    res = pipeline.fit_transform(
+        X_train,
+        feature_schema,
+        feature_indices=gather,
+        may_keep_input=may_keep_input,
     )
 
     y_train_processed = _transform_labels_one(config, y_train)
@@ -215,13 +218,10 @@ def fit_preprocessing(
             n_jobs=n_preprocessing_jobs, batch_size="auto", prefer="threads"
         )
 
-    # A worker thread starts with an empty context, so each task runs in a copy of
-    # the caller's, which holds `overwrite_fit_input()`. A context can be entered by
-    # one thread at a time, hence a copy per task.
-    context = contextvars.copy_context()
+    # Read in the caller's thread: a worker thread or process starts without it.
+    may_keep_input = overwriting_fit_input()
     yield from executor(  # type: ignore[misc]
-        joblib.delayed(context.copy().run)(
-            _fit_preprocessing_one,
+        joblib.delayed(_fit_preprocessing_one)(
             config_index,
             config,
             X_train,
@@ -230,6 +230,7 @@ def fit_preprocessing(
             pipeline=pipeline,
             feature_indices=feat_idx,
             row_indices=row_idx,
+            may_keep_input=may_keep_input,
         )
         for config_index, (config, pipeline, feat_idx, row_idx) in enumerate(
             zip(

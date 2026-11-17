@@ -128,6 +128,7 @@ from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.settings import settings
 from tabpfn.utils import (
     DevicesSpecification,
+    as_tensor_to_read,
     convert_batch_of_cat_ix_to_schema,
     infer_random_state,
     transform_borders_one,
@@ -2409,8 +2410,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ]
             device = worker.devices_[0]
             for member in members:
-                x_tr = torch.as_tensor(np.asarray(member.X_train), dtype=torch.float32)
-                x_te = torch.as_tensor(
+                x_tr = as_tensor_to_read(
+                    np.asarray(member.X_train), dtype=torch.float32
+                )
+                x_te = as_tensor_to_read(
                     np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
                 )
                 full, schema = _maybe_run_gpu_preprocessing(
