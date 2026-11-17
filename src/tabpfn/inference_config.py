@@ -359,7 +359,6 @@ class InferenceConfig:
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
         - One of the options for nonnegative targets from
           `tabpfn.preprocessing.target_transform.ZERO_INFLATED_TARGET_TRANSFORMS`.
-        - "zero_inflated_auto": a zero-inflated transform for the model.
     """
 
     REGRESSION_TARGET_SIGN_FLIP: bool = False

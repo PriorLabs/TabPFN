@@ -183,11 +183,18 @@ OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 
 REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("zero_inflated_auto",),
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
 }
 """The named bundles of `inference_config` values that `presets` selects."""
+
+BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG: dict[str, Any] = {
+    "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
+    "REGRESSION_READOUT": "nonnegative_and_capped",
+}
+"""The `inference_config` for zero-inflated targets on the models up to TabPFN-3.5,
+which the "zero_inflated" preset does not support."""
 
 ZERO_SHARE_WARNING_THRESHOLD = 0.2
 """`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
@@ -698,10 +705,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
-                  `REGRESSION_READOUT` to `"nonnegative_and_capped"` and
-                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to
-                  `("zero_inflated_auto",)`, a zero-inflated transform for the
-                  model.
+                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_fixed_atom",)`
+                  and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. It
+                  raises on the models up to TabPFN-3.5; for those, set
+                  `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` in `inference_config`
+                  instead.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -929,22 +937,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             The determined byte_size.
         """
         byte_size = initialize_model_variables_helper(self, self.estimator_type)
-        # The checkpoint's, unless `inference_config` names them.
-        stored = self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
         if self.presets is not None:
             self.inference_config_ = _apply_presets(
-                self.inference_config_, self.presets, self.inference_config
-            )
-        transforms = self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
-        if "zero_inflated_auto" in transforms:
-            resolved = _zero_inflated_transforms(stored, self.configs_)
-            self.inference_config_ = dataclasses.replace(
                 self.inference_config_,
-                REGRESSION_Y_PREPROCESS_TRANSFORMS=tuple(
-                    r
-                    for t in transforms
-                    for r in (resolved if t == "zero_inflated_auto" else (t,))
-                ),
+                self.presets,
+                self.inference_config,
+                self.configs_,
             )
         return byte_size
 
@@ -1665,7 +1663,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         transforms = self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
         if not any(t in ZERO_INFLATED_TARGET_TRANSFORMS for t in transforms):
-            _warn_if_zero_inflated(y)
+            _warn_if_zero_inflated(
+                y,
+                builtin=any(
+                    type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in self.configs_
+                ),
+            )
 
         # Each tuning fold must derive its target statistics from its own raw targets.
         self._maybe_tune_on_holdout(
@@ -2923,8 +2926,14 @@ def _apply_presets(
     config: InferenceConfig,
     presets: str | Sequence[str],
     user_config: dict | InferenceConfig | None,
+    architecture_configs: Sequence[ArchitectureConfig],
 ) -> InferenceConfig:
-    """`config` with the presets' values, except the keys `user_config` names."""
+    """`config` with the presets' values, except the keys `user_config` names.
+
+    Raises:
+        TabPFNValidationError: If a preset is unknown, or "zero_inflated" is used
+            with a model up to TabPFN-3.5.
+    """
     if not isinstance(user_config, dict | None):
         raise TabPFNValidationError(
             "`presets` needs `inference_config` as a dict or None."
@@ -2935,35 +2944,31 @@ def _apply_presets(
             raise TabPFNValidationError(
                 f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
             )
+        if name == "zero_inflated":
+            for architecture_config in architecture_configs:
+                if type(architecture_config) in BUILTIN_ARCHITECTURE_CONFIGS:
+                    raise TabPFNValidationError(
+                        'This model does not support `presets="zero_inflated"`: '
+                        "its architecture config is "
+                        f"{type(architecture_config).__name__}, one of the models "
+                        "up to TabPFN-3.5. For zero-inflated targets on this "
+                        "model, set `inference_config="
+                        f"{BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG}` instead."
+                    )
         values.update(REGRESSION_PRESETS[name])
     values = {k: v for k, v in values.items() if k not in (user_config or {})}
     return dataclasses.replace(config, **values)
-
-
-def _zero_inflated_transforms(
-    stored: tuple[str | None, ...],
-    architecture_configs: Sequence[ArchitectureConfig],
-) -> tuple[str, ...]:
-    """What "zero_inflated_auto" resolves to: the zero-inflated transforms in
-    `stored`, else `log_quantile_gap` on the built-in architectures and
-    `log_fixed_atom` on all others.
-    """
-    kept = tuple(
-        t for t in stored if t is not None and t in ZERO_INFLATED_TARGET_TRANSFORMS
-    )
-    if kept:
-        return kept
-    if all(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs):
-        return ("log_quantile_gap",)
-    return ("log_fixed_atom",)
 
 
 _zero_share_warning_issued = False
 """Whether `fit` has suggested the "zero_inflated" preset in this process."""
 
 
-def _warn_if_zero_inflated(y: np.ndarray) -> None:
-    """Suggest the "zero_inflated" preset, once per process."""
+def _warn_if_zero_inflated(y: np.ndarray, *, builtin: bool) -> None:
+    """Suggest a setup for zero-inflated targets, once per process: the
+    "zero_inflated" preset, or `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` for the
+    models up to TabPFN-3.5 (`builtin`).
+    """
     global _zero_share_warning_issued  # noqa: PLW0603
     if _zero_share_warning_issued:
         return
@@ -2980,11 +2985,15 @@ def _warn_if_zero_inflated(y: np.ndarray) -> None:
     if is_integer and len(np.unique(positives)) <= ZERO_SHARE_WARNING_MAX_COUNT_LEVELS:
         return
     _zero_share_warning_issued = True
+    suggestion = (
+        f"`inference_config={BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG}`"
+        if builtin
+        else '`presets="zero_inflated"`'
+    )
     warnings.warn(
         f"{zero_share:.0%} of the training targets are exactly 0, and none is "
-        "negative. For such zero-inflated targets, consider "
-        '`TabPFNRegressor(presets="zero_inflated")`, which models the zeros as a '
-        "separate point mass.",
+        f"negative. For such zero-inflated targets, consider {suggestion}, which "
+        "models the zeros as a separate point mass.",
         UserWarning,
         # Past fit and the frame of its `config_context` decorator.
         stacklevel=4,

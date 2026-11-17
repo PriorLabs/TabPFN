@@ -2781,27 +2781,17 @@ def _other_architecture_specs() -> ModelSpecs:
     )
 
 
-@pytest.mark.parametrize(
-    ("other_architecture", "transform"),
-    [(False, "log_quantile_gap"), (True, "log_fixed_atom")],
-)
-def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only(
-    other_architecture: bool, transform: str
-) -> None:
+def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only() -> None:
     X, y = _zero_inflated_tuning_data()
-    model_path = (
-        _other_architecture_specs()
-        if other_architecture
-        else _create_dummy_regressor_model_specs()
-    )
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=".*zero-inflated targets.*")
         regressor = TabPFNRegressor(
-            presets="zero_inflated", **_tuning_regressor_kwargs(model_path=model_path)
+            presets="zero_inflated",
+            **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
         ).fit(X, y)
 
     config = regressor.inference_config_
-    assert (transform,) == config.REGRESSION_Y_PREPROCESS_TRANSFORMS
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
     assert config.REGRESSION_READOUT == "nonnegative_and_capped"
     # The preset does not calibrate, and the constructor arguments stay as passed.
     assert regressor.mean_calibration_scale_ == 1.0
@@ -2809,12 +2799,29 @@ def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only(
     assert sklearn.base.clone(regressor).presets == "zero_inflated"
 
 
+def test__fit__zero_inflated_preset_on_a_builtin_model__raises() -> None:
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(presets="zero_inflated", **_tuning_regressor_kwargs())
+
+    with pytest.raises(ValueError, match=r"does not support `presets=.zero_inflated.`"):
+        regressor.fit(X, y)
+
+    # The setup the error suggests works on this model.
+    regressor = TabPFNRegressor(
+        inference_config=regressor_module.BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG,
+        **_tuning_regressor_kwargs(),
+    ).fit(X, y)
+    assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
+        "log_quantile_gap",
+    )
+
+
 def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() -> None:
     X, y = _zero_inflated_tuning_data()
     regressor = TabPFNRegressor(
         presets="zero_inflated",
         tuning_config={"calibrate_mean": True},
-        **_tuning_regressor_kwargs(),
+        **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
     ).fit(X, y)
 
     assert regressor.mean_calibration_scale_ != 1.0
@@ -2836,11 +2843,11 @@ def test__fit__presets__user_keys_win_and_later_presets_win(
     regressor = TabPFNRegressor(
         presets=["zero_inflated", "uncapped"],
         inference_config={"REGRESSION_TARGET_SIGN_FLIP": False},
-        **_tuning_regressor_kwargs(),
+        **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
     ).fit(X, y)
 
     config = regressor.inference_config_
-    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_quantile_gap",)
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
     assert config.REGRESSION_READOUT == "default"
     assert config.REGRESSION_TARGET_SIGN_FLIP is False
 
@@ -2898,7 +2905,9 @@ def test__fit__stored_fixed_atom__the_model_sees_every_zero_at_the_atom(
     assert (labels[0] == -4.0).sum() == (y == 0).sum()
 
 
-def test__fit__zero_inflated_preset__keeps_a_stored_zero_inflated_transform() -> None:
+def test__fit__zero_inflated_preset__replaces_a_stored_zero_inflated_transform() -> (
+    None
+):
     X, y = _zero_inflated_tuning_data()
     regressor = TabPFNRegressor(
         presets="zero_inflated",
@@ -2908,64 +2917,35 @@ def test__fit__zero_inflated_preset__keeps_a_stored_zero_inflated_transform() ->
     ).fit(X, y)
 
     assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
-        "log_quantile_gap",
+        "log_fixed_atom",
     )
 
     # An explicit choice wins over both.
     regressor.set_params(
-        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log1p_target",)}
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",)}
     ).fit(X, y)
     assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
-        "log1p_target",
+        "log_quantile_gap",
     )
 
 
-@pytest.mark.parametrize("presets", [None, "zero_inflated"])
 @pytest.mark.parametrize(
-    ("v4_like", "transforms"),
-    [(False, ("log_quantile_gap",)), (True, ("log_fixed_atom",))],
-)
-def test__fit__zero_inflated_auto__picks_a_transform_for_the_model(
-    presets: str | None, v4_like: bool, transforms: tuple
-) -> None:
-    X, y = _zero_inflated_tuning_data()
-    model_path = (
-        _other_architecture_specs()
-        if v4_like
-        else _create_dummy_regressor_model_specs()
-    )
-
-    regressor = TabPFNRegressor(
-        presets=presets,
-        inference_config={
-            "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("zero_inflated_auto",)
-        },
-        **_tuning_regressor_kwargs(model_path=model_path),
-    ).fit(X, y)
-
-    assert transforms == regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
-    assert regressor.get_params()["inference_config"] == {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("zero_inflated_auto",)
-    }
-
-
-@pytest.mark.parametrize(
-    ("positives", "zero_share", "minimum", "presets", "warns"),
+    ("positives", "zero_share", "minimum", "zero_inflated_config", "warns"),
     [
-        ("spread", 0.3, 0.0, None, True),
-        ("spread", 0.2, 0.0, None, False),
-        ("spread", 0.3, -1.0, None, False),
-        ("spread", 0.3, 0.0, "zero_inflated", False),
-        ("spread", 0.6, 0.0, None, False),  # 40 positives, fewer than 50
-        ("narrow", 0.3, 0.0, None, False),
-        ("counts", 0.3, 0.0, None, False),
+        ("spread", 0.3, 0.0, False, True),
+        ("spread", 0.2, 0.0, False, False),
+        ("spread", 0.3, -1.0, False, False),
+        ("spread", 0.3, 0.0, True, False),
+        ("spread", 0.6, 0.0, False, False),  # 40 positives, fewer than 50
+        ("narrow", 0.3, 0.0, False, False),
+        ("counts", 0.3, 0.0, False, False),
     ],
 )
-def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
+def test__fit__zero_inflated_target__suggests_a_zero_inflated_setup(
     positives: str,
     zero_share: float,
     minimum: float,
-    presets: str | None,
+    zero_inflated_config: bool,
     warns: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2981,16 +2961,36 @@ def test__fit__zero_inflated_target__suggests_the_zero_inflated_preset(
     }[positives]
     y[: int(zero_share * 100)] = 0.0
     y[-1] = minimum if minimum < 0 else y[-1]
-    regressor = TabPFNRegressor(presets=presets, **_tuning_regressor_kwargs())
+    regressor = TabPFNRegressor(
+        inference_config=(
+            regressor_module.BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG
+            if zero_inflated_config
+            else None
+        ),
+        **_tuning_regressor_kwargs(),
+    )
 
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         regressor.fit(X, y)
 
-    suggestions = [w for w in record if 'presets="zero_inflated"' in str(w.message)]
+    suggestions = [w for w in record if "zero-inflated targets" in str(w.message)]
     assert len(suggestions) == int(warns)
-    # The warning points at the caller of `fit`.
+    # The warning points at the caller of `fit`, with the setup for this model.
     assert all(w.filename == __file__ for w in suggestions)
+    assert all("log_quantile_gap" in str(w.message) for w in suggestions)
+
+
+def test__fit__zero_inflated_target_on_another_architecture__suggests_the_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(regressor_module, "_zero_share_warning_issued", False)
+    X, y = _zero_inflated_tuning_data()
+
+    with pytest.warns(UserWarning, match='consider `presets="zero_inflated"`'):
+        TabPFNRegressor(
+            **_tuning_regressor_kwargs(model_path=_other_architecture_specs())
+        ).fit(X, y)
 
 
 def test__fit__zero_inflated_target__suggests_the_preset_once(
@@ -3008,7 +3008,7 @@ def test__fit__zero_inflated_target__suggests_the_preset_once(
         regressor.fit(X, y)
         regressor.fit(X[:500], y[:500])
 
-    suggestions = [w for w in record if 'presets="zero_inflated"' in str(w.message)]
+    suggestions = [w for w in record if "zero-inflated targets" in str(w.message)]
     assert len(suggestions) == 1
 
 
@@ -3031,7 +3031,7 @@ def test__fit__tuning_folds__do_not_suggest_what_the_full_fit_does_not(
             **_tuning_regressor_kwargs(),
         ).fit(X, y)
 
-    suggestions = [w for w in record if 'presets="zero_inflated"' in str(w.message)]
+    suggestions = [w for w in record if "zero-inflated targets" in str(w.message)]
     assert suggestions == []
 
 
