@@ -187,15 +187,12 @@ def _prepare_train_inputs(
                 compute_device=device,
             )
             return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
-    if isinstance(X_train, SharedColumnsTable) and (
-        # Only a table that is its base, in its own dtype, can be read in place.
-        not X_train.is_base() or tensor_dtype != torch.float32
-    ):
+    if isinstance(X_train, SharedColumnsTable) and not X_train.is_base():
         X_device = torch.empty(X_train.shape, dtype=tensor_dtype, device=device)
         _copy_rows_into(X_train, X_device)
         X_train = X_device
     elif not isinstance(X_train, torch.Tensor):
-        # An array, or a float32 table that is its base, is read in place.
+        # An array, or a table that is its base, is read in place.
         X_train = as_tensor_to_read(
             np.asarray(X_train), dtype=tensor_dtype, device=device
         )
