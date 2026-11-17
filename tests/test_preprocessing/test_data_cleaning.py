@@ -1698,7 +1698,7 @@ def test__overwrite_fit_input__preprocessing_in_processes__fits() -> None:
         X.copy(), y
     )
 
-    with joblib.parallel_config(backend="loky"), clean_module.overwrite_fit_input():
+    with joblib.parallel_backend("loky"), clean_module.overwrite_fit_input():
         model = TabPFNRegressor(
             n_estimators=2, device="cpu", random_state=0, n_preprocessing_jobs=2
         ).fit(X.copy(), y)
