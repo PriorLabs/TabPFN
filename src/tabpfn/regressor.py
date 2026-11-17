@@ -724,7 +724,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. On the
                   models up to TabPFN-3.5 it sets
                   `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, with
-                  `log_quantile_gap`, and warns.
+                  `log_quantile_gap`.
                 - `"grouped"`: for `group_col` data. It sets
                   `APPEND_GROUP_AGGREGATES=True` and
                   `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
@@ -2099,12 +2099,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
                 )
-                # Only the full fit suggests or explains the zero_inflated preset.
+                # Only the full fit suggests the zero_inflated preset.
                 warnings.filterwarnings(
                     "ignore", message=".*zero-inflated targets.*", category=UserWarning
-                )
-                warnings.filterwarnings(
-                    "ignore", message='presets="zero_inflated"', category=UserWarning
                 )
                 tuning_regressor.fit(X_train_NtF, y_train_Nt, **fit_kwargs)
 
@@ -2957,7 +2954,7 @@ def _apply_presets(
     """`config` with the presets' values, except the keys `user_config` names.
 
     On a model up to TabPFN-3.5, "zero_inflated" sets
-    `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, and warns.
+    `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead.
     """
     registry = REGRESSION_PRESETS
     if any(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs):

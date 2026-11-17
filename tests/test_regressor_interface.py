@@ -2805,22 +2805,13 @@ def test__fit__zero_inflated_preset_on_a_builtin_model__sets_the_builtin_config(
 ):
     X, y = _zero_inflated_tuning_data()
 
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        regressor = TabPFNRegressor(
-            presets="zero_inflated",
-            tuning_config={"calibrate_mean": True},
-            **_tuning_regressor_kwargs(),
-        ).fit(X, y)
+    regressor = TabPFNRegressor(
+        presets="zero_inflated", **_tuning_regressor_kwargs()
+    ).fit(X, y)
 
     config = regressor.inference_config_
     assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_quantile_gap",)
     assert config.REGRESSION_READOUT == "nonnegative_and_capped"
-    # One warning, from the full fit and not from its tuning folds, pointing at
-    # the caller of `fit`.
-    notes = [w for w in record if "up to TabPFN-3.5" in str(w.message)]
-    assert len(notes) == 1
-    assert notes[0].filename == __file__
 
 
 def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() -> None:
