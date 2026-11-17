@@ -37,7 +37,7 @@ def _fit_preprocessing_one(
     pipeline: PreprocessingPipeline,
     feature_indices: np.ndarray | None = None,
     row_indices: np.ndarray | None = None,
-    may_keep_input: bool = False,
+    may_keep_input: bool,
 ) -> tuple[
     int,
     EnsembleConfig,

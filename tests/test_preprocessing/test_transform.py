@@ -97,6 +97,7 @@ def test__fit_preprocessing_one__feature_subset__matches_the_subset_array(
             feature_schema=s,
             pipeline=pipeline,
             feature_indices=feature_indices,
+            may_keep_input=False,
         )
 
     fused = run(X, indices, schema)
