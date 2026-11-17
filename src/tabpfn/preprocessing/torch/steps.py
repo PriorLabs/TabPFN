@@ -46,6 +46,8 @@ class TorchSelectiveStep(TorchPreprocessingStep):
     columns directly.
     """
 
+    columnwise = True
+
     _target_column_indices: list[int]
 
     @override
@@ -59,6 +61,8 @@ class TorchSelectiveStep(TorchPreprocessingStep):
 
 class TorchRandomSignFlipStep(TorchPreprocessingStep):
     """Randomly negate columns with signs shared across rows."""
+
+    rowwise = True
 
     def __init__(self, random_state: int | np.random.Generator | None) -> None:
         super().__init__()
@@ -243,6 +247,9 @@ class TorchSelectiveQuantileTransformerStep(TorchSelectiveStep):
     are left unchanged.
     """
 
+    shared_cache_keys = frozenset({"references"})
+    computes_on_cpu_for_mps = True
+
     def __init__(
         self,
         n_quantiles: int,
@@ -317,6 +324,8 @@ class TorchSelectiveSquashingScalerStep(TorchSelectiveStep):
     unchanged.
     """
 
+    computes_on_cpu_for_mps = True
+
     def __init__(
         self,
         max_absolute_value: float,
@@ -387,6 +396,8 @@ class TorchSelectiveSafePowerStep(TorchSelectiveStep):
     :class:`TorchSelectiveQuantileTransformerStep`.
     """
 
+    computes_on_cpu_for_mps = True
+
     def __init__(self, target_column_indices: list[int]) -> None:
         super().__init__()
         self._transformer = TorchSafePowerTransformer()
@@ -444,8 +455,6 @@ class TorchSelectiveRobustScalerStep(TorchSelectiveStep):
     Register with ``modalities=None``, like
     :class:`TorchSelectiveQuantileTransformerStep`.
     """
-
-    columnwise = True
 
     def __init__(self, target_column_indices: list[int]) -> None:
         super().__init__()
@@ -695,6 +704,9 @@ class TorchAddFingerprintFeaturesStep(TorchPreprocessingStep):
 
     TODO: Implement this on GPU natively.
     """
+
+    # It hashes on the CPU whatever the device.
+    runs_on_input_device = True
 
     @override
     def added_feature_prefix(self) -> str:

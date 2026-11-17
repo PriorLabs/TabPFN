@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import typing
 from typing_extensions import override
 
 import pytest
@@ -17,7 +18,13 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStepResult,
 )
 from tabpfn.preprocessing.torch.steps import (
+    TorchAddFingerprintFeaturesStep,
     TorchAddSVDFeaturesStep,
+    TorchRandomSignFlipStep,
+    TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveRobustScalerStep,
+    TorchSelectiveSafePowerStep,
+    TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
     TorchStandardScalerStep,
 )
@@ -542,10 +549,10 @@ def test__call__consume_input__step_without_in_place_keyword_runs() -> None:
 
 @pytest.mark.parametrize("use_cache", [False, True])
 @pytest.mark.parametrize("indices", [[0, 1, 2, 3, 4, 6], [6, 1, 4, 2]])
-def test__fit_transform_on_device__column_blocks__match_fit_transform(
+def test__fit_transform_column_blocks__on_a_device__match_fit_transform(
     use_cache: bool, indices: list[int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 12 * 2 * 4 * 2)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 12 * 2 * 4 * 2)
     generator = torch.Generator().manual_seed(0)
     x = torch.randn(12, 2, 7, generator=generator)
     x[0, 0, 3] = 40.0
@@ -554,8 +561,8 @@ def test__fit_transform_on_device__column_blocks__match_fit_transform(
     expected = step.fit_transform(x.clone(), indices, num_train_rows=9)
     cache = expected.fitted_cache if use_cache else None
 
-    actual = pipeline_interface._fit_transform_on_device(
-        step, x, indices, 9, cache, torch.device("cpu")
+    actual = step._fit_transform_column_blocks(
+        x, indices, 9, cache, torch.device("cpu")
     )
 
     assert actual.x.data_ptr() == x.data_ptr()
@@ -678,3 +685,262 @@ def test__fit_transform_rows_on_device__row_blocks__match_fit_transform(
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0)
     assert actual.schema_permutation == expected.schema_permutation
+
+
+def _blockwise_pipeline(
+    *, keep_fitted_cache: bool = False
+) -> TorchPreprocessingPipeline:
+    """One step of each kind the block runners handle, on 10 numerical columns."""
+    return TorchPreprocessingPipeline(
+        keep_fitted_cache=keep_fitted_cache,
+        steps=[
+            (TorchSelectiveQuantileTransformerStep(20, [0, 1, 2]), None),
+            (TorchSelectiveSafePowerStep([3, 4]), None),
+            (TorchSelectiveSquashingScalerStep(3.0, [5, 6]), None),
+            (TorchSelectiveRobustScalerStep([7, 8]), None),
+            (TorchRandomSignFlipStep(random_state=0), {FeatureModality.NUMERICAL}),
+            (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
+        ],
+    )
+
+
+def _wide_input() -> torch.Tensor:
+    generator = torch.Generator().manual_seed(0)
+    x = torch.randn(64, 1, 10, generator=generator) * torch.linspace(0.5, 20, 10)
+    x[3, 0, 4] = float("nan")
+    return x
+
+
+_TARGETS = [0, 2, 3, 5, 7, 8, 9]
+
+_ROUNDING = {"rtol": 1e-6, "atol": 1e-6}
+"""How far a fit may move with the columns fitted beside it: reductions over rows can
+round differently on some platforms, and safepower's lambda search stops within its
+tolerance."""
+
+_FITS_UP_TO_ROUNDING = (
+    TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveSafePowerStep,
+)
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        TorchSelectiveQuantileTransformerStep(20, _TARGETS),
+        TorchSelectiveSafePowerStep(_TARGETS),
+        TorchSelectiveSquashingScalerStep(3.0, _TARGETS),
+        TorchSelectiveRobustScalerStep(_TARGETS),
+        TorchSoftClipOutliersStep(n_sigma=3.0),
+    ],
+    ids=["quantile", "safepower", "squashing", "robust", "soft_clip"],
+)
+def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
+    step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Three columns of 64 float32 rows per block: three blocks for seven targets.
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
+    x = _wide_input()
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = step._fit_transform_column_blocks(
+        x, _TARGETS, 50, None, torch.device("cpu")
+    )
+
+    tolerance = (
+        _ROUNDING if isinstance(step, _FITS_UP_TO_ROUNDING) else {"rtol": 0, "atol": 0}
+    )
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **tolerance)
+    assert actual.fitted_cache is not None
+    assert expected.fitted_cache is not None
+    for key, value in expected.fitted_cache.items():
+        torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
+
+
+def test__fit_transform_rows_on_device__sign_flip__matches_fit_transform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 10 * 10 * 4)
+    x = _wide_input()
+    step = TorchRandomSignFlipStep(random_state=0)
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = pipeline_interface._fit_transform_rows_on_device(
+        step, x, _TARGETS, 50, None, torch.device("cpu")
+    )
+
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__call__host_table__matches_the_device_table() -> None:
+    x = _wide_input()
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    device = torch.device("cuda")
+    expected = _blockwise_pipeline()(x.to(device), schema, num_train_rows=50)
+
+    actual = _blockwise_pipeline()(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=device,
+    )
+
+    assert actual.x.device.type == "cpu"
+    torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True, **_ROUNDING)
+
+
+@pytest.mark.parametrize("use_fitted_cache", [False, True])
+def test__call__staged_on_the_cpu__matches_the_whole_table(
+    monkeypatch: pytest.MonkeyPatch, *, use_fitted_cache: bool
+) -> None:
+    """The staged path, with the CPU standing in for a separate compute device."""
+    monkeypatch.setattr(pipeline_interface, "_same_device", lambda _a, _b: False)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 2 * 64 * 4)
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 10 * 10 * 4)
+    x = _wide_input()
+    x[7, 0, 1] = float("inf")
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    whole = _blockwise_pipeline(keep_fitted_cache=True)
+    staged = _blockwise_pipeline(keep_fitted_cache=True)
+    expected = whole(x.clone(), schema, num_train_rows=50)
+    actual = staged(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+    if use_fitted_cache:
+        x_test = x[50:] * 1.5
+        expected = whole(
+            x_test.clone(), schema, num_train_rows=0, use_fitted_cache=True
+        )
+        actual = staged(
+            x_test.clone(),
+            schema,
+            num_train_rows=0,
+            use_fitted_cache=True,
+            consume_input=True,
+            compute_device=torch.device("cpu"),
+        )
+
+    # Safepower's fit moves slightly with the columns fitted beside it.
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **_ROUNDING)
+    assert actual.feature_schema == expected.feature_schema
+
+
+def test__call__staged__fingerprints_the_table_where_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "_same_device", lambda _a, _b: False)
+    x = _wide_input()
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    expected = TorchPreprocessingPipeline(
+        steps=[(TorchAddFingerprintFeaturesStep(), None)]
+    )(x.clone(), schema, num_train_rows=50)
+
+    actual = TorchPreprocessingPipeline(
+        steps=[(TorchAddFingerprintFeaturesStep(), None)]
+    )(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, rtol=0, atol=0)
+    assert actual.feature_schema == expected.feature_schema
+
+
+def test__call__staged__rejects_a_step_without_a_block_runner_before_any_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = TorchPreprocessingPipeline(
+        steps=[
+            (TorchSelectiveRobustScalerStep([0, 1]), None),
+            (TorchAddSVDFeaturesStep(random_state=0), None),
+        ]
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(
+        pipeline_interface, "_run_step", lambda step, *_, **__: ran.append(step)
+    )
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+
+    with pytest.raises(
+        ValueError, match=r"TorchAddSVDFeaturesStep cannot run by .*pull/1427"
+    ):
+        pipeline(
+            _wide_input(),
+            schema,
+            num_train_rows=50,
+            consume_input=True,
+            # A device unlike `x`'s; nothing is moved there before the check.
+            compute_device=torch.device("meta"),
+        )
+    assert ran == []
+
+
+def test__run_step__staged__moves_wide_blocks_and_computes_in_narrow_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 6 * 64 * 4)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 2 * 64 * 4)
+    step = TorchSoftClipOutliersStep(n_sigma=3.0)
+    widths: list[int] = []
+    fit, transform = step._fit, step._transform
+
+    def spy_fit(x: torch.Tensor) -> dict[str, torch.Tensor]:
+        widths.append(x.shape[-1])
+        return fit(x)
+
+    def spy_transform(x: torch.Tensor, **kwargs: typing.Any) -> typing.Any:
+        widths.append(x.shape[-1])
+        return transform(x, **kwargs)
+
+    moved: list[int] = []
+    run_blocks = step._fit_transform_column_blocks
+
+    def spy_blocks(x: torch.Tensor, *args: typing.Any) -> typing.Any:
+        moved.append(x.shape[-1])
+        return run_blocks(x, *args)
+
+    monkeypatch.setattr(step, "_fit", spy_fit)
+    monkeypatch.setattr(step, "_transform", spy_transform)
+    monkeypatch.setattr(step, "_fit_transform_column_blocks", spy_blocks)
+
+    pipeline_interface._run_step(
+        step,
+        _wide_input(),
+        _TARGETS,
+        50,
+        None,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+
+    assert moved == [6, 1]
+    assert max(widths) == 2
+
+
+def test__run_step__mps__computes_safepower_on_the_cpu() -> None:
+    """MPS has no float64, so safepower's blocks stay on the CPU."""
+    step = TorchSelectiveSafePowerStep(_TARGETS)
+    x = _wide_input()
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = pipeline_interface._run_step(
+        step,
+        x,
+        _TARGETS,
+        50,
+        None,
+        consume_input=True,
+        compute_device=torch.device("mps"),
+    )
+
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
