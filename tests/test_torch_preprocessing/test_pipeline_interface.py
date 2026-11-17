@@ -758,18 +758,23 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
         torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
 
 
-def test__fit_transform_rows_on_device__sign_flip__matches_fit_transform(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 10 * 10 * 4)
+def test__run_step__staged__sign_flip_writes_into_the_host_table() -> None:
     x = _wide_input()
     step = TorchRandomSignFlipStep(random_state=0)
     expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
 
-    actual = pipeline_interface._fit_transform_rows_on_device(
-        step, x, _TARGETS, 50, None, torch.device("cpu")
+    actual = pipeline_interface._run_step(
+        step,
+        x,
+        _TARGETS,
+        50,
+        None,
+        consume_input=True,
+        # Anything moved to `meta` would come back without values.
+        compute_device=torch.device("meta"),
     )
 
+    assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
 
 

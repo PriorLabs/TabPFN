@@ -501,6 +501,14 @@ def _run_step(
         and step.computes_on_cpu_for_mps
     ):
         compute_device = torch.device("cpu")
+    if compute_device is not None and step.runs_on_input_device:
+        return step.fit_transform(
+            x,
+            column_indices=column_indices,
+            num_train_rows=num_train_rows,
+            fitted_cache=fitted_cache,
+            in_place=True,
+        )
     if compute_device is not None and step.columnwise:
         return _fit_transform_on_device(
             step, x, column_indices, num_train_rows, fitted_cache, compute_device

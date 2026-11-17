@@ -62,7 +62,7 @@ class TorchSelectiveStep(TorchPreprocessingStep):
 class TorchRandomSignFlipStep(TorchPreprocessingStep):
     """Randomly negate columns with signs shared across rows."""
 
-    rowwise = True
+    runs_on_input_device = True
 
     def __init__(self, random_state: int | np.random.Generator | None) -> None:
         super().__init__()
@@ -79,16 +79,17 @@ class TorchRandomSignFlipStep(TorchPreprocessingStep):
         *,
         in_place: bool = False,
     ) -> TorchPreprocessingStepResult:
-        del in_place  # Writes a new tensor.
         if fitted_cache is None:
             # Fitting needs only the shape; slicing avoids gathering the table.
             fitted_cache = self._fit(x[:0, :, : len(column_indices)])
 
+        signs = fitted_cache["signs"].to(x)
         if column_indices == list(range(x.shape[-1])):
-            transformed, _, _ = self._transform(x, fitted_cache)
+            transformed = x.mul_(signs) if in_place else x * signs
         else:
-            transformed = x.clone()
-            signs = fitted_cache["signs"].to(x)
+            # Runs of evenly spaced columns, multiplied where they are, leave the
+            # other columns' bits as they were.
+            transformed = x if in_place else x.clone()
             start = 0
             while start < len(column_indices):
                 end = start + 1
