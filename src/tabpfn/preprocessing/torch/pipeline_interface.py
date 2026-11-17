@@ -90,7 +90,7 @@ class TorchPreprocessingStep(abc.ABC):
 
         if fitted_cache is None:
             fitted_cache = self._fit(x_cols_selected[:num_train_rows])
-        elif device != x.device:
+        else:
             fitted_cache = _move_cache_to_device(fitted_cache, device)
 
         transformed, added_columns, added_modality = self._transform(
@@ -199,7 +199,8 @@ class TorchPreprocessingStep(abc.ABC):
         """Transform the selected columns using the cache.
 
         Args:
-            x: Tensor of selected columns [num_rows, batch_size, num_cols].
+            x: Tensor of selected columns [num_rows, batch_size, num_cols]: the
+                step's own copy of them, which the step may overwrite.
             fitted_cache: Cache returned by _fit.
 
         Returns:
@@ -343,9 +344,8 @@ class TorchPreprocessingPipeline:
             if not indices:
                 continue
 
+            # Each step moves the cache to the device it computes on.
             fitted_cache = self.fitted_cache[i] if use_fitted_cache else None
-            if fitted_cache is not None:
-                fitted_cache = _move_cache_to_device(fitted_cache, x.device)
 
             result = _run_step(
                 step,
@@ -471,17 +471,10 @@ def _device_index(device: torch.device) -> int:
 def _move_cache_to_device(
     cache: dict[str, torch.Tensor], device: torch.device
 ) -> dict[str, torch.Tensor]:
-    """Move cache tensors to ``device``, keeping float64 on CPU for MPS.
-
-    MPS has no float64; steps that need it fall back to CPU themselves.
-    """
-
-    def move(v: torch.Tensor) -> torch.Tensor:
-        if device.type == "mps" and v.dtype == torch.float64:
-            return v.cpu()
-        return v.to(device)
-
-    return {k: move(v) if isinstance(v, torch.Tensor) else v for k, v in cache.items()}
+    """Move cache tensors to ``device``."""
+    return {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in cache.items()
+    }
 
 
 def _run_step(
