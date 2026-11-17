@@ -29,18 +29,26 @@ PERMUTE_BLOCK_BYTES = 1 << 26
 """Bytes of rows `permute_columns_in_place` moves at a time."""
 
 GATHER_BLOCK_BYTES = 1 << 26
-"""Bytes of columns `gather_columns` reads at a time."""
+"""Bytes of gathered values `gather_columns` handles at a time."""
 
 
 def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray:
-    """`X[:, indices].astype(dtype, order="C")`, with no full-size intermediate.
-
-    The columns are gathered a block at a time straight into the C-ordered result.
-    """
+    """`X[:, indices].astype(dtype, order="C")`, with no full-size intermediate."""
     out = np.empty((X.shape[0], len(indices)), dtype=dtype, order="C")
-    width = max(1, GATHER_BLOCK_BYTES // max(1, X.shape[0] * X.itemsize))
-    for start in range(0, len(indices), width):
-        out[:, start : start + width] = X[:, indices[start : start + width]]
+    # A block of rows at a time, each cast as it is written into the result.
+    rows = max(1, GATHER_BLOCK_BYTES // max(1, len(indices) * X.itemsize))
+    if X.flags.c_contiguous and X.dtype in (np.float32, np.float64):
+        # numpy gathers columns of a C-ordered array with a strided copy, which
+        # `index_select` beats; from any other layout numpy is the faster.
+        source = as_tensor_to_read(X)
+        index = torch.as_tensor(indices, dtype=torch.long)
+        target = torch.from_numpy(out)
+        for start in range(0, X.shape[0], rows):
+            block = slice(start, start + rows)
+            target[block] = source[block].index_select(1, index)
+        return out
+    for start in range(0, X.shape[0], rows):
+        out[start : start + rows] = X[start : start + rows, indices]
     return out
 
 
@@ -662,12 +670,18 @@ class PreprocessingPipeline:
         return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
     def transform(
-        self, X: np.ndarray | torch.Tensor, *, may_keep_input: bool = False
+        self,
+        X: np.ndarray | torch.Tensor,
+        *,
+        feature_indices: np.ndarray | None = None,
+        may_keep_input: bool = False,
     ) -> PreprocessingPipelineResult:
         """Transform the data using the fitted pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
+            feature_indices: The columns of `X` the pipeline reads, gathered into
+                its working copy; None for all of them.
             may_keep_input: Whether the result may be `X` itself, or a
                 `SharedColumnsTable` over it, which the caller then must not write
                 into.
@@ -684,6 +698,7 @@ class PreprocessingPipeline:
             X,
             self.initial_feature_schema_,
             is_fitting=False,
+            feature_indices=feature_indices,
             may_keep_input=may_keep_input,
         )
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)

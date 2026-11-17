@@ -154,9 +154,10 @@ def clean_data_transform(
             encoding stage unchanged instead of crashing it.
 
     Returns:
-        `X` itself when `X` is a numeric array the encoder encodes no column of; a new
-        float32, C-ordered array when `X` is a float32 array whose encoded columns all
-        held numbers at fit; otherwise a new float64 array.
+        `X`, or a copy of it with the fit-time constant columns restored, when `X` is
+        a numeric array the encoder encodes no column of; a new float32, C-ordered
+        array when `X` is a float32 array whose encoded columns all held numbers at
+        fit; otherwise a new float64 array.
     """
     given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
