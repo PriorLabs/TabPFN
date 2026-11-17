@@ -344,7 +344,10 @@ class InferenceConfig:
           otherwise no importance filtering is done.
     """
 
-    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
+    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] | Literal["auto"] = (
+        None,
+        "safepower",
+    )
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
     it. The preprocessors should be passed as a tuple/list and are then (repeatedly)
@@ -359,6 +362,11 @@ class InferenceConfig:
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
         - One of the options for nonnegative targets from
           `tabpfn.preprocessing.target_transform.ZERO_INFLATED_TARGET_TRANSFORMS`.
+
+    A user's "auto" is the absence of a choice, as for `n_estimators`: the
+    checkpoint's transforms apply. The "zero_inflated" preset of
+    `TabPFNRegressor(presets=...)` sets "auto" and resolves it to a zero-inflated
+    transform for the model.
     """
 
     REGRESSION_TARGET_SIGN_FLIP: bool = False
@@ -464,6 +472,12 @@ class InferenceConfig:
             )
             return deepcopy(user_config)
         if isinstance(user_config, dict):
+            if user_config.get("REGRESSION_Y_PREPROCESS_TRANSFORMS") == "auto":
+                user_config = {
+                    k: v
+                    for k, v in user_config.items()
+                    if k != "REGRESSION_Y_PREPROCESS_TRANSFORMS"
+                }
             return dataclasses.replace(self, **user_config)
         raise ValueError(
             f"{user_config=}\nUnknown user config provided, see config above."

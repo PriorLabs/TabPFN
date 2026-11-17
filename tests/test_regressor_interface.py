@@ -2898,25 +2898,53 @@ def test__fit__stored_fixed_atom__the_model_sees_every_zero_at_the_atom(
     assert (labels[0] == -4.0).sum() == (y == 0).sum()
 
 
-def test__fit__zero_inflated_preset_on_another_zero_inflated_checkpoint__raises() -> (
-    None
-):
+def test__fit__zero_inflated_preset__keeps_a_stored_zero_inflated_transform() -> None:
     X, y = _zero_inflated_tuning_data()
     regressor = TabPFNRegressor(
         presets="zero_inflated",
         **_tuning_regressor_kwargs(
             model_path=_zero_inflated_checkpoint_specs("log_quantile_gap")
         ),
+    ).fit(X, y)
+
+    assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
+        "log_quantile_gap",
     )
 
-    with pytest.raises(ValueError, match="stores the zero-inflated target transforms"):
-        regressor.fit(X, y)
-
-    # Naming the transform in `inference_config` keeps the checkpoint's map.
+    # An explicit choice wins over both.
     regressor.set_params(
-        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",)}
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log1p_target",)}
     ).fit(X, y)
-    assert regressor.inference_config_.REGRESSION_READOUT == "nonnegative_and_capped"
+    assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
+        "log1p_target",
+    )
+
+
+@pytest.mark.parametrize(
+    ("presets", "transforms"),
+    [(None, (None, "safepower")), ("zero_inflated", ("log_quantile_gap",))],
+)
+def test__fit__auto_target_transforms__keep_the_checkpoints_unless_the_preset_is_set(
+    presets: str | None, transforms: tuple
+) -> None:
+    """As for `n_estimators`, a user's "auto" is the absence of a choice."""
+    X, y = _zero_inflated_tuning_data()
+    specs = _create_dummy_regressor_model_specs()
+    assert specs.inference_config.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
+        None,
+        "safepower",
+    )
+
+    regressor = TabPFNRegressor(
+        presets=presets,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": "auto"},
+        **_tuning_regressor_kwargs(model_path=specs),
+    ).fit(X, y)
+
+    assert transforms == regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
+    assert regressor.get_params()["inference_config"] == {
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "auto"
+    }
 
 
 @pytest.mark.parametrize(
