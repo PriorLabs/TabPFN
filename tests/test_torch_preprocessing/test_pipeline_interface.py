@@ -784,11 +784,8 @@ def test__fit_transform__selective_step_in_place__writes_into_x(
 
     actual = step.fit_transform(x, _TARGETS, num_train_rows=50, in_place=True)
 
-    # Safepower's fit moves slightly with the columns fitted beside it.
     tolerance = (
-        _ROUNDING
-        if isinstance(step, TorchSelectiveSafePowerStep)
-        else {"rtol": 0, "atol": 0}
+        _ROUNDING if isinstance(step, _FITS_UP_TO_ROUNDING) else {"rtol": 0, "atol": 0}
     )
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **tolerance)
