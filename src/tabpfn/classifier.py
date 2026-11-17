@@ -632,7 +632,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 the checkpoint, the presets in list order, then the keys of an
                 `inference_config` dict. A preset never changes `tuning_config`.
 
-                - `"grouped"`: for `group_col` data. It sets
+                - `"grouped"`: for `group_col` data, no effect without it. It sets
                   `APPEND_GROUP_AGGREGATES=True` and
                   `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
                   passed to predict, so predict all rows of a group in one call.

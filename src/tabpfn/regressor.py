@@ -724,7 +724,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. On the
                   models up to TabPFN-3.5 it sets `log_quantile_gap` as the y
                   transform.
-                - `"grouped"`: for `group_col` data. It sets
+                - `"grouped"`: for `group_col` data, no effect without it. It sets
                   `APPEND_GROUP_AGGREGATES=True` and
                   `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
                   passed to predict, so predict all rows of a group in one call.
