@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-- `fit` now accepts `sample_weight`, so scikit-learn meta-estimators pass weights to it, and `fit` raises for models without `SAMPLE_WEIGHT_MODE`. `BaggingClassifier(TabPFNClassifier())` and `BaggingRegressor(TabPFNRegressor())` raise in `fit` with any `bootstrap` and `max_samples`, because they pass their row counts as weights instead of fitting on a row subset. `CalibratedClassifierCV(TabPFNClassifier()).fit(X, y, sample_weight=w)` raises instead of warning that the estimator ignores the weights. ([#1415](https://github.com/PriorLabs/TabPFN/pull/1415))
+- `fit` now accepts `sample_weight`, so scikit-learn meta-estimators pass weights to it, and `fit` raises for models without `SAMPLE_WEIGHT_MODE`. `BaggingClassifier(TabPFNClassifier())` and `BaggingRegressor(TabPFNRegressor())` raise in `fit` with any `bootstrap` and `max_samples`, because they pass their row counts as weights instead of fitting on a row subset. `CalibratedClassifierCV(TabPFNClassifier()).fit(X, y, sample_weight=w)` raises instead of warning that the estimator ignores the weights. No released model supports sample weights yet. ([#1415](https://github.com/PriorLabs/TabPFN/pull/1415))
+- A missing value in a `group_col` column now raises in `fit` and `predict`. Before, such a row was treated as belonging to no known group. ([#1418](https://github.com/PriorLabs/TabPFN/pull/1418))
 
 ### Added
 
@@ -22,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TabPFNClassifier.fit` and `TabPFNRegressor.fit` take experimental `sample_weight` and `label_reliability` arguments, applied by models whose inference config sets `SAMPLE_WEIGHT_MODE`. For every other model `fit` raises when they are given. ([#1415](https://github.com/PriorLabs/TabPFN/pull/1415))
 - Two `inference_config` flags add transductive modes for `group_col` data: `APPEND_GROUP_AGGREGATES` appends per-group aggregates of the features, and `POOL_GROUP_PREDICTIONS` gives the rows of a group their mean or geometric-mean prediction when every group has one label. A missing value in a `group_col` column is now refused. ([#1418](https://github.com/PriorLabs/TabPFN/pull/1418))
 - `sample_weight` and `label_reliability` can be combined with `tuning_config`: each tuning fold is fit with the weights of its rows, and a holdout row counts in the tuned metric in proportion to `sample_weight * label_reliability`. ([#1428](https://github.com/PriorLabs/TabPFN/pull/1428))
-- Added `InferenceConfig.AVERAGE_BEFORE_SOFTMAX`, so a checkpoint can set whether the ensemble averages logits or probabilities. `average_before_softmax` now defaults to `"auto"`, which uses the checkpoint's value. ([#1432](https://github.com/PriorLabs/TabPFN/pull/1432))
+- Add `InferenceConfig.AVERAGE_BEFORE_SOFTMAX`, so a checkpoint can set whether the ensemble averages logits or probabilities. `average_before_softmax` now defaults to `"auto"`, which uses the checkpoint's value. ([#1432](https://github.com/PriorLabs/TabPFN/pull/1432))
 
 ### Changed
 
