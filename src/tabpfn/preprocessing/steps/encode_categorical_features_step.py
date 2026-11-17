@@ -457,16 +457,16 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
     def _ordinal_fit_transform(ct: ColumnTransformer, X: np.ndarray) -> np.ndarray:
         """`ct.fit_transform(X)`: the encoded columns first, the rest after them.
 
-        When the pipeline hands `X` over, the columns are moved and the codes written
-        within `X` wherever its dtype holds them exactly.
+        The columns are moved and the codes written within `X`, or within a copy of it
+        when the pipeline does not hand `X` over, wherever its dtype holds them exactly.
         """
         if (
             isinstance(ct, EfficientColumnTransformer)
-            and step_owns_input()
             and X.dtype.kind == "f"
             and X.ndim == 2
         ):
-            out = ct.fit_transform_into(X, out=X)
+            # A copy in `X`'s dtype, not `ct.fit_transform`'s float64 table.
+            out = ct.fit_transform_into(X, out=X if step_owns_input() else X.copy())
             if out is not None:
                 return out
         return ct.fit_transform(X)

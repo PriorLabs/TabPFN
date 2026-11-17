@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import tracemalloc
 import typing
 from typing import Literal
 
@@ -15,14 +16,20 @@ import pytest
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingPipeline,
+    step_owns_input,
+)
 from tabpfn.preprocessing.presets import (
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
-from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
+from tabpfn.preprocessing.steps import (
+    EncodeCategoricalFeaturesStep,
+    ReshapeFeatureDistributionsStep,
+)
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     get_gpu_transform_type,
 )
@@ -157,3 +164,131 @@ def test__reshape_step__no_arithmetic__follows_a_changed_transform_name() -> Non
 
     assert not step.no_arithmetic
     assert not pipeline.keep_float32
+
+
+def test__keep_float32_pipeline__runs_on_a_finite_input_itself() -> None:
+    """Nothing writes into a finite float32 input, so a fit or transform that may
+    keep it does not copy it; by default they copy.
+    """
+    pipeline = PreprocessingPipeline(
+        [ReshapeFeatureDistributionsStep(transform_name="none")]
+    )
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
+
+    fitted = pipeline.fit_transform(X, schema, may_keep_input=True)
+    transformed = pipeline.transform(X, may_keep_input=True)
+
+    assert np.shares_memory(fitted.X, X)
+    assert np.shares_memory(transformed.X, X)
+    assert not np.shares_memory(pipeline.transform(X).X, X)
+    assert fitted.X.dtype == transformed.X.dtype == np.float32
+
+
+def test__keep_float32_pipeline__fit__copies_the_callers_input() -> None:
+    """A fitted model may keep its training data, so the caller must opt in."""
+    pipeline = PreprocessingPipeline(
+        [ReshapeFeatureDistributionsStep(transform_name="none")]
+    )
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
+
+    result = pipeline.fit_transform(X, schema)
+
+    assert not np.shares_memory(result.X, X)
+
+
+@pytest.mark.parametrize(
+    "layout", ["negative_strides", "fortran_order"], ids=lambda layout: layout
+)
+def test__keep_float32_pipeline__copies_an_input_that_is_not_c_ordered(
+    layout: str,
+) -> None:
+    """The output is C-ordered, as the copy is."""
+    pipeline = PreprocessingPipeline(
+        [ReshapeFeatureDistributionsStep(transform_name="none")]
+    )
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    X = X[::-1] if layout == "negative_strides" else np.asfortranarray(X)
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
+    pipeline.fit_transform(X, schema)
+
+    result = pipeline.transform(X, may_keep_input=True)
+
+    assert not np.shares_memory(result.X, X)
+    assert result.X.flags.c_contiguous
+
+
+def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
+    """Infinities are replaced in place, so such an input is copied first."""
+    pipeline = PreprocessingPipeline(
+        [ReshapeFeatureDistributionsStep(transform_name="none")]
+    )
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    X[0, 0] = np.inf
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
+
+    result = pipeline.fit_transform(X, schema, may_keep_input=True)
+
+    assert not np.shares_memory(result.X, X)
+    assert np.isinf(X[0, 0])
+
+
+def test__keep_float32_pipeline__a_steps_new_array__is_written_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A step after one that returned a new array may write into that array."""
+    owned: list[bool] = []
+    encode = EncodeCategoricalFeaturesStep._ordinal_fit_transform
+
+    def spy(ct: typing.Any, X: np.ndarray) -> np.ndarray:
+        owned.append(step_owns_input())
+        return encode(ct, X)
+
+    monkeypatch.setattr(
+        EncodeCategoricalFeaturesStep, "_ordinal_fit_transform", staticmethod(spy)
+    )
+    pipeline = PreprocessingPipeline(
+        [
+            # Moves the categorical column to the front, into a new array.
+            ReshapeFeatureDistributionsStep(transform_name="none"),
+            EncodeCategoricalFeaturesStep("ordinal", random_state=0),
+        ]
+    )
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((50, 4)).astype(np.float32)
+    X[:, 2] = rng.integers(0, 3, size=X.shape[0])
+    schema = FeatureSchema.from_only_categorical_indices([2], num_columns=4)
+
+    pipeline.fit_transform(X, schema, may_keep_input=True)
+
+    assert owned == [True]
+
+
+def test__keep_float32_pipeline__encodes_a_finite_input_without_a_float64_table() -> (
+    None
+):
+    """Ordinal codes go into a float32 copy, not a float64 table cast back."""
+    pipeline = PreprocessingPipeline(
+        [
+            EncodeCategoricalFeaturesStep("ordinal", random_state=0),
+            ReshapeFeatureDistributionsStep(transform_name="none"),
+        ]
+    )
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((20_000, 20)).astype(np.float32)
+    X[:, 0] = rng.integers(0, 5, size=X.shape[0])
+    before = X.copy()
+    schema = FeatureSchema.from_only_categorical_indices([0], num_columns=20)
+
+    tracemalloc.start()
+    try:
+        result = pipeline.fit_transform(X, schema, may_keep_input=True)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # One float32 copy and the encoder's own bookkeeping; a float64 table is two.
+    assert peak < 2 * X.nbytes
+    assert result.X.dtype == np.float32
+    np.testing.assert_array_equal(X, before)

@@ -19,7 +19,7 @@ from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribut
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.target_transform import StandardizeTarget
-from tabpfn.utils import infer_random_state, pad_tensors
+from tabpfn.utils import as_tensor_to_read, infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
@@ -484,11 +484,11 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         ## Convert to tensors.
         for i in range(len(X_trains_preprocessed)):
             if not isinstance(X_trains_preprocessed[i], torch.Tensor):
-                X_trains_preprocessed[i] = torch.as_tensor(
+                X_trains_preprocessed[i] = as_tensor_to_read(
                     X_trains_preprocessed[i], dtype=torch.float32
                 )
             if not isinstance(X_tests_preprocessed[i], torch.Tensor):
-                X_tests_preprocessed[i] = torch.as_tensor(
+                X_tests_preprocessed[i] = as_tensor_to_read(
                     X_tests_preprocessed[i], dtype=torch.float32
                 )
             if not isinstance(y_trains_preprocessed[i], torch.Tensor):

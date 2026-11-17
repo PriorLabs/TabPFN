@@ -30,6 +30,7 @@ import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import pipeline_interface
+from tabpfn.preprocessing.clean import overwrite_fit_input
 
 N_ROWS = 12
 N_TEST = 6
@@ -54,6 +55,11 @@ def _numeric_with_non_finite() -> np.ndarray:
     X[11, 0] = -np.inf
     X[N_ROWS + 2, 4] = np.nan
     X[N_ROWS + 5, 3] = np.inf
+    return X
+
+
+def _read_only(X: np.ndarray) -> np.ndarray:
+    X.flags.writeable = False
     return X
 
 
@@ -86,6 +92,10 @@ def _dataframe_mixed() -> pd.DataFrame:
 
 INPUTS = {
     "numeric_float32": lambda: _numeric("float32"),
+    # Negative strides, which `torch.as_tensor` rejects.
+    "numeric_float32_reversed": lambda: _numeric("float32")[::-1],
+    # A memmap opened read-only, say; preprocessing may hand it on without a copy.
+    "numeric_float32_read_only": lambda: _read_only(_numeric("float32")),
     "numeric_float64": lambda: _numeric("float64"),
     "numeric_with_nan_and_inf": _numeric_with_non_finite,
     "object_mixed": _object_mixed,
@@ -121,8 +131,13 @@ def _assert_unchanged(after: Any, before: Any, what: str) -> None:
     "estimator_cls", [TabPFNClassifier, TabPFNRegressor], ids=lambda c: c.__name__
 )
 @pytest.mark.parametrize("input_kind", list(INPUTS), ids=list(INPUTS))
+@pytest.mark.parametrize(
+    "gpu_preprocessing", [False, True], ids=["cpu_preprocessing", "gpu_preprocessing"]
+)
+# torch warns once per process, so this catches the warning only in a fresh one.
+@pytest.mark.filterwarnings("error:The given NumPy array is not writable")
 def test__fit_predict__leave_every_input_untouched(
-    estimator_cls: type, input_kind: str
+    estimator_cls: type, input_kind: str, *, gpu_preprocessing: bool
 ) -> None:
     """A whole fit + predict changes nothing the caller passed in."""
     X_train, X_test = _split(INPUTS[input_kind]())
@@ -143,7 +158,12 @@ def test__fit_predict__leave_every_input_untouched(
         n_estimators=2,
         device="cpu",
         random_state=0,
-        inference_config=PASSTHROUGH_INF,
+        inference_config={
+            **PASSTHROUGH_INF,
+            # GPU preprocessing (on CPU here) leaves the CPU pipelines without
+            # arithmetic, so they transform the caller's test array without a copy.
+            "ENABLE_GPU_PREPROCESSING": gpu_preprocessing,
+        },
     ).fit(X_train, y_train)
     model.predict(X_test)
     if estimator_cls is TabPFNClassifier:
@@ -152,6 +172,70 @@ def test__fit_predict__leave_every_input_untouched(
     after = {"X_train": X_train, "X_test": X_test, "y_train": y_train}
     for name, original in before.items():
         _assert_unchanged(after[name], original, name)
+
+
+@pytest.mark.parametrize(
+    "estimator_cls", [TabPFNClassifier, TabPFNRegressor], ids=lambda c: c.__name__
+)
+@pytest.mark.parametrize("path", ["batched", "fit_with_cache"])
+# torch warns once per process, so this catches the warning only in a fresh one.
+@pytest.mark.filterwarnings("error:The given NumPy array is not writable")
+def test__predict__read_only_input__reaches_torch_without_a_warning(
+    estimator_cls: type, path: str
+) -> None:
+    X_train, X_test = _split(_read_only(_numeric("float32")))
+    y_train = np.random.default_rng(3).integers(0, 3, N_ROWS)
+    config = {"ENABLE_GPU_PREPROCESSING": True}
+    if path == "batched":
+        model = estimator_cls(
+            n_estimators=2, device="cpu", random_state=0, inference_config=config
+        )
+        predict_batched = (
+            model.predict_proba_batched
+            if estimator_cls is TabPFNClassifier
+            else model.predict_batched
+        )
+        predict_batched([X_train], [y_train], [X_test])
+    else:
+        model = estimator_cls(
+            n_estimators=2,
+            device="cpu",
+            random_state=0,
+            fit_mode="fit_with_cache",
+            inference_config=config,
+        )
+        # Inside the opt-in, the members keep the caller's read-only array.
+        with overwrite_fit_input():
+            model.fit(X_train, y_train)
+        model.predict(X_test)
+
+
+@pytest.mark.parametrize(
+    "estimator_cls", [TabPFNClassifier, TabPFNRegressor], ids=lambda c: c.__name__
+)
+def test__fit__keeps_no_reference_to_the_training_array(estimator_cls: type) -> None:
+    """Outside `overwrite_fit_input()`, the caller may reuse `X_train` after `fit`."""
+    X_train, X_test = _split(_numeric("float32"))
+    rng = np.random.default_rng(3)
+    y_train = (
+        rng.integers(0, 3, N_ROWS)
+        if estimator_cls is TabPFNClassifier
+        else rng.standard_normal(N_ROWS)
+    )
+    model = estimator_cls(
+        n_estimators=2,
+        device="cpu",
+        random_state=0,
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    ).fit(X_train, y_train)
+    predict = (
+        model.predict_proba if estimator_cls is TabPFNClassifier else model.predict
+    )
+    before = predict(X_test)
+
+    X_train += 1.0
+
+    np.testing.assert_array_equal(predict(X_test), before)
 
 
 @pytest.mark.parametrize(

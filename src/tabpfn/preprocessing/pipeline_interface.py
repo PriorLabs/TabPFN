@@ -22,6 +22,7 @@ _STEP_OWNS_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_step_owns_input", default=False
 )
 
+
 PERMUTE_BLOCK_BYTES = 1 << 26
 """Bytes of rows `permute_columns_in_place` moves at a time."""
 
@@ -44,8 +45,8 @@ def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray
 def step_owns_input() -> bool:
     """Whether the running step may write into the array it was handed.
 
-    True only inside `PreprocessingPipeline`, which hands each step a working copy
-    nobody else holds.
+    True only inside `PreprocessingPipeline`, for an array nobody outside the
+    pipeline holds.
     """
     return _STEP_OWNS_INPUT.get()
 
@@ -291,7 +292,8 @@ class PreprocessingStep:
     """Whether the step only selects, reorders, compares and encodes values.
 
     Such a step gives the same float32 results from a float32 copy of its input as
-    from a float64 one.
+    from a float64 one. It may be handed the caller's array, so it writes into its
+    input only when `step_owns_input()`.
     """
 
     @abstractmethod
@@ -468,7 +470,9 @@ class PreprocessingPipeline:
 
     @property
     def keep_float32(self) -> bool:
-        """Whether a float32 input is copied as float32 rather than float64.
+        """Whether a float32 input is copied as float32 rather than float64, and not
+        copied at all when nothing would write into it and the caller lets the
+        result keep it.
 
         True when every step only selects, reorders, compares and encodes values:
         their float32 results equal the float64 ones cast back.
@@ -489,6 +493,7 @@ class PreprocessingPipeline:
         feature_schema: FeatureSchema,
         *,
         feature_indices: np.ndarray | None = None,
+        may_keep_input: bool = False,
     ) -> PreprocessingPipelineResult:
         """Fit and transform the data using the pipeline.
 
@@ -497,22 +502,33 @@ class PreprocessingPipeline:
             feature_schema: feature schema, of the columns the pipeline reads.
             feature_indices: The columns of `X` the pipeline reads, gathered into
                 its working copy; None for all of them.
+            may_keep_input: Whether the result may be `X` itself. A fitted model
+                keeps its training data, so this is only for a caller that hands
+                `X` over.
 
         Returns:
             PreprocessingPipelineResult with transformed data and updated schema.
         """
         self.initial_feature_schema_ = feature_schema
         X, feature_schema = self._process_steps(
-            X, feature_schema, is_fitting=True, feature_indices=feature_indices
+            X,
+            feature_schema,
+            is_fitting=True,
+            feature_indices=feature_indices,
+            may_keep_input=may_keep_input,
         )
         self.final_feature_schema_ = feature_schema
         return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
-    def transform(self, X: np.ndarray | torch.Tensor) -> PreprocessingPipelineResult:
+    def transform(
+        self, X: np.ndarray | torch.Tensor, *, may_keep_input: bool = False
+    ) -> PreprocessingPipelineResult:
         """Transform the data using the fitted pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
+            may_keep_input: Whether the result may be `X` itself, which the caller
+                then must not write into.
 
         Returns:
             PreprocessingPipelineResult with transformed data and feature schema.
@@ -523,7 +539,10 @@ class PreprocessingPipeline:
         assert self.final_feature_schema_ is not None
 
         X, updated_schema = self._process_steps(
-            X, self.initial_feature_schema_, is_fitting=False
+            X,
+            self.initial_feature_schema_,
+            is_fitting=False,
+            may_keep_input=may_keep_input,
         )
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
 
@@ -551,9 +570,16 @@ class PreprocessingPipeline:
         )
 
     def _working_copy(
-        self, X: np.ndarray | torch.Tensor, feature_indices: np.ndarray | None
+        self,
+        X: np.ndarray | torch.Tensor,
+        feature_indices: np.ndarray | None,
+        *,
+        may_keep_input: bool,
     ) -> np.ndarray | torch.Tensor:
-        """The array the steps write into: a copy of `X`, or of its `feature_indices`.
+        """The array the steps run on.
+
+        This is a copy of `X`, or of its `feature_indices` columns. It is `X` itself
+        when nothing would write into it and `may_keep_input`.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -564,10 +590,31 @@ class PreprocessingPipeline:
             index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
             return X.index_select(-1, index)
         keep = self.keep_float32 and X.dtype == np.float32
+        if (
+            keep
+            and feature_indices is None
+            and may_keep_input
+            # The copy is C-ordered, and `torch.as_tensor` rejects negative strides.
+            and X.flags.c_contiguous
+            and self._writes_only_owned_input(X)
+        ):
+            return X
         dtype = np.float32 if keep else np.float64
         if feature_indices is None:
             return X.astype(dtype, order="C", copy=True)
         return gather_columns(X, feature_indices, dtype)
+
+    def _writes_only_owned_input(self, X: np.ndarray) -> bool:
+        """Whether the steps can run on `X` itself without anything writing into it.
+
+        That is not the case when a step has modalities, because the pipeline writes
+        that step's output back into its array, or when `X` holds infinities, which
+        are replaced in place. The steps themselves only write into arrays they own.
+        """
+        if any(modalities for _, modalities in self.steps):
+            return False
+        (has_inf,) = any_per_column(X, [np.isinf])
+        return not has_inf.any()
 
     def _process_steps(
         self,
@@ -575,6 +622,7 @@ class PreprocessingPipeline:
         feature_schema: FeatureSchema,
         *,
         is_fitting: bool,
+        may_keep_input: bool,
         feature_indices: np.ndarray | None = None,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Process all pipeline steps.
@@ -583,18 +631,22 @@ class PreprocessingPipeline:
             X: Input array of shape (n_samples, n_features).
             feature_schema: Feature schema.
             is_fitting: If True, call fit_transform on steps; otherwise transform.
+            may_keep_input: Whether the result may be `X` itself.
             feature_indices: Columns of `X` to gather into the working copy.
 
         Returns:
             Tuple of (transformed array, updated feature schema).
         """
-        X = self._working_copy(X, feature_indices)
+        given = X
+        X = self._working_copy(X, feature_indices, may_keep_input=may_keep_input)
+        owns_input = X is not given
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
         # end.  Computed per call so train and test each restore their own
         # pattern.  A no-op when the input is already finite.
-        inf_masks = _extract_inf_masks(X, feature_schema)
+        # Without a copy, `_working_copy` has already found `X` free of infinities.
+        inf_masks = _extract_inf_masks(X, feature_schema) if owns_input else {}
         if is_fitting:
             feature_schema = _flag_non_constant_with_infs(feature_schema, inf_masks)
 
@@ -638,7 +690,7 @@ class PreprocessingPipeline:
                 # We still have preprocessing steps that don't change the columns
                 # internally (will be deprecated going forward). For backwards
                 # compatibility, we still handle these here.
-                owned = _STEP_OWNS_INPUT.set(True)
+                owned = _STEP_OWNS_INPUT.set(owns_input)
                 try:
                     result = (
                         step.fit_transform(X, feature_schema)
@@ -652,6 +704,8 @@ class PreprocessingPipeline:
                 X, feature_schema = self._maybe_append_added_columns(
                     X, feature_schema, result, step.added_feature_prefix()
                 )
+                # A new array from a step is the pipeline's to hand on.
+                owns_input = owns_input or not np.may_share_memory(X, given)
 
             if self.record_timings:
                 step_key = f"{step_idx}_{step.__class__.__name__}"

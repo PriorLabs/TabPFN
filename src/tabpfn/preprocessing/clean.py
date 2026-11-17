@@ -326,8 +326,9 @@ def overwrite_fit_input() -> Iterator[None]:
     """Let a `fit` inside this block write into the array it is given.
 
     For a caller that hands over a large, writeable float32 array it no longer
-    needs: its categorical columns are then coded in place rather than in a copy. A
-    read-only array is copied as outside the block.
+    needs: its categorical columns are then coded in place rather than in a copy,
+    and preprocessing that writes nothing keeps the array rather than a copy. A
+    read-only array's categorical columns are coded in a copy, as outside the block.
 
     Each array may be given to one `fit` only. Its contents are undefined after that
     fit, and the fitted model may keep it, so the caller must neither read nor
@@ -338,6 +339,11 @@ def overwrite_fit_input() -> Iterator[None]:
         yield
     finally:
         _OVERWRITE_FIT_INPUT.reset(token)
+
+
+def overwriting_fit_input() -> bool:
+    """Whether the caller is inside `overwrite_fit_input()`."""
+    return _OVERWRITE_FIT_INPUT.get()
 
 
 def may_overwrite_fit_input(X: Any, given: Any) -> bool:
