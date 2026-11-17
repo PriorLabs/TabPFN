@@ -44,6 +44,7 @@ from tabpfn.inference_tuning import (
     get_tuning_temperatures,
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
+from tabpfn.pareto_tail import ParetoTail, capped_mean_excess
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
@@ -1917,6 +1918,43 @@ def test__logits_to_output__truncated__quantile_one_is_the_last_kept_border(
     np.testing.assert_array_equal(top, [expected])
 
 
+def test__logits_to_output__tail__reads_the_mass_above_the_threshold_from_it() -> None:
+    # xi = 0.5 and M - u = 4 give the tail mean excess 2.
+    tail = ParetoTail(threshold=2.5, cap=6.5, n_excesses=30, sigma=2.0, xi=0.5)
+    assert tail.mean_excess == pytest.approx(2.0)
+    # Rows: half in the bucket that holds 0, half in [2, 3], which holds u; all in
+    # [1.5, 2], below u; all in the tail bucket above 3; half in [2, 3], half in
+    # the tail bucket.
+    probs = torch.zeros(4, 6, dtype=torch.float64)
+    probs[0, 2] = probs[0, 4] = 0.5
+    probs[1, 3] = 1.0
+    probs[2, 5] = 1.0
+    probs[3, 4] = probs[3, 5] = 0.5
+
+    def mean(truncate_above: float, tail: ParetoTail) -> np.ndarray:
+        return regressor_module._logits_to_output(
+            output_type="mean",
+            logits=probs.log(),
+            znorm_space_bardist=_SMALL_GRID,
+            y_mean=0.0,
+            y_std=1.0,
+            quantiles=[],
+            truncate_above=truncate_above,
+            tail=tail,
+        )
+
+    # In [2, 3], the half below u reads 2.25 and the half above it reads u.
+    straddle = 0.5 * 2.25 + 0.5 * 2.5
+    np.testing.assert_allclose(
+        mean(10.0, tail),
+        [0.5 * straddle + 0.25 * 2.0, 1.75, 2.5 + 2.0, 0.5 * straddle + 1.25 + 1.5],
+    )
+    doubled = dataclasses.replace(tail, probability_scale=2.0)
+    np.testing.assert_allclose(mean(10.0, doubled)[[1, 2]], [1.75, 2.5 + 4.0])
+    # Capped at 2.5, the tail bucket above 3 is dropped first.
+    np.testing.assert_allclose(mean(2.5, tail)[3], straddle + 0.5 * 2.0)
+
+
 def test__predict__nonnegative_and_capped__reads_every_output_truncated() -> None:
     X, y = _zero_inflated_regression_data()
     config = {"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)}
@@ -1951,9 +1989,12 @@ def test__predict__nonnegative_and_capped__reads_every_output_truncated() -> Non
     torch.testing.assert_close(full["logits"], full_plain["logits"])
 
 
+@pytest.mark.parametrize(
+    "readout", ["nonnegative_and_capped", "nonnegative_and_pareto_tail"]
+)
 @pytest.mark.parametrize("constant", [False, True])
-def test__fit__nonnegative_and_capped_with_negative_targets__raises(
-    constant: bool,
+def test__fit__nonnegative_readout_with_negative_targets__raises(
+    constant: bool, readout: str
 ) -> None:
     X, y = _zero_inflated_regression_data()
     y[0] = -1.0
@@ -1963,10 +2004,10 @@ def test__fit__nonnegative_and_capped_with_negative_targets__raises(
     reg = TabPFNRegressor(
         n_estimators=1,
         device="cpu",
-        inference_config={"REGRESSION_READOUT": "nonnegative_and_capped"},
+        inference_config={"REGRESSION_READOUT": readout},
     )
 
-    with pytest.raises(ValueError, match=r"nonnegative_and_capped.*nonnegative"):
+    with pytest.raises(ValueError, match=rf"{readout}.*nonnegative"):
         reg.fit(X, y)
 
 
@@ -2424,10 +2465,12 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
         log_weights,
         row_weights,
         truncate_above,
+        tail,
     ) in folds:
         assert log_weights is None
         assert row_weights is None
         assert truncate_above is None
+        assert tail is None
         n_holdout = len(X) // 2
         assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
         assert y_holdout.shape == (n_holdout,)
@@ -2643,12 +2686,17 @@ def _zero_inflated_tuning_data() -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-def test__fit__with_mean_calibration_and_a_mean_readout__scales_the_readout() -> None:
+@pytest.mark.parametrize(
+    "readout", ["nonnegative_and_capped", "nonnegative_and_exponential_tail"]
+)
+def test__fit__with_mean_calibration_and_a_mean_readout__scales_the_readout(
+    readout: str,
+) -> None:
     X, y = _zero_inflated_tuning_data()
     kwargs = _tuning_regressor_kwargs(
         inference_config={
             "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
-            "REGRESSION_READOUT": "nonnegative_and_capped",
+            "REGRESSION_READOUT": readout,
         }
     )
     splits = {"tuning_holdout_frac": 0.5, "tuning_n_folds": 2}
@@ -2678,6 +2726,132 @@ def test__fit__with_mean_calibration_and_a_mean_readout__scales_the_readout() ->
         expected_scale * plain.predict(X[:20]),
         rtol=1e-6,
     )
+
+
+TAIL_READOUTS = ["nonnegative_and_pareto_tail", "nonnegative_and_exponential_tail"]
+
+
+def _tail_readout_kwargs(readout: str, **config: Any) -> dict[str, Any]:
+    return _tuning_regressor_kwargs(
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
+            "REGRESSION_READOUT": readout,
+            **config,
+        }
+    )
+
+
+@pytest.mark.parametrize("readout", TAIL_READOUTS)
+def test__predict__tail_readout__adds_the_fitted_tail_to_the_mean(
+    readout: str,
+) -> None:
+    X, y = _zero_inflated_tuning_data()
+    reg = TabPFNRegressor(**_tail_readout_kwargs(readout)).fit(X, y)
+
+    tail = reg.pareto_tail_
+    assert tail is not None
+    assert tail.cap == 2 * y.max()
+    assert (tail.xi == 0.0) == (readout == "nonnegative_and_exponential_tail")
+    full = reg.predict(X[:50], output_type="full")
+
+    def expected(output_type: str, tail: ParetoTail | None) -> typing.Any:
+        return regressor_module._logits_to_output(
+            output_type=output_type,
+            logits=full["logits"],
+            znorm_space_bardist=reg.znorm_space_bardist_,
+            y_mean=reg.y_train_mean_,
+            y_std=reg.y_train_std_,
+            quantiles=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+            truncate_above=float(y.max()),
+            tail=tail,
+        )
+
+    np.testing.assert_array_equal(full["mean"], expected("mean", tail))
+    assert (full["mean"] >= 0).all()
+    assert not np.allclose(full["mean"], expected("mean", None))
+    # Only the mean reads the tail; the other outputs are the capped ones.
+    for output_type in ("median", "mode", "quantiles"):
+        np.testing.assert_array_equal(full[output_type], expected(output_type, None))
+
+
+def test__fit__tail_readout__reads_the_threshold_and_cap_from_the_config() -> None:
+    X, y = _zero_inflated_tuning_data()
+    readout = "nonnegative_and_exponential_tail"
+    default = TabPFNRegressor(**_tail_readout_kwargs(readout)).fit(X, y)
+    threshold, cap = float(np.quantile(y, 0.9)), 1.2 * float(y.max())
+    reg = TabPFNRegressor(
+        **_tail_readout_kwargs(
+            readout, REGRESSION_TAIL_THRESHOLD=threshold, REGRESSION_TAIL_CAP=cap
+        )
+    ).fit(X, y)
+
+    tail = reg.pareto_tail_
+    assert tail is not None
+    assert tail.threshold == threshold
+    assert tail.cap == cap
+    np.testing.assert_allclose(
+        tail.mean_excess, capped_mean_excess(tail.sigma, 0.0, cap - threshold)
+    )
+    assert not np.allclose(reg.predict(X[:20]), default.predict(X[:20]))
+
+
+def test__fit__tail_cap_below_the_threshold__raises() -> None:
+    X, y = _zero_inflated_tuning_data()
+    reg = TabPFNRegressor(
+        **_tail_readout_kwargs(
+            "nonnegative_and_pareto_tail",
+            REGRESSION_TAIL_THRESHOLD=10.0,
+            REGRESSION_TAIL_CAP=5.0,
+        )
+    )
+
+    with pytest.raises(ValueError, match="cap"):
+        reg.fit(X, y)
+
+
+def test__fit__with_rescale_tail_probability__matches_the_tail_share_on_holdout() -> (
+    None
+):
+    X, y = _zero_inflated_tuning_data()
+    kwargs = _tail_readout_kwargs("nonnegative_and_pareto_tail")
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "rescale_tail_probability": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 2,
+        },
+        **kwargs,
+    ).fit(X, y)
+
+    folds = regressor._compute_holdout_validation_data(
+        X=X, y=y, holdout_frac=0.5, n_folds=2
+    )
+    tail_probability = np.concatenate(
+        [regressor._holdout_tail_probability(fold) for fold in folds]
+    )
+    tail = regressor.pareto_tail_
+    assert tail is not None
+    assert tail.probability_scale != 1.0
+    np.testing.assert_allclose(
+        tail.probability_scale * tail_probability.mean(),
+        tail.n_excesses / len(y),
+        rtol=1e-10,
+    )
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    assert plain.pareto_tail_ is not None
+    assert plain.pareto_tail_.probability_scale == 1.0
+    assert not np.allclose(regressor.predict(X[:20]), plain.predict(X[:20]))
+
+
+def test__fit__rescale_tail_probability_without_a_tail_readout__raises() -> None:
+    X, y = _zero_inflated_tuning_data()
+    regressor = TabPFNRegressor(
+        tuning_config={"rescale_tail_probability": True},
+        **_tuning_regressor_kwargs(),
+    )
+
+    with pytest.raises(ValueError, match="nonnegative_and_pareto_tail"):
+        regressor.fit(X, y)
 
 
 def _weighted_tuning_regressor_kwargs(
