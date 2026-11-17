@@ -2799,21 +2799,27 @@ def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only() -> No
     assert sklearn.base.clone(regressor).presets == "zero_inflated"
 
 
-def test__fit__zero_inflated_preset_on_a_builtin_model__raises() -> None:
+def test__fit__zero_inflated_preset_on_a_builtin_model__sets_the_builtin_config() -> (
+    None
+):
     X, y = _zero_inflated_tuning_data()
-    regressor = TabPFNRegressor(presets="zero_inflated", **_tuning_regressor_kwargs())
 
-    with pytest.raises(ValueError, match=r"does not support `presets=.zero_inflated.`"):
-        regressor.fit(X, y)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        regressor = TabPFNRegressor(
+            presets="zero_inflated",
+            tuning_config={"calibrate_mean": True},
+            **_tuning_regressor_kwargs(),
+        ).fit(X, y)
 
-    # The setup the error suggests works on this model.
-    regressor = TabPFNRegressor(
-        inference_config=regressor_module.BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG,
-        **_tuning_regressor_kwargs(),
-    ).fit(X, y)
-    assert regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
-        "log_quantile_gap",
-    )
+    config = regressor.inference_config_
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_quantile_gap",)
+    assert config.REGRESSION_READOUT == "nonnegative_and_capped"
+    # One warning, from the full fit and not from its tuning folds, pointing at
+    # the caller of `fit`.
+    notes = [w for w in record if "up to TabPFN-3.5" in str(w.message)]
+    assert len(notes) == 1
+    assert notes[0].filename == __file__
 
 
 def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() -> None:
@@ -2976,21 +2982,9 @@ def test__fit__zero_inflated_target__suggests_a_zero_inflated_setup(
 
     suggestions = [w for w in record if "zero-inflated targets" in str(w.message)]
     assert len(suggestions) == int(warns)
-    # The warning points at the caller of `fit`, with the setup for this model.
+    # The warning points at the caller of `fit`.
     assert all(w.filename == __file__ for w in suggestions)
-    assert all("log_quantile_gap" in str(w.message) for w in suggestions)
-
-
-def test__fit__zero_inflated_target_on_another_architecture__suggests_the_preset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(regressor_module, "_zero_share_warning_issued", False)
-    X, y = _zero_inflated_tuning_data()
-
-    with pytest.warns(UserWarning, match='consider `presets="zero_inflated"`'):
-        TabPFNRegressor(
-            **_tuning_regressor_kwargs(model_path=_other_architecture_specs())
-        ).fit(X, y)
+    assert all('presets="zero_inflated"' in str(w.message) for w in suggestions)
 
 
 def test__fit__zero_inflated_target__suggests_the_preset_once(
