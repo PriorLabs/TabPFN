@@ -26,7 +26,7 @@ _MAX_COLLISION_RETRIES = 100
 _HASH_ROUND_DECIMALS = 12
 
 _HASH_BLOCK_BYTES = 1 << 26
-"""Bytes of rows `_rounded_rows` copies to the host and rounds at a time. Larger
+"""Bytes of rows `_rows_and_rounded` copies to the host and rounds at a time. Larger
 blocks cost host memory; smaller ones add a transfer per block, which the per-row
 hashing outweighs until blocks get very small."""
 
@@ -35,14 +35,19 @@ def _to_host(X: np.ndarray | torch.Tensor) -> np.ndarray:
     return X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else X
 
 
-def _rounded_rows(X: np.ndarray | torch.Tensor) -> Iterator[np.ndarray]:
-    """`X`'s rows rounded for hashing, on the host, which holds one block at a time."""
+def _rows_and_rounded(
+    X: np.ndarray | torch.Tensor,
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """`X`'s rows on the host, each with its rounding for hashing.
+
+    The host holds one block of rows at a time.
+    """
     itemsize = X.element_size() if isinstance(X, torch.Tensor) else X.itemsize
     rows = max(1, _HASH_BLOCK_BYTES // max(1, X.shape[1] * itemsize))
     for start in range(0, X.shape[0], rows):
-        yield from np.ascontiguousarray(
-            np.around(_to_host(X[start : start + rows]), decimals=_HASH_ROUND_DECIMALS)
-        )
+        block = _to_host(X[start : start + rows])
+        rounded = np.ascontiguousarray(np.around(block, decimals=_HASH_ROUND_DECIMALS))
+        yield from zip(block, rounded, strict=True)
 
 
 def _hash_row_bytes(row_data: bytes, salt_bytes: bytes) -> float:
@@ -105,8 +110,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
 
         X_h = np.zeros(X.shape[0], dtype=_to_host(X[:0]).dtype)
         if is_test:
-            for i, row in enumerate(_rounded_rows(X)):
-                X_h[i] = _hash_row_bytes(row.tobytes(), salt_bytes)
+            for i, (_, rounded) in enumerate(_rows_and_rounded(X)):
+                X_h[i] = _hash_row_bytes(rounded.tobytes(), salt_bytes)
         else:
             # Handle hash collisions by counting up and rehashing
             seen_hashes = set()
@@ -116,8 +121,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
                 ob = (salt + offset).to_bytes(8, "little", signed=False)
                 return _hash_row_bytes(row_bytes, ob)
 
-            for i, row in enumerate(_rounded_rows(X)):
-                row_data = row.tobytes()
+            for i, (row, rounded) in enumerate(_rows_and_rounded(X)):
+                row_data = rounded.tobytes()
 
                 # Calculate the base hash to identify the row content
                 h_base = _hash_row_bytes(row_data, salt_bytes)
@@ -133,7 +138,6 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
 
                 # Resolve remaining collisions
                 retries = 0
-                # Rounding keeps NaN and makes none, so the rounded row tells.
                 while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
                     retries += 1
