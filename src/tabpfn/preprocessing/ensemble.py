@@ -39,7 +39,7 @@ from tabpfn.preprocessing.torch import (
     create_gpu_preprocessing_pipeline,
 )
 from tabpfn.preprocessing.transform import fit_preprocessing
-from tabpfn.utils import infer_random_state
+from tabpfn.utils import as_tensor_to_read, infer_random_state
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -53,6 +53,19 @@ if TYPE_CHECKING:
     from tabpfn.preprocessing.row_weights import SampleWeightMode
 
 T = TypeVar("T")
+
+
+def _take_columns(
+    X: np.ndarray | torch.Tensor, indices: np.ndarray
+) -> np.ndarray | torch.Tensor:
+    """`X[..., indices]`, C-ordered for a C-ordered float32 array."""
+    if isinstance(X, np.ndarray) and X.dtype == np.float32 and X.flags.c_contiguous:
+        # numpy gathers columns of a C-ordered array with a strided copy into an
+        # F-ordered result, which the pipeline copies again; `index_select` gathers
+        # into a C-ordered one, which it can share.
+        index = torch.as_tensor(indices, dtype=torch.long)
+        return as_tensor_to_read(X).index_select(1, index).numpy()
+    return X[..., indices]
 
 
 @dataclasses.dataclass
@@ -86,7 +99,7 @@ class TabPFNEnsembleMember:
         The result may be `X` itself, so the caller must not write into it.
         """
         if self.feature_indices is not None:
-            X = X[..., self.feature_indices]
+            X = _take_columns(X, self.feature_indices)
         return self.cpu_preprocessor.transform(X, may_keep_input=True).X
 
 
