@@ -183,7 +183,7 @@ OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 
 REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "zero_inflated_auto",
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("zero_inflated_auto",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
 }
@@ -699,8 +699,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
                   `REGRESSION_READOUT` to `"nonnegative_and_capped"` and
-                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `"zero_inflated_auto"`,
-                  a zero-inflated transform for the model.
+                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to
+                  `("zero_inflated_auto",)`, a zero-inflated transform for the
+                  model.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -934,14 +935,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.inference_config_ = _apply_presets(
                 self.inference_config_, self.presets, self.inference_config
             )
-        if (
-            self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
-            == "zero_inflated_auto"
-        ):
+        transforms = self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
+        if "zero_inflated_auto" in transforms:
+            resolved = _zero_inflated_transforms(stored, self.configs_)
             self.inference_config_ = dataclasses.replace(
                 self.inference_config_,
-                REGRESSION_Y_PREPROCESS_TRANSFORMS=_zero_inflated_transforms(
-                    stored, self.configs_
+                REGRESSION_Y_PREPROCESS_TRANSFORMS=tuple(
+                    r
+                    for t in transforms
+                    for r in (resolved if t == "zero_inflated_auto" else (t,))
                 ),
             )
         return byte_size
@@ -2939,19 +2941,18 @@ def _apply_presets(
 
 
 def _zero_inflated_transforms(
-    stored: tuple[str | None, ...] | str,
+    stored: tuple[str | None, ...],
     architecture_configs: Sequence[ArchitectureConfig],
 ) -> tuple[str, ...]:
     """What "zero_inflated_auto" resolves to: the zero-inflated transforms in
     `stored`, else `log_quantile_gap` on the built-in architectures and
     `log_fixed_atom` on all others.
     """
-    if not isinstance(stored, str):
-        kept = tuple(
-            t for t in stored if t is not None and t in ZERO_INFLATED_TARGET_TRANSFORMS
-        )
-        if kept:
-            return kept
+    kept = tuple(
+        t for t in stored if t is not None and t in ZERO_INFLATED_TARGET_TRANSFORMS
+    )
+    if kept:
+        return kept
     if all(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs):
         return ("log_quantile_gap",)
     return ("log_fixed_atom",)

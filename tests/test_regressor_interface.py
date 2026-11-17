@@ -2937,13 +2937,15 @@ def test__fit__zero_inflated_auto__picks_a_transform_for_the_model(
 
     regressor = TabPFNRegressor(
         presets=presets,
-        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": "zero_inflated_auto"},
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("zero_inflated_auto",)
+        },
         **_tuning_regressor_kwargs(model_path=model_path),
     ).fit(X, y)
 
     assert transforms == regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
     assert regressor.get_params()["inference_config"] == {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "zero_inflated_auto"
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("zero_inflated_auto",)
     }
 
 

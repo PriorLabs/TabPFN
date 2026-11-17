@@ -344,9 +344,7 @@ class InferenceConfig:
           otherwise no importance filtering is done.
     """
 
-    REGRESSION_Y_PREPROCESS_TRANSFORMS: (
-        tuple[str | None, ...] | Literal["zero_inflated_auto"]
-    ) = (None, "safepower")
+    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
     it. The preprocessors should be passed as a tuple/list and are then (repeatedly)
@@ -361,11 +359,7 @@ class InferenceConfig:
           `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
         - One of the options for nonnegative targets from
           `tabpfn.preprocessing.target_transform.ZERO_INFLATED_TARGET_TRANSFORMS`.
-
-    "zero_inflated_auto" picks a zero-inflated transform for the model: the ones
-    the checkpoint stores, else "log_quantile_gap" for the models up to TabPFN-3.5
-    and "log_fixed_atom" for others. The "zero_inflated" preset of
-    `TabPFNRegressor(presets=...)` sets it.
+        - "zero_inflated_auto": a zero-inflated transform for the model.
     """
 
     REGRESSION_TARGET_SIGN_FLIP: bool = False
