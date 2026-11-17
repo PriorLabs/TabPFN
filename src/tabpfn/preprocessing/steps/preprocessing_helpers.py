@@ -204,6 +204,27 @@ class EfficientColumnTransformer(ColumnTransformer):
                 return shared
         return self.transform(np.asarray(X))
 
+    def transform_into(self, X: np.ndarray) -> np.ndarray | None:
+        """`transform(X)`'s values, written into `X`, an array the caller owns.
+
+        None, with `X` untouched, when the output cannot be laid out column by column
+        or a code would change in `X`'s dtype; `transform` is then to be used.
+        """
+        name, selected = self._named_selection()
+        if not (
+            selected
+            and self.n_features_in_ == X.shape[1]
+            and not self.sparse_output_
+            and self._may_assemble(X[:1], {})
+        ):
+            return None
+        # Fancy indexing copies, so `X` stays untouched until every code is known.
+        codes = X[:, selected]
+        if not self._encode_in_place(name, codes):
+            return None
+        destination, passthrough = self._output_positions(X, name, selected)
+        return _assemble_into(X, codes, X, selected, destination, passthrough)
+
     def _shared_output(
         self,
         X: SharedColumnsTable,
@@ -213,20 +234,29 @@ class EfficientColumnTransformer(ColumnTransformer):
     ) -> SharedColumnsTable | None:
         """The output laid out as `_assemble` lays it, sharing `X`'s base columns.
 
-        `codes`, `X`'s selected columns in `X`'s dtype, is encoded in place, a block
-        of rows at a time, so the encoder's wider intermediates span one block. None
-        when a code would change in `X`'s dtype.
+        `codes` are `X`'s selected columns in `X`'s dtype. None when a code would
+        change in `X`'s dtype.
+        """
+        if not self._encode_in_place(name, codes):
+            return None
+        destination, passthrough = self._output_positions(X, name, selected)
+        return X.with_columns(codes, destination, passthrough)
+
+    def _encode_in_place(self, name: str | None, codes: np.ndarray) -> bool:
+        """Encode `codes`, the selected columns, in their own dtype.
+
+        False, with `codes` partly written, when a code would change in that dtype.
         """
         encoder = self.named_transformers_[name]
-        # Sized by the encoder's float64 output.
+        # A block of rows at a time, so the encoder's wider intermediates span one
+        # block. Sized by the encoder's float64 output.
         rows = max(1, ROW_SCAN_BLOCK_BYTES // max(1, codes.shape[1] * 8))
         for start in range(0, len(codes), rows):
             block = np.asarray(encoder.transform(codes[start : start + rows]))
             if not _holds_exactly(block, codes.dtype):
-                return None
+                return False
             codes[start : start + rows] = block
-        destination, passthrough = self._output_positions(X, name, selected)
-        return X.with_columns(codes, destination, passthrough)
+        return True
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:
