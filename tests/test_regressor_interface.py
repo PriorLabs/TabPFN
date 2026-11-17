@@ -2769,7 +2769,7 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
 
 
 class _OtherArchitectureConfig(tabpfn_v2_5.TabPFNV2p5Config):
-    """Stands for an architecture outside `UP_TO_3_5_ARCHITECTURE_CONFIGS`."""
+    """Stands for an architecture outside `ARCHITECTURE_CONFIGS_UP_TO_V3_5`."""
 
 
 def _other_architecture_specs() -> ModelSpecs:
@@ -2982,7 +2982,7 @@ def test__fit__zero_inflated_target__suggests_a_zero_inflated_setup(
     y[-1] = minimum if minimum < 0 else y[-1]
     regressor = TabPFNRegressor(
         inference_config=(
-            regressor_module.UP_TO_3_5_ZERO_INFLATED_INFERENCE_CONFIG
+            regressor_module.ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5
             if zero_inflated_config
             else None
         ),
