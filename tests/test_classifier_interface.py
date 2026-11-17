@@ -119,11 +119,8 @@ def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if inference_precision == "autocast":
-        if torch.device(device).type == "cpu":
-            pytest.skip("CPU device does not support 'autocast' inference.")
-        if torch.device(device).type == "mps" and torch.__version__ < "2.5":
-            pytest.skip("MPS does not support mixed precision before PyTorch 2.5")
+    if inference_precision == "autocast" and torch.device(device).type == "cpu":
+        pytest.skip("CPU device does not support 'autocast' inference.")
     if (
         torch.device(device).type == "cpu"
         and inference_precision == torch.float16
@@ -889,10 +886,8 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         }
         patch_layernorm_no_affine(classifier.models_[0])
 
-        # From 2.9 PyTorch changed the default export mode from TorchScript to
-        # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
-        # available in newer PyTorch versions, hence we don't always include it.
-        export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
+        # Only the TorchScript exporter is supported, not the default Dynamo one.
+        export_kwargs = {"dynamo": False}
         torch.onnx.export(
             ModelWrapper(classifier.models_[0]).eval(),
             (X_tensor, y_tensor, True, [[]]),

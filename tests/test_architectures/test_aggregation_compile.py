@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 import torch
-from torch.torch_version import TorchVersion
 
 from tabpfn.architectures import tabpfn_v3_5 as v35
 from tabpfn.architectures.interface import PerformanceOptions
@@ -43,8 +42,6 @@ def compiled_regions(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> list[str]:
     """Trace real graphs without requiring Inductor or inheriting cached wrappers."""
-    if TorchVersion(torch.__version__) < TorchVersion("2.6"):
-        pytest.skip("v3.5 compilation requires PyTorch >= 2.6")
     for cls, name in _REGIONS:
         original = getattr(cls, name).__wrapped__
         monkeypatch.setattr(cls, name, compile_when_enabled(original))
@@ -69,28 +66,6 @@ def compiled_regions(
     return regions
 
 
-@torch.no_grad()
-def test__compile_flag__unsupported_pytorch__raises_only_when_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    model = _get_model()
-    x, y = _inputs("multiclass")
-    expected = model(x, y, "multiclass")
-    monkeypatch.setattr(torch, "__version__", "2.5.0")
-    with pytest.raises(ValueError, match=r"v3.5 compilation requires PyTorch >= 2\.6"):
-        model(
-            x,
-            y,
-            "multiclass",
-            performance_options=PerformanceOptions(enable_torch_compile=True),
-        )
-    torch.testing.assert_close(model(x, y, "multiclass"), expected)
-
-
-@pytest.mark.skipif(
-    TorchVersion(torch.__version__) < TorchVersion("2.6"),
-    reason="v3.5 compilation requires PyTorch >= 2.6",
-)
 def test__compiled_region__concurrent_first_calls__initialize_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

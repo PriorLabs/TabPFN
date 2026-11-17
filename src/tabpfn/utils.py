@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 import numpy as np
 import numpy.typing as npt
 import torch
-from torch.torch_version import TorchVersion
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import (
@@ -144,15 +143,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
             )
 
         if "mps" not in exclude_devices and torch.backends.mps.is_available():
-            if _is_torch_mps_supported():
-                return (torch.device("mps"),)
-            warnings.warn(
-                "An MPS device is available, but TabPFN disables MPS for "
-                "PyTorch < 2.6 (earlier versions can give poor accuracy and "
-                "lack bfloat16 autocast support on the MPS backend). Falling "
-                "back to CPU. Install torch>=2.6 to use MPS.",
-                stacklevel=2,
-            )
+            return (torch.device("mps"),)
 
         return (torch.device("cpu"),)
 
@@ -167,17 +158,10 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
             f"than once. It contained: {devices}"
         )
 
-    if any(d.type == "mps" for d in devices):
-        if not torch.backends.mps.is_available():
-            raise ValueError(
-                "The MPS device was selected, but MPS is not available on this system."
-            )
-        if not _is_torch_mps_supported():
-            raise ValueError(
-                "The MPS device was selected, "
-                "but TabPFN requires PyTorch >= 2.6 for MPS. "
-                "Upgrade PyTorch, or set device='cpu' instead."
-            )
+    if any(d.type == "mps" for d in devices) and not torch.backends.mps.is_available():
+        raise ValueError(
+            "The MPS device was selected, but MPS is not available on this system."
+        )
 
     return devices
 
@@ -194,14 +178,6 @@ def _parse_device(device: str | torch.device) -> torch.device:
         device = torch.device("cuda:0")
 
     return device
-
-
-def _is_torch_mps_supported() -> bool:
-    """Return True if the MPS device is supported, otherwise False.
-
-    We require PyTorch >= 2.6 for MPS to support all used operations.
-    """
-    return torch.__version__ >= TorchVersion("2.6")
 
 
 def is_autocast_available(device_type: str) -> bool:

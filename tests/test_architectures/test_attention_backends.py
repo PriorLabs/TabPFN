@@ -213,9 +213,6 @@ def _gqa_inputs(
     return q, k, v
 
 
-@pytest.mark.skipif(
-    torch.__version__ < "2.5", reason="enable_gqa requires torch >= 2.5"
-)
 def test__torch_mps_sdpa__gqa_matches_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
