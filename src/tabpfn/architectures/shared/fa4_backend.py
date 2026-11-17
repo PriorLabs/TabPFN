@@ -308,7 +308,7 @@ class FA4Backend(AttentionBackend):
         v_BSJD: torch.Tensor | None,
         **_informational: Any,  # forward-compat context; safe to ignore
     ) -> torch.Tensor:
-        """Run FA4 (k/v arrive dense; the SDPA wrapper dequantizes)."""
+        """Run FA4 (k/v arrive dense from the SDPA wrapper)."""
         assert k_BSJD is not None
         assert v_BSJD is not None
         return fa4_attn_func(
