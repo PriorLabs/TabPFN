@@ -297,7 +297,8 @@ class InferenceConfig:
     Only the ``quantile_uni*``, ``quantile_norm*``, ``squashing_scaler_*``,
     ``safepower`` and ``robust`` transforms are accelerated.  Other transforms stay
     on CPU regardless of this flag.  SVD and shuffle always move to GPU / torch when
-    this flag is set.
+    this flag is set.  With ``APPEND_GROUP_AGGREGATES``, the aggregates of the
+    numeric columns are also selected on the device when it is a CUDA device.
 
     The GPU transforms read the table in float32, while the CPU ones compute in
     float64. A column whose spread is small against its magnitude, such as a

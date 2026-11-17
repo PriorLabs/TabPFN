@@ -651,6 +651,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 `n_estimators > 1`, the estimators are preprocessed on that many
                 threads, which speeds up the fit on large tables. Threads beyond
                 `n_estimators` are unused.
+                With `APPEND_GROUP_AGGREGATES`, the aggregates are also selected
+                on that many threads. `-1` uses all cores.
 
             inference_config:
                 For advanced users, additional advanced arguments that adjust the
@@ -1103,6 +1105,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.group_aggregator_ = GroupAggregator(
             append=self.inference_config_.APPEND_GROUP_AGGREGATES,
             pool=self.inference_config_.POOL_GROUP_PREDICTIONS is not None,
+            n_jobs=self.n_preprocessing_jobs,
+            # float64 is needed, which MPS lacks; on CPU pandas is faster.
+            device=self.devices_[0]
+            if self.inference_config_.ENABLE_GPU_PREPROCESSING
+            and self.devices_[0].type == "cuda"
+            else None,
         )
         X = self.group_aggregator_.fit_transform(
             X, y, groups, exclude=self.group_encoder_.feature_name_
