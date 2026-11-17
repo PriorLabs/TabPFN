@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-11-17
+
+### Added
+
+- Add `TabPFNRegressor(presets=...)`, named bundles of `inference_config` values. The `"zero_inflated"` preset is for nonnegative targets with many exact zeros: it sets the `log_fixed_atom` target transform and the `nonnegative_and_capped` readout. On the models up to TabPFN-3.5 it sets `log_quantile_gap` with the same readout instead. `fit` suggests the preset, once per process, for nonnegative targets with more than 20% zeros and at least 50 widely spread, non-count positives. ([#1413](https://github.com/PriorLabs/TabPFN/pull/1413))
+- With GPU preprocessing, a table held in host memory goes through the selective steps (quantile, squashing, safepower, robust) a block at a time, and the fingerprint hashes it where it is. Any other step that cannot run by blocks raises on such a table. ([#1426](https://github.com/PriorLabs/TabPFN/pull/1426))
+- Add the `"grouped"` preset for `group_col` data, on both estimators: `presets="grouped"` sets `APPEND_GROUP_AGGREGATES=True` and `POOL_GROUP_PREDICTIONS="mean"`. `TabPFNClassifier` gets the `presets` argument for it. Both modes are computed over the rows passed to predict, so predict all rows of a group in one call. ([#1434](https://github.com/PriorLabs/TabPFN/pull/1434))
+
+### Changed
+
+- A CPU preprocessing pipeline that writes nothing into a float32 input no longer copies it at predict, nor at fit inside `overwrite_fit_input()`. ([#1425](https://github.com/PriorLabs/TabPFN/pull/1425))
+- With GPU preprocessing, random sign flips and the feature shuffle write into a table they may consume, and run on a table held in host memory without moving it to the GPU. ([#1438](https://github.com/PriorLabs/TabPFN/pull/1438))
+- With GPU preprocessing, the quantile, squashing and safepower steps transform a table they may consume in place, a block of columns at a time. Quantile and safepower can then differ from a fit over all columns by float rounding. ([#1440](https://github.com/PriorLabs/TabPFN/pull/1440))
+- When every CPU preprocessing step only selects, reorders or encodes (as with GPU preprocessing), ensemble members fitted inside `overwrite_fit_input()` read the caller's table and hold only the categorical columns they encode, rather than a copy each. At predict, a test table without categorical columns is read the same way. ([#1442](https://github.com/PriorLabs/TabPFN/pull/1442))
+
+
 ## [10.1.0] - 2026-11-17
 
 ### Breaking Changes
