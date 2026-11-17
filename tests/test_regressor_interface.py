@@ -2877,7 +2877,7 @@ def test__fit__grouped_preset__appends_aggregates_and_pools_predictions() -> Non
     regressor = TabPFNRegressor(
         presets=["zero_inflated", "grouped"],
         group_col="g",
-        **_tuning_regressor_kwargs(),
+        **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
     ).fit(X, y)
 
     config = regressor.inference_config_
