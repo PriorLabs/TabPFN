@@ -34,6 +34,7 @@ from tabpfn.preprocessing.steps import (
     ReshapeFeatureDistributionsStep,
 )
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
+    GPUTransformType,
     get_gpu_transform_type,
 )
 
@@ -319,7 +320,16 @@ def test__keep_float32_pipeline__encodes_a_finite_input_without_a_float64_table(
     np.testing.assert_array_equal(X, before)
 
 
-@pytest.mark.parametrize("encoding", ["ordinal", "ordinal_shuffled", "numeric"])
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        "ordinal",
+        "ordinal_shuffled",
+        "ordinal_common_categories",
+        "ordinal_very_common_categories_shuffled",
+        "numeric",
+    ],
+)
 def test__keep_float32_pipeline__may_keep_input__shares_the_columns_it_leaves(
     encoding: str,
 ) -> None:
@@ -360,4 +370,36 @@ def test__keep_float32_pipeline__may_keep_input__shares_the_columns_it_leaves(
     assert isinstance(sharing.transform(X_test).X, np.ndarray)
     np.testing.assert_array_equal(
         np.asarray(shared), copying.transform(X_test.copy()).X
+    )
+
+
+def test__keep_float32_pipeline__may_keep_input__appending_reshape__matches() -> None:
+    """A reshape that appends the original columns hands sklearn an array."""
+
+    def pipeline() -> PreprocessingPipeline:
+        return PreprocessingPipeline(
+            [
+                RemoveConstantFeaturesStep(),
+                ReshapeFeatureDistributionsStep(
+                    transform_name="none",
+                    append_to_original=True,
+                    schedule_gpu_transform=GPUTransformType.QUANTILE,
+                ),
+                EncodeCategoricalFeaturesStep("ordinal_shuffled", random_state=0),
+            ]
+        )
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((200, 6)).astype(np.float32)
+    X[:, 1] = rng.integers(0, 4, size=200)
+    schema = FeatureSchema.from_only_categorical_indices([1], num_columns=6)
+    copying, sharing = pipeline(), pipeline()
+
+    expected = copying.fit_transform(X.copy(), schema)
+    actual = sharing.fit_transform(X, schema, may_keep_input=True)
+
+    np.testing.assert_array_equal(np.asarray(actual.X), expected.X)
+    np.testing.assert_array_equal(
+        np.asarray(sharing.transform(X, may_keep_input=True).X),
+        copying.transform(X.copy()).X,
     )

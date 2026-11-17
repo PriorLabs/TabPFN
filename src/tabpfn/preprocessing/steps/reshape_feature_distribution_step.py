@@ -29,6 +29,7 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
+    SharedColumnsTable,
     permute_columns_in_place,
     step_owns_input,
 )
@@ -501,7 +502,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         if column_order is not None:
             return _reordered(X, column_order), None, None
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X), None, None
+        return self.transformer_.transform(_as_array(X)), None, None
 
     @override
     def fit_transform(
@@ -527,7 +528,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             feature_schema,
         )
         if transformer is not None:
-            x_transformed = transformer.fit_transform(X)
+            x_transformed = transformer.fit_transform(_as_array(X))
         elif self.column_order_ is not None:
             x_transformed = _reordered(X, self.column_order_)
         else:
@@ -793,6 +794,11 @@ def get_all_reshape_feature_distribution_preprocessors(
     )
 
     return all_preprocessors
+
+
+def _as_array(X: np.ndarray | SharedColumnsTable) -> np.ndarray:
+    """`X` for a sklearn transformer, which reads arrays only."""
+    return np.asarray(X) if isinstance(X, SharedColumnsTable) else X
 
 
 def _reordered(X: np.ndarray, order: list[int]) -> np.ndarray:

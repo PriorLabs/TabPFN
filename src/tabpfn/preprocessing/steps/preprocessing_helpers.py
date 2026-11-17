@@ -20,6 +20,7 @@ from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 
 from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
 from tabpfn.preprocessing.pipeline_interface import (
+    ROW_SCAN_BLOCK_BYTES,
     SharedColumnsTable,
     permute_columns_in_place,
 )
@@ -153,55 +154,69 @@ class EfficientColumnTransformer(ColumnTransformer):
             return None
         return self._assemble(X, name, selected, out=out)
 
-    def fit_transform_shared(self, X: SharedColumnsTable) -> SharedColumnsTable | None:
+    def fit_transform_shared(
+        self, X: SharedColumnsTable
+    ) -> SharedColumnsTable | np.ndarray:
         """`fit_transform(X)`'s values, as a table that shares `X`'s base columns.
 
-        None when `fit_transform_into` would return None; the transformer is then to
-        be fitted again.
+        An array, from `fit_transform`, when the output cannot be laid out column by
+        column or a code would change in `X`'s dtype.
         """
         head = X[:1]
-        if not self._may_assemble_a_fit(head, None, {}):
-            return None
-        probe = self._fit_column_bookkeeping(head)
-        name, selected = self._named_selection()
-        if not selected or not self._can_assemble(X, probe, selected):
-            return None
-        transformed = np.asarray(
-            self.named_transformers_[name].fit_transform(np.asarray(X[:, selected]))
-        )
-        return self._shared_output(X, name, selected, transformed)
+        if self._may_assemble_a_fit(head, None, {}):
+            probe = self._fit_column_bookkeeping(head)
+            name, selected = self._named_selection()
+            if selected and self._can_assemble(X, probe, selected):
+                codes = np.asarray(X[:, selected])
+                self.named_transformers_[name].fit(codes)
+                shared = self._shared_output(X, name, selected, codes)
+                if shared is not None:
+                    return shared
+        return self.fit_transform(np.asarray(X))
 
-    def transform_shared(self, X: SharedColumnsTable) -> SharedColumnsTable | None:
+    def transform_shared(
+        self, X: SharedColumnsTable
+    ) -> SharedColumnsTable | np.ndarray:
         """`transform(X)`'s values, as a table that shares `X`'s base columns.
 
-        None when the output cannot be assembled column by column; `transform` is then
-        to be called on the whole array, with its checks.
+        An array, from `transform` and its checks, when the output cannot be laid out
+        column by column or a code would change in `X`'s dtype.
         """
-        if not hasattr(self, "transformers_") or self.n_features_in_ != X.shape[1]:
-            return None
         name, selected = self._named_selection()
-        if not selected or self.sparse_output_ or not self._may_assemble(X[:1], {}):
-            return None
-        transformed = np.asarray(
-            self.named_transformers_[name].transform(np.asarray(X[:, selected]))
-        )
-        return self._shared_output(X, name, selected, transformed)
+        if (
+            selected
+            and self.n_features_in_ == X.shape[1]
+            and not self.sparse_output_
+            and self._may_assemble(X[:1], {})
+        ):
+            shared = self._shared_output(X, name, selected, np.asarray(X[:, selected]))
+            if shared is not None:
+                return shared
+        return self.transform(np.asarray(X))
 
     def _shared_output(
         self,
         X: SharedColumnsTable,
         name: str | None,
         selected: list[Any],
-        transformed: np.ndarray,
+        codes: np.ndarray,
     ) -> SharedColumnsTable | None:
         """The output laid out as `_assemble` lays it, sharing `X`'s base columns.
 
-        None when a transformed value would change in `X`'s dtype.
+        `codes`, `X`'s selected columns in `X`'s dtype, is encoded in place, a block
+        of rows at a time, so the encoder's wider intermediates span one block. None
+        when a code would change in `X`'s dtype.
         """
-        if not _holds_exactly(transformed, X.dtype):
-            return None
+        encoder = self.named_transformers_[name]
+        # Sized by the encoder's float64 output.
+        rows = max(1, ROW_SCAN_BLOCK_BYTES // max(1, codes.shape[1] * 8))
+        for start in range(0, len(codes), rows):
+            block = np.asarray(encoder.transform(codes[start : start + rows]))
+            if not _holds_exactly(block, codes.dtype):
+                return None
+            codes[start : start + rows] = block
         destination, passthrough = self._output_positions(X, name, selected)
-        return X.with_columns(transformed, destination, passthrough)
+        return X.with_columns(codes, destination, passthrough)
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:

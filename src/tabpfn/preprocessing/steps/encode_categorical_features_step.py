@@ -32,9 +32,22 @@ from tabpfn.utils import infer_random_state
 ONE_HOT_ENCODER_NAME = "one_hot_encoder"
 ORDINAL_ENCODER_NAME = "ordinal_encoder"
 
-_SHARED_TABLE_TRANSFORMS = ("ordinal", "ordinal_shuffled", "numeric", "none")
-"""The encodings that keep a `SharedColumnsTable` input one, sharing the columns
-they do not encode; any other builds the whole array first."""
+
+def _keeps_a_shared_table(transform_name: str) -> bool:
+    """Whether the encoding keeps a `SharedColumnsTable` input one, sharing the
+    columns it does not encode; any other builds the whole array first.
+    """
+    return transform_name.startswith("ordinal") or transform_name in (
+        "numeric",
+        "none",
+    )
+
+
+def _column(X: np.ndarray | SharedColumnsTable, column: int) -> np.ndarray:
+    """Column `column` of `X`, as a 1-D array."""
+    if isinstance(X, SharedColumnsTable):
+        return np.asarray(X[:, [column]])[:, 0]
+    return X[:, column]
 
 
 def _writeable_column(X: np.ndarray | SharedColumnsTable, column: int) -> np.ndarray:
@@ -242,7 +255,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
     def _get_transformer(
         self,
-        X: np.ndarray,
+        X: np.ndarray | SharedColumnsTable,
         categorical_features: list[int],
     ) -> tuple[ColumnTransformer | None, list[int]]:
         if self.categorical_transform_name.startswith("ordinal"):
@@ -252,18 +265,18 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 name = name[len("_common_categories") :]
                 categorical_features = [
                     i
-                    for i, col in enumerate(X.T)
+                    for i in range(X.shape[1])
                     if i in categorical_features
-                    and _get_least_common_category_count(col) >= 10
+                    and _get_least_common_category_count(_column(X, i)) >= 10
                 ]
             elif name.startswith("_very_common_categories"):
                 name = name[len("_very_common_categories") :]
                 categorical_features = [
                     i
-                    for i, col in enumerate(X.T)
+                    for i in range(X.shape[1])
                     if i in categorical_features
-                    and _get_least_common_category_count(col) >= 10
-                    and len(np.unique(col)) < (len(X) // 10)  # type: ignore
+                    and _get_least_common_category_count(column := _column(X, i)) >= 10
+                    and len(np.unique(column)) < (len(X) // 10)
                 ]
 
             assert name in ("_shuffled", ""), (
@@ -400,9 +413,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
-        if (
-            isinstance(X, SharedColumnsTable)
-            and self.categorical_transform_name not in _SHARED_TABLE_TRANSFORMS
+        if isinstance(X, SharedColumnsTable) and not _keeps_a_shared_table(
+            self.categorical_transform_name
         ):
             X = np.asarray(X)
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
@@ -479,13 +491,9 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         when the pipeline does not hand `X` over, wherever its dtype holds them exactly.
         """
         if isinstance(X, SharedColumnsTable):
-            shared = (
-                ct.fit_transform_shared(X)
-                if isinstance(ct, EfficientColumnTransformer)
-                else None
-            )
-            # `fit_transform_into` gives up on the same conditions.
-            return shared if shared is not None else ct.fit_transform(np.asarray(X))
+            # `_get_transformer` builds an ordinal encoding as this transformer.
+            assert isinstance(ct, EfficientColumnTransformer)
+            return ct.fit_transform_shared(X)
         if (
             isinstance(ct, EfficientColumnTransformer)
             and X.dtype.kind == "f"
@@ -520,13 +528,10 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 "ignore", message=".*Found unknown categories in col.*"
             )  # These warnings are expected when transforming test data
             if isinstance(X, SharedColumnsTable):
-                shared = (
+                transformed = (
                     ct.transform_shared(X)
                     if isinstance(ct, EfficientColumnTransformer)
-                    else None
-                )
-                transformed = (
-                    shared if shared is not None else ct.transform(np.asarray(X))
+                    else ct.transform(np.asarray(X))
                 )
             else:
                 transformed = ct.transform(X)

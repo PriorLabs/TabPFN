@@ -9,7 +9,6 @@ import dataclasses
 import functools
 import os
 import time
-import warnings
 from abc import abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +18,7 @@ import numpy as np
 import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.utils import as_tensor_to_read
 
 _STEP_OWNS_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_step_owns_input", default=False
@@ -200,44 +200,36 @@ class SharedColumnsTable:
         sources = np.empty(n_columns, dtype=np.intp)
         for position, column in passthrough:
             sources[position] = self.sources[column]
-        positions = range(n_columns)[at] if isinstance(at, slice) else at
-        sources[list(positions)] = -1 - (self.own.shape[1] + np.arange(values.shape[1]))
-        own = np.concatenate([self.own, values.astype(self.dtype)], axis=1)
+        sources[at] = -1 - (self.own.shape[1] + np.arange(values.shape[1]))
+        if self.own.shape[1] == 0 and values.dtype == self.dtype:
+            own = values  # the caller's to give away
+        else:
+            own = np.concatenate([self.own, values], axis=1, dtype=self.dtype)
         return SharedColumnsTable(self.base, sources, own)
 
     def copy_rows_into(self, start: int, stop: int, out: torch.Tensor) -> None:
         """Writes rows `start:stop` into `out`, a CPU tensor of their shape."""
-        with warnings.catch_warnings():
-            # `base` may be read-only; it is only read here.
-            warnings.filterwarnings(
-                "ignore", message="The given NumPy array is not writable"
-            )
-            base = torch.from_numpy(self.base[start:stop])
+        shared_at, shared_from, own_at, own_from = self._column_indices
+        base = as_tensor_to_read(self.base[start:stop])
+        out.index_copy_(1, shared_at, base.index_select(1, shared_from))
+        if len(own_at):
             own = torch.from_numpy(self.own[start:stop])
-        # Runs of adjacent columns, so torch copies wide strips on its own threads
-        # rather than numpy gathering one value at a time.
-        for position, source, width in self._runs:
-            values = base if source >= 0 else own
-            column = source if source >= 0 else -1 - source
-            out[:, position : position + width].copy_(
-                values[:, column : column + width]
-            )
+            out.index_copy_(1, own_at, own.index_select(1, own_from))
 
     @functools.cached_property
-    def _runs(self) -> list[tuple[int, int, int]]:
-        """`(position, source, width)` per run of columns that are adjacent in both
-        the table and their source, `source` encoded as in `sources`.
+    def _column_indices(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Where the shared columns go and come from in `base`, then the same for
+        the own columns.
         """
-        runs: list[tuple[int, int, int]] = []
-        for position, source in enumerate(self.sources.tolist()):
-            if runs:
-                start, first, width = runs[-1]
-                step = 1 if first >= 0 else -1
-                if (source >= 0) == (first >= 0) and source == first + step * width:
-                    runs[-1] = (start, first, width + 1)
-                    continue
-            runs.append((position, source, 1))
-        return runs
+        shared = self.sources >= 0
+        return (
+            torch.as_tensor(np.flatnonzero(shared)),
+            torch.as_tensor(self.sources[shared]),
+            torch.as_tensor(np.flatnonzero(~shared)),
+            torch.as_tensor(-1 - self.sources[~shared]),
+        )
 
     def __array__(self, dtype: Any = None, *, copy: bool | None = None) -> np.ndarray:
         if self.is_base():
