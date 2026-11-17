@@ -1713,6 +1713,44 @@ def test__overwrite_fit_input__preprocessing_in_processes__fits() -> None:
     np.testing.assert_array_equal(model.predict(X), expected.predict(X))
 
 
+def _two_categoricals_table(
+    estimator_cls: type,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Train rows, test rows and targets of a float32 table with categorical
+    columns 3 and 6.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((300, 8)).astype(np.float32)
+    X[:, 3] = rng.integers(0, 5, 300)
+    X[:, 6] = rng.integers(0, 3, 300)
+    y = (
+        rng.integers(0, 2, 200)
+        if estimator_cls is TabPFNClassifier
+        else rng.standard_normal(200)
+    )
+    return X[:200].copy(), X[200:].copy(), y
+
+
+def _encoding_only_members(
+    estimator_cls: type, fit_mode: str
+) -> TabPFNClassifier | TabPFNRegressor:
+    """Two members whose CPU steps only encode, so they may share a float32 table."""
+    return estimator_cls(
+        n_estimators=2,
+        device="cpu",
+        random_state=0,
+        fit_mode=fit_mode,
+        categorical_features_indices=[3, 6],
+        inference_config={
+            "ENABLE_GPU_PREPROCESSING": True,
+            "PREPROCESS_TRANSFORMS": [
+                PreprocessorConfig("none", categorical_name="ordinal"),
+                PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
+            ],
+        },
+    )
+
+
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "fit_with_cache"])
 def test__overwrite_fit_input__categoricals__members_share_the_array(
@@ -1721,37 +1759,10 @@ def test__overwrite_fit_input__categoricals__members_share_the_array(
     """Members hold their encoded columns and read the rest from the caller's
     array, and predict as members that copied it.
     """
-    rng = np.random.default_rng(0)
-    X = rng.standard_normal((300, 8)).astype(np.float32)
-    X[:, 3] = rng.integers(0, 5, 300)
-    X[:, 6] = rng.integers(0, 3, 300)
-    X_train, X_test = X[:200].copy(), X[200:]
-    y = (
-        rng.integers(0, 2, 200)
-        if estimator_cls is TabPFNClassifier
-        else rng.standard_normal(200)
-    )
-    transforms = [
-        PreprocessorConfig("none", categorical_name="ordinal"),
-        PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
-    ]
-
-    def estimator() -> TabPFNClassifier | TabPFNRegressor:
-        return estimator_cls(
-            n_estimators=2,
-            device="cpu",
-            random_state=0,
-            fit_mode=fit_mode,
-            categorical_features_indices=[3, 6],
-            inference_config={
-                "ENABLE_GPU_PREPROCESSING": True,
-                "PREPROCESS_TRANSFORMS": transforms,
-            },
-        )
-
-    expected = estimator().fit(X_train.copy(), y)
+    X_train, X_test, y = _two_categoricals_table(estimator_cls)
+    expected = _encoding_only_members(estimator_cls, fit_mode).fit(X_train.copy(), y)
     with clean_module.overwrite_fit_input():
-        model = estimator().fit(X_train, y)
+        model = _encoding_only_members(estimator_cls, fit_mode).fit(X_train, y)
 
     if fit_mode == "fit_preprocessors":
         # `fit_with_cache` drops the members' tables once their cache is built.
@@ -1775,32 +1786,10 @@ def test__predict__float32_with_categoricals__members_share_the_test_table(
     """Members hold their encoded test columns and read the rest from the cleaned
     float32 table, and predict as on the float64 table.
     """
-    rng = np.random.default_rng(0)
-    X = rng.standard_normal((300, 8)).astype(np.float32)
-    X[:, 3] = rng.integers(0, 5, 300)
-    X[:, 6] = rng.integers(0, 3, 300)
-    X_train, X_test = X[:200], X[200:].copy()
+    X_train, X_test, y = _two_categoricals_table(estimator_cls)
     X_test[:5, 3] = 7  # a category unseen at fit
     X_test[5, 6] = np.nan
-    y = (
-        rng.integers(0, 2, 200)
-        if estimator_cls is TabPFNClassifier
-        else rng.standard_normal(200)
-    )
-    model = estimator_cls(
-        n_estimators=2,
-        device="cpu",
-        random_state=0,
-        fit_mode=fit_mode,
-        categorical_features_indices=[3, 6],
-        inference_config={
-            "ENABLE_GPU_PREPROCESSING": True,
-            "PREPROCESS_TRANSFORMS": [
-                PreprocessorConfig("none", categorical_name="ordinal"),
-                PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
-            ],
-        },
-    ).fit(X_train, y)
+    model = _encoding_only_members(estimator_cls, fit_mode).fit(X_train, y)
     predict = (
         model.predict_proba if estimator_cls is TabPFNClassifier else model.predict
     )

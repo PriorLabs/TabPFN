@@ -191,12 +191,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         column by column or a code would change in `X`'s dtype.
         """
         name, selected = self._named_selection()
-        if (
-            selected
-            and self.n_features_in_ == X.shape[1]
-            and not self.sparse_output_
-            and self._may_assemble(X[:1], {})
-        ):
+        if self._may_transform_by_column(X, selected):
             shared = self._shared_output(
                 X, name, selected, _columns_to_encode(X, selected)
             )
@@ -211,12 +206,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         or a code would change in `X`'s dtype; `transform` is then to be used.
         """
         name, selected = self._named_selection()
-        if not (
-            selected
-            and self.n_features_in_ == X.shape[1]
-            and not self.sparse_output_
-            and self._may_assemble(X[:1], {})
-        ):
+        if not self._may_transform_by_column(X, selected):
             return None
         # Fancy indexing copies, so `X` stays untouched until every code is known.
         codes = X[:, selected]
@@ -224,6 +214,19 @@ class EfficientColumnTransformer(ColumnTransformer):
             return None
         destination, passthrough = self._output_positions(X, name, selected)
         return _assemble_into(X, codes, X, selected, destination, passthrough)
+
+    def _may_transform_by_column(
+        self, X: np.ndarray | SharedColumnsTable, selected: list[Any] | None
+    ) -> bool:
+        """Whether `transform(X)` can be laid out column by column, which skips the
+        checks `ColumnTransformer.transform` makes against the input seen at fit.
+        """
+        return (
+            bool(selected)
+            and self.n_features_in_ == X.shape[1]
+            and not self.sparse_output_
+            and self._may_assemble(X[:1], {})
+        )
 
     def _shared_output(
         self,

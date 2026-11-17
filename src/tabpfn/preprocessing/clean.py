@@ -154,8 +154,9 @@ def clean_data_transform(
             encoding stage unchanged instead of crashing it.
 
     Returns:
-        The cleaned data as a float64 array, or as a float32, C-ordered one for a
-        float32 array whose categorical columns alone are encoded.
+        `X` itself when `X` is a numeric array the encoder encodes no column of; a new
+        float32, C-ordered array when `X` is a float32 array whose encoded columns all
+        held numbers at fit; otherwise a new float64 array.
     """
     given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
@@ -297,9 +298,8 @@ def _fitted_on_numbers(ord_encoder: OrderPreservingColumnTransformer) -> bool:
     The general path casts a column that held strings at fit back to strings, which
     a float32 array cannot hold.
     """
-    encoder = ord_encoder.named_transformers_.get("encoder")
-    categories = getattr(encoder, "categories_", None)
-    return categories is not None and all(c.dtype.kind in "fiu" for c in categories)
+    categories = ord_encoder.named_transformers_["encoder"].categories_
+    return all(c.dtype.kind in "fiu" for c in categories)
 
 
 def _with_categoricals(X: np.ndarray, cat_indices: Sequence[int]) -> pd.DataFrame:
