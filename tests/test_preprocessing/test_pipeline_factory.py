@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import tracemalloc
 import typing
 from typing import Literal
 
@@ -22,7 +23,10 @@ from tabpfn.preprocessing.presets import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
-from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
+from tabpfn.preprocessing.steps import (
+    EncodeCategoricalFeaturesStep,
+    ReshapeFeatureDistributionsStep,
+)
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     get_gpu_transform_type,
 )
@@ -186,3 +190,32 @@ def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
 
     assert not np.shares_memory(result.X, X)
     assert np.isinf(X[0, 0])
+
+
+def test__keep_float32_pipeline__encodes_a_finite_input_without_a_float64_table() -> (
+    None
+):
+    """Ordinal codes go into a float32 copy, not a float64 table cast back."""
+    pipeline = PreprocessingPipeline(
+        [
+            EncodeCategoricalFeaturesStep("ordinal", random_state=0),
+            ReshapeFeatureDistributionsStep(transform_name="none"),
+        ]
+    )
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((20_000, 20)).astype(np.float32)
+    X[:, 0] = rng.integers(0, 5, size=X.shape[0])
+    before = X.copy()
+    schema = FeatureSchema.from_only_categorical_indices([0], num_columns=20)
+
+    tracemalloc.start()
+    try:
+        result = pipeline.fit_transform(X, schema)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # One float32 copy and the encoder's own bookkeeping; a float64 table is two.
+    assert peak < 2 * X.nbytes
+    assert result.X.dtype == np.float32
+    np.testing.assert_array_equal(X, before)
