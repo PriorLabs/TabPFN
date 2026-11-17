@@ -548,10 +548,10 @@ def test__call__consume_input__step_without_in_place_keyword_runs() -> None:
 
 @pytest.mark.parametrize("use_cache", [False, True])
 @pytest.mark.parametrize("indices", [[0, 1, 2, 3, 4, 6], [6, 1, 4, 2]])
-def test__fit_transform_on_device__column_blocks__match_fit_transform(
+def test__fit_transform_column_blocks__on_a_device__match_fit_transform(
     use_cache: bool, indices: list[int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 12 * 2 * 4 * 2)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 12 * 2 * 4 * 2)
     generator = torch.Generator().manual_seed(0)
     x = torch.randn(12, 2, 7, generator=generator)
     x[0, 0, 3] = 40.0
@@ -560,8 +560,8 @@ def test__fit_transform_on_device__column_blocks__match_fit_transform(
     expected = step.fit_transform(x.clone(), indices, num_train_rows=9)
     cache = expected.fitted_cache if use_cache else None
 
-    actual = pipeline_interface._fit_transform_on_device(
-        step, x, indices, 9, cache, torch.device("cpu")
+    actual = step._fit_transform_column_blocks(
+        x, indices, 9, cache, torch.device("cpu")
     )
 
     assert actual.x.data_ptr() == x.data_ptr()
@@ -686,9 +686,12 @@ def test__fit_transform_rows_on_device__row_blocks__match_fit_transform(
     assert actual.schema_permutation == expected.schema_permutation
 
 
-def _blockwise_pipeline() -> TorchPreprocessingPipeline:
+def _blockwise_pipeline(
+    *, keep_fitted_cache: bool = False
+) -> TorchPreprocessingPipeline:
     """One step of each kind the block runners handle, on 10 numerical columns."""
     return TorchPreprocessingPipeline(
+        keep_fitted_cache=keep_fitted_cache,
         steps=[
             (TorchSelectiveQuantileTransformerStep(20, [0, 1, 2]), None),
             (TorchSelectiveSafePowerStep([3, 4]), None),
@@ -696,7 +699,7 @@ def _blockwise_pipeline() -> TorchPreprocessingPipeline:
             (TorchSelectiveRobustScalerStep([7, 8]), None),
             (TorchRandomSignFlipStep(random_state=0), {FeatureModality.NUMERICAL}),
             (TorchShuffleFeaturesStep("shuffle", 0, random_state=3), None),
-        ]
+        ],
     )
 
 
@@ -721,16 +724,16 @@ _TARGETS = [0, 2, 3, 5, 7, 8, 9]
     ],
     ids=["quantile", "safepower", "squashing", "robust", "soft_clip"],
 )
-def test__fit_transform_on_device__columnwise_step__matches_fit_transform(
+def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
     step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Three columns of 64 float32 rows per block: three blocks for seven targets.
-    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 64 * 4)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
     x = _wide_input()
     expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
 
-    actual = pipeline_interface._fit_transform_on_device(
-        step, x, _TARGETS, 50, None, torch.device("cpu")
+    actual = step._fit_transform_column_blocks(
+        x, _TARGETS, 50, None, torch.device("cpu")
     )
 
     assert actual.x.data_ptr() == x.data_ptr()
@@ -772,7 +775,48 @@ def test__call__host_table__matches_the_device_table() -> None:
     )
 
     assert actual.x.device.type == "cpu"
-    torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True)
+    torch.testing.assert_close(
+        actual.x, expected.x.cpu(), rtol=0, atol=0, equal_nan=True
+    )
+
+
+@pytest.mark.parametrize("use_fitted_cache", [False, True])
+def test__call__staged_on_the_cpu__matches_the_whole_table(
+    monkeypatch: pytest.MonkeyPatch, *, use_fitted_cache: bool
+) -> None:
+    """The staged path, with the CPU standing in for a separate compute device."""
+    monkeypatch.setattr(pipeline_interface, "_same_device", lambda _a, _b: False)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 2 * 64 * 4)
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 10 * 10 * 4)
+    x = _wide_input()
+    x[7, 0, 1] = float("inf")
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    whole = _blockwise_pipeline(keep_fitted_cache=True)
+    staged = _blockwise_pipeline(keep_fitted_cache=True)
+    expected = whole(x.clone(), schema, num_train_rows=50)
+    actual = staged(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+    if use_fitted_cache:
+        x_test = x[50:] * 1.5
+        expected = whole(
+            x_test.clone(), schema, num_train_rows=0, use_fitted_cache=True
+        )
+        actual = staged(
+            x_test.clone(),
+            schema,
+            num_train_rows=0,
+            use_fitted_cache=True,
+            consume_input=True,
+            compute_device=torch.device("cpu"),
+        )
+
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+    assert actual.feature_schema == expected.feature_schema
 
 
 def test__call__staged__rejects_a_step_without_a_block_runner_before_any_step(
@@ -804,7 +848,7 @@ def test__call__staged__rejects_a_step_without_a_block_runner_before_any_step(
     assert ran == []
 
 
-def test__fit_transform_on_device__runs_each_device_block_in_smaller_blocks(
+def test__run_step__staged__moves_in_place_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 6 * 64 * 4)
@@ -824,8 +868,14 @@ def test__fit_transform_on_device__runs_each_device_block_in_smaller_blocks(
     monkeypatch.setattr(step, "_fit", spy_fit)
     monkeypatch.setattr(step, "_transform", spy_transform)
 
-    pipeline_interface._fit_transform_on_device(
-        step, _wide_input(), _TARGETS, 50, None, torch.device("cpu")
+    pipeline_interface._run_step(
+        step,
+        _wide_input(),
+        _TARGETS,
+        50,
+        None,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
     )
 
     assert max(widths) == 2

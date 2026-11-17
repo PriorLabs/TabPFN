@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import torch
 
-from tabpfn.preprocessing.torch.ops import columnwise_sum
+from tabpfn.preprocessing.torch.ops import columnwise_sum, pairwise_sum
 
 _INV_GOLDEN = (math.sqrt(5) - 1) / 2
 # scipy.optimize.fminbound's xtol, as used by SafePowerTransformer.
@@ -70,8 +70,9 @@ def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
     impute_mean = torch.nan_to_num(columnwise_sum(y) / num_finite, nan=0.0)
     torch.where(torch.isnan(y), impute_mean, y, out=y)
 
-    mean = columnwise_sum(y) / y.shape[0]
-    var = columnwise_sum((y - mean).square_()) / y.shape[0]
+    # `y` holds no NaN from here on.
+    mean = pairwise_sum(y) / y.shape[0]
+    var = pairwise_sum((y - mean).square_(), consume=True) / y.shape[0]
     scale = torch.where(_is_constant(var, mean, x.shape[0]), 1.0, var.sqrt())
     return {
         "lambdas": lambdas,
@@ -122,10 +123,11 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     sum_log = columnwise_sum(log1p_abs.copysign(x))
 
     def neg_llf(lambdas: torch.Tensor) -> torch.Tensor:
+        # The bounds keep `y` finite, and the NaN cells are zeroed.
         y = _yeo_johnson(x, log1p_abs, lambdas).masked_fill_(invalid, 0.0)
-        mean = columnwise_sum(y) / n_valid
+        mean = pairwise_sum(y) / n_valid
         y.sub_(mean).masked_fill_(invalid, 0.0)
-        var = columnwise_sum(y.square_()) / n_valid
+        var = pairwise_sum(y.square_(), consume=True) / n_valid
         llf = -n_valid / 2 * var.log() + (lambdas - 1) * sum_log
         # scipy rejects near-zero variance as an infinite likelihood.
         return torch.where(var < finfo.tiny, torch.inf, -llf)

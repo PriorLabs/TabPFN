@@ -16,7 +16,8 @@ import torch
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
 IN_PLACE_BLOCK_BYTES = 1 << 28
-"""Bytes of selected columns a columnwise step copies at a time when in place."""
+"""Bytes of selected columns a columnwise step copies, to its own device or the
+pipeline's compute device, at a time when in place."""
 
 DEVICE_BLOCK_BYTES = 1 << 31
 """Bytes of an input held elsewhere that the pipeline moves to its compute device at a
@@ -39,7 +40,8 @@ class TorchPreprocessingStep(abc.ABC):
     """Whether each column's fit and transform read only that column.
 
     Such a step fits and transforms an input it may write into a block of
-    columns at a time, its cache tensors' last dimension indexing the columns. A
+    columns at a time, its cache tensors' last dimension indexing the columns
+    (but for `shared_cache_keys`). A
     column's fitted values are bitwise the same whichever other columns it is
     fitted with.
     """
@@ -83,7 +85,7 @@ class TorchPreprocessingStep(abc.ABC):
         """
         if in_place and self.columnwise and column_indices:
             return self._fit_transform_column_blocks(
-                x, column_indices, num_train_rows, fitted_cache
+                x, column_indices, num_train_rows, fitted_cache, x.device
             )
         x_cols_selected = x[:, :, column_indices]
 
@@ -110,28 +112,36 @@ class TorchPreprocessingStep(abc.ABC):
         column_indices: list[int],
         num_train_rows: int,
         fitted_cache: dict[str, torch.Tensor] | None,
+        device: torch.device,
     ) -> TorchPreprocessingStepResult:
-        """`fit_transform` of a columnwise step into `x`, a block of columns at a time.
+        """`fit_transform` of a columnwise step into `x`, a block of columns at a time
+        moved to `device`.
 
-        Bounds the selected columns' copies to one block.
+        Bounds the selected columns' copies to one block. Returns the fitted cache on
+        `device`.
         """
         columns = torch.as_tensor(column_indices, device=x.device)
         row_bytes = x.shape[0] * x.shape[1] * x.element_size()
         width = max(1, IN_PLACE_BLOCK_BYTES // max(1, row_bytes))
-        blocks = [
-            slice(start, min(start + width, len(column_indices)))
-            for start in range(0, len(column_indices), width)
-        ]
-        if fitted_cache is None:
-            parts = [self._fit(x[:num_train_rows, :, columns[b]]) for b in blocks]
-            fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
-        for block in blocks:
-            cache = _slice_column_cache(fitted_cache, block, self.shared_cache_keys)
+        if fitted_cache is not None:
+            fitted_cache = _move_cache_to_device(fitted_cache, device)
+        parts: list[dict[str, torch.Tensor]] = []
+        for start in range(0, len(column_indices), width):
+            block = slice(start, start + width)
+            # Indexing by a tensor copies, also when `device` is `x`'s.
+            selected = x[:, :, columns[block]].to(device)
+            if fitted_cache is None:
+                cache = self._fit(selected[:num_train_rows])
+            else:
+                cache = _slice_column_cache(fitted_cache, block, self.shared_cache_keys)
             transformed, added_columns, _ = self._transform(
-                x[:, :, columns[block]], fitted_cache=cache
+                selected, fitted_cache=cache
             )
             assert added_columns is None, "A columnwise step adds no columns."
-            x[:, :, columns[block]] = transformed
+            x[:, :, columns[block]] = transformed.to(x.device)
+            parts.append(cache)
+        if fitted_cache is None:
+            fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
     @override
@@ -481,13 +491,13 @@ def _run_step(
     """
     if (
         compute_device is not None
-        and torch.device(compute_device).type == "mps"
+        and compute_device.type == "mps"
         and step.computes_on_cpu_for_mps
     ):
         compute_device = torch.device("cpu")
     if compute_device is not None and step.columnwise:
-        return _fit_transform_on_device(
-            step, x, column_indices, num_train_rows, fitted_cache, compute_device
+        return step._fit_transform_column_blocks(
+            x, column_indices, num_train_rows, fitted_cache, compute_device
         )
     if compute_device is not None and step.rowwise and x.shape[0] > 0:
         return _fit_transform_rows_on_device(
@@ -501,47 +511,6 @@ def _run_step(
         fitted_cache=fitted_cache,
         **in_place,
     )
-
-
-def _fit_transform_on_device(
-    step: TorchPreprocessingStep,
-    x: torch.Tensor,
-    column_indices: list[int],
-    num_train_rows: int,
-    fitted_cache: dict[str, torch.Tensor] | None,
-    device: torch.device,
-) -> TorchPreprocessingStepResult:
-    """A columnwise step's `fit_transform` into `x`, a block of columns at a time on
-    `device`.
-
-    Returns the fitted cache on `device`.
-    """
-    row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-    width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
-    parts: list[dict[str, torch.Tensor]] = []
-    for start in range(0, len(column_indices), width):
-        selected = column_indices[start : start + width]
-        index = _column_index(selected)
-        block = x[:, :, index].to(device)
-        cache = None
-        if fitted_cache is not None:
-            cache = _move_cache_to_device(
-                _slice_column_cache(
-                    fitted_cache,
-                    slice(start, start + len(selected)),
-                    step.shared_cache_keys,
-                ),
-                device,
-            )
-        # The step's own blocks bound its intermediates to a fraction of this one.
-        result = step._fit_transform_column_blocks(
-            block, list(range(len(selected))), num_train_rows, cache
-        )
-        x[:, :, index] = result.x.to(x.device)
-        assert result.fitted_cache is not None
-        parts.append(result.fitted_cache)
-    fitted = _join_column_caches(parts, step.shared_cache_keys)
-    return TorchPreprocessingStepResult(x=x, fitted_cache=fitted)
 
 
 def _fit_transform_rows_on_device(
@@ -600,13 +569,6 @@ def _slice_column_cache(
         key: value if key in shared_keys else value[..., columns]
         for key, value in cache.items()
     }
-
-
-def _column_index(columns: list[int]) -> slice | list[int]:
-    """`columns` as a slice when they are a contiguous ascending range."""
-    if columns == list(range(columns[0], columns[0] + len(columns))):
-        return slice(columns[0], columns[0] + len(columns))
-    return columns
 
 
 def _extract_inf_masks(
