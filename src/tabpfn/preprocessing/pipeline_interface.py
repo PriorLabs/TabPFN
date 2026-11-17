@@ -639,15 +639,14 @@ class PreprocessingPipeline:
         """
         given = X
         X = self._working_copy(X, feature_indices, may_keep_input=may_keep_input)
-        copied = X is not given
-        owns_input = copied
+        owns_input = X is not given
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
         # end.  Computed per call so train and test each restore their own
         # pattern.  A no-op when the input is already finite.
         # Without a copy, `_working_copy` has already found `X` free of infinities.
-        inf_masks = _extract_inf_masks(X, feature_schema) if copied else {}
+        inf_masks = _extract_inf_masks(X, feature_schema) if owns_input else {}
         if is_fitting:
             feature_schema = _flag_non_constant_with_infs(feature_schema, inf_masks)
 
