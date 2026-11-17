@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-11-17
+
+### Breaking Changes
+
+- `fit` now accepts `sample_weight`, so scikit-learn meta-estimators pass weights to it, and `fit` raises for models without `SAMPLE_WEIGHT_MODE`. `BaggingClassifier(TabPFNClassifier())` and `BaggingRegressor(TabPFNRegressor())` raise in `fit` with any `bootstrap` and `max_samples`, because they pass their row counts as weights instead of fitting on a row subset. `CalibratedClassifierCV(TabPFNClassifier()).fit(X, y, sample_weight=w)` raises instead of warning that the estimator ignores the weights. ([#1415](https://github.com/PriorLabs/TabPFN/pull/1415))
+
+### Added
+
+- Add the `log_quantile_gap`, `log_fixed_atom` and `log1p_target` regression target transforms for nonnegative targets. `log_quantile_gap` and `log_fixed_atom` decode a range to exactly 0 for zero-inflated targets. `log1p_target` encodes log1p(y) of the raw target and decodes negative codes to 0. ([#1409](https://github.com/PriorLabs/TabPFN/pull/1409))
+- Add `InferenceConfig.REGRESSION_READOUT`. With `"nonnegative_and_capped"`, the regression outputs of a nonnegative target are read from the ensemble's averaged distribution of max(Y, 0) given Y <= y_max, with y_max the largest training target. ([#1410](https://github.com/PriorLabs/TabPFN/pull/1410))
+- Add `RegressorTuningConfig.calibrate_mean`. It multiplies the predicted mean by a constant fitted on the tuning holdout rows. Its only `mean_calibration_mode`, `"tweedie"`, picks the constant that minimizes the Tweedie deviance (power `mean_calibration_power`, default 1.5). ([#1411](https://github.com/PriorLabs/TabPFN/pull/1411))
+- `RegressorTuningConfig.calibrate_mean` weights each tuning holdout row by `sample_weight * label_reliability`. For an exposure, pass the rate as the target and the exposure as `sample_weight`. ([#1412](https://github.com/PriorLabs/TabPFN/pull/1412))
+- `TabPFNClassifier.fit` and `TabPFNRegressor.fit` take experimental `sample_weight` and `label_reliability` arguments, applied by models whose inference config sets `SAMPLE_WEIGHT_MODE`. For every other model `fit` raises when they are given. ([#1415](https://github.com/PriorLabs/TabPFN/pull/1415))
+- Two `inference_config` flags add transductive modes for `group_col` data: `APPEND_GROUP_AGGREGATES` appends per-group aggregates of the features, and `POOL_GROUP_PREDICTIONS` gives the rows of a group their mean or geometric-mean prediction when every group has one label. A missing value in a `group_col` column is now refused. ([#1418](https://github.com/PriorLabs/TabPFN/pull/1418))
+- `sample_weight` and `label_reliability` can be combined with `tuning_config`: each tuning fold is fit with the weights of its rows, and a holdout row counts in the tuned metric in proportion to `sample_weight * label_reliability`. ([#1428](https://github.com/PriorLabs/TabPFN/pull/1428))
+- Added `InferenceConfig.AVERAGE_BEFORE_SOFTMAX`, so a checkpoint can set whether the ensemble averages logits or probabilities. `average_before_softmax` now defaults to `"auto"`, which uses the checkpoint's value. ([#1432](https://github.com/PriorLabs/TabPFN/pull/1432))
+
+### Changed
+
+- Lower peak host and GPU memory when fitting and predicting on large tables: preprocessing works in place by blocks, a float32 input stays float32 where the values are not changed, and the model input can stay in host memory for a model whose `forward` takes `x_host`. Add `tabpfn.preprocessing.clean.overwrite_fit_input()` to let `fit` write into an array the caller will not read again. ([#1422](https://github.com/PriorLabs/TabPFN/pull/1422))
+- With `ENABLE_GPU_PREPROCESSING`, the `robust` preset runs on the GPU in float32. ([#1424](https://github.com/PriorLabs/TabPFN/pull/1424))
+- With `APPEND_GROUP_AGGREGATES`, the fit selects the per-group aggregates faster: on `n_preprocessing_jobs` threads, and for numeric columns on the GPU when `ENABLE_GPU_PREPROCESSING` is set and the estimator runs on a CUDA device. The default of one job on CPU is unchanged. ([#1429](https://github.com/PriorLabs/TabPFN/pull/1429))
+
+### Fixed
+
+- `TabPFNRegressor.predict` with `fit_mode="fit_with_cache"` now predicts large test sets in blocks of rows, so peak memory no longer grows with the number of test rows. The block size is set by `TABPFN_MAX_REGRESSOR_PREDICT_ROWS` (default 65,536; 0 disables it). ([#1417](https://github.com/PriorLabs/TabPFN/pull/1417))
+
+
 ## [10.0.0] - 2026-11-13
 
 ### Breaking Changes
