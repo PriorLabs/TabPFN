@@ -236,7 +236,10 @@ class SharedColumnsTable:
 
     def __array__(self, dtype: Any = None, *, copy: bool | None = None) -> np.ndarray:
         if self.is_base():
-            return np.array(self.base, dtype=dtype, copy=copy)
+            # Not `np.array(..., copy=copy)`: numpy 1 rejects `copy=None`.
+            if copy:
+                return np.array(self.base, dtype=dtype)
+            return np.asarray(self.base, dtype=dtype)
         if copy is False:
             raise ValueError("A table is built anew; it cannot be read without a copy.")
         out = self._rows(slice(None))

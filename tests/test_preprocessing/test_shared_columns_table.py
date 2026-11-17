@@ -56,7 +56,8 @@ def test__asarray__without_a_copy__raises_unless_the_table_is_its_base() -> None
     base = _base()
     table = SharedColumnsTable.of(base)
 
-    assert np.asarray(table, copy=False) is base
+    assert np.asarray(table) is base
     assert np.shares_memory(table[1:3], base)
+    # Called directly: numpy 1's `np.asarray` takes no `copy`.
     with pytest.raises(ValueError, match="without a copy"):
-        np.asarray(table[:, [1, 0]], copy=False)
+        table[:, [1, 0]].__array__(copy=False)
