@@ -722,9 +722,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   such as claim amounts or demand. It sets
                   `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_fixed_atom",)`
                   and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. On the
-                  models up to TabPFN-3.5 it sets
-                  `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, with
-                  `log_quantile_gap`.
+                  models up to TabPFN-3.5 it sets `log_quantile_gap` as the y
+                  transform.
                 - `"grouped"`: for `group_col` data. It sets
                   `APPEND_GROUP_AGGREGATES=True` and
                   `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
