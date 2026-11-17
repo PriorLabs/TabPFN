@@ -41,15 +41,11 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
+from tabpfn.architectures import BUILTIN_ARCHITECTURE_CONFIGS
 from tabpfn.architectures.shared.bar_distribution import (
     FullSupportBarDistribution,
     expected_value,
 )
-from tabpfn.architectures.tabpfn_v2 import TabPFNV2Config
-from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5Config
-from tabpfn.architectures.tabpfn_v2_6 import TabPFNV2p6Config
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
-from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5Config
 from tabpfn.base import (
     ModelSpecs,
     create_inference_engine,
@@ -195,17 +191,8 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 """The named bundles of `inference_config` values that `presets` selects. A value
-that is a dict holds one value for models on `BUILTIN_ARCHITECTURE_CONFIGS` and one
-for all other models."""
-
-BUILTIN_ARCHITECTURE_CONFIGS = (
-    TabPFNV2Config,
-    TabPFNV2p5Config,
-    TabPFNV2p6Config,
-    TabPFNV3Config,
-    TabPFNV3p5Config,
-)
-"""The architecture configs of the models up to TabPFN-3.5."""
+that is a dict holds one value for models on
+`tabpfn.architectures.BUILTIN_ARCHITECTURE_CONFIGS` and one for all other models."""
 
 ZERO_SHARE_WARNING_THRESHOLD = 0.2
 """`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
