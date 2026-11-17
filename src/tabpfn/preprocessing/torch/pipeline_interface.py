@@ -485,7 +485,7 @@ def _run_step(
     compute_device: torch.device | None,
 ) -> TorchPreprocessingStepResult:
     """`step.fit_transform`; with a `compute_device`, a columnwise step moves its
-    blocks there, and a step that runs on its input's device writes into `x`.
+    blocks there, and a step that runs on its input's device runs on `x`.
     """
     if compute_device is not None and not step.runs_on_input_device:
         if compute_device.type == "mps" and step.computes_on_cpu_for_mps:
