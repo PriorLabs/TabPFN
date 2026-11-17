@@ -739,12 +739,16 @@ _FITS_UP_TO_ROUNDING = (
     ],
     ids=["quantile", "safepower", "squashing", "robust", "soft_clip"],
 )
+@pytest.mark.parametrize("batch_size", [1, 2])
 def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
-    step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch
+    step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch, batch_size: int
 ) -> None:
-    # Three columns of 64 float32 rows per block: three blocks for seven targets.
-    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
-    x = _wide_input()
+    # Three columns of 64 float32 rows per batch entry per block: three blocks for
+    # seven targets.
+    monkeypatch.setattr(
+        pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * batch_size * 4
+    )
+    x = torch.cat([_wide_input() * (1 + b) for b in range(batch_size)], dim=1)
     expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
 
     actual = step._fit_transform_column_blocks(
@@ -760,6 +764,54 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
     assert expected.fitted_cache is not None
     for key, value in expected.fitted_cache.items():
         torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
+
+
+_SELECTIVE_STEPS = [
+    lambda: TorchSelectiveQuantileTransformerStep(20, _TARGETS),
+    lambda: TorchSelectiveSafePowerStep(_TARGETS),
+    lambda: TorchSelectiveSquashingScalerStep(3.0, _TARGETS),
+    lambda: TorchSelectiveRobustScalerStep(_TARGETS),
+]
+_SELECTIVE_IDS = ["quantile", "safepower", "squashing", "robust"]
+
+
+@pytest.mark.parametrize("make_step", _SELECTIVE_STEPS, ids=_SELECTIVE_IDS)
+def test__fit_transform__selective_step_in_place__writes_into_x(
+    make_step: typing.Callable[[], TorchPreprocessingStep],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
+    x = _wide_input()
+    expected = make_step().fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    step = make_step()
+
+    actual = step.fit_transform(x, _TARGETS, num_train_rows=50, in_place=True)
+
+    tolerance = (
+        _ROUNDING if isinstance(step, _FITS_UP_TO_ROUNDING) else {"rtol": 0, "atol": 0}
+    )
+    assert actual.x.data_ptr() == x.data_ptr()
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **tolerance)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("make_step", _SELECTIVE_STEPS, ids=_SELECTIVE_IDS)
+def test__fit_transform__selective_step_on_mps__matches_cpu(
+    make_step: typing.Callable[[], TorchPreprocessingStep], *, in_place: bool
+) -> None:
+    x = _wide_input()
+    expected = make_step().fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = make_step().fit_transform(
+        x.to("mps"), _TARGETS, num_train_rows=50, in_place=in_place
+    )
+
+    assert actual.x.device.type == "mps"
+    torch.testing.assert_close(
+        actual.x.cpu(), expected.x, rtol=0, atol=0, equal_nan=True
+    )
 
 
 def test__run_step__staged__sign_flip_writes_into_the_host_table() -> None:
@@ -953,3 +1005,14 @@ def test__run_step__mps__computes_safepower_on_the_cpu() -> None:
     )
 
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+
+
+def test__columnwise_step__overriding_fit_transform__raises() -> None:
+    with pytest.raises(TypeError, match="columnwise"):
+
+        class _Overriding(TorchSelectiveRobustScalerStep):
+            @override
+            def fit_transform(
+                self, *args: typing.Any, **kwargs: typing.Any
+            ) -> TorchPreprocessingStepResult:
+                return super().fit_transform(*args, **kwargs)

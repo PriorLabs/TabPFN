@@ -640,27 +640,28 @@ class TestChunkedQuantileTransformerEquivalence:
         x = torch.randn(100, 2, 9).to(dtype)
         x[::7, :, 2] = float("nan")
         x_before = x.clone()
+        targets = [7, 0, 2, 4]
         step = TorchSelectiveQuantileTransformerStep(
             n_quantiles=40,
-            target_column_indices=[7, 0, 2, 4],
+            target_column_indices=targets,
             extrapolate_ratio=extrapolate_ratio,
             output_distribution=output_distribution,
         )
 
         other_cache = step.fit_transform(
-            x * 3 + 1, list(range(9)), num_train_rows=80
+            x * 3 + 1, targets, num_train_rows=80
         ).fitted_cache
-        full = step.fit_transform(x, list(range(9)), num_train_rows=80)
+        full = step.fit_transform(x, targets, num_train_rows=80)
         full_cached = step.fit_transform(
-            x, list(range(9)), num_train_rows=80, fitted_cache=other_cache
+            x, targets, num_train_rows=80, fitted_cache=other_cache
         )
 
         monkeypatch.setattr(
             TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
         )
-        chunked = step.fit_transform(x, list(range(9)), num_train_rows=80)
+        chunked = step.fit_transform(x, targets, num_train_rows=80)
         chunked_cached = step.fit_transform(
-            x, list(range(9)), num_train_rows=80, fitted_cache=other_cache
+            x, targets, num_train_rows=80, fitted_cache=other_cache
         )
 
         torch.testing.assert_close(chunked.x, full.x, rtol=0, atol=0, equal_nan=True)
@@ -710,15 +711,16 @@ def test__selective_step__mps__matches_cpu(monkeypatch, dtype):
     torch.manual_seed(0)
     x = torch.randn(100, 2, 9).to(dtype)
     x[::7, :, 2] = float("nan")
+    targets = [7, 0, 2, 4]
     step = TorchSelectiveQuantileTransformerStep(
-        n_quantiles=40, target_column_indices=[7, 0, 2, 4]
+        n_quantiles=40, target_column_indices=targets
     )
     monkeypatch.setattr(
         TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
     )
 
-    cpu = step.fit_transform(x, list(range(9)), num_train_rows=80)
-    mps = step.fit_transform(x.to("mps"), list(range(9)), num_train_rows=80)
+    cpu = step.fit_transform(x, targets, num_train_rows=80)
+    mps = step.fit_transform(x.to("mps"), targets, num_train_rows=80)
 
     assert mps.x.device.type == "mps"
     torch.testing.assert_close(mps.x.cpu(), cpu.x, rtol=0, atol=0, equal_nan=True)

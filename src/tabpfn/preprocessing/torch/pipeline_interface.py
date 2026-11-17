@@ -9,6 +9,7 @@ import dataclasses
 import functools
 import inspect
 import time
+from typing import Any
 from typing_extensions import override
 
 import torch
@@ -43,7 +44,8 @@ class TorchPreprocessingStep(abc.ABC):
     columns at a time, its cache tensors' last dimension indexing the columns
     (but for `shared_cache_keys`). A column's fitted values are the same whichever
     other columns it is fitted with, up to float rounding and the tolerance of any
-    search the fit runs.
+    search the fit runs. Its `_fit` and `_transform` say all it does: the block
+    runners call them directly, so it does not override `fit_transform`.
     """
 
     runs_on_input_device: bool = False
@@ -59,8 +61,19 @@ class TorchPreprocessingStep(abc.ABC):
     """
 
     computes_on_cpu_for_mps: bool = False
-    """Whether the pipeline moves the step's blocks to the CPU rather than to an MPS
-    compute device."""
+    """Whether the step computes on the CPU in place of MPS: it needs float64, or its
+    many small kernels run faster there."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if (
+            cls.columnwise
+            and cls.fit_transform is not TorchPreprocessingStep.fit_transform
+        ):
+            raise TypeError(
+                f"{cls.__name__} is columnwise, so its block runners call `_fit` and "
+                "`_transform` directly and would skip its `fit_transform`."
+            )
 
     def fit_transform(
         self,
@@ -81,22 +94,26 @@ class TorchPreprocessingStep(abc.ABC):
                 fit the cache on the training data.
             in_place: Whether the step may write its result into `x`.
         """
+        device = self._compute_device(x.device)
         if in_place and self.columnwise and column_indices:
             return self._fit_transform_column_blocks(
-                x, column_indices, num_train_rows, fitted_cache, x.device
+                x, column_indices, num_train_rows, fitted_cache, device
             )
-        x_cols_selected = x[:, :, column_indices]
+        x_cols_selected = x[:, :, column_indices].to(device)
 
         if fitted_cache is None:
             fitted_cache = self._fit(x_cols_selected[:num_train_rows])
+        else:
+            fitted_cache = _move_cache_to_device(fitted_cache, device)
 
         transformed, added_columns, added_modality = self._transform(
             x_cols_selected, fitted_cache=fitted_cache
         )
+        del x_cols_selected  # Freed before the clone below.
 
         if not in_place:
             x = x.clone()
-        x[:, :, column_indices] = transformed
+        x[:, :, column_indices] = transformed.to(x.device)
         return TorchPreprocessingStepResult(
             x=x,
             added_columns=added_columns,
@@ -141,6 +158,12 @@ class TorchPreprocessingStep(abc.ABC):
         if fitted_cache is None:
             fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+    def _compute_device(self, device: torch.device) -> torch.device:
+        """The device the step computes on for an input on `device`."""
+        if device.type == "mps" and self.computes_on_cpu_for_mps:
+            return torch.device("cpu")
+        return device
 
     @override
     def __repr__(self) -> str:
@@ -189,7 +212,8 @@ class TorchPreprocessingStep(abc.ABC):
         """Transform the selected columns using the cache.
 
         Args:
-            x: Tensor of selected columns [num_rows, batch_size, num_cols].
+            x: Tensor of selected columns [num_rows, batch_size, num_cols]: the
+                step's own copy of them, which the step may overwrite.
             fitted_cache: Cache returned by _fit.
 
         Returns:
@@ -333,9 +357,8 @@ class TorchPreprocessingPipeline:
             if not indices:
                 continue
 
+            # Each step moves the cache to the device it computes on.
             fitted_cache = self.fitted_cache[i] if use_fitted_cache else None
-            if fitted_cache is not None:
-                fitted_cache = _move_cache_to_device(fitted_cache, x.device)
 
             result = _run_step(
                 step,
@@ -461,17 +484,10 @@ def _device_index(device: torch.device) -> int:
 def _move_cache_to_device(
     cache: dict[str, torch.Tensor], device: torch.device
 ) -> dict[str, torch.Tensor]:
-    """Move cache tensors to ``device``, keeping float64 on CPU for MPS.
-
-    MPS has no float64; steps that need it fall back to CPU themselves.
-    """
-
-    def move(v: torch.Tensor) -> torch.Tensor:
-        if device.type == "mps" and v.dtype == torch.float64:
-            return v.cpu()
-        return v.to(device)
-
-    return {k: move(v) if isinstance(v, torch.Tensor) else v for k, v in cache.items()}
+    """Move cache tensors to ``device``."""
+    return {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in cache.items()
+    }
 
 
 def _run_step(
@@ -488,10 +504,13 @@ def _run_step(
     blocks there, and a step that runs on its input's device runs on `x`.
     """
     if compute_device is not None and not step.runs_on_input_device:
-        if compute_device.type == "mps" and step.computes_on_cpu_for_mps:
-            compute_device = torch.device("cpu")
         return _fit_transform_on_device(
-            step, x, column_indices, num_train_rows, fitted_cache, compute_device
+            step,
+            x,
+            column_indices,
+            num_train_rows,
+            fitted_cache,
+            step._compute_device(compute_device),
         )
     in_place = _in_place_kwargs(step) if consume_input else {}
     return step.fit_transform(
