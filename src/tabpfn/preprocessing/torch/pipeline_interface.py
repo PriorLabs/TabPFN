@@ -54,6 +54,12 @@ class TorchPreprocessingStep(abc.ABC):
     of rows at a time.
     """
 
+    runs_on_input_device: bool = False
+    """Whether the step runs where its input is, even given another compute device.
+
+    For a step that does less work than moving its input would cost.
+    """
+
     shared_cache_keys: frozenset[str] = frozenset()
     """Keys of a columnwise step's fitted cache whose value is shared by all columns.
 
@@ -309,7 +315,7 @@ class TorchPreprocessingPipeline:
             whole = [
                 type(step).__name__
                 for step, _ in self.steps
-                if not (step.columnwise or step.rowwise)
+                if not (step.columnwise or step.rowwise or step.runs_on_input_device)
             ]
             if whole:
                 svd_hint = (

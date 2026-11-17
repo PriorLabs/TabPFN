@@ -705,6 +705,9 @@ class TorchAddFingerprintFeaturesStep(TorchPreprocessingStep):
     TODO: Implement this on GPU natively.
     """
 
+    # It hashes on the CPU whatever the device.
+    runs_on_input_device = True
+
     @override
     def added_feature_prefix(self) -> str:
         return "fingerprint"

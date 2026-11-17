@@ -18,6 +18,7 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStepResult,
 )
 from tabpfn.preprocessing.torch.steps import (
+    TorchAddFingerprintFeaturesStep,
     TorchAddSVDFeaturesStep,
     TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
@@ -828,6 +829,30 @@ def test__call__staged_on_the_cpu__matches_the_whole_table(
 
     # Safepower's fit moves slightly with the columns fitted beside it.
     torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **_ROUNDING)
+    assert actual.feature_schema == expected.feature_schema
+
+
+def test__call__staged__fingerprints_the_table_where_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "_same_device", lambda _a, _b: False)
+    x = _wide_input()
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+    expected = TorchPreprocessingPipeline(
+        steps=[(TorchAddFingerprintFeaturesStep(), None)]
+    )(x.clone(), schema, num_train_rows=50)
+
+    actual = TorchPreprocessingPipeline(
+        steps=[(TorchAddFingerprintFeaturesStep(), None)]
+    )(
+        x.clone(),
+        schema,
+        num_train_rows=50,
+        consume_input=True,
+        compute_device=torch.device("cpu"),
+    )
+
+    torch.testing.assert_close(actual.x, expected.x, equal_nan=True, rtol=0, atol=0)
     assert actual.feature_schema == expected.feature_schema
 
 
