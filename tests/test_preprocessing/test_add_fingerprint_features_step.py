@@ -219,3 +219,23 @@ def test__transform__row_blocks__match_one_block(
 
     assert max(rounded_rows) == 6
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+def test__transform__float16_collisions__resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rounding float16 makes every value NaN, so whether a row is all NaN is read
+    from the row itself, or float16 rows would never resolve a collision.
+    """
+    data = np.arange(40 * 2, dtype=np.float16).reshape(40, 2)
+    step = AddFingerprintFeaturesStep()
+    step._fit(data, _get_schema(num_columns=2))
+    hash_row_bytes = fingerprint_step._hash_row_bytes
+
+    def coarse(row_data: bytes, salt_bytes: bytes) -> float:
+        return round(hash_row_bytes(row_data, salt_bytes) * 64) / 64
+
+    monkeypatch.setattr(fingerprint_step, "_hash_row_bytes", coarse)
+    _, fingerprints, _ = step._transform(data, is_test=False)
+
+    assert len(np.unique(fingerprints)) == 40
