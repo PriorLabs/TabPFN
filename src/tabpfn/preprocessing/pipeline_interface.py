@@ -471,8 +471,8 @@ class PreprocessingPipeline:
     @property
     def keep_float32(self) -> bool:
         """Whether a float32 input is copied as float32 rather than float64, and not
-        copied at all when nothing would write into it (at fit, only when the caller
-        lets the result keep it).
+        copied at all when nothing would write into it and the caller lets the
+        result keep it.
 
         True when every step only selects, reorders, compares and encodes values:
         their float32 results equal the float64 ones cast back.
@@ -520,15 +520,18 @@ class PreprocessingPipeline:
         self.final_feature_schema_ = feature_schema
         return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
-    def transform(self, X: np.ndarray | torch.Tensor) -> PreprocessingPipelineResult:
+    def transform(
+        self, X: np.ndarray | torch.Tensor, *, may_keep_input: bool = False
+    ) -> PreprocessingPipelineResult:
         """Transform the data using the fitted pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
+            may_keep_input: Whether the result may be `X` itself, which the caller
+                then must not write into.
 
         Returns:
             PreprocessingPipelineResult with transformed data and feature schema.
-            Its array may be `X` itself, so the caller must not write into it.
         """
         assert self.initial_feature_schema_ is not None, (
             "The pipeline must be fit before it can be used to transform."
@@ -536,7 +539,10 @@ class PreprocessingPipeline:
         assert self.final_feature_schema_ is not None
 
         X, updated_schema = self._process_steps(
-            X, self.initial_feature_schema_, is_fitting=False, may_keep_input=True
+            X,
+            self.initial_feature_schema_,
+            is_fitting=False,
+            may_keep_input=may_keep_input,
         )
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
 

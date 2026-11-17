@@ -167,8 +167,8 @@ def test__reshape_step__no_arithmetic__follows_a_changed_transform_name() -> Non
 
 
 def test__keep_float32_pipeline__runs_on_a_finite_input_itself() -> None:
-    """Nothing writes into a finite float32 input, so a transform does not copy it,
-    and neither does a fit that may keep it.
+    """Nothing writes into a finite float32 input, so a fit or transform that may
+    keep it does not copy it; by default they copy.
     """
     pipeline = PreprocessingPipeline(
         [ReshapeFeatureDistributionsStep(transform_name="none")]
@@ -177,10 +177,11 @@ def test__keep_float32_pipeline__runs_on_a_finite_input_itself() -> None:
     schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
 
     fitted = pipeline.fit_transform(X, schema, may_keep_input=True)
-    transformed = pipeline.transform(X)
+    transformed = pipeline.transform(X, may_keep_input=True)
 
     assert np.shares_memory(fitted.X, X)
     assert np.shares_memory(transformed.X, X)
+    assert not np.shares_memory(pipeline.transform(X).X, X)
     assert fitted.X.dtype == transformed.X.dtype == np.float32
 
 
@@ -212,7 +213,7 @@ def test__keep_float32_pipeline__copies_an_input_that_is_not_c_ordered(
     schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
     pipeline.fit_transform(X, schema)
 
-    result = pipeline.transform(X)
+    result = pipeline.transform(X, may_keep_input=True)
 
     assert not np.shares_memory(result.X, X)
     assert result.X.flags.c_contiguous

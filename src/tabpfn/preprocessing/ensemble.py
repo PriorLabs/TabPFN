@@ -82,7 +82,7 @@ class TabPFNEnsembleMember:
         """
         if self.feature_indices is not None:
             X = X[..., self.feature_indices]
-        return self.cpu_preprocessor.transform(X).X
+        return self.cpu_preprocessor.transform(X, may_keep_input=True).X
 
 
 class TabPFNEnsemblePreprocessor:
