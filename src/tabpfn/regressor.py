@@ -183,7 +183,7 @@ OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 
 REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "auto",
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "zero_inflated_auto",
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
 }
@@ -698,11 +698,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
-                  `REGRESSION_READOUT` to `"nonnegative_and_capped"`, and
-                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `"auto"`, which here
-                  means a zero-inflated transform for the model: the ones the
-                  checkpoint stores, else `("log_quantile_gap",)` for the models
-                  up to TabPFN-3.5 and `("log_fixed_atom",)` for others.
+                  `REGRESSION_READOUT` to `"nonnegative_and_capped"` and
+                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `"zero_inflated_auto"`,
+                  a zero-inflated transform for the model.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -930,12 +928,21 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             The determined byte_size.
         """
         byte_size = initialize_model_variables_helper(self, self.estimator_type)
+        # The checkpoint's, unless `inference_config` names them.
+        stored = self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
         if self.presets is not None:
             self.inference_config_ = _apply_presets(
+                self.inference_config_, self.presets, self.inference_config
+            )
+        if (
+            self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
+            == "zero_inflated_auto"
+        ):
+            self.inference_config_ = dataclasses.replace(
                 self.inference_config_,
-                self.presets,
-                self.inference_config,
-                self.configs_,
+                REGRESSION_Y_PREPROCESS_TRANSFORMS=_zero_inflated_transforms(
+                    stored, self.configs_
+                ),
             )
         return byte_size
 
@@ -2914,14 +2921,8 @@ def _apply_presets(
     config: InferenceConfig,
     presets: str | Sequence[str],
     user_config: dict | InferenceConfig | None,
-    architecture_configs: Sequence[ArchitectureConfig],
 ) -> InferenceConfig:
-    """`config` with the presets' values, except the keys `user_config` names.
-
-    "auto" target transforms become a zero-inflated transform for the model: the
-    ones the checkpoint stores, else `log_quantile_gap` on the built-in
-    architectures and `log_fixed_atom` on all others.
-    """
+    """`config` with the presets' values, except the keys `user_config` names."""
     if not isinstance(user_config, dict | None):
         raise TabPFNValidationError(
             "`presets` needs `inference_config` as a dict or None."
@@ -2933,21 +2934,27 @@ def _apply_presets(
                 f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
             )
         values.update(REGRESSION_PRESETS[name])
-    # A user's "auto" is the absence of a choice, so the preset's value applies.
-    named = {k for k, v in (user_config or {}).items() if v != "auto"}
-    values = {k: v for k, v in values.items() if k not in named}
-    key = "REGRESSION_Y_PREPROCESS_TRANSFORMS"
-    if values.get(key) == "auto":
-        stored = tuple(
-            t for t in getattr(config, key) if t in ZERO_INFLATED_TARGET_TRANSFORMS
-        )
-        builtin = all(
-            type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs
-        )
-        values[key] = stored or (
-            ("log_quantile_gap",) if builtin else ("log_fixed_atom",)
-        )
+    values = {k: v for k, v in values.items() if k not in (user_config or {})}
     return dataclasses.replace(config, **values)
+
+
+def _zero_inflated_transforms(
+    stored: tuple[str | None, ...] | str,
+    architecture_configs: Sequence[ArchitectureConfig],
+) -> tuple[str, ...]:
+    """What "zero_inflated_auto" resolves to: the zero-inflated transforms in
+    `stored`, else `log_quantile_gap` on the built-in architectures and
+    `log_fixed_atom` on all others.
+    """
+    if not isinstance(stored, str):
+        kept = tuple(
+            t for t in stored if t is not None and t in ZERO_INFLATED_TARGET_TRANSFORMS
+        )
+        if kept:
+            return kept
+    if all(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs):
+        return ("log_quantile_gap",)
+    return ("log_fixed_atom",)
 
 
 _zero_share_warning_issued = False

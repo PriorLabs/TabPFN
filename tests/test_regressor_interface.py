@@ -2920,30 +2920,30 @@ def test__fit__zero_inflated_preset__keeps_a_stored_zero_inflated_transform() ->
     )
 
 
+@pytest.mark.parametrize("presets", [None, "zero_inflated"])
 @pytest.mark.parametrize(
-    ("presets", "transforms"),
-    [(None, (None, "safepower")), ("zero_inflated", ("log_quantile_gap",))],
+    ("v4_like", "transforms"),
+    [(False, ("log_quantile_gap",)), (True, ("log_fixed_atom",))],
 )
-def test__fit__auto_target_transforms__keep_the_checkpoints_unless_the_preset_is_set(
-    presets: str | None, transforms: tuple
+def test__fit__zero_inflated_auto__picks_a_transform_for_the_model(
+    presets: str | None, v4_like: bool, transforms: tuple
 ) -> None:
-    """As for `n_estimators`, a user's "auto" is the absence of a choice."""
     X, y = _zero_inflated_tuning_data()
-    specs = _create_dummy_regressor_model_specs()
-    assert specs.inference_config.REGRESSION_Y_PREPROCESS_TRANSFORMS == (
-        None,
-        "safepower",
+    model_path = (
+        _other_architecture_specs()
+        if v4_like
+        else _create_dummy_regressor_model_specs()
     )
 
     regressor = TabPFNRegressor(
         presets=presets,
-        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": "auto"},
-        **_tuning_regressor_kwargs(model_path=specs),
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": "zero_inflated_auto"},
+        **_tuning_regressor_kwargs(model_path=model_path),
     ).fit(X, y)
 
     assert transforms == regressor.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
     assert regressor.get_params()["inference_config"] == {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "auto"
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": "zero_inflated_auto"
     }
 
 
