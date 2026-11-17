@@ -14,9 +14,7 @@ def _base() -> np.ndarray:
 
 def test__selecting_columns__matches_the_array() -> None:
     base = _base()
-    table = SharedColumnsTable.of(base)[:, [3, 0, 4]].compress(
-        [True, False, True], axis=1
-    )
+    table = SharedColumnsTable.of(base)[:, [3, 0, 4]][:, [True, False, True]]
 
     np.testing.assert_array_equal(np.asarray(table), base[:, [3, 4]])
     np.testing.assert_array_equal(table[2:5], base[2:5][:, [3, 4]])
@@ -25,7 +23,7 @@ def test__selecting_columns__matches_the_array() -> None:
     assert len(table) == 6
 
 
-def test__with_columns__places_own_values_and_keeps_only_those_used() -> None:
+def test__with_columns__places_own_values() -> None:
     base = _base()
     values = np.full((6, 2), -1.0)
     table = SharedColumnsTable.of(base).with_columns(values, slice(0, 2), [(2, 4)])
@@ -34,7 +32,6 @@ def test__with_columns__places_own_values_and_keeps_only_those_used() -> None:
         np.asarray(table), np.column_stack([values, base[:, 4]])
     )
     assert table.own.dtype == base.dtype
-    assert table.take([2]).own.shape == (6, 0)
     table.own_column(1)[:] = 7.0
     np.testing.assert_array_equal(np.asarray(table)[:, 1], np.full(6, 7.0))
 
@@ -61,3 +58,10 @@ def test__asarray__without_a_copy__raises_unless_the_table_is_its_base() -> None
     # Called directly: numpy 1's `np.asarray` takes no `copy`.
     with pytest.raises(ValueError, match="without a copy"):
         table[:, [1, 0]].__array__(copy=False)
+
+
+def test__rows__a_slice_only() -> None:
+    table = SharedColumnsTable.of(_base())[:, [1, 0]]
+
+    with pytest.raises(IndexError, match="contiguous"):
+        table[::2]

@@ -32,9 +32,9 @@ from tabpfn.utils import infer_random_state
 ONE_HOT_ENCODER_NAME = "one_hot_encoder"
 ORDINAL_ENCODER_NAME = "ordinal_encoder"
 
-_SHARED_TABLE_TRANSFORMS = ("ordinal", "ordinal_shuffled")
-"""The encodings that keep a `SharedColumnsTable` input one, sharing its other
-columns; any other builds the whole array first."""
+_SHARED_TABLE_TRANSFORMS = ("ordinal", "ordinal_shuffled", "numeric", "none")
+"""The encodings that keep a `SharedColumnsTable` input one, sharing the columns
+they do not encode; any other builds the whole array first."""
 
 
 def _writeable_column(X: np.ndarray | SharedColumnsTable, column: int) -> np.ndarray:
@@ -335,7 +335,6 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
-        X = np.asarray(X)
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         input_names = [f.name for f in feature_schema.features]
         n_input_features = X.shape[1]
@@ -401,12 +400,9 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
-        if isinstance(
-            X, SharedColumnsTable
-        ) and self.categorical_transform_name not in (
-            *_SHARED_TABLE_TRANSFORMS,
-            "numeric",
-            "none",
+        if (
+            isinstance(X, SharedColumnsTable)
+            and self.categorical_transform_name not in _SHARED_TABLE_TRANSFORMS
         ):
             X = np.asarray(X)
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
@@ -482,23 +478,21 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         The columns are moved and the codes written within `X`, or within a copy of it
         when the pipeline does not hand `X` over, wherever its dtype holds them exactly.
         """
-        owns_input = step_owns_input()
         if isinstance(X, SharedColumnsTable):
             shared = (
                 ct.fit_transform_shared(X)
                 if isinstance(ct, EfficientColumnTransformer)
                 else None
             )
-            if shared is not None:
-                return shared
-            X, owns_input = np.asarray(X), True
+            # `fit_transform_into` gives up on the same conditions.
+            return shared if shared is not None else ct.fit_transform(np.asarray(X))
         if (
             isinstance(ct, EfficientColumnTransformer)
             and X.dtype.kind == "f"
             and X.ndim == 2
         ):
             # A copy in `X`'s dtype, not `ct.fit_transform`'s float64 table.
-            out = ct.fit_transform_into(X, out=X if owns_input else X.copy())
+            out = ct.fit_transform_into(X, out=X if step_owns_input() else X.copy())
             if out is not None:
                 return out
         return ct.fit_transform(X)
@@ -525,13 +519,16 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             warnings.filterwarnings(
                 "ignore", message=".*Found unknown categories in col.*"
             )  # These warnings are expected when transforming test data
-            transformed = None
             if isinstance(X, SharedColumnsTable):
-                if isinstance(ct, EfficientColumnTransformer):
-                    transformed = ct.transform_shared(X)
-                if transformed is None:
-                    X = np.asarray(X)
-            if transformed is None:
+                shared = (
+                    ct.transform_shared(X)
+                    if isinstance(ct, EfficientColumnTransformer)
+                    else None
+                )
+                transformed = (
+                    shared if shared is not None else ct.transform(np.asarray(X))
+                )
+            else:
                 transformed = ct.transform(X)
         if self.categorical_transform_name.endswith("_shuffled"):
             for col, mapping in self.random_mappings_.items():

@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import contextvars
 import dataclasses
+import functools
 import os
 import time
+import warnings
 from abc import abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -116,7 +118,8 @@ class SharedColumnsTable:
 
     Column `j` is `base[:, sources[j]]` where `sources[j] >= 0`, and
     `own[:, -1 - sources[j]]` otherwise. The ensemble members preprocessed from one
-    input share it as `base` and each hold only the columns they rewrote.
+    input share it as `base` and each hold only the columns they rewrote; tables
+    made from one another with `take` share `own` too.
 
     Rows come out as a new array, or as a view of `base` while the table is `base`
     itself; `np.asarray` builds the whole table.
@@ -146,11 +149,6 @@ class SharedColumnsTable:
         """Bytes per value."""
         return self.base.itemsize
 
-    @property
-    def ndim(self) -> int:
-        """Always 2."""
-        return 2
-
     def __len__(self) -> int:
         return self.base.shape[0]
 
@@ -161,25 +159,26 @@ class SharedColumnsTable:
         )
 
     def __getitem__(self, key: Any) -> Any:
-        """A block of rows as an array, or `[:, columns]` as a table."""
+        """A slice of rows as an array, or `[:, columns]` as a table."""
         if isinstance(key, tuple):
             rows, columns = key
             if rows != slice(None):
                 raise IndexError("A table selects rows or columns, not both.")
             return self.take(np.arange(self.shape[1])[columns])
-        return self._rows(key)
+        rows = range(self.shape[0])[key]
+        if not isinstance(rows, range) or rows.step != 1:
+            raise IndexError("A table reads a contiguous slice of rows.")
+        if self.is_base():
+            return self.base[rows.start : rows.stop]
+        out = np.empty((len(rows), self.shape[1]), dtype=self.dtype)
+        self.copy_rows_into(rows.start, rows.stop, torch.from_numpy(out))
+        return out
 
     def take(self, columns: np.ndarray | list[int]) -> SharedColumnsTable:
         """The given columns, in the given order."""
         return SharedColumnsTable(
             self.base, self.sources[np.asarray(columns, dtype=np.intp)], self.own
-        )._without_unused_own()
-
-    def compress(self, condition: Any, axis: int) -> SharedColumnsTable:
-        """`np.compress` along the columns."""
-        if axis != 1:
-            raise ValueError("A table compresses its columns only.")
-        return self.take(np.flatnonzero(np.asarray(condition, dtype=bool)))
+        )
 
     def own_column(self, column: int) -> np.ndarray:
         """Column `column`, which the table holds itself, as a writeable view."""
@@ -190,49 +189,55 @@ class SharedColumnsTable:
 
     def with_columns(
         self,
-        values: np.ndarray | None,
+        values: np.ndarray,
         at: slice | list[int],
         passthrough: list[tuple[int, int]],
     ) -> SharedColumnsTable:
         """A table of `values` at positions `at` and, per `(position, column)` in
         `passthrough`, this table's `column` at `position`.
         """
-        n_columns = len(passthrough) + (0 if values is None else values.shape[1])
+        n_columns = len(passthrough) + values.shape[1]
         sources = np.empty(n_columns, dtype=np.intp)
         for position, column in passthrough:
             sources[position] = self.sources[column]
-        own = self.own
-        if values is not None:
-            positions = range(n_columns)[at] if isinstance(at, slice) else at
-            sources[list(positions)] = -1 - (own.shape[1] + np.arange(values.shape[1]))
-            own = np.concatenate([own, values.astype(self.dtype)], axis=1)
-        return SharedColumnsTable(self.base, sources, own)._without_unused_own()
+        positions = range(n_columns)[at] if isinstance(at, slice) else at
+        sources[list(positions)] = -1 - (self.own.shape[1] + np.arange(values.shape[1]))
+        own = np.concatenate([self.own, values.astype(self.dtype)], axis=1)
+        return SharedColumnsTable(self.base, sources, own)
 
-    def _without_unused_own(self) -> SharedColumnsTable:
-        """The same table, holding only the own columns it uses."""
-        used = np.unique(-1 - self.sources[self.sources < 0])
-        if len(used) == self.own.shape[1]:
-            return self
-        renumbered = np.full(self.own.shape[1], -1, dtype=np.intp)
-        renumbered[used] = np.arange(len(used))
-        sources = self.sources.copy()
-        own_positions = sources < 0
-        sources[own_positions] = -1 - renumbered[-1 - sources[own_positions]]
-        return SharedColumnsTable(
-            self.base, sources, np.ascontiguousarray(self.own[:, used])
-        )
+    def copy_rows_into(self, start: int, stop: int, out: torch.Tensor) -> None:
+        """Writes rows `start:stop` into `out`, a CPU tensor of their shape."""
+        with warnings.catch_warnings():
+            # `base` may be read-only; it is only read here.
+            warnings.filterwarnings(
+                "ignore", message="The given NumPy array is not writable"
+            )
+            base = torch.from_numpy(self.base[start:stop])
+            own = torch.from_numpy(self.own[start:stop])
+        # Runs of adjacent columns, so torch copies wide strips on its own threads
+        # rather than numpy gathering one value at a time.
+        for position, source, width in self._runs:
+            values = base if source >= 0 else own
+            column = source if source >= 0 else -1 - source
+            out[:, position : position + width].copy_(
+                values[:, column : column + width]
+            )
 
-    def _rows(self, rows: Any) -> np.ndarray:
-        """The given rows of every column."""
-        if self.is_base():
-            return self.base[rows]
-        base_rows = self.base[rows]
-        out = np.empty((base_rows.shape[0], self.shape[1]), dtype=self.dtype)
-        shared = self.sources >= 0
-        out[:, shared] = base_rows[:, self.sources[shared]]
-        if not shared.all():
-            out[:, ~shared] = self.own[rows][:, -1 - self.sources[~shared]]
-        return out
+    @functools.cached_property
+    def _runs(self) -> list[tuple[int, int, int]]:
+        """`(position, source, width)` per run of columns that are adjacent in both
+        the table and their source, `source` encoded as in `sources`.
+        """
+        runs: list[tuple[int, int, int]] = []
+        for position, source in enumerate(self.sources.tolist()):
+            if runs:
+                start, first, width = runs[-1]
+                step = 1 if first >= 0 else -1
+                if (source >= 0) == (first >= 0) and source == first + step * width:
+                    runs[-1] = (start, first, width + 1)
+                    continue
+            runs.append((position, source, 1))
+        return runs
 
     def __array__(self, dtype: Any = None, *, copy: bool | None = None) -> np.ndarray:
         if self.is_base():
@@ -242,7 +247,11 @@ class SharedColumnsTable:
             return np.asarray(self.base, dtype=dtype)
         if copy is False:
             raise ValueError("A table is built anew; it cannot be read without a copy.")
-        out = self._rows(slice(None))
+        out = np.empty(self.shape, dtype=self.dtype)
+        rows = max(1, ROW_SCAN_BLOCK_BYTES // max(1, self.shape[1] * self.itemsize))
+        for start in range(0, self.shape[0], rows):
+            stop = min(start + rows, self.shape[0])
+            self.copy_rows_into(start, stop, torch.from_numpy(out[start:stop]))
         return out if dtype is None else out.astype(dtype, copy=False)
 
 
@@ -429,7 +438,9 @@ class PreprocessingStep:
 
     Such a step gives the same float32 results from a float32 copy of its input as
     from a float64 one. It may be handed the caller's array, so it writes into its
-    input only when `step_owns_input()`.
+    input only when `step_owns_input()`, or a `SharedColumnsTable` over it, which
+    supports `shape`, `dtype`, `len`, slices of rows, `[:, columns]` and
+    `np.asarray`.
     """
 
     @abstractmethod
@@ -638,9 +649,9 @@ class PreprocessingPipeline:
             feature_schema: feature schema, of the columns the pipeline reads.
             feature_indices: The columns of `X` the pipeline reads, gathered into
                 its working copy; None for all of them.
-            may_keep_input: Whether the result may be `X` itself. A fitted model
-                keeps its training data, so this is only for a caller that hands
-                `X` over.
+            may_keep_input: Whether the result may be `X` itself, or a
+                `SharedColumnsTable` over it. A fitted model keeps its training
+                data, so this is only for a caller that hands `X` over.
 
         Returns:
             PreprocessingPipelineResult with transformed data and updated schema.
@@ -663,8 +674,9 @@ class PreprocessingPipeline:
 
         Args:
             X: 2d array of shape (n_samples, n_features).
-            may_keep_input: Whether the result may be `X` itself, which the caller
-                then must not write into.
+            may_keep_input: Whether the result may be `X` itself, or a
+                `SharedColumnsTable` over it, which the caller then must not write
+                into.
 
         Returns:
             PreprocessingPipelineResult with transformed data and feature schema.

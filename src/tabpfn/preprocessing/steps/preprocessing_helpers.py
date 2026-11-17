@@ -164,14 +164,10 @@ class EfficientColumnTransformer(ColumnTransformer):
             return None
         probe = self._fit_column_bookkeeping(head)
         name, selected = self._named_selection()
-        if selected is None or not self._can_assemble(X, probe, selected):
+        if not selected or not self._can_assemble(X, probe, selected):
             return None
-        transformed = (
-            None
-            if not selected
-            else np.asarray(
-                self.named_transformers_[name].fit_transform(np.asarray(X[:, selected]))
-            )
+        transformed = np.asarray(
+            self.named_transformers_[name].fit_transform(np.asarray(X[:, selected]))
         )
         return self._shared_output(X, name, selected, transformed)
 
@@ -184,14 +180,10 @@ class EfficientColumnTransformer(ColumnTransformer):
         if not hasattr(self, "transformers_") or self.n_features_in_ != X.shape[1]:
             return None
         name, selected = self._named_selection()
-        if selected is None or self.sparse_output_ or not self._may_assemble(X[:1], {}):
+        if not selected or self.sparse_output_ or not self._may_assemble(X[:1], {}):
             return None
-        transformed = (
-            None
-            if not selected
-            else np.asarray(
-                self.named_transformers_[name].transform(np.asarray(X[:, selected]))
-            )
+        transformed = np.asarray(
+            self.named_transformers_[name].transform(np.asarray(X[:, selected]))
         )
         return self._shared_output(X, name, selected, transformed)
 
@@ -200,13 +192,13 @@ class EfficientColumnTransformer(ColumnTransformer):
         X: SharedColumnsTable,
         name: str | None,
         selected: list[Any],
-        transformed: np.ndarray | None,
+        transformed: np.ndarray,
     ) -> SharedColumnsTable | None:
         """The output laid out as `_assemble` lays it, sharing `X`'s base columns.
 
         None when a transformed value would change in `X`'s dtype.
         """
-        if transformed is not None and not _holds_exactly(transformed, X.dtype):
+        if not _holds_exactly(transformed, X.dtype):
             return None
         destination, passthrough = self._output_positions(X, name, selected)
         return X.with_columns(transformed, destination, passthrough)

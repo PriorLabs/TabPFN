@@ -355,6 +355,9 @@ def test__keep_float32_pipeline__may_keep_input__shares_the_columns_it_leaves(
     assert actual.X.own.shape[1] == (0 if encoding == "numeric" else 2)
     assert actual.feature_schema == expected.feature_schema
     np.testing.assert_array_equal(np.asarray(actual.X), expected.X)
+    shared = sharing.transform(X_test, may_keep_input=True).X
+    assert isinstance(shared, SharedColumnsTable)
+    assert isinstance(sharing.transform(X_test).X, np.ndarray)
     np.testing.assert_array_equal(
-        np.asarray(sharing.transform(X_test).X), copying.transform(X_test.copy()).X
+        np.asarray(shared), copying.transform(X_test.copy()).X
     )

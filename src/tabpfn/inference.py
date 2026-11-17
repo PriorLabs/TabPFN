@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
+import numpy as np
 import torch
 
 from tabpfn.architectures.interface import EstimatorBatchBudget
@@ -28,12 +29,11 @@ from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
 from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.settings import settings
 from tabpfn.utils import as_tensor_to_read, get_autocast_context
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from tabpfn.architectures.interface import Architecture, PerformanceOptions
     from tabpfn.architectures.kv_cache import KVCache
     from tabpfn.preprocessing import EnsembleConfig
@@ -1690,8 +1690,8 @@ def _call_model_on_members(  # noqa: PLR0913
 def _prepare_model_inputs(
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
-    X_train: torch.Tensor | np.ndarray,
-    X_test: torch.Tensor | np.ndarray,
+    X_train: torch.Tensor | np.ndarray | SharedColumnsTable,
+    X_test: torch.Tensor | np.ndarray | SharedColumnsTable,
     y_train: torch.Tensor | np.ndarray,
     *,
     x_device: torch.device | None = None,
@@ -1710,10 +1710,21 @@ def _prepare_model_inputs(
         device=device if x_device is None else x_device,
     )
     rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
+    staging: torch.Tensor | None = None
     for offset, part in ((0, X_train), (num_train, X_test)):
         for start in range(0, len(part), rows):
-            block = as_tensor_to_read(part[start : start + rows])
-            X_full[offset + start : offset + start + len(block), 0].copy_(block)
+            stop = min(start + rows, len(part))
+            if isinstance(part, SharedColumnsTable):
+                # One host block, reused, that the table's columns are copied into.
+                if staging is None:
+                    staging = torch.from_numpy(
+                        np.empty((rows, num_columns), dtype=part.dtype)
+                    )
+                block = staging[: stop - start]
+                part.copy_rows_into(start, stop, block)
+            else:
+                block = as_tensor_to_read(part[start:stop])
+            X_full[offset + start : offset + stop, 0].copy_(block)
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
 
