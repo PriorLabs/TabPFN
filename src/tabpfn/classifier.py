@@ -43,6 +43,7 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
+    resolved_average_before_softmax,
     resolved_n_estimators,
     resolved_softmax_temperature,
     transform_columns,
@@ -269,6 +270,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     `softmax_temperature`, i.e. the one the checkpoint declares when no temperature
     tuning is done."""
 
+    average_before_softmax_: bool
+    """The resolved `average_before_softmax`, i.e. the one the checkpoint declares
+    unless it was overridden."""
+
     ensemble_configs_: list[ClassifierEnsembleConfig]
     """The ensemble configurations used during fit.
     Stored for reuse in prompt tuning."""
@@ -287,7 +292,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         group_col: str | list[str] | None = None,
         softmax_temperature: float | Literal["auto"] = "auto",
         balance_probabilities: bool = False,
-        average_before_softmax: bool = False,
+        average_before_softmax: bool | Literal["auto"] = "auto",
         model_path: str
         | Path
         | list[str]
@@ -422,6 +427,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   softmax.
                 - If `False`, the softmax function is applied to each set of logits.
                   Then, we average the resulting probabilities of each forward pass.
+                - If `"auto"` (the default), the value is taken from the checkpoint
+                  (`InferenceConfig.AVERAGE_BEFORE_SOFTMAX`), which is `False`
+                  unless the checkpoint sets it. Passing a bool overrides the
+                  checkpoint; it cannot be combined with an
+                  `AVERAGE_BEFORE_SOFTMAX` in `inference_config`, which is the other
+                  way of naming one.
 
             model_path:
                 The path to the TabPFN model file, i.e., the pre-trained weights.
@@ -1982,7 +1993,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.logits_to_probabilities(
                     raw_logits=raw_logits,
                     softmax_temperature=softmax_temperature,
-                    average_before_softmax=self.average_before_softmax,
+                    average_before_softmax=resolved_average_before_softmax(self),
                     downsample_correction_weights=holdout_correction_weights,
                     balance_probabilities=self.balance_probabilities,
                 )
@@ -2081,7 +2092,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else softmax_temperature
         )
         use_average_before_softmax = (
-            self.average_before_softmax
+            resolved_average_before_softmax(self)
             if average_before_softmax is None
             else average_before_softmax
         )

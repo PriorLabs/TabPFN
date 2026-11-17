@@ -120,6 +120,7 @@ def initialize_tabpfn_model(
     *,
     softmax_temperature_override: float | None = None,
     n_estimators_override: int | None = None,
+    average_before_softmax_override: bool | None = None,
     devices: Sequence[torch.device] | None = None,
     force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
@@ -143,6 +144,7 @@ def initialize_tabpfn_model(
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
         n_estimators_override: Likewise for the number of estimators.
+        average_before_softmax_override: Likewise for the ensemble averaging order.
         devices: Where the caller will place the models; part of the cache key.
         force_inference_dtype: The dtype the caller will cast them to; likewise.
 
@@ -162,7 +164,10 @@ def initialize_tabpfn_model(
     ):
         specs = typing.cast("list[ModelSpecs]", model_path)
         _assert_inference_configs_equal(
-            specs, softmax_temperature_override, n_estimators_override
+            specs,
+            softmax_temperature_override,
+            n_estimators_override,
+            average_before_softmax_override=average_before_softmax_override,
         )
         norm_criterion = None
         if which == "regressor":
@@ -211,6 +216,7 @@ def initialize_tabpfn_model(
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
                     n_estimators_override=n_estimators_override,
+                    average_before_softmax_override=average_before_softmax_override,
                     devices=devices,
                     force_inference_dtype=force_inference_dtype,
                 )
@@ -227,6 +233,7 @@ def initialize_tabpfn_model(
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
                     n_estimators_override=n_estimators_override,
+                    average_before_softmax_override=average_before_softmax_override,
                     devices=devices,
                     force_inference_dtype=force_inference_dtype,
                 )
@@ -251,6 +258,8 @@ def _assert_inference_configs_equal(
     model_specs: list[ModelSpecs],
     softmax_temperature_override: float | None,
     n_estimators_override: int | None,
+    *,
+    average_before_softmax_override: bool | None,
 ) -> None:
     # A mismatch in an overridable field is reported separately, as the user can fix
     # those by naming a value.
@@ -266,6 +275,7 @@ def _assert_inference_configs_equal(
         overrides={
             "SOFTMAX_TEMPERATURE": softmax_temperature_override,
             "N_ESTIMATORS": n_estimators_override,
+            "AVERAGE_BEFORE_SOFTMAX": average_before_softmax_override,
         },
     )
 
@@ -549,6 +559,7 @@ def initialize_model_variables_helper(
             which=model_type,
             softmax_temperature_override=overrides["SOFTMAX_TEMPERATURE"],
             n_estimators_override=overrides["N_ESTIMATORS"],
+            average_before_softmax_override=overrides["AVERAGE_BEFORE_SOFTMAX"],
             devices=devices,
             force_inference_dtype=forced_inference_dtype,
         )
@@ -563,12 +574,17 @@ def initialize_model_variables_helper(
     inference_config = inference_config.override_with_user_input_and_resolve_auto(
         user_config=user_config,
     )
-    # Only the `softmax_temperature` argument still has to be applied here; an
-    # override that came from `user_config` was applied by the call above, and the two
-    # cannot both be given.
+    # Only the `softmax_temperature` and `average_before_softmax` arguments still have
+    # to be applied here; an override that came from `user_config` was applied by the
+    # call above, and the two cannot both be given.
     if overrides["SOFTMAX_TEMPERATURE"] is not None:
         inference_config = dataclasses.replace(
             inference_config, SOFTMAX_TEMPERATURE=overrides["SOFTMAX_TEMPERATURE"]
+        )
+    if overrides["AVERAGE_BEFORE_SOFTMAX"] is not None:
+        inference_config = dataclasses.replace(
+            inference_config,
+            AVERAGE_BEFORE_SOFTMAX=overrides["AVERAGE_BEFORE_SOFTMAX"],
         )
 
     # An `n_estimators` argument is deliberately *not* written back into the config.
@@ -580,6 +596,7 @@ def initialize_model_variables_helper(
 
     calling_instance.inference_config_ = inference_config
     calling_instance.softmax_temperature_ = inference_config.SOFTMAX_TEMPERATURE
+    calling_instance.average_before_softmax_ = inference_config.AVERAGE_BEFORE_SOFTMAX
 
     return byte_size
 
@@ -642,6 +659,21 @@ def resolved_n_estimators(
     if estimator.n_estimators != "auto":
         return estimator.n_estimators
     return estimator.inference_config_.N_ESTIMATORS
+
+
+def resolved_average_before_softmax(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+) -> bool:
+    """Whether `estimator` averages the estimators' logits before the softmax.
+
+    Reads the value resolved by `initialize_model_variables_helper`, falling back to
+    the unresolved argument for estimators that were never initialized or were pickled
+    before that resolution existed, where `"auto"` means averaging probabilities.
+    """
+    value = getattr(
+        estimator, "average_before_softmax_", estimator.average_before_softmax
+    )
+    return False if value == "auto" else bool(value)
 
 
 def resolved_softmax_temperature(

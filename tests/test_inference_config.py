@@ -18,7 +18,7 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.base import ModelSpecs
+from tabpfn.base import ModelSpecs, resolved_average_before_softmax
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import (
     DEFAULT_SOFTMAX_TEMPERATURE,
@@ -916,3 +916,179 @@ def test__classifier_n_estimators__checkpoint_count__is_never_scaled(
         clf.fit(X, y)
 
     assert clf.n_estimators_ == 3
+
+
+# =============================================================================
+# AVERAGE_BEFORE_SOFTMAX
+# =============================================================================
+
+
+def _with_average_before_softmax(specs: ModelSpecs, value: bool) -> ModelSpecs:
+    """The same weights as `specs`, with a different declared averaging order."""
+    return ModelSpecs(
+        model=specs.model,
+        architecture_config=specs.architecture_config,
+        inference_config=replace(specs.inference_config, AVERAGE_BEFORE_SOFTMAX=value),
+        norm_criterion=specs.norm_criterion,
+    )
+
+
+def test__average_before_softmax__omitted_from_config__is_false() -> None:
+    """Checkpoints predating the field keep averaging probabilities."""
+    config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    assert config.AVERAGE_BEFORE_SOFTMAX is False
+
+    for model_version in (ModelVersion.V2, ModelVersion.V2_5):
+        for task_type in ("multiclass", "regression"):
+            default = InferenceConfig.get_default(
+                task_type=task_type,  # type: ignore[arg-type]
+                model_version=model_version,
+            )
+            assert default.AVERAGE_BEFORE_SOFTMAX is False
+
+
+def test__classifier_average_before_softmax__never_fitted__averages_probabilities() -> (
+    None
+):
+    logits = np.random.default_rng(0).normal(size=(2, 5, 3)).astype(np.float32)
+    clf = TabPFNClassifier()
+
+    np.testing.assert_allclose(
+        clf.logits_to_probabilities(logits),
+        clf.logits_to_probabilities(logits, average_before_softmax=False),
+    )
+
+
+def test__classifier_average_before_softmax__reaches_the_predictions(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The order a checkpoint declares must behave like passing that value."""
+    X, y = classification_data
+    base = _make_classifier_specs()
+    logit_averaging = _with_average_before_softmax(base, value=True)
+
+    def probas_for(specs: ModelSpecs, **kwargs: object) -> np.ndarray:
+        clf = TabPFNClassifier(
+            model_path=specs, device="cpu", n_estimators=2, random_state=0, **kwargs
+        )
+        clf.fit(X, y)
+        return clf.predict_proba(X)
+
+    from_checkpoint = probas_for(logit_averaging)
+    from_argument = probas_for(base, average_before_softmax=True)
+    untouched = probas_for(base)
+    argument_over_checkpoint = probas_for(logit_averaging, average_before_softmax=False)
+
+    np.testing.assert_allclose(from_checkpoint, from_argument)
+    assert not np.allclose(from_checkpoint, untouched)
+    np.testing.assert_allclose(argument_over_checkpoint, untouched)
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_value", "argument", "expected"),
+    [(True, "auto", True), (False, True, True), (True, False, False)],
+)
+def test__classifier_average_before_softmax__is_resolved_at_fit(
+    classification_data: tuple[np.ndarray, np.ndarray],
+    checkpoint_value: bool,
+    argument: bool | str,
+    expected: bool,
+) -> None:
+    """Like the temperature, the resolved value is a fitted attribute and is what
+    the estimator's inference config, and so a saved checkpoint, carries.
+    """
+    X, y = classification_data
+    specs = _with_average_before_softmax(
+        _make_classifier_specs(), value=checkpoint_value
+    )
+    clf = TabPFNClassifier(
+        model_path=specs, device="cpu", n_estimators=2, average_before_softmax=argument
+    )
+    clf.fit(X, y)
+
+    assert clf.average_before_softmax_ is expected
+    assert clf.inference_config_.AVERAGE_BEFORE_SOFTMAX is expected
+
+
+@pytest.mark.parametrize(
+    "inference_config",
+    [
+        {"AVERAGE_BEFORE_SOFTMAX": True},
+        InferenceConfig.get_default("multiclass", ModelVersion.V2_5),
+    ],
+)
+def test__classifier_average_before_softmax__named_twice__raises(
+    classification_data: tuple[np.ndarray, np.ndarray],
+    inference_config: dict | InferenceConfig,
+) -> None:
+    """A hand-built `InferenceConfig` always carries a value, so it names one too."""
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_make_classifier_specs(),
+        device="cpu",
+        average_before_softmax=True,
+        inference_config=inference_config,
+    )
+    with pytest.raises(ValueError, match="`average_before_softmax` was given twice"):
+        clf.fit(X, y)
+
+
+def test__classifier_average_before_softmax__checkpoints_disagree__raises(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    base = _make_classifier_specs()
+    specs = [base, _with_average_before_softmax(base, value=True)]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu", n_estimators=2)
+    with pytest.raises(ValueError, match="different ensemble averaging orders"):
+        clf.fit(X, y)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"average_before_softmax": False},
+        {"inference_config": {"AVERAGE_BEFORE_SOFTMAX": False}},
+    ],
+)
+def test__classifier_average_before_softmax__disagreeing_checkpoints_and_override__is_used(  # noqa: E501
+    classification_data: tuple[np.ndarray, np.ndarray],
+    kwargs: dict,
+) -> None:
+    """`False` is a value the user named, not the absence of one."""
+    X, y = classification_data
+    base = _make_classifier_specs()
+    specs = [_with_average_before_softmax(base, value=True), base]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu", n_estimators=2, **kwargs)
+    clf.fit(X, y)
+
+    assert resolved_average_before_softmax(clf) is False
+
+
+def test__regressor_average_before_softmax__reaches_the_predictions() -> None:
+    """The order a checkpoint declares must behave like passing that value."""
+    X, y = sklearn.datasets.make_regression(
+        n_samples=30, n_features=4, noise=10.0, random_state=0
+    )
+    base = _make_regressor_specs(max_num_classes=0)
+    logit_averaging = _with_average_before_softmax(base, value=True)
+
+    def predictions_for(specs: ModelSpecs, **kwargs: object) -> np.ndarray:
+        reg = TabPFNRegressor(
+            model_path=specs, device="cpu", n_estimators=2, random_state=0, **kwargs
+        )
+        reg.fit(X, y)
+        return reg.predict(X)
+
+    from_checkpoint = predictions_for(logit_averaging)
+    from_argument = predictions_for(base, average_before_softmax=True)
+    untouched = predictions_for(base)
+    argument_over_checkpoint = predictions_for(
+        logit_averaging, average_before_softmax=False
+    )
+
+    np.testing.assert_allclose(from_checkpoint, from_argument)
+    assert not np.allclose(from_checkpoint, untouched)
+    np.testing.assert_allclose(argument_over_checkpoint, untouched)
