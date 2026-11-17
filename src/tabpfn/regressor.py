@@ -45,6 +45,11 @@ from tabpfn.architectures.shared.bar_distribution import (
     FullSupportBarDistribution,
     expected_value,
 )
+from tabpfn.architectures.tabpfn_v2 import TabPFNV2Config
+from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5Config
+from tabpfn.architectures.tabpfn_v2_6 import TabPFNV2p6Config
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
+from tabpfn.architectures.tabpfn_v3_5 import TabPFNV3p5Config
 from tabpfn.base import (
     ModelSpecs,
     create_inference_engine,
@@ -182,11 +187,25 @@ OutputType = Literal["mean", "median", "mode", "quantiles", "full", "main"]
 
 REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
-        "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
+        "REGRESSION_Y_PREPROCESS_TRANSFORMS": {
+            "builtin": ("log_quantile_gap",),
+            "other": ("log_fixed_atom",),
+        },
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
 }
-"""The named bundles of `inference_config` values that `presets` selects."""
+"""The named bundles of `inference_config` values that `presets` selects. A value
+that is a dict holds one value for models on `BUILTIN_ARCHITECTURE_CONFIGS` and one
+for all other models."""
+
+BUILTIN_ARCHITECTURE_CONFIGS = (
+    TabPFNV2Config,
+    TabPFNV2p5Config,
+    TabPFNV2p6Config,
+    TabPFNV3Config,
+    TabPFNV3p5Config,
+)
+"""The architecture configs of the models up to TabPFN-3.5."""
 
 ZERO_SHARE_WARNING_THRESHOLD = 0.2
 """`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
@@ -697,8 +716,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
-                  `REGRESSION_Y_PREPROCESS_TRANSFORMS=("log_fixed_atom",)` and
-                  `REGRESSION_READOUT="nonnegative_and_capped"`.
+                  `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_quantile_gap",)`
+                  for the models up to TabPFN-3.5 and to `("log_fixed_atom",)`
+                  for other models, and `REGRESSION_READOUT` to
+                  `"nonnegative_and_capped"`.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -928,7 +949,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         byte_size = initialize_model_variables_helper(self, self.estimator_type)
         if self.presets is not None:
             self.inference_config_ = _apply_presets(
-                self.inference_config_, self.presets, self.inference_config
+                self.inference_config_,
+                self.presets,
+                self.inference_config,
+                self.configs_,
             )
         return byte_size
 
@@ -2907,19 +2931,26 @@ def _apply_presets(
     config: InferenceConfig,
     presets: str | Sequence[str],
     user_config: dict | InferenceConfig | None,
+    architecture_configs: Sequence[ArchitectureConfig],
 ) -> InferenceConfig:
     """`config` with the presets' values, except the keys `user_config` names."""
     if not isinstance(user_config, dict | None):
         raise TabPFNValidationError(
             "`presets` needs `inference_config` as a dict or None."
         )
+    builtin = all(type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs)
     values: dict[str, Any] = {}
     for name in [presets] if isinstance(presets, str) else presets:
         if name not in REGRESSION_PRESETS:
             raise TabPFNValidationError(
                 f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
             )
-        values.update(REGRESSION_PRESETS[name])
+        for key, value in REGRESSION_PRESETS[name].items():
+            values[key] = (
+                value["builtin" if builtin else "other"]
+                if isinstance(value, dict)
+                else value
+            )
     values = {k: v for k, v in values.items() if k not in (user_config or {})}
     key = "REGRESSION_Y_PREPROCESS_TRANSFORMS"
     if key in values:

@@ -2767,16 +2767,41 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
     assert regressor.mean_calibration_scale_ == 1.0
 
 
-def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only() -> None:
+class _OtherArchitectureConfig(tabpfn_v2_5.TabPFNV2p5Config):
+    """Stands for an architecture outside `BUILTIN_ARCHITECTURE_CONFIGS`."""
+
+
+def _other_architecture_specs() -> ModelSpecs:
+    specs = _create_dummy_regressor_model_specs()
+    config = _OtherArchitectureConfig(**dataclasses.asdict(specs.architecture_config))
+    return dataclasses.replace(
+        specs,
+        model=tabpfn_v2_5.get_architecture(config=config),
+        architecture_config=config,
+    )
+
+
+@pytest.mark.parametrize(
+    ("other_architecture", "transform"),
+    [(False, "log_quantile_gap"), (True, "log_fixed_atom")],
+)
+def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only(
+    other_architecture: bool, transform: str
+) -> None:
     X, y = _zero_inflated_tuning_data()
+    model_path = (
+        _other_architecture_specs()
+        if other_architecture
+        else _create_dummy_regressor_model_specs()
+    )
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=".*zero-inflated targets.*")
         regressor = TabPFNRegressor(
-            presets="zero_inflated", **_tuning_regressor_kwargs()
+            presets="zero_inflated", **_tuning_regressor_kwargs(model_path=model_path)
         ).fit(X, y)
 
     config = regressor.inference_config_
-    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
+    assert (transform,) == config.REGRESSION_Y_PREPROCESS_TRANSFORMS
     assert config.REGRESSION_READOUT == "nonnegative_and_capped"
     # The preset does not calibrate, and the constructor arguments stay as passed.
     assert regressor.mean_calibration_scale_ == 1.0
@@ -2815,7 +2840,7 @@ def test__fit__presets__user_keys_win_and_later_presets_win(
     ).fit(X, y)
 
     config = regressor.inference_config_
-    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
+    assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_quantile_gap",)
     assert config.REGRESSION_READOUT == "default"
     assert config.REGRESSION_TARGET_SIGN_FLIP is False
 
@@ -2829,8 +2854,10 @@ def test__fit__unknown_preset__raises() -> None:
 
 
 def _zero_inflated_checkpoint_specs(transform: str) -> ModelSpecs:
-    """A checkpoint that stores a zero-inflated target transform and readout."""
-    specs = _create_dummy_regressor_model_specs()
+    """A checkpoint outside the built-in architectures that stores a zero-inflated
+    target transform and readout.
+    """
+    specs = _other_architecture_specs()
     return dataclasses.replace(
         specs,
         inference_config=dataclasses.replace(
