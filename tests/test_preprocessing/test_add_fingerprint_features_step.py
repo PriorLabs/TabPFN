@@ -4,12 +4,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import pytest
 import torch
 
 from tabpfn.preprocessing import PreprocessingPipeline
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.steps import AddFingerprintFeaturesStep
+from tabpfn.preprocessing.steps import (
+    AddFingerprintFeaturesStep,
+    add_fingerprint_features_step as fingerprint_step,
+)
 
 
 def _get_schema(num_columns: int) -> FeatureSchema:
@@ -181,3 +187,35 @@ def test__num_added_features() -> None:
     """Test that the step returns the correct number of added features."""
     step = AddFingerprintFeaturesStep()
     assert step.num_added_features(-1, _get_schema(num_columns=1)) == 1
+
+
+@pytest.mark.parametrize("is_test", [False, True])
+@pytest.mark.parametrize("as_tensor", [False, True])
+def test__transform__row_blocks__match_one_block(
+    monkeypatch: pytest.MonkeyPatch, is_test: bool, as_tensor: bool
+) -> None:
+    """Hashing a block of rows at a time gives the fingerprints of one block, with
+    collisions resolved across the blocks, and rounds no more than a block at once.
+    """
+    rng = np.random.default_rng(0)
+    data = rng.standard_normal((40, 3)).astype(np.float32)
+    data[7:30:4] = data[3]  # duplicates of one row, in several blocks
+    data[[11, 25]] = np.nan
+    X = torch.from_numpy(data) if as_tensor else data
+    step = AddFingerprintFeaturesStep()
+    step._fit(data, _get_schema(num_columns=3))
+    _, expected, _ = step._transform(X, is_test=is_test)
+
+    rounded_rows: list[int] = []
+    around = np.around
+
+    def spy(a: np.ndarray, *args: Any, **kwargs: Any) -> np.ndarray:
+        rounded_rows.append(a.shape[0])
+        return around(a, *args, **kwargs)
+
+    monkeypatch.setattr(np, "around", spy)
+    monkeypatch.setattr(fingerprint_step, "_HASH_BLOCK_BYTES", 3 * 4 * 6)
+    _, actual, _ = step._transform(X, is_test=is_test)
+
+    assert max(rounded_rows) == 6
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
