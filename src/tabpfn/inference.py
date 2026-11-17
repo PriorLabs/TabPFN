@@ -1734,8 +1734,8 @@ def _copy_rows_into(
 ) -> None:
     """Writes `part` into `out`, a `(rows, columns)` tensor on any device.
 
-    Goes a block of rows at a time, so the host holds at most one block of rows
-    beyond `part` and `out`.
+    Goes a block of rows at a time, so beyond `part` and `out` the host holds rows
+    a block at a time, never all of them.
     """
     rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, out.shape[1] * out.element_size()))
     gathered = isinstance(part, SharedColumnsTable) and not part.is_base()
