@@ -41,12 +41,13 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
-from tabpfn.architectures import ARCHITECTURES_CONFIGS_BEFORE_V4
+from tabpfn.architectures import ARCHITECTURE_CONFIGS_UP_TO_V3_5
 from tabpfn.architectures.shared.bar_distribution import (
     FullSupportBarDistribution,
     expected_value,
 )
 from tabpfn.base import (
+    GROUPED_PRESET,
     ModelSpecs,
     create_inference_engine,
     determine_precision,
@@ -56,6 +57,7 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
     resolve_categorical_features_indices,
+    resolve_presets,
     resolved_average_before_softmax,
     resolved_n_estimators,
     resolved_softmax_temperature,
@@ -187,10 +189,11 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
     },
+    "grouped": GROUPED_PRESET,
 }
 """The named bundles of `inference_config` values that `presets` selects."""
 
-BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG: dict[str, Any] = {
+ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5: dict[str, Any] = {
     "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
     "REGRESSION_READOUT": "nonnegative_and_capped",
 }
@@ -712,16 +715,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 Names of bundles of `inference_config` values, see
                 `REGRESSION_PRESETS`. `None` uses the checkpoint's settings as they
                 are. The settings resolve in this order, a later one winning: the
-                checkpoint, the presets in list order, then the keys of an
-                `inference_config` dict. A preset never changes `tuning_config`.
+                checkpoint, the presets, then the keys of an `inference_config`
+                dict. Two presets that set one key to different values raise. A
+                preset never changes `tuning_config`.
 
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
                   `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_fixed_atom",)`
                   and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. On the
-                  models up to TabPFN-3.5 it sets
-                  `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, with
-                  `log_quantile_gap`, and warns.
+                  models up to TabPFN-3.5 it sets `log_quantile_gap` as the y
+                  transform.
+                - `"grouped"`: for `group_col` data, no effect without it. It sets
+                  `APPEND_GROUP_AGGREGATES=True` and
+                  `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
+                  passed to predict, so predict all rows of a group in one call.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
@@ -2092,12 +2099,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
                 )
-                # Only the full fit suggests or explains the zero_inflated preset.
+                # Only the full fit suggests the zero_inflated preset.
                 warnings.filterwarnings(
                     "ignore", message=".*zero-inflated targets.*", category=UserWarning
-                )
-                warnings.filterwarnings(
-                    "ignore", message='presets="zero_inflated"', category=UserWarning
                 )
                 tuning_regressor.fit(X_train_NtF, y_train_Nt, **fit_kwargs)
 
@@ -2950,33 +2954,15 @@ def _apply_presets(
     """`config` with the presets' values, except the keys `user_config` names.
 
     On a model up to TabPFN-3.5, "zero_inflated" sets
-    `BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG` instead, and warns.
+    `ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5` instead.
     """
-    if not isinstance(user_config, dict | None):
-        raise TabPFNValidationError(
-            "`presets` needs `inference_config` as a dict or None."
-        )
-    values: dict[str, Any] = {}
-    for name in [presets] if isinstance(presets, str) else presets:
-        if name not in REGRESSION_PRESETS:
-            raise TabPFNValidationError(
-                f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
-            )
-        if name == "zero_inflated" and any(
-            type(c) in ARCHITECTURES_CONFIGS_BEFORE_V4 for c in architecture_configs
-        ):
-            warnings.warn(
-                'presets="zero_inflated" on a model up to TabPFN-3.5 sets '
-                f"{BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG}.",
-                UserWarning,
-                # Past `_initialize_model_variables`, fit and the frame of its
-                # `config_context` decorator.
-                stacklevel=5,
-            )
-            values.update(BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG)
-        else:
-            values.update(REGRESSION_PRESETS[name])
-    values = {k: v for k, v in values.items() if k not in (user_config or {})}
+    registry = REGRESSION_PRESETS
+    if any(type(c) in ARCHITECTURE_CONFIGS_UP_TO_V3_5 for c in architecture_configs):
+        registry = {
+            **REGRESSION_PRESETS,
+            "zero_inflated": ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5,
+        }
+    values = resolve_presets(presets, user_config, registry)
     return dataclasses.replace(config, **values)
 
 

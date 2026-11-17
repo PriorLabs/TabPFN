@@ -15,6 +15,7 @@ from typing import Any, Literal
 from unittest import mock
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn.base
 import sklearn.datasets
@@ -2768,7 +2769,7 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
 
 
 class _OtherArchitectureConfig(tabpfn_v2_5.TabPFNV2p5Config):
-    """Stands for an architecture outside `ARCHITECTURES_CONFIGS_BEFORE_V4`."""
+    """Stands for an architecture outside `ARCHITECTURE_CONFIGS_UP_TO_V3_5`."""
 
 
 def _other_architecture_specs() -> ModelSpecs:
@@ -2799,27 +2800,18 @@ def test__fit__zero_inflated_preset__sets_the_transform_and_readout_only() -> No
     assert sklearn.base.clone(regressor).presets == "zero_inflated"
 
 
-def test__fit__zero_inflated_preset_on_a_builtin_model__sets_the_builtin_config() -> (
+def test__fit__zero_inflated_preset_on_a_model_up_to_3_5__sets_log_quantile_gap() -> (
     None
 ):
     X, y = _zero_inflated_tuning_data()
 
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        regressor = TabPFNRegressor(
-            presets="zero_inflated",
-            tuning_config={"calibrate_mean": True},
-            **_tuning_regressor_kwargs(),
-        ).fit(X, y)
+    regressor = TabPFNRegressor(
+        presets="zero_inflated", **_tuning_regressor_kwargs()
+    ).fit(X, y)
 
     config = regressor.inference_config_
     assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_quantile_gap",)
     assert config.REGRESSION_READOUT == "nonnegative_and_capped"
-    # One warning, from the full fit and not from its tuning folds, pointing at
-    # the caller of `fit`.
-    notes = [w for w in record if "up to TabPFN-3.5" in str(w.message)]
-    assert len(notes) == 1
-    assert notes[0].filename == __file__
 
 
 def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() -> None:
@@ -2836,26 +2828,36 @@ def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() ->
     assert fold_regressor.tuning_config is None
 
 
-def test__fit__presets__user_keys_win_and_later_presets_win(
+def test__fit__presets__user_keys_win_and_conflicting_presets_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(
         regressor_module.REGRESSION_PRESETS,
+        "flipped",
+        {"REGRESSION_TARGET_SIGN_FLIP": True},
+    )
+    monkeypatch.setitem(
+        regressor_module.REGRESSION_PRESETS,
         "uncapped",
-        {"REGRESSION_READOUT": "default", "REGRESSION_TARGET_SIGN_FLIP": True},
+        {"REGRESSION_READOUT": "default"},
     )
     X, y = _zero_inflated_tuning_data()
+    kwargs = _tuning_regressor_kwargs(model_path=_other_architecture_specs())
 
     regressor = TabPFNRegressor(
-        presets=["zero_inflated", "uncapped"],
+        presets=["zero_inflated", "flipped"],
         inference_config={"REGRESSION_TARGET_SIGN_FLIP": False},
-        **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
+        **kwargs,
     ).fit(X, y)
 
     config = regressor.inference_config_
     assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
-    assert config.REGRESSION_READOUT == "default"
+    assert config.REGRESSION_READOUT == "nonnegative_and_capped"
     assert config.REGRESSION_TARGET_SIGN_FLIP is False
+
+    regressor = TabPFNRegressor(presets=["zero_inflated", "uncapped"], **kwargs)
+    with pytest.raises(ValueError, match="cannot be combined: they set REGRESSION_"):
+        regressor.fit(X, y)
 
 
 def test__fit__unknown_preset__raises() -> None:
@@ -2866,8 +2868,29 @@ def test__fit__unknown_preset__raises() -> None:
         regressor.fit(X, y)
 
 
+def test__fit__grouped_preset__appends_aggregates_and_pools_predictions() -> None:
+    """The preset composes with "zero_inflated" and switches on both group modes."""
+    rng = np.random.default_rng(0)
+    groups = np.repeat(np.arange(10), 4)
+    X = pd.DataFrame({"num": rng.normal(size=40), "g": groups})
+    y = (groups % 3).astype(float)
+
+    regressor = TabPFNRegressor(
+        presets=["zero_inflated", "grouped"],
+        group_col="g",
+        **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
+    ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.APPEND_GROUP_AGGREGATES is True
+    assert config.POOL_GROUP_PREDICTIONS == "mean"
+    assert config.REGRESSION_READOUT == "nonnegative_and_capped"
+    assert "num_mean" in regressor.group_aggregator_.names_
+    assert regressor.group_aggregator_.pool_ is True
+
+
 def _zero_inflated_checkpoint_specs(transform: str) -> ModelSpecs:
-    """A checkpoint outside the built-in architectures that stores a zero-inflated
+    """A checkpoint beyond TabPFN-3.5 that stores a zero-inflated
     target transform and readout.
     """
     specs = _other_architecture_specs()
@@ -2969,7 +2992,7 @@ def test__fit__zero_inflated_target__suggests_a_zero_inflated_setup(
     y[-1] = minimum if minimum < 0 else y[-1]
     regressor = TabPFNRegressor(
         inference_config=(
-            regressor_module.BUILTIN_ZERO_INFLATED_INFERENCE_CONFIG
+            regressor_module.ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5
             if zero_inflated_config
             else None
         ),

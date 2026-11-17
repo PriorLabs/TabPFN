@@ -7,11 +7,12 @@ import itertools
 import os
 from collections.abc import Callable
 from itertools import product
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn.base
 import sklearn.datasets
 import torch
 from sklearn import config_context
@@ -1428,6 +1429,47 @@ def test__fit_with_roc_auc_metric_with_temperature_calibration__warns() -> None:
         match=r".*temperature calibration.*ROC AUC is independent of this tuning.*",
     ):
         clf.fit(X, y)
+
+
+def _grouped_preset_classifier(**kwargs: Any) -> TabPFNClassifier:
+    return TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        group_col="g",
+        model_path=_create_dummy_classifier_model_specs(),
+        **kwargs,
+    )
+
+
+def test__fit__grouped_preset__appends_aggregates_and_pools_predictions() -> None:
+    rng = np.random.default_rng(0)
+    groups = np.repeat(np.arange(10), 4)
+    X = pd.DataFrame({"num": rng.normal(size=40), "g": groups})
+    y = groups % 2
+
+    classifier = _grouped_preset_classifier(presets="grouped").fit(X, y)
+
+    assert classifier.inference_config_.APPEND_GROUP_AGGREGATES is True
+    assert classifier.inference_config_.POOL_GROUP_PREDICTIONS == "mean"
+    assert "num_mean" in classifier.group_aggregator_.names_
+    assert classifier.group_aggregator_.pool_ is True
+    assert classifier.get_params()["inference_config"] is None
+    assert sklearn.base.clone(classifier).presets == "grouped"
+
+    # A key of `inference_config` wins over the preset.
+    classifier = _grouped_preset_classifier(
+        presets="grouped", inference_config={"POOL_GROUP_PREDICTIONS": None}
+    ).fit(X, y)
+    assert classifier.inference_config_.APPEND_GROUP_AGGREGATES is True
+    assert classifier.group_aggregator_.pool_ is False
+
+
+def test__fit__unknown_preset__raises() -> None:
+    X = pd.DataFrame({"num": np.arange(8.0), "g": np.repeat(np.arange(4), 2)})
+    classifier = _grouped_preset_classifier(presets="zero_inflated")
+
+    with pytest.raises(ValueError, match="Unknown preset 'zero_inflated'"):
+        classifier.fit(X, np.arange(8) % 2)
 
 
 def _create_dummy_classifier_model_specs(

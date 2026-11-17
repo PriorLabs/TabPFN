@@ -8,7 +8,7 @@ import dataclasses
 import pathlib
 import typing
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -530,6 +530,47 @@ def reject_categoricals_for_differentiable_input(
         raise ValueError(
             "Categorical features are not supported for differentiable input."
         )
+
+
+GROUPED_PRESET: dict[str, Any] = {
+    "APPEND_GROUP_AGGREGATES": True,
+    "POOL_GROUP_PREDICTIONS": "mean",
+}
+"""The `"grouped"` preset of both estimators."""
+
+
+def resolve_presets(
+    presets: str | Sequence[str],
+    user_config: dict | InferenceConfig | None,
+    registry: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """The `inference_config` values of the presets, without the keys `user_config`
+    names.
+
+    Raises:
+        TabPFNValidationError: If a preset is unknown, or two presets set one key to
+            different values.
+    """
+    if not isinstance(user_config, dict | None):
+        raise TabPFNValidationError(
+            "`presets` needs `inference_config` as a dict or None."
+        )
+    values: dict[str, Any] = {}
+    setter: dict[str, str] = {}
+    for name in [presets] if isinstance(presets, str) else presets:
+        if name not in registry:
+            raise TabPFNValidationError(
+                f"Unknown preset {name!r}. Choose from {sorted(registry)}."
+            )
+        for key, value in registry[name].items():
+            if key in values and values[key] != value:
+                raise TabPFNValidationError(
+                    f"The presets {setter[key]!r} and {name!r} cannot be combined: "
+                    f"they set {key} to {values[key]!r} and {value!r}."
+                )
+            values[key] = value
+            setter[key] = name
+    return {k: v for k, v in values.items() if k not in (user_config or {})}
 
 
 def initialize_model_variables_helper(
