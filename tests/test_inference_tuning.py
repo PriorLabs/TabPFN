@@ -687,6 +687,30 @@ def test__find_mean_calibration_scale__minimizes_the_tweedie_deviance(
     assert deviance(scale) < deviance(scale * 1.01)
 
 
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_calibration_scale__minimizes_the_weighted_tweedie_deviance(
+    power: float,
+) -> None:
+    rng = np.random.default_rng(2)
+    mean = rng.gamma(shape=2.0, scale=1.0, size=500)
+    y = rng.poisson(mean**2) + 1.0
+    # Tied to `mean`, so the weighted minimizer moves away from the plain one.
+    weight = rng.uniform(0.0, 1.0, size=mean.size) * mean**2
+
+    scale = find_mean_calibration_scale(
+        y_true=y, mean=mean, power=power, sample_weight=weight
+    )
+
+    def deviance(c: float) -> float:
+        return mean_tweedie_deviance(y, c * mean, power=power, sample_weight=weight)
+
+    assert deviance(scale) < deviance(scale * 0.99)
+    assert deviance(scale) < deviance(scale * 1.01)
+    assert scale != pytest.approx(
+        find_mean_calibration_scale(y_true=y, mean=mean, power=power), rel=1e-3
+    )
+
+
 def test__find_mean_calibration_scale__floors_non_positive_means() -> None:
     y = np.array([0.0, 0.0, 4.0])
     mean = np.array([-0.5, 0.0, 2.0])
@@ -697,6 +721,22 @@ def test__find_mean_calibration_scale__floors_non_positive_means() -> None:
         4.0 / (2.0 + 2 * floor)
     )
     assert np.isfinite(find_mean_calibration_scale(y_true=y, mean=mean, power=1.5))
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5])
+def test__find_mean_calibration_scale__zero_weight_rows_do_not_move_the_floor(
+    power: float,
+) -> None:
+    y = np.array([0.0, 0.0, 4.0, 1e6])
+    mean = np.array([-0.5, 0.0, 2.0, 1.0])
+    weight = np.array([1.0, 1.0, 1.0, 0.0])
+
+    assert find_mean_calibration_scale(
+        y_true=y, mean=mean, power=power, sample_weight=weight
+    ) == pytest.approx(
+        find_mean_calibration_scale(y_true=y[:3], mean=mean[:3], power=power),
+        rel=1e-12,
+    )
 
 
 @pytest.mark.parametrize("power", [1.5, 2.0])
