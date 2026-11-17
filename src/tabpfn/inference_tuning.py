@@ -113,6 +113,12 @@ class RegressorTuningConfig(TuningConfig):
     the Tweedie deviance you evaluate with. 1.5 sits in the middle of that range
     and suits common zero-inflated datasets."""
 
+    rescale_tail_probability: bool = False
+    """Whether to scale the tail probability nu of the "nonnegative_and_pareto_tail"
+    and "nonnegative_and_exponential_tail" readouts by one factor, so that its mean
+    on the holdout rows is k / n, the share of training targets the tail was fitted
+    on. With `calibrate_mean`, c is fitted after it. Set to True to enable."""
+
     def __post_init__(self) -> None:
         if not 1.0 <= self.mean_calibration_power <= 2.0:
             raise ValueError(

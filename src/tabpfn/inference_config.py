@@ -367,7 +367,12 @@ class InferenceConfig:
     their target pipeline. Their predicted distributions are mirrored back. Ignored
     for classification."""
 
-    REGRESSION_READOUT: Literal["default", "nonnegative_and_capped"] = "default"
+    REGRESSION_READOUT: Literal[
+        "default",
+        "nonnegative_and_capped",
+        "nonnegative_and_pareto_tail",
+        "nonnegative_and_exponential_tail",
+    ] = "default"
     """How the regressor reads its outputs from the ensemble's averaged
     distribution.
 
@@ -377,7 +382,26 @@ class InferenceConfig:
           with y_max the largest training target. The mass above y_max is dropped,
           and the grid bucket that holds 0 and every bucket below it are read at 0.
           It needs y >= 0. The `"full"` output keeps the untruncated logits.
+        - "nonnegative_and_pareto_tail": "nonnegative_and_capped", except that the
+          mean replaces the distribution above the threshold u with a generalized
+          Pareto distribution (GPD), fitted by MAP to the training targets above u
+          and capped at M: E[min(Y, u)] + nu * E[min(Y - u, M - u) | Y > u], with
+          nu = P(Y > u) from the distribution. See `REGRESSION_TAIL_THRESHOLD` and
+          `REGRESSION_TAIL_CAP`. With fewer than 50 positive training targets,
+          the mean is the "nonnegative_and_capped" one.
+        - "nonnegative_and_exponential_tail": "nonnegative_and_pareto_tail" with
+          the GPD shape fixed at 0, an exponential tail.
     """
+
+    REGRESSION_TAIL_THRESHOLD: float | None = None
+    """The threshold u above which the "nonnegative_and_pareto_tail" and
+    "nonnegative_and_exponential_tail" readouts use the fitted tail. If None, u is
+    the (k+1)-th largest positive training target, with
+    k = clip(round(0.05 * n_pos), 30, 500)."""
+
+    REGRESSION_TAIL_CAP: float | None = None
+    """The upper threshold M > u at which the fitted tail is capped: its mass above
+    M is read at M. If None, M is twice the largest training target."""
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
     """Whether to round the probabilities to float 16 to match the precision of

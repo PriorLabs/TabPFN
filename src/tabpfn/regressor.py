@@ -88,6 +88,7 @@ from tabpfn.model_loading import (
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
+from tabpfn.pareto_tail import ParetoTail, fit_pareto_tail
 from tabpfn.preprocessing import (
     EnsembleConfig,
     FeatureSubsamplingMethod,
@@ -193,6 +194,9 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
 """The named bundles of `inference_config` values that `presets` selects. A value
 that is a dict holds one value for models on
 `tabpfn.architectures.BUILTIN_ARCHITECTURE_CONFIGS` and one for all other models."""
+
+TAIL_READOUTS = ("nonnegative_and_pareto_tail", "nonnegative_and_exponential_tail")
+"""The `REGRESSION_READOUT` options whose mean uses a fitted tail."""
 
 ZERO_SHARE_WARNING_THRESHOLD = 0.2
 """`fit` suggests the "zero_inflated" preset for nonnegative targets with a larger
@@ -366,8 +370,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     `RegressorTuningConfig.calibrate_mean`. This is `1.0`, a no-op, otherwise."""
 
     y_train_max_: float
-    """The largest training target, above which the "nonnegative_and_capped" readout
-    drops the predicted mass."""
+    """The largest training target, above which the nonnegative readouts drop the
+    predicted mass."""
+
+    pareto_tail_: ParetoTail | None
+    """The tail the "nonnegative_and_pareto_tail" and
+    "nonnegative_and_exponential_tail" readouts add to the mean above its threshold.
+    None for the other readouts, or when there are too few positive targets to fit
+    it. Its `probability_scale` is fitted with
+    `RegressorTuningConfig.rescale_tail_probability`."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -1415,8 +1426,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if self._readout() != "default":
             raise NotImplementedError(
                 "fit_from_preprocessed supports only "
-                "REGRESSION_READOUT='default'; the 'nonnegative_and_capped' readout "
-                "needs the largest training target. Use fit instead."
+                f"REGRESSION_READOUT='default'; the '{self._readout()}' readout "
+                "needs the training targets. Use fit instead."
             )
 
         feature_schema = convert_batch_of_cat_ix_to_schema(
@@ -1498,8 +1509,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if self._readout() != "default":
             raise NotImplementedError(
                 "fit_with_differentiable_input supports only "
-                "REGRESSION_READOUT='default'; the 'nonnegative_and_capped' readout "
-                "needs the largest training target. Use fit instead."
+                f"REGRESSION_READOUT='default'; the '{self._readout()}' readout "
+                "needs the training targets. Use fit instead."
             )
 
         # Refresh target stats and rebuild the raw-space bardist on every
@@ -1626,10 +1637,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
         self.y_train_max_ = float(np.max(y))
-        if self._readout() == "nonnegative_and_capped" and np.any(y < 0):
+        readout = self._readout()
+        if readout != "default" and np.any(y < 0):
             raise TabPFNValidationError(
-                "The 'nonnegative_and_capped' readout requires nonnegative targets "
-                "(y >= 0)."
+                f"The '{readout}' readout requires nonnegative targets (y >= 0)."
+            )
+        self.pareto_tail_ = None
+        if readout in TAIL_READOUTS:
+            self.pareto_tail_ = fit_pareto_tail(
+                y,
+                threshold=self.inference_config_.REGRESSION_TAIL_THRESHOLD,
+                cap=self.inference_config_.REGRESSION_TAIL_CAP,
+                fix_shape=readout == "nonnegative_and_exponential_tail",
             )
         row_weights, sample_weight_mode = self._resolve_row_weights(
             sample_weight, label_reliability, n_samples=len(y)
@@ -1804,7 +1823,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y_mean=self.y_train_mean_,
             y_std=self.y_train_std_,
             truncate_above=self._truncate_above(),
-            # `getattr` keeps models pickled before this attribute existed loadable.
+            # `getattr` keeps models pickled before these attributes existed loadable.
+            tail=getattr(self, "pareto_tail_", None),
             mean_scale=getattr(self, "mean_calibration_scale_", 1.0),
         )
         block_rows = settings.tabpfn.max_regressor_predict_rows
@@ -1850,12 +1870,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return _concat_block_outputs(parts, output_type)
 
     def _truncate_above(self) -> float | None:
-        """The largest training target for the "nonnegative_and_capped" readout, or
-        None.
-        """
-        return (
-            self.y_train_max_ if self._readout() == "nonnegative_and_capped" else None
-        )
+        """The largest training target for the nonnegative readouts, or None."""
+        return self.y_train_max_ if self._readout() != "default" else None
 
     def _readout(self) -> str:
         # `getattr` keeps models pickled before this field existed loadable.
@@ -1876,8 +1892,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         temperature against `eval_metric_` on their pooled holdout rows, and
         stores the winner in `ensemble_softmax_temperature_`, which
         `_compute_aggregated_logits` applies to every prediction. With
-        `calibrate_mean`, it then fits `mean_calibration_scale_` on
-        the holdout means, with the temperature applied.
+        `rescale_tail_probability`, it then fits the `probability_scale` of
+        `pareto_tail_`, and with `calibrate_mean`, `mean_calibration_scale_` on
+        the holdout means, with the temperature and the tail scale applied.
 
         `y` must be the *raw* target: each fold's regressor performs its own
         z-normalisation, and passing an already-normalised `y` would normalise
@@ -1908,8 +1925,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         assert isinstance(tuning_config_resolved, RegressorTuningConfig)
         calibrate_mean = tuning_config_resolved.calibrate_mean
-        if not (tuning_config_resolved.calibrate_temperature or calibrate_mean):
+        rescale_tail = tuning_config_resolved.rescale_tail_probability
+        if not (
+            tuning_config_resolved.calibrate_temperature
+            or calibrate_mean
+            or rescale_tail
+        ):
             return
+
+        if rescale_tail and self._readout() not in TAIL_READOUTS:
+            raise TabPFNValidationError(
+                "`rescale_tail_probability` needs REGRESSION_READOUT="
+                f"'nonnegative_and_pareto_tail' or 'nonnegative_and_exponential_tail', "
+                f"got '{self._readout()}'."
+            )
 
         if calibrate_mean and np.min(y) < 0:
             raise TabPFNValidationError(
@@ -1942,6 +1971,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 holdout_folds=[fold[:5] for fold in holdout_folds],
                 metric_name=self.eval_metric_,
                 current_default_temperature=self.ensemble_softmax_temperature_,
+            )
+
+        # Keeps the unscaled tail if every fold was dropped or had no tail.
+        tail_folds = [fold for fold in holdout_folds if fold[6] is not None]
+        if rescale_tail and self.pareto_tail_ is not None and tail_folds:
+            tail_probability = np.concatenate(
+                [self._holdout_tail_probability(fold) for fold in tail_folds]
+            )
+            self.pareto_tail_ = dataclasses.replace(
+                self.pareto_tail_,
+                probability_scale=self.pareto_tail_.n_excesses
+                / len(y)
+                / max(float(tail_probability.mean()), np.finfo(np.float64).tiny),
             )
 
         # Keeps the no-op scale if every fold was dropped.
@@ -1978,7 +2020,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """The mean `predict` returns for one fold's holdout rows, before the
         mean calibration.
         """
-        logits, raw_space_bardist, _, log_weights, _, truncate_above = fold
+        logits, raw_space_bardist, _, log_weights, _, truncate_above, tail = fold
+        if tail is not None and self.pareto_tail_ is not None:
+            tail = dataclasses.replace(
+                tail, probability_scale=self.pareto_tail_.probability_scale
+            )
         # `raw_space_bardist` is already in target units.
         return typing.cast(
             "np.ndarray",
@@ -1994,8 +2040,32 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 y_std=1.0,
                 quantiles=[],
                 truncate_above=truncate_above,
+                tail=tail,
             ),
         )
+
+    def _holdout_tail_probability(self, fold: _HoldoutFold) -> np.ndarray:
+        """P(Y > u) for one fold's holdout rows, with the fold's own tail threshold
+        u and without a tail scale.
+        """
+        logits, raw_space_bardist, _, log_weights, _, truncate_above, tail = fold
+        assert truncate_above is not None
+        assert tail is not None
+        _, tail_probability = _tail_mean_parts(
+            temper_and_correct_logits(
+                logits,
+                temperature=self.ensemble_softmax_temperature_,
+                log_weights=log_weights,
+            ),
+            raw_borders=raw_space_bardist.borders.cpu().numpy().astype(np.float64),
+            raw_bucket_means=raw_space_bardist.bucket_means()
+            .cpu()
+            .numpy()
+            .astype(np.float64),
+            truncate_above=truncate_above,
+            threshold=tail.threshold,
+        )
+        return tail_probability
 
     def _compute_holdout_validation_data(
         self,
@@ -2018,7 +2088,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Returns:
             One `(logits, raw_space_bardist, y_holdout, log_weights, row_weights,
-            truncate_above)` tuple per usable fold. `logits` has shape
+            truncate_above, tail)` tuple per usable fold. `logits` has shape
             `[n_holdout_samples, n_buckets]` and carries no temperature and no
             downsampling correction; `log_weights` is the fold's own per-bar
             correction (or `None`), kept separate so the temperature sweep can
@@ -2029,7 +2099,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             each holdout row in the tuned metric, `sample_weight *
             label_reliability`, or is `None` when neither was given.
             `truncate_above` is the fold regressor's largest training target for
-            the "nonnegative_and_capped" readout, or `None`.
+            the nonnegative readouts, or `None`, and `tail` its `pareto_tail_`.
             Folds whose training target turned out to be constant, or whose
             training rows all have `sample_weight` 0, are omitted, so the list
             may be shorter than `n_folds` and may be empty.
@@ -2118,6 +2188,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                         device=logits_NhB.device,
                     ),
                     tuning_regressor._truncate_above(),
+                    tuning_regressor.pareto_tail_,
                 )
             )
 
@@ -2357,7 +2428,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if self.get_inference_config().REGRESSION_READOUT != "default":
             raise NotImplementedError(
                 "predict_batched supports only REGRESSION_READOUT='default'; the "
-                "'nonnegative_and_capped' readout needs each dataset's largest target. "
+                "nonnegative readouts need each dataset's own targets. "
                 "Score datasets individually with predict."
             )
         if self.tuning_config is not None:
@@ -2640,8 +2711,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             raw_space_bardist=raw_space_bardist,
             y_mean=y_mean,
             y_std=y_std,
-            # `predict_batched` rejects the "nonnegative_and_capped" readout.
+            # `predict_batched` rejects the nonnegative readouts.
             truncate_above=None,
+            tail=None,
             # `predict_batched` rejects `tuning_config`, which fits the scale.
             mean_scale=1.0,
         )
@@ -2908,9 +2980,10 @@ _HoldoutFold = tuple[
     torch.Tensor | None,
     torch.Tensor | None,
     float | None,
+    ParetoTail | None,
 ]
 """`(logits, raw_space_bardist, y_holdout, log_weights, row_weights,
-truncate_above)` of one tuning fold, see
+truncate_above, tail)` of one tuning fold, see
 `TabPFNRegressor._compute_holdout_validation_data`."""
 
 
@@ -3008,6 +3081,7 @@ def _decode_logits(
     y_mean: float,
     y_std: float,
     truncate_above: float | None,
+    tail: ParetoTail | None,
     mean_scale: float,
 ) -> RegressionResultType:
     """Turn aggregated log-probabilities into the output `predict` returns.
@@ -3023,6 +3097,7 @@ def _decode_logits(
         y_std=y_std,
         quantiles=quantiles,
         truncate_above=truncate_above,
+        tail=tail,
     )
 
     def read_mean() -> np.ndarray:
@@ -3082,6 +3157,7 @@ def _logits_to_output(
     y_std: float,
     quantiles: list[float],
     truncate_above: float | None,
+    tail: ParetoTail | None = None,
 ) -> np.ndarray | list[np.ndarray]:
     """Converts raw model logits to the desired prediction format.
 
@@ -3094,6 +3170,9 @@ def _logits_to_output(
     grid bucket that holds 0 and every bucket below it are read as a point at 0:
     `translate_probs_across_borders` moves a member's mass at 0 into that bucket.
     If 0 lies below the grid, no bucket is read at 0 and outputs are clipped at 0.
+
+    With `tail`, which needs `truncate_above`, the mean above the tail's threshold
+    comes from the tail, see `_nonnegative_mean`.
     """
     criterion = znorm_space_bardist
 
@@ -3102,11 +3181,7 @@ def _logits_to_output(
 
     if truncate_above is not None:
         raw_borders = to_raw(criterion.borders)
-        # The buckets that start at or below 0 are read at 0. Outputs at or below
-        # the upper border of the last of them read 0.
-        n_zero = int(np.searchsorted(raw_borders, 0.0, side="right"))
-        zero_cut = raw_borders[n_zero] if n_zero > 0 else 0.0
-        above = raw_borders[:-1] >= truncate_above
+        _, zero_cut, above = _truncation(raw_borders, truncate_above)
         logits = logits.masked_fill(
             torch.as_tensor(above, device=logits.device), float("-inf")
         )
@@ -3130,10 +3205,13 @@ def _logits_to_output(
     if output_type == "mean":
         if truncate_above is None:
             return to_raw(criterion.mean(logits))
-        # In target units, so the buckets read at 0 add exactly 0.
-        values = torch.as_tensor(to_raw(criterion.bucket_means()))
-        values[:n_zero] = 0.0
-        return expected_value(logits.detach().cpu(), values).numpy()
+        return _nonnegative_mean(
+            logits,
+            raw_borders=raw_borders,
+            raw_bucket_means=to_raw(criterion.bucket_means()),
+            truncate_above=truncate_above,
+            tail=tail,
+        )
     if output_type == "median":
         output = criterion.median(logits)
     elif output_type == "mode":
@@ -3142,6 +3220,82 @@ def _logits_to_output(
         raise ValueError(f"Invalid output type: {output_type}")
 
     return decode(output)
+
+
+def _truncation(
+    raw_borders: np.ndarray, truncate_above: float
+) -> tuple[int, float, np.ndarray]:
+    """`(n_zero, zero_cut, above)` of the nonnegative readouts on `raw_borders`.
+
+    The `n_zero` buckets that start at or below 0 are read at 0, and outputs at or
+    below `zero_cut`, the upper border of the last of them, read 0. `above` marks
+    the buckets that start at or above `truncate_above`, which are dropped.
+    """
+    n_zero = int(np.searchsorted(raw_borders, 0.0, side="right"))
+    zero_cut = raw_borders[n_zero] if n_zero > 0 else 0.0
+    return n_zero, zero_cut, raw_borders[:-1] >= truncate_above
+
+
+def _nonnegative_mean(
+    logits: torch.Tensor,
+    *,
+    raw_borders: np.ndarray,
+    raw_bucket_means: np.ndarray,
+    truncate_above: float,
+    tail: ParetoTail | None,
+) -> np.ndarray:
+    """The mean of the nonnegative readouts, with the mass above the threshold of
+    `tail` read from it.
+    """
+    if tail is not None:
+        below, tail_probability = _tail_mean_parts(
+            logits,
+            raw_borders=raw_borders,
+            raw_bucket_means=raw_bucket_means,
+            truncate_above=truncate_above,
+            threshold=tail.threshold,
+        )
+        return below + tail.probability_scale * tail_probability * tail.mean_excess
+    n_zero, _, above = _truncation(raw_borders, truncate_above)
+    logits = logits.masked_fill(
+        torch.as_tensor(above, device=logits.device), float("-inf")
+    )
+    # In target units, so the buckets read at 0 add exactly 0.
+    values = torch.tensor(raw_bucket_means)
+    values[:n_zero] = 0.0
+    return expected_value(logits.detach().cpu(), values).numpy()
+
+
+def _tail_mean_parts(
+    logits: torch.Tensor,
+    *,
+    raw_borders: np.ndarray,
+    raw_bucket_means: np.ndarray,
+    truncate_above: float,
+    threshold: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """E[min(Y, u)] and P(Y > u) of the "nonnegative_and_capped" distribution,
+    with u = `threshold`, each of shape [n_samples].
+
+    A bucket that holds u is read as uniform on its borders.
+    """
+    n_zero, _, above = _truncation(raw_borders, truncate_above)
+    logits = logits.masked_fill(
+        torch.as_tensor(above, device=logits.device), float("-inf")
+    )
+    low, high = raw_borders[:-1], raw_borders[1:]
+    share_above = np.clip((high - threshold) / (high - low), 0.0, 1.0)
+    below = np.where(
+        share_above > 0,
+        (1 - share_above) * (low + threshold) / 2 + share_above * threshold,
+        raw_bucket_means,
+    )
+    below[:n_zero] = 0.0
+    share_above[:n_zero] = 0.0
+    parts = expected_value(
+        logits.detach().cpu(), torch.as_tensor(np.stack([below, share_above], -1))
+    )
+    return parts[:, 0].numpy(), parts[:, 1].numpy()
 
 
 def _validate_eval_metric(

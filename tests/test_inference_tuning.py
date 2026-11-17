@@ -640,6 +640,7 @@ def test__regressor_tuning_config__has_no_classification_only_fields() -> None:
 
 def test__regressor_tuning_config__calibrate_mean_is_off_by_default() -> None:
     assert RegressorTuningConfig().calibrate_mean is False
+    assert RegressorTuningConfig().rescale_tail_probability is False
     assert RegressorTuningConfig().mean_calibration_mode == "tweedie"
 
 
@@ -813,7 +814,8 @@ def test__resolve_tuning_config__keeps_a_config_instance_over_config_cls() -> No
         ),
         (
             RegressorTuningConfig(),
-            "`calibrate_temperature=True` or `calibrate_mean=True`",
+            "`calibrate_temperature=True` or `calibrate_mean=True` or "
+            "`rescale_tail_probability=True`",
         ),
     ],
 )
@@ -856,6 +858,7 @@ def test__get_tuning_feature_flags__lists_only_the_boolean_feature_fields() -> N
     assert get_tuning_feature_flags(RegressorTuningConfig()) == {
         "calibrate_temperature": False,
         "calibrate_mean": False,
+        "rescale_tail_probability": False,
     }
 
 
