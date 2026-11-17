@@ -38,6 +38,8 @@ from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     RegressorEvalMetrics,
     RegressorTuningConfig,
+    find_mean_calibration_scale,
+    get_tuning_split_indices,
     get_tuning_temperatures,
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
@@ -2414,9 +2416,17 @@ def test__compute_holdout_validation_data__returns_self_consistent_triples() -> 
     )
 
     assert len(folds) == 2
-    for logits, raw_space_bardist, y_holdout, log_weights, row_weights in folds:
+    for (
+        logits,
+        raw_space_bardist,
+        y_holdout,
+        log_weights,
+        row_weights,
+        truncate_above,
+    ) in folds:
         assert log_weights is None
         assert row_weights is None
+        assert truncate_above is None
         n_holdout = len(X) // 2
         assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
         assert y_holdout.shape == (n_holdout,)
@@ -2492,6 +2502,268 @@ def _make_tuning_sized_regression_data(
     return sklearn.datasets.make_regression(
         n_samples=n_samples, n_features=4, noise=10.0, random_state=0
     )
+
+
+def _make_non_negative_tuning_sized_regression_data() -> tuple[np.ndarray, np.ndarray]:
+    X, y = _make_tuning_sized_regression_data()
+    return X, np.abs(y)
+
+
+@pytest.mark.parametrize(
+    "inference_config",
+    [None, {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",)}],
+)
+@pytest.mark.parametrize("calibrate_temperature", [False, True])
+@pytest.mark.parametrize("power", [1.0, 1.5])
+def test__fit__with_calibrate_mean__scales_the_mean_by_the_holdout_fit(
+    power: float, calibrate_temperature: bool, inference_config: dict | None
+) -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    # One model for every regressor below: each dummy model has its own random weights.
+    kwargs = _tuning_regressor_kwargs(inference_config=inference_config)
+    tuning_config = {
+        "calibrate_mean": True,
+        "mean_calibration_power": power,
+        "calibrate_temperature": calibrate_temperature,
+        "tuning_holdout_frac": 0.5,
+        "tuning_n_folds": 2,
+    }
+    calibrated = TabPFNRegressor(tuning_config=tuning_config, **kwargs).fit(X, y)
+
+    # Rebuild the holdout means c* must be fitted on: one tuning regressor per
+    # split, predicting the mean of its own holdout rows with the calibrated
+    # temperature.
+    temperature = calibrated.ensemble_softmax_temperature_
+    y_holdout, mean_holdout = [], []
+    for train, holdout in get_tuning_split_indices(
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        fold_regressor = TabPFNRegressor(**kwargs).fit(X[train], y[train])
+        fold_regressor.ensemble_softmax_temperature_ = temperature
+        y_holdout.append(y[holdout])
+        mean_holdout.append(fold_regressor.predict(X[holdout]))
+    expected_scale = find_mean_calibration_scale(
+        y_true=np.concatenate(y_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=power,
+    )
+    assert calibrated.mean_calibration_scale_ != 1.0
+    np.testing.assert_allclose(
+        calibrated.mean_calibration_scale_, expected_scale, rtol=1e-5
+    )
+
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    plain.ensemble_softmax_temperature_ = temperature
+    X_test = X[:20]
+    scale = calibrated.mean_calibration_scale_
+    np.testing.assert_allclose(
+        calibrated.predict(X_test), scale * plain.predict(X_test), rtol=1e-6
+    )
+    main_calibrated = calibrated.predict(X_test, output_type="main")
+    main_plain = plain.predict(X_test, output_type="main")
+    np.testing.assert_allclose(
+        main_calibrated["mean"], scale * main_plain["mean"], rtol=1e-6
+    )
+    # Only the mean is rescaled.
+    np.testing.assert_array_equal(main_calibrated["median"], main_plain["median"])
+    np.testing.assert_array_equal(
+        calibrated.predict(X_test, output_type="quantiles", quantiles=[0.9])[0],
+        plain.predict(X_test, output_type="quantiles", quantiles=[0.9])[0],
+    )
+
+
+@pytest.mark.parametrize(
+    "tuning_config",
+    [
+        None,
+        {"calibrate_temperature": True, "tuning_holdout_frac": 0.5},
+    ],
+)
+def test__fit__without_calibrate_mean__leaves_the_mean_unchanged(
+    tuning_config: dict | None,
+) -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config=tuning_config, **_tuning_regressor_kwargs()
+    ).fit(X, y)
+
+    assert regressor.mean_calibration_scale_ == 1.0
+    X_test = X[:20]
+    unscaled_mean = regressor_module._logits_to_output(
+        output_type="mean",
+        logits=regressor._compute_aggregated_logits(
+            ensure_compatible_predict_input_sklearn(X_test, regressor)
+        ),
+        znorm_space_bardist=regressor.znorm_space_bardist_,
+        y_mean=regressor.y_train_mean_,
+        y_std=regressor.y_train_std_,
+        quantiles=[],
+        truncate_above=None,
+    )
+    np.testing.assert_array_equal(regressor.predict(X_test), unscaled_mean)
+    np.testing.assert_array_equal(
+        regressor.predict(X_test, output_type="main")["mean"], unscaled_mean
+    )
+
+
+def test__fit__calibrate_mean_with_negative_targets__raises() -> None:
+    X, y = _make_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config={"calibrate_mean": True}, **_tuning_regressor_kwargs()
+    )
+
+    with pytest.raises(ValueError, match="nonnegative targets"):
+        regressor.fit(X, y)
+
+
+def test__fit__mean_calibration_without_positive_holdout_targets__warns() -> None:
+    X, y = _make_non_negative_tuning_sized_regression_data()
+    splits = {"tuning_holdout_frac": 0.2, "tuning_n_folds": 1}
+    # Zero every target the one tuning fold holds out.
+    ((_, holdout),) = get_tuning_split_indices(
+        X, y, holdout_frac=0.2, n_splits=1, random_state=0, task_type="regressor"
+    )
+    y[holdout] = 0.0
+    regressor = TabPFNRegressor(
+        tuning_config={"calibrate_mean": True, **splits},
+        **_tuning_regressor_kwargs(),
+    )
+
+    with pytest.warns(UserWarning, match="positive target and a positive weight"):
+        regressor.fit(X, y)
+
+    assert regressor.mean_calibration_scale_ == 1.0
+
+
+def _zero_inflated_tuning_data() -> tuple[np.ndarray, np.ndarray]:
+    r = np.random.RandomState(0)
+    X = r.randn(MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING + 100, 3)
+    y = np.where(X[:, 0] < 0.0, 0.0, np.exp(4.0 + X[:, 1] + 0.8 * r.randn(X.shape[0])))
+    return X, y
+
+
+def test__fit__with_mean_calibration_and_a_mean_readout__scales_the_readout() -> None:
+    X, y = _zero_inflated_tuning_data()
+    kwargs = _tuning_regressor_kwargs(
+        inference_config={
+            "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
+            "REGRESSION_READOUT": "nonnegative_and_capped",
+        }
+    )
+    splits = {"tuning_holdout_frac": 0.5, "tuning_n_folds": 2}
+    calibrated = TabPFNRegressor(
+        tuning_config={"calibrate_mean": True, **splits}, **kwargs
+    ).fit(X, y)
+
+    y_holdout, mean_holdout = [], []
+    for train, holdout in get_tuning_split_indices(
+        X, y, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        y_holdout.append(y[holdout])
+        mean_holdout.append(
+            TabPFNRegressor(**kwargs).fit(X[train], y[train]).predict(X[holdout])
+        )
+    expected_scale = find_mean_calibration_scale(
+        y_true=np.concatenate(y_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=1.5,
+    )
+    np.testing.assert_allclose(
+        calibrated.mean_calibration_scale_, expected_scale, rtol=1e-6
+    )
+    plain = TabPFNRegressor(**kwargs).fit(X, y)
+    np.testing.assert_allclose(
+        calibrated.predict(X[:20]),
+        expected_scale * plain.predict(X[:20]),
+        rtol=1e-6,
+    )
+
+
+def _weighted_tuning_regressor_kwargs(
+    monkeypatch: pytest.MonkeyPatch, **overrides: Any
+) -> dict[str, Any]:
+    """`_tuning_regressor_kwargs` for a dummy model that takes and ignores row
+    weights, so `fit` accepts `sample_weight`.
+    """
+    kwargs = _tuning_regressor_kwargs(
+        inference_config={"SAMPLE_WEIGHT_MODE": "learned"}, **overrides
+    )
+    model_cls = type(kwargs["model_path"].model)
+    original_forward = model_cls.forward
+
+    def forward(
+        self: Any,
+        *args: Any,
+        row_weights_NB2: torch.Tensor | None = None,
+        sample_weight_mode: str | None = None,
+        **forward_kwargs: Any,
+    ) -> Any:
+        del row_weights_NB2, sample_weight_mode
+        return original_forward(self, *args, **forward_kwargs)
+
+    monkeypatch.setattr(model_cls, "forward", forward)
+    monkeypatch.setattr(
+        model_cls, "get_supported_sample_weight_modes", lambda _: ("learned",)
+    )
+    return kwargs
+
+
+def test__fit__mean_calibration_with_sample_weight__weights_the_holdout_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X, rate = _zero_inflated_tuning_data()
+    exposure = np.random.RandomState(1).uniform(0.05, 2.0, len(rate))
+    kwargs = _weighted_tuning_regressor_kwargs(monkeypatch)
+    splits = {"tuning_holdout_frac": 0.5, "tuning_n_folds": 2}
+    calibrated = TabPFNRegressor(
+        tuning_config={"calibrate_mean": True, **splits}, **kwargs
+    ).fit(X, rate, sample_weight=exposure)
+
+    rate_holdout, mean_holdout, exposure_holdout = [], [], []
+    for train, holdout in get_tuning_split_indices(
+        X, rate, holdout_frac=0.5, n_splits=2, random_state=0, task_type="regressor"
+    ):
+        fold_regressor = TabPFNRegressor(**kwargs).fit(
+            X[train], rate[train], sample_weight=exposure[train]
+        )
+        rate_holdout.append(rate[holdout])
+        mean_holdout.append(fold_regressor.predict(X[holdout]))
+        exposure_holdout.append(exposure[holdout])
+    fold_scale = partial(
+        find_mean_calibration_scale,
+        y_true=np.concatenate(rate_holdout),
+        mean=np.concatenate(mean_holdout),
+        power=1.5,
+    )
+    expected_scale = fold_scale(sample_weight=np.concatenate(exposure_holdout))
+    assert expected_scale != pytest.approx(fold_scale(), rel=1e-3)
+    np.testing.assert_allclose(
+        calibrated.mean_calibration_scale_, expected_scale, rtol=1e-6
+    )
+
+
+def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X, y = _zero_inflated_tuning_data()
+    ((_, holdout),) = get_tuning_split_indices(
+        X, y, holdout_frac=0.2, n_splits=1, random_state=0, task_type="regressor"
+    )
+    sample_weight = np.ones(len(y))
+    sample_weight[holdout[y[holdout] > 0]] = 0.0
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "calibrate_mean": True,
+            "tuning_holdout_frac": 0.2,
+            "tuning_n_folds": 1,
+        },
+        **_weighted_tuning_regressor_kwargs(monkeypatch),
+    )
+
+    with pytest.warns(UserWarning, match="positive target and a positive weight"):
+        regressor.fit(X, y, sample_weight=sample_weight)
+
+    assert regressor.mean_calibration_scale_ == 1.0
 
 
 @pytest.mark.parametrize(

@@ -9,15 +9,18 @@ from typing import Literal
 import numpy as np
 import pytest
 import torch
+from sklearn.metrics import mean_tweedie_deviance
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.inference_tuning import (
+    MEAN_CALIBRATION_MIN_MEAN_FRACTION,
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
     RegressorEvalMetrics,
     RegressorTuningConfig,
     compute_regression_metric_to_minimize,
+    find_mean_calibration_scale,
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
@@ -635,6 +638,126 @@ def test__regressor_tuning_config__has_no_classification_only_fields() -> None:
     assert RegressorTuningConfig().calibrate_temperature is False
 
 
+def test__regressor_tuning_config__calibrate_mean_is_off_by_default() -> None:
+    assert RegressorTuningConfig().calibrate_mean is False
+    assert RegressorTuningConfig().mean_calibration_mode == "tweedie"
+
+
+@pytest.mark.parametrize("power", [0.0, 0.99, 2.01])
+def test__regressor_tuning_config__rejects_mean_calibration_power_outside_1_2(
+    power: float,
+) -> None:
+    with pytest.raises(ValueError, match="must be in \\[1, 2\\]"):
+        RegressorTuningConfig(calibrate_mean=True, mean_calibration_power=power)
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_calibration_scale__recovers_a_known_scale(power: float) -> None:
+    rng = np.random.default_rng(0)
+    # Shifted by 1, so no mean falls below the floor of the mean calibration.
+    mean = 1.0 + rng.gamma(shape=2.0, scale=3.0, size=10_000)
+    # Zero-inflated, multiplicative noise with mean 1: E[y] = 2.5 * mean.
+    y = 2.5 * mean * rng.binomial(1, 0.2, size=mean.size) * 5.0
+
+    scale = find_mean_calibration_scale(y_true=y, mean=mean, power=power)
+
+    assert scale == pytest.approx(2.5, rel=0.1)
+    # Without noise every power recovers the scale exactly.
+    assert find_mean_calibration_scale(
+        y_true=2.5 * mean, mean=mean, power=power
+    ) == pytest.approx(2.5, rel=1e-12)
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_calibration_scale__minimizes_the_tweedie_deviance(
+    power: float,
+) -> None:
+    rng = np.random.default_rng(1)
+    # Shifted, so no mean falls below the floor of the mean calibration.
+    mean = 0.5 + rng.gamma(shape=2.0, scale=1.0, size=500)
+    # Not proportional to `mean`, so each power has a different minimizer.
+    y = rng.poisson(mean**2) + 1.0
+
+    scale = find_mean_calibration_scale(y_true=y, mean=mean, power=power)
+
+    def deviance(c: float) -> float:
+        return mean_tweedie_deviance(y, c * mean, power=power)
+
+    assert deviance(scale) < deviance(scale * 0.99)
+    assert deviance(scale) < deviance(scale * 1.01)
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test__find_mean_calibration_scale__minimizes_the_weighted_tweedie_deviance(
+    power: float,
+) -> None:
+    rng = np.random.default_rng(2)
+    mean = rng.gamma(shape=2.0, scale=1.0, size=500)
+    y = rng.poisson(mean**2) + 1.0
+    # Tied to `mean`, so the weighted minimizer moves away from the plain one.
+    weight = rng.uniform(0.0, 1.0, size=mean.size) * mean**2
+
+    scale = find_mean_calibration_scale(
+        y_true=y, mean=mean, power=power, sample_weight=weight
+    )
+
+    def deviance(c: float) -> float:
+        return mean_tweedie_deviance(y, c * mean, power=power, sample_weight=weight)
+
+    assert deviance(scale) < deviance(scale * 0.99)
+    assert deviance(scale) < deviance(scale * 1.01)
+    assert scale != pytest.approx(
+        find_mean_calibration_scale(y_true=y, mean=mean, power=power), rel=1e-3
+    )
+
+
+def test__find_mean_calibration_scale__floors_non_positive_means() -> None:
+    y = np.array([0.0, 0.0, 4.0])
+    mean = np.array([-0.5, 0.0, 2.0])
+    floor = MEAN_CALIBRATION_MIN_MEAN_FRACTION * y.mean()
+
+    # p = 1 is sum(y) / sum(m) with the floored means.
+    assert find_mean_calibration_scale(y_true=y, mean=mean, power=1.0) == pytest.approx(
+        4.0 / (2.0 + 2 * floor)
+    )
+    assert np.isfinite(find_mean_calibration_scale(y_true=y, mean=mean, power=1.5))
+
+
+@pytest.mark.parametrize("power", [1.0, 1.5])
+def test__find_mean_calibration_scale__zero_weight_rows_do_not_move_the_floor(
+    power: float,
+) -> None:
+    y = np.array([0.0, 0.0, 4.0, 1e6])
+    mean = np.array([-0.5, 0.0, 2.0, 1.0])
+    weight = np.array([1.0, 1.0, 1.0, 0.0])
+
+    assert find_mean_calibration_scale(
+        y_true=y, mean=mean, power=power, sample_weight=weight
+    ) == pytest.approx(
+        find_mean_calibration_scale(y_true=y[:3], mean=mean[:3], power=power),
+        rel=1e-12,
+    )
+
+
+@pytest.mark.parametrize("power", [1.5, 2.0])
+def test__find_mean_calibration_scale__floors_relative_to_the_targets(
+    power: float,
+) -> None:
+    # 1000 rows with m = y = 100 give c = 1. One more row has y = 100 and m = 0.
+    # With an absolute floor of 1e-6 this row moves c to about 11 at p = 1.5 and
+    # about 1e5 at p = 2.
+    y = np.full(1001, 100.0)
+    mean = np.append(np.full(1000, 100.0), 0.0)
+
+    scale = find_mean_calibration_scale(y_true=y, mean=mean, power=power)
+
+    assert 1.0 < scale < 1.15
+    # The floor scales with the targets, so c does not depend on their units.
+    assert find_mean_calibration_scale(
+        y_true=1e-4 * y, mean=1e-4 * mean, power=power
+    ) == pytest.approx(scale, rel=1e-12)
+
+
 def test__regressor_eval_metrics__round_trips_from_string() -> None:
     # Constructed from a string the same way `eval_metric` arguments will be.
     assert RegressorEvalMetrics("nll") is RegressorEvalMetrics.NLL
@@ -688,7 +811,10 @@ def test__resolve_tuning_config__keeps_a_config_instance_over_config_cls() -> No
             ClassifierTuningConfig(),
             "`calibrate_temperature=True` or `tune_decision_thresholds=True`",
         ),
-        (RegressorTuningConfig(), "`calibrate_temperature=True`"),
+        (
+            RegressorTuningConfig(),
+            "`calibrate_temperature=True` or `calibrate_mean=True`",
+        ),
     ],
 )
 def test__resolve_tuning_config__warns_about_the_options_the_config_has(
@@ -728,7 +854,8 @@ def test__get_tuning_feature_flags__lists_only_the_boolean_feature_fields() -> N
         ClassifierTuningConfig(calibrate_temperature=True, tuning_n_folds=3)
     ) == {"calibrate_temperature": True, "tune_decision_thresholds": False}
     assert get_tuning_feature_flags(RegressorTuningConfig()) == {
-        "calibrate_temperature": False
+        "calibrate_temperature": False,
+        "calibrate_mean": False,
     }
 
 

@@ -151,6 +151,33 @@ class InferenceConfig:
     rejected. With neither, the value comes from the checkpoint, and an ensemble
     whose checkpoints declare different values is rejected too."""
 
+    APPEND_GROUP_AGGREGATES: bool = False
+    """Whether per-group aggregates of the features are appended for `group_col`
+    data. Up to 64 are kept, by their variance over the training rows, from the
+    mean, std, min, max and last value of numeric columns and the count, last
+    value and number of unique values of the others. Ignored with a warning when
+    no training group has more than one row.
+
+    This is transductive: at predict, a row's aggregates are computed over the
+    rows of its group in the predict input, so the other rows passed in change
+    its prediction. Predict all rows of a group in one call."""
+
+    POOL_GROUP_PREDICTIONS: Literal["mean", "geometric_mean"] | None = None
+    """How the rows of a group get one shared prediction, for `group_col` data
+    with one label per group: the target is constant within every training group
+    and some group has more than one row. Ignored with a warning otherwise.
+
+    - If `None`, every row keeps its own prediction.
+    - If `"mean"`, each row's predicted distribution, over the classes or over
+      the target, is replaced by the mean distribution of the rows of its group
+      in the predict input.
+    - If `"geometric_mean"`, by their geometric mean, normalised: the rows'
+      log-probabilities are averaged. This is sharper than `"mean"` when the
+      rows agree, and a class or value that one row finds very unlikely stays
+      unlikely for the group.
+
+    This is transductive too: predict all rows of a group in one call."""
+
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
     or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`.
