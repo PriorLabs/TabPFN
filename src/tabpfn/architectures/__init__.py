@@ -27,7 +27,7 @@ ARCHITECTURES: dict[str, ArchitectureModule] = {
 }
 """Map from architecture names to the corresponding module."""
 
-BUILTIN_ARCHITECTURE_CONFIGS = (
+ARCHITECTURES_CONFIGS_BEFORE_V4 = (
     tabpfn_v2.TabPFNV2Config,
     tabpfn_v2_5.TabPFNV2p5Config,
     tabpfn_v2_6.TabPFNV2p6Config,

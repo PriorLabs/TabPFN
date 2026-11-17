@@ -41,7 +41,7 @@ from sklearn.base import (
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
-from tabpfn.architectures import BUILTIN_ARCHITECTURE_CONFIGS
+from tabpfn.architectures import ARCHITECTURES_CONFIGS_BEFORE_V4
 from tabpfn.architectures.shared.bar_distribution import (
     FullSupportBarDistribution,
     expected_value,
@@ -2941,7 +2941,7 @@ def _apply_presets(
                 f"Unknown preset {name!r}. Choose from {sorted(REGRESSION_PRESETS)}."
             )
         if name == "zero_inflated" and any(
-            type(c) in BUILTIN_ARCHITECTURE_CONFIGS for c in architecture_configs
+            type(c) in ARCHITECTURES_CONFIGS_BEFORE_V4 for c in architecture_configs
         ):
             warnings.warn(
                 'presets="zero_inflated" on a model up to TabPFN-3.5 sets '

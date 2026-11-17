@@ -2768,7 +2768,7 @@ def test__fit__mean_calibration_with_only_zero_weight_positive_holdout_rows__war
 
 
 class _OtherArchitectureConfig(tabpfn_v2_5.TabPFNV2p5Config):
-    """Stands for an architecture outside `BUILTIN_ARCHITECTURE_CONFIGS`."""
+    """Stands for an architecture outside `ARCHITECTURES_CONFIGS_BEFORE_V4`."""
 
 
 def _other_architecture_specs() -> ModelSpecs:
