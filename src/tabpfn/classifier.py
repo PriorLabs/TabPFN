@@ -629,8 +629,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Names of bundles of `inference_config` values, see
                 `CLASSIFICATION_PRESETS`. `None` uses the checkpoint's settings as
                 they are. The settings resolve in this order, a later one winning:
-                the checkpoint, the presets in list order, then the keys of an
-                `inference_config` dict. A preset never changes `tuning_config`.
+                the checkpoint, the presets, then the keys of an
+                `inference_config` dict. Two presets that set one key to
+                different values raise. A preset never changes `tuning_config`.
 
                 - `"grouped"`: for `group_col` data, no effect without it. It sets
                   `APPEND_GROUP_AGGREGATES=True` and

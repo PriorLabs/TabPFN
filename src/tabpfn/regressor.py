@@ -715,8 +715,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 Names of bundles of `inference_config` values, see
                 `REGRESSION_PRESETS`. `None` uses the checkpoint's settings as they
                 are. The settings resolve in this order, a later one winning: the
-                checkpoint, the presets in list order, then the keys of an
-                `inference_config` dict. A preset never changes `tuning_config`.
+                checkpoint, the presets, then the keys of an `inference_config`
+                dict. Two presets that set one key to different values raise. A
+                preset never changes `tuning_config`.
 
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets

@@ -2828,26 +2828,36 @@ def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() ->
     assert fold_regressor.tuning_config is None
 
 
-def test__fit__presets__user_keys_win_and_later_presets_win(
+def test__fit__presets__user_keys_win_and_conflicting_presets_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(
         regressor_module.REGRESSION_PRESETS,
+        "flipped",
+        {"REGRESSION_TARGET_SIGN_FLIP": True},
+    )
+    monkeypatch.setitem(
+        regressor_module.REGRESSION_PRESETS,
         "uncapped",
-        {"REGRESSION_READOUT": "default", "REGRESSION_TARGET_SIGN_FLIP": True},
+        {"REGRESSION_READOUT": "default"},
     )
     X, y = _zero_inflated_tuning_data()
+    kwargs = _tuning_regressor_kwargs(model_path=_other_architecture_specs())
 
     regressor = TabPFNRegressor(
-        presets=["zero_inflated", "uncapped"],
+        presets=["zero_inflated", "flipped"],
         inference_config={"REGRESSION_TARGET_SIGN_FLIP": False},
-        **_tuning_regressor_kwargs(model_path=_other_architecture_specs()),
+        **kwargs,
     ).fit(X, y)
 
     config = regressor.inference_config_
     assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
-    assert config.REGRESSION_READOUT == "default"
+    assert config.REGRESSION_READOUT == "nonnegative_and_capped"
     assert config.REGRESSION_TARGET_SIGN_FLIP is False
+
+    regressor = TabPFNRegressor(presets=["zero_inflated", "uncapped"], **kwargs)
+    with pytest.raises(ValueError, match="cannot be combined: they set REGRESSION_"):
+        regressor.fit(X, y)
 
 
 def test__fit__unknown_preset__raises() -> None:
