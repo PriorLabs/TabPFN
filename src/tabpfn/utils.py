@@ -729,6 +729,8 @@ def as_tensor_to_read(array: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.
     Preprocessing can hand back the caller's own array, a read-only memmap among
     them; torch warns about any read-only array it does not copy.
     """
+    if not isinstance(array, (np.ndarray, torch.Tensor)):
+        raise TypeError(f"Expected an array or a tensor, got {type(array).__name__}.")
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="The given NumPy array is not writable"

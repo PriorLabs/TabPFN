@@ -19,7 +19,11 @@ from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 
 from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
-from tabpfn.preprocessing.pipeline_interface import permute_columns_in_place
+from tabpfn.preprocessing.pipeline_interface import (
+    ROW_SCAN_BLOCK_BYTES,
+    SharedColumnsTable,
+    permute_columns_in_place,
+)
 from tabpfn.preprocessing.steps.utils import is_identity_transformer
 
 if TYPE_CHECKING:
@@ -68,6 +72,14 @@ def to_numpy_may_alias(X: pd.DataFrame) -> bool:
     # input is the caller's own. Anything wider is built fresh, so it is private.
     blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
     return blocks is None or len(blocks) <= 1
+
+
+def _columns_to_encode(X: SharedColumnsTable, selected: list[Any]) -> np.ndarray:
+    """`X`'s `selected` columns as an array of their own, which the encoding may
+    write over: never `X`'s base, even when they are all of it.
+    """
+    columns = X[:, selected]
+    return np.array(columns) if columns.is_base() else np.asarray(columns)
 
 
 class EfficientColumnTransformer(ColumnTransformer):
@@ -149,6 +161,72 @@ class EfficientColumnTransformer(ColumnTransformer):
         if selected is None or not self._can_assemble(X, probe, selected):
             return None
         return self._assemble(X, name, selected, out=out)
+
+    def fit_transform_shared(
+        self, X: SharedColumnsTable
+    ) -> SharedColumnsTable | np.ndarray:
+        """`fit_transform(X)`'s values, as a table that shares `X`'s base columns.
+
+        An array, from `fit_transform`, when the output cannot be laid out column by
+        column or a code would change in `X`'s dtype.
+        """
+        head = X[:1]
+        if self._may_assemble_a_fit(head, None, {}):
+            probe = self._fit_column_bookkeeping(head)
+            name, selected = self._named_selection()
+            if selected and self._can_assemble(X, probe, selected):
+                codes = _columns_to_encode(X, selected)
+                self.named_transformers_[name].fit(codes)
+                shared = self._shared_output(X, name, selected, codes)
+                if shared is not None:
+                    return shared
+        return self.fit_transform(np.asarray(X))
+
+    def transform_shared(
+        self, X: SharedColumnsTable
+    ) -> SharedColumnsTable | np.ndarray:
+        """`transform(X)`'s values, as a table that shares `X`'s base columns.
+
+        An array, from `transform` and its checks, when the output cannot be laid out
+        column by column or a code would change in `X`'s dtype.
+        """
+        name, selected = self._named_selection()
+        if (
+            selected
+            and self.n_features_in_ == X.shape[1]
+            and not self.sparse_output_
+            and self._may_assemble(X[:1], {})
+        ):
+            shared = self._shared_output(
+                X, name, selected, _columns_to_encode(X, selected)
+            )
+            if shared is not None:
+                return shared
+        return self.transform(np.asarray(X))
+
+    def _shared_output(
+        self,
+        X: SharedColumnsTable,
+        name: str | None,
+        selected: list[Any],
+        codes: np.ndarray,
+    ) -> SharedColumnsTable | None:
+        """The output laid out as `_assemble` lays it, sharing `X`'s base columns.
+
+        `codes`, `X`'s selected columns in `X`'s dtype, is encoded in place, a block
+        of rows at a time, so the encoder's wider intermediates span one block. None
+        when a code would change in `X`'s dtype.
+        """
+        encoder = self.named_transformers_[name]
+        # Sized by the encoder's float64 output.
+        rows = max(1, ROW_SCAN_BLOCK_BYTES // max(1, codes.shape[1] * 8))
+        for start in range(0, len(codes), rows):
+            block = np.asarray(encoder.transform(codes[start : start + rows]))
+            if not _holds_exactly(block, codes.dtype):
+                return None
+            codes[start : start + rows] = block
+        destination, passthrough = self._output_positions(X, name, selected)
+        return X.with_columns(codes, destination, passthrough)
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:

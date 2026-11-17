@@ -484,12 +484,13 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         ## Convert to tensors.
         for i in range(len(X_trains_preprocessed)):
             if not isinstance(X_trains_preprocessed[i], torch.Tensor):
+                # A `SharedColumnsTable` is built whole here.
                 X_trains_preprocessed[i] = as_tensor_to_read(
-                    X_trains_preprocessed[i], dtype=torch.float32
+                    np.asarray(X_trains_preprocessed[i]), dtype=torch.float32
                 )
             if not isinstance(X_tests_preprocessed[i], torch.Tensor):
                 X_tests_preprocessed[i] = as_tensor_to_read(
-                    X_tests_preprocessed[i], dtype=torch.float32
+                    np.asarray(X_tests_preprocessed[i]), dtype=torch.float32
                 )
             if not isinstance(y_trains_preprocessed[i], torch.Tensor):
                 y_trains_preprocessed[i] = torch.as_tensor(

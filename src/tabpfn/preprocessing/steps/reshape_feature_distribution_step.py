@@ -501,7 +501,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         if column_order is not None:
             return _reordered(X, column_order), None, None
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X), None, None
+        return self.transformer_.transform(np.asarray(X)), None, None
 
     @override
     def fit_transform(
@@ -527,7 +527,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             feature_schema,
         )
         if transformer is not None:
-            x_transformed = transformer.fit_transform(X)
+            x_transformed = transformer.fit_transform(np.asarray(X))
         elif self.column_order_ is not None:
             x_transformed = _reordered(X, self.column_order_)
         else:

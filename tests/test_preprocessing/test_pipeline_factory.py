@@ -18,6 +18,8 @@ from tabpfn.preprocessing.datamodel import FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingPipeline,
+    PreprocessingStep,
+    SharedColumnsTable,
     step_owns_input,
 )
 from tabpfn.preprocessing.presets import (
@@ -28,9 +30,11 @@ from tabpfn.preprocessing.presets import (
 )
 from tabpfn.preprocessing.steps import (
     EncodeCategoricalFeaturesStep,
+    RemoveConstantFeaturesStep,
     ReshapeFeatureDistributionsStep,
 )
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
+    GPUTransformType,
     get_gpu_transform_type,
 )
 
@@ -234,35 +238,57 @@ def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
     assert np.isinf(X[0, 0])
 
 
-def test__keep_float32_pipeline__a_steps_new_array__is_written_in_place(
-    monkeypatch: pytest.MonkeyPatch,
+class _NewArrayStep(PreprocessingStep):
+    """Returns its input as a new array."""
+
+    no_arithmetic = True
+
+    def _fit(self, X: np.ndarray, feature_schema: FeatureSchema) -> FeatureSchema:
+        del X
+        return feature_schema
+
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, None, None]:
+        del is_test
+        return np.array(X), None, None
+
+
+class _OwnershipSpy(PreprocessingStep):
+    """Records whether the pipeline lets it write into its input."""
+
+    no_arithmetic = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.owned: list[bool] = []
+
+    def _fit(self, X: np.ndarray, feature_schema: FeatureSchema) -> FeatureSchema:
+        del X
+        self.owned.append(step_owns_input())
+        return feature_schema
+
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, None, None]:
+        del is_test
+        return X, None, None
+
+
+@pytest.mark.parametrize("new_array_first", [False, True])
+def test__keep_float32_pipeline__a_steps_new_array__is_the_next_steps_to_write(
+    *, new_array_first: bool
 ) -> None:
-    """A step after one that returned a new array may write into that array."""
-    owned: list[bool] = []
-    encode = EncodeCategoricalFeaturesStep._ordinal_fit_transform
-
-    def spy(ct: typing.Any, X: np.ndarray) -> np.ndarray:
-        owned.append(step_owns_input())
-        return encode(ct, X)
-
-    monkeypatch.setattr(
-        EncodeCategoricalFeaturesStep, "_ordinal_fit_transform", staticmethod(spy)
-    )
+    spy = _OwnershipSpy()
     pipeline = PreprocessingPipeline(
-        [
-            # Moves the categorical column to the front, into a new array.
-            ReshapeFeatureDistributionsStep(transform_name="none"),
-            EncodeCategoricalFeaturesStep("ordinal", random_state=0),
-        ]
+        [_NewArrayStep(), spy] if new_array_first else [spy]
     )
-    rng = np.random.default_rng(0)
-    X = rng.standard_normal((50, 4)).astype(np.float32)
-    X[:, 2] = rng.integers(0, 3, size=X.shape[0])
-    schema = FeatureSchema.from_only_categorical_indices([2], num_columns=4)
+    X = np.random.default_rng(0).standard_normal((20, 3)).astype(np.float32)
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=3)
 
     pipeline.fit_transform(X, schema, may_keep_input=True)
 
-    assert owned == [True]
+    assert spy.owned == [new_array_first]
 
 
 def test__keep_float32_pipeline__encodes_a_finite_input_without_a_float64_table() -> (
@@ -292,3 +318,124 @@ def test__keep_float32_pipeline__encodes_a_finite_input_without_a_float64_table(
     assert peak < 2 * X.nbytes
     assert result.X.dtype == np.float32
     np.testing.assert_array_equal(X, before)
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        "ordinal",
+        "ordinal_shuffled",
+        "ordinal_common_categories",
+        "ordinal_very_common_categories_shuffled",
+        "numeric",
+    ],
+)
+def test__keep_float32_pipeline__may_keep_input__shares_the_columns_it_leaves(
+    encoding: str,
+) -> None:
+    """Columns the steps only move are read from `X`; the encoded ones are held."""
+
+    def pipeline() -> PreprocessingPipeline:
+        return PreprocessingPipeline(
+            [
+                RemoveConstantFeaturesStep(),
+                ReshapeFeatureDistributionsStep(transform_name="none", random_state=0),
+                EncodeCategoricalFeaturesStep(encoding, random_state=0),
+            ]
+        )
+
+    rng = np.random.default_rng(0)
+    X, X_test = (
+        rng.standard_normal((rows, 9)).astype(np.float32) for rows in (3000, 500)
+    )
+    for table in (X, X_test):
+        table[:, 2] = rng.integers(0, 5, len(table))
+        table[:, 6] = rng.integers(0, 3, len(table))
+        table[:, 4] = 7.0  # constant, so removed
+    X_test[3, 2] = np.nan
+    X_test[4, 2] = 9.0  # a category unseen at fit
+    schema = FeatureSchema.from_only_categorical_indices([2, 6], num_columns=9)
+    copying, sharing = pipeline(), pipeline()
+
+    expected = copying.fit_transform(X.copy(), schema)
+    actual = sharing.fit_transform(X, schema, may_keep_input=True)
+
+    assert isinstance(actual.X, SharedColumnsTable)
+    assert actual.X.base is X
+    assert actual.X.own.shape[1] == (0 if encoding == "numeric" else 2)
+    assert actual.feature_schema == expected.feature_schema
+    np.testing.assert_array_equal(np.asarray(actual.X), expected.X)
+    shared = sharing.transform(X_test, may_keep_input=True).X
+    assert isinstance(shared, SharedColumnsTable)
+    assert isinstance(sharing.transform(X_test).X, np.ndarray)
+    np.testing.assert_array_equal(
+        np.asarray(shared), copying.transform(X_test.copy()).X
+    )
+
+
+def test__keep_float32_pipeline__may_keep_input__appending_reshape__matches() -> None:
+    """A reshape that appends the original columns hands sklearn an array."""
+
+    def pipeline() -> PreprocessingPipeline:
+        return PreprocessingPipeline(
+            [
+                RemoveConstantFeaturesStep(),
+                ReshapeFeatureDistributionsStep(
+                    transform_name="none",
+                    append_to_original=True,
+                    schedule_gpu_transform=GPUTransformType.QUANTILE,
+                ),
+                EncodeCategoricalFeaturesStep("ordinal_shuffled", random_state=0),
+            ]
+        )
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((200, 6)).astype(np.float32)
+    X[:, 1] = rng.integers(0, 4, size=200)
+    schema = FeatureSchema.from_only_categorical_indices([1], num_columns=6)
+    copying, sharing = pipeline(), pipeline()
+
+    expected = copying.fit_transform(X.copy(), schema)
+    actual = sharing.fit_transform(X, schema, may_keep_input=True)
+
+    np.testing.assert_array_equal(np.asarray(actual.X), expected.X)
+    np.testing.assert_array_equal(
+        np.asarray(sharing.transform(X, may_keep_input=True).X),
+        copying.transform(X.copy()).X,
+    )
+
+
+@pytest.mark.parametrize("encoding", ["ordinal", "ordinal_shuffled"])
+def test__keep_float32_pipeline__may_keep_input__all_categorical__leaves_x(
+    encoding: str,
+) -> None:
+    """With every column encoded, the encoding still writes into its own columns."""
+
+    def pipeline() -> PreprocessingPipeline:
+        return PreprocessingPipeline(
+            [
+                RemoveConstantFeaturesStep(),
+                ReshapeFeatureDistributionsStep(transform_name="none", random_state=0),
+                EncodeCategoricalFeaturesStep(encoding, random_state=0),
+            ]
+        )
+
+    rng = np.random.default_rng(0)
+    # Category values that are not their codes, so writing codes changes them.
+    X, X_test = (
+        (10 * rng.integers(1, 6, (rows, 3))).astype(np.float32) for rows in (200, 40)
+    )
+    X_before, X_test_before = X.copy(), X_test.copy()
+    schema = FeatureSchema.from_only_categorical_indices([0, 1, 2], num_columns=3)
+    copying, sharing = pipeline(), pipeline()
+
+    expected = copying.fit_transform(X.copy(), schema)
+    actual = sharing.fit_transform(X, schema, may_keep_input=True)
+    shared = sharing.transform(X_test, may_keep_input=True).X
+
+    np.testing.assert_array_equal(X, X_before)
+    np.testing.assert_array_equal(X_test, X_test_before)
+    np.testing.assert_array_equal(np.asarray(actual.X), expected.X)
+    np.testing.assert_array_equal(
+        np.asarray(shared), copying.transform(X_test.copy()).X
+    )
