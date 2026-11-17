@@ -248,6 +248,7 @@ class TorchSelectiveQuantileTransformerStep(TorchSelectiveStep):
     """
 
     shared_cache_keys = frozenset({"references"})
+    computes_on_cpu_for_mps = True
 
     def __init__(
         self,
@@ -323,6 +324,8 @@ class TorchSelectiveSquashingScalerStep(TorchSelectiveStep):
     unchanged.
     """
 
+    computes_on_cpu_for_mps = True
+
     def __init__(
         self,
         max_absolute_value: float,
@@ -393,6 +396,8 @@ class TorchSelectiveSafePowerStep(TorchSelectiveStep):
     :class:`TorchSelectiveQuantileTransformerStep`.
     """
 
+    computes_on_cpu_for_mps = True
+
     def __init__(self, target_column_indices: list[int]) -> None:
         super().__init__()
         self._transformer = TorchSafePowerTransformer()
@@ -450,8 +455,6 @@ class TorchSelectiveRobustScalerStep(TorchSelectiveStep):
     Register with ``modalities=None``, like
     :class:`TorchSelectiveQuantileTransformerStep`.
     """
-
-    columnwise = True
 
     def __init__(self, target_column_indices: list[int]) -> None:
         super().__init__()

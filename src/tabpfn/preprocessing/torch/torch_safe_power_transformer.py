@@ -174,23 +174,14 @@ def _golden_section_search(
     for i in range(n_iter):
         # Ties move right, as in fminbound.
         left = fc < fd
-        next_a = torch.where(left, a, c)
-        next_b = torch.where(left, d, b)
-        new = torch.where(
-            left,
-            next_b - _INV_GOLDEN * (next_b - next_a),
-            next_a + _INV_GOLDEN * (next_b - next_a),
-        )
-        f_new = f(new)
+        # A stopped column's `c` and `d` drift on but never reach `a` or `b` again.
         moves = i < steps
-        a = torch.where(moves, next_a, a)
-        b = torch.where(moves, next_b, b)
-        c, d, fc, fd = (
-            torch.where(moves, torch.where(left, new, d), c),
-            torch.where(moves, torch.where(left, c, new), d),
-            torch.where(moves, torch.where(left, f_new, fd), fc),
-            torch.where(moves, torch.where(left, fc, f_new), fd),
-        )
+        a = torch.where(moves & ~left, c, a)
+        b = torch.where(moves & left, d, b)
+        new = torch.where(left, b - _INV_GOLDEN * (b - a), a + _INV_GOLDEN * (b - a))
+        f_new = f(new)
+        c, d = torch.where(left, new, d), torch.where(left, c, new)
+        fc, fd = torch.where(left, f_new, fd), torch.where(left, fc, f_new)
     return (a + b) / 2
 
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import typing
 from typing_extensions import override
 
 import pytest
@@ -17,7 +18,6 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStepResult,
 )
 from tabpfn.preprocessing.torch.steps import (
-    TorchAddFingerprintFeaturesStep,
     TorchAddSVDFeaturesStep,
     TorchRandomSignFlipStep,
     TorchSelectiveQuantileTransformerStep,
@@ -717,10 +717,11 @@ _TARGETS = [0, 2, 3, 5, 7, 8, 9]
         TorchSelectiveSafePowerStep(_TARGETS),
         TorchSelectiveSquashingScalerStep(3.0, _TARGETS),
         TorchSelectiveRobustScalerStep(_TARGETS),
+        TorchSoftClipOutliersStep(n_sigma=3.0),
     ],
-    ids=["quantile", "safepower", "squashing", "robust"],
+    ids=["quantile", "safepower", "squashing", "robust", "soft_clip"],
 )
-def test__fit_transform_on_device__selective_step__matches_fit_transform(
+def test__fit_transform_on_device__columnwise_step__matches_fit_transform(
     step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Three columns of 64 float32 rows per block: three blocks for seven targets.
@@ -774,14 +775,74 @@ def test__call__host_table__matches_the_device_table() -> None:
     torch.testing.assert_close(actual.x, expected.x.cpu(), equal_nan=True)
 
 
-def test__run_step__staged__rejects_a_step_without_a_block_runner() -> None:
-    with pytest.raises(ValueError, match="cannot run by blocks"):
-        pipeline_interface._run_step(
-            TorchAddFingerprintFeaturesStep(),
+def test__call__staged__rejects_a_step_without_a_block_runner_before_any_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = TorchPreprocessingPipeline(
+        steps=[
+            (TorchSelectiveRobustScalerStep([0, 1]), None),
+            (TorchAddSVDFeaturesStep(random_state=0), None),
+        ]
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(
+        pipeline_interface, "_run_step", lambda step, *_, **__: ran.append(step)
+    )
+    schema = FeatureSchema.from_only_categorical_indices([], num_columns=10)
+
+    with pytest.raises(ValueError, match="TorchAddSVDFeaturesStep cannot run by"):
+        pipeline(
             _wide_input(),
-            list(range(10)),
-            50,
-            None,
+            schema,
+            num_train_rows=50,
             consume_input=True,
-            compute_device=torch.device("cpu"),
+            # A device unlike `x`'s; nothing is moved there before the check.
+            compute_device=torch.device("meta"),
         )
+    assert ran == []
+
+
+def test__fit_transform_on_device__runs_each_device_block_in_smaller_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 6 * 64 * 4)
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 2 * 64 * 4)
+    step = TorchSoftClipOutliersStep(n_sigma=3.0)
+    widths: list[int] = []
+    fit, transform = step._fit, step._transform
+
+    def spy_fit(x: torch.Tensor) -> dict[str, torch.Tensor]:
+        widths.append(x.shape[-1])
+        return fit(x)
+
+    def spy_transform(x: torch.Tensor, **kwargs: typing.Any) -> typing.Any:
+        widths.append(x.shape[-1])
+        return transform(x, **kwargs)
+
+    monkeypatch.setattr(step, "_fit", spy_fit)
+    monkeypatch.setattr(step, "_transform", spy_transform)
+
+    pipeline_interface._fit_transform_on_device(
+        step, _wide_input(), _TARGETS, 50, None, torch.device("cpu")
+    )
+
+    assert max(widths) == 2
+
+
+def test__run_step__mps__computes_safepower_on_the_cpu() -> None:
+    """MPS has no float64, so safepower's blocks stay on the CPU."""
+    step = TorchSelectiveSafePowerStep(_TARGETS)
+    x = _wide_input()
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    actual = pipeline_interface._run_step(
+        step,
+        x,
+        _TARGETS,
+        50,
+        None,
+        consume_input=True,
+        compute_device=torch.device("mps"),
+    )
+
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)

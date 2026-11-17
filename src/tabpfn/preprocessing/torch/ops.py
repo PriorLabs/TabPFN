@@ -98,13 +98,14 @@ def columnwise_sum(x: torch.Tensor) -> torch.Tensor:
     Each column's sum depends only on that column, so it comes out the same
     whichever other columns `x` holds.
     """
-    return _pairwise_sum(torch.where(torch.isnan(x), 0, x))
+    return _pairwise_sum(torch.where(torch.isnan(x), 0, x), consume=True)
 
 
-def _pairwise_sum(x: torch.Tensor) -> torch.Tensor:
+def _pairwise_sum(x: torch.Tensor, *, consume: bool = False) -> torch.Tensor:
     """Sum over dimension 0 by a pairwise tree of elementwise additions.
 
     Each column's sum reads only that column, in an order set by `x.shape[0]`.
+    With `consume`, `x` is overwritten.
     """
     leftovers = []
     while x.shape[0] > 1:
@@ -112,7 +113,13 @@ def _pairwise_sum(x: torch.Tensor) -> torch.Tensor:
             leftovers.append(x[-1])
             x = x[:-1]
         half = x.shape[0] // 2
-        x = x[:half] + x[half:]
+        if consume:
+            # Rows past `half`, the leftovers among them, are never written.
+            x[:half] += x[half:]
+            x = x[:half]
+        else:
+            x = x[:half] + x[half:]
+            consume = True
     total = x.sum(dim=0)
     for leftover in leftovers:
         total = total + leftover
