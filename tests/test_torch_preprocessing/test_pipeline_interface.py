@@ -739,12 +739,16 @@ _FITS_UP_TO_ROUNDING = (
     ],
     ids=["quantile", "safepower", "squashing", "robust", "soft_clip"],
 )
+@pytest.mark.parametrize("batch_size", [1, 2])
 def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
-    step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch
+    step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch, batch_size: int
 ) -> None:
-    # Three columns of 64 float32 rows per block: three blocks for seven targets.
-    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
-    x = _wide_input()
+    # Three columns of 64 float32 rows per batch entry per block: three blocks for
+    # seven targets.
+    monkeypatch.setattr(
+        pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * batch_size * 4
+    )
+    x = torch.cat([_wide_input() * (1 + b) for b in range(batch_size)], dim=1)
     expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
 
     actual = step._fit_transform_column_blocks(

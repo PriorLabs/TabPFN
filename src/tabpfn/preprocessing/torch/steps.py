@@ -330,7 +330,10 @@ class TorchSelectiveSafePowerStep(TorchSelectiveStep):
 
     @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        return self._transformer.fit(x)
+        # The transformer flattens the batch into the columns; the block runners
+        # slice and join the cache by columns, along its last dimension.
+        cache = self._transformer.fit(x)
+        return {key: value.reshape(x.shape[1:]) for key, value in cache.items()}
 
     @override
     def _transform(
@@ -338,7 +341,8 @@ class TorchSelectiveSafePowerStep(TorchSelectiveStep):
         x: torch.Tensor,
         fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
-        return self._transformer.transform(x, fitted_cache=fitted_cache), None, None
+        flat = {key: value.reshape(-1) for key, value in fitted_cache.items()}
+        return self._transformer.transform(x, fitted_cache=flat), None, None
 
 
 class TorchSelectiveRobustScalerStep(TorchSelectiveStep):
