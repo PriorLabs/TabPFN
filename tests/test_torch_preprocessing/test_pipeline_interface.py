@@ -713,8 +713,14 @@ def _wide_input() -> torch.Tensor:
 _TARGETS = [0, 2, 3, 5, 7, 8, 9]
 
 _ROUNDING = {"rtol": 1e-6, "atol": 1e-6}
-"""How far safepower's fit may move with the columns fitted beside it: its sums round
-differently, and its lambda search stops within its tolerance."""
+"""How far a fit may move with the columns fitted beside it: reductions over rows can
+round differently on some platforms, and safepower's lambda search stops within its
+tolerance."""
+
+_FITS_UP_TO_ROUNDING = (
+    TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveSafePowerStep,
+)
 
 
 @pytest.mark.parametrize(
@@ -740,11 +746,8 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
         x, _TARGETS, 50, None, torch.device("cpu")
     )
 
-    # Safepower's fit moves slightly with the columns fitted beside it.
     tolerance = (
-        _ROUNDING
-        if isinstance(step, TorchSelectiveSafePowerStep)
-        else {"rtol": 0, "atol": 0}
+        _ROUNDING if isinstance(step, _FITS_UP_TO_ROUNDING) else {"rtol": 0, "atol": 0}
     )
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **tolerance)
