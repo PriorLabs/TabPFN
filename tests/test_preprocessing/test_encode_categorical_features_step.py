@@ -683,6 +683,27 @@ def test__encode_categorical__ordinal__step_output_matches_column_transformer() 
     assert np.isfortran(result.X) == np.isfortran(reference)
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("cat_indices", [[1, 3], [2], [0, 1, 2, 3]])
+def test__encode_categorical__ordinal__transform_matches_column_transformer(
+    dtype: type, cat_indices: list[int]
+) -> None:
+    """At predict, the step's values are those a plain ColumnTransformer gives."""
+    X = _ordinal_case(np.float64, cat_indices, with_nan=True)
+    schema = _make_feature_schema(X.shape[1], cat_indices)
+    step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
+    step.fit_transform(X.astype(dtype), schema)
+    reference = _plain_column_transformer(X, cat_indices).fit(X)
+    test = X[::3].astype(dtype)
+    test[1, cat_indices[0]] = 99.0  # a category unseen at fit
+
+    result = step.transform(test).X
+
+    np.testing.assert_array_equal(
+        result.astype(np.float64), reference.transform(test.astype(np.float64))
+    )
+
+
 def test__encode_categorical__ordinal__one_row_fit_learns_every_category() -> None:
     """Fitting the transformer on one row must not cost the encoder its categories.
 

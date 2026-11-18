@@ -224,9 +224,7 @@ def test__keep_float32_pipeline__copies_an_input_that_is_not_c_ordered(
 
 
 def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
-    """Infinities are replaced in place, so such an input is copied first, and
-    gathered columns holding one are not shared.
-    """
+    """Infinities are replaced in place, so such an input is copied first."""
     pipeline = PreprocessingPipeline(
         [ReshapeFeatureDistributionsStep(transform_name="none")]
     )
@@ -238,20 +236,6 @@ def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
 
     assert not np.shares_memory(result.X, X)
     assert np.isinf(X[0, 0])
-
-    X[:, 1] = np.arange(20) % 4 + 10
-    encoding = PreprocessingPipeline(
-        [EncodeCategoricalFeaturesStep("ordinal_shuffled", random_state=0)]
-    )
-    indices = np.array([0, 1])
-    encoding.fit_transform(
-        X,
-        FeatureSchema.from_only_categorical_indices([1], num_columns=2),
-        feature_indices=indices,
-    )
-    gathered = encoding.transform(X, feature_indices=indices, may_keep_input=True).X
-    assert isinstance(gathered, np.ndarray)
-    assert np.isinf(gathered).sum() == 1
 
 
 class _NewArrayStep(PreprocessingStep):
@@ -386,43 +370,6 @@ def test__keep_float32_pipeline__may_keep_input__shares_the_columns_it_leaves(
     assert isinstance(sharing.transform(X_test).X, np.ndarray)
     np.testing.assert_array_equal(
         np.asarray(shared), copying.transform(X_test.copy()).X
-    )
-
-
-def test__keep_float32_pipeline__feature_indices__shares_the_gathered_columns() -> None:
-    """A pipeline reading some of `X`'s columns shares its own copy of them at
-    predict, and codes them in place at fit.
-    """
-    pipeline = PreprocessingPipeline(
-        [
-            RemoveConstantFeaturesStep(),
-            ReshapeFeatureDistributionsStep(transform_name="none", random_state=0),
-            EncodeCategoricalFeaturesStep("ordinal_shuffled", random_state=0),
-        ]
-    )
-    rng = np.random.default_rng(0)
-    X, X_test = (
-        rng.standard_normal((rows, 9)).astype(np.float32) for rows in (3000, 500)
-    )
-    for table in (X, X_test):
-        table[:, 2] = rng.integers(10, 15, len(table))
-        table[:, 6] = rng.integers(20, 23, len(table))
-    indices = np.array([0, 2, 3, 6, 8])
-    schema = FeatureSchema.from_only_categorical_indices([1, 3], num_columns=5)
-    fitted = pipeline.fit_transform(
-        X, schema, feature_indices=indices, may_keep_input=True
-    ).X
-    assert isinstance(fitted, np.ndarray)
-    before = X_test.copy()
-
-    shared = pipeline.transform(X_test, feature_indices=indices, may_keep_input=True).X
-
-    assert isinstance(shared, SharedColumnsTable)
-    assert not np.shares_memory(shared.base, X_test)
-    assert shared.own.shape[1] == 2
-    np.testing.assert_array_equal(X_test, before)
-    np.testing.assert_array_equal(
-        np.asarray(shared), pipeline.transform(X_test[:, indices].copy()).X
     )
 
 

@@ -69,6 +69,13 @@ def permute_columns_in_place(X: np.ndarray, order: list[int]) -> np.ndarray:
         return X[:, order]
     index = np.asarray(order, dtype=np.intp)
     rows = max(1, PERMUTE_BLOCK_BYTES // max(1, X.shape[1] * X.itemsize))
+    if X.dtype in (np.float32, np.float64):
+        # `index_select` beats numpy's strided gather, as in `gather_columns`.
+        table, by = torch.from_numpy(X), torch.as_tensor(index, dtype=torch.long)
+        for start in range(0, X.shape[0], rows):
+            block = table[start : start + rows]
+            block.copy_(block.index_select(1, by))
+        return X
     for start in range(0, X.shape[0], rows):
         block = X[start : start + rows]
         block[:] = block[:, index]
@@ -732,15 +739,13 @@ class PreprocessingPipeline:
         feature_indices: np.ndarray | None,
         *,
         may_keep_input: bool,
-        is_fitting: bool,
     ) -> np.ndarray | torch.Tensor | SharedColumnsTable:
         """The array the steps run on.
 
-        This is a copy of `X`, or of its `feature_indices` columns. It is a
-        `SharedColumnsTable` over `X` itself, or at predict over the gathered
-        columns, when nothing would write into it and `may_keep_input`: a step that
-        would copy it to move or rewrite its columns then shares the columns it
-        leaves alone.
+        This is a copy of `X`, or of its `feature_indices` columns. It is `X` itself,
+        as a `SharedColumnsTable`, when nothing would write into it and
+        `may_keep_input`: a step that would copy `X` to move or rewrite its columns
+        then shares the columns it leaves alone.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -751,24 +756,19 @@ class PreprocessingPipeline:
             index = torch.as_tensor(feature_indices, dtype=torch.long, device=X.device)
             return X.index_select(-1, index)
         keep = self.keep_float32 and X.dtype == np.float32
-        dtype = np.float32 if keep else np.float64
-        if feature_indices is not None:
-            X = gather_columns(X, feature_indices, dtype)
-            if is_fitting:
-                # The fit codes the categorical columns of its own copy in place, where
-                # a table would keep both those columns and their codes.
-                return X
         if (
             keep
+            and feature_indices is None
             and may_keep_input
             # The copy is C-ordered, and `torch.as_tensor` rejects negative strides.
             and X.flags.c_contiguous
             and self._writes_only_owned_input(X)
         ):
             return SharedColumnsTable.of(X)
-        if feature_indices is not None:
-            return X
-        return X.astype(dtype, order="C", copy=True)
+        dtype = np.float32 if keep else np.float64
+        if feature_indices is None:
+            return X.astype(dtype, order="C", copy=True)
+        return gather_columns(X, feature_indices, dtype)
 
     def _writes_only_owned_input(self, X: np.ndarray) -> bool:
         """Whether the steps can run on `X` itself without anything writing into it.
@@ -804,9 +804,7 @@ class PreprocessingPipeline:
             Tuple of (transformed array, updated feature schema).
         """
         given = X
-        X = self._working_copy(
-            X, feature_indices, may_keep_input=may_keep_input, is_fitting=is_fitting
-        )
+        X = self._working_copy(X, feature_indices, may_keep_input=may_keep_input)
         owns_input = not isinstance(X, SharedColumnsTable)
 
         # Record any +/-inf positions and replace them with NaN so the steps
