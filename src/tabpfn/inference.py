@@ -1937,7 +1937,7 @@ def _chunked_copy_(
 
 
 _MODEL_INPUT_BLOCK_BYTES = 1 << 28
-"""Bytes of rows `_chunked_copy_` converts and copies at a time."""
+"""Bytes of rows `_prepare_model_inputs` converts and copies at a time."""
 
 
 def _model_input_device(
