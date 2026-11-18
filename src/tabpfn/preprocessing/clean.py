@@ -115,13 +115,11 @@ written while it is in cache: larger blocks fall out of it, smaller ones pay mor
 per-block overhead."""
 
 
-def _with_constants(
-    X: np.ndarray, constant_values: dict[int, Any], dtype: Any
-) -> np.ndarray:
-    """A C-ordered copy of `X` in `dtype`, with `constant_values` in their columns."""
-    out = np.empty(X.shape, dtype=dtype)
+def _with_constants(X: np.ndarray, constant_values: dict[int, Any]) -> np.ndarray:
+    """A C-ordered copy of `X`, with `constant_values` in their columns."""
+    out = np.empty(X.shape, dtype=X.dtype)
     columns = list(constant_values)
-    values = np.array(list(constant_values.values()), dtype=dtype)
+    values = np.array(list(constant_values.values()), dtype=X.dtype)
     rows = max(1, _FILL_BLOCK_BYTES // max(1, X.shape[1] * out.itemsize))
     for start in range(0, X.shape[0], rows):
         block = out[start : start + rows]
@@ -189,13 +187,16 @@ def clean_data_transform(
             isinstance(v, (int, float, np.number)) for v in constant_values.values()
         )
         # A copy either way: the caller's array must not be written to.
-        if not numeric:
-            X = X.astype(object)
+        if numeric and X.dtype == np.float32:
+            # The float32 paths below read a C-ordered table.
+            X = _with_constants(X, constant_values)
+        else:
+            if not numeric:
+                X = X.astype(object)
+            else:
+                X = X.astype(X.dtype if X.dtype.kind in "fO" else np.float64)
             for index, value in constant_values.items():
                 X[:, index] = value
-        else:
-            dtype = X.dtype if X.dtype.kind in "fO" else np.float64
-            X = _with_constants(X, constant_values, dtype)
 
     if _is_plain_numeric_array(X) and _encoder_selects_nothing(ord_encoder):
         # `passthrough_inf` makes no difference here: it records the +/-inf cells,
