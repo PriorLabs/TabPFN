@@ -1752,7 +1752,7 @@ def _chunked_copy_(
 
 
 _MODEL_INPUT_BLOCK_BYTES = 1 << 28
-"""Bytes of rows `_chunked_copy_` converts and copies at a time."""
+"""Bytes of rows `_prepare_model_inputs` converts and copies at a time."""
 
 HOST_MODEL_INPUT_MIN_BYTES = 16 << 30
 """Model inputs at least this large stay in host memory, for a model that reads its
