@@ -189,7 +189,7 @@ def _prepare_train_inputs(
             return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
     if isinstance(X_train, SharedColumnsTable) and not X_train.is_base():
         X_device = torch.empty(X_train.shape, dtype=tensor_dtype, device=device)
-        _copy_rows_into(X_train, X_device)
+        _chunked_copy_(X_train, X_device)
         X_train = X_device
     elif not isinstance(X_train, torch.Tensor):
         # An array, or a table that is its base, is read in place.
@@ -1906,19 +1906,15 @@ def _prepare_model_inputs(
         device=device if x_device is None else x_device,
     )
     for offset, part in ((0, X_train), (num_train, X_test)):
-        _copy_rows_into(part, X_full[offset : offset + len(part), 0])
+        _chunked_copy_(part, X_full[offset : offset + len(part), 0])
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
 
 
-def _copy_rows_into(
+def _chunked_copy_(
     part: torch.Tensor | np.ndarray | SharedColumnsTable, out: torch.Tensor
 ) -> None:
-    """Writes `part` into `out`, a `(rows, columns)` tensor on any device.
-
-    Goes a block of rows at a time, so beyond `part` and `out` the host holds rows
-    a block at a time, never all of them.
-    """
+    """Writes `part` into `out` in chunks, handling devices."""
     rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, out.shape[1] * out.element_size()))
     gathered = isinstance(part, SharedColumnsTable) and not part.is_base()
     block = None
@@ -1941,7 +1937,7 @@ def _copy_rows_into(
 
 
 _MODEL_INPUT_BLOCK_BYTES = 1 << 28
-"""Bytes of rows `_copy_rows_into` converts and copies at a time."""
+"""Bytes of rows `_chunked_copy_` converts and copies at a time."""
 
 
 def _model_input_device(
