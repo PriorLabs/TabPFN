@@ -8,7 +8,7 @@ import dataclasses
 import time
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from copy import copy, deepcopy
 from functools import partial
 from inspect import Parameter, signature
@@ -155,10 +155,38 @@ def _prepare_train_inputs(
     member: TabPFNEnsembleMember,
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
+    model: torch.nn.Module | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
-    """A member's train rows as ``(rows, 1, C)``, targets, and categorical indices."""
+    """A member's train rows as ``(rows, 1, C)``, targets, and categorical indices.
+
+    With ``model``, train rows that `_model_input_device` keeps in host memory stay
+    there, and the GPU preprocessing reads them from there, as for a full forward.
+    """
     tensor_dtype = force_inference_dtype or torch.float32
     X_train, y_train = member.X_train, member.y_train
+    if model is not None:
+        no_test_rows = np.empty((0, X_train.shape[1]), dtype=np.float32)
+        x_device = _model_input_device(
+            model, device, X_train, no_test_rows, force_inference_dtype
+        )
+        if x_device != device:
+            X, y = _prepare_model_inputs(
+                device,
+                force_inference_dtype,
+                X_train,
+                no_test_rows,
+                y_train,
+                x_device=x_device,
+            )
+            X, feature_schema = _maybe_run_gpu_preprocessing(
+                X,
+                gpu_preprocessor=member.gpu_preprocessor,
+                num_train_rows=X.shape[0],
+                feature_schema=member.feature_schema,
+                consume_input=True,
+                compute_device=device,
+            )
+            return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
     if not isinstance(X_train, torch.Tensor):
         # A `SharedColumnsTable` is built whole here.
         X_train = as_tensor_to_read(
@@ -1201,6 +1229,26 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
+        save_peak_mem_during_build = should_save_peak_mem(
+            memory_saving_mode=save_peak_mem,
+            X_train_shape=tuple[int, int](X_train.shape),
+            X_test_shape=(0, X_train.shape[1]),
+            devices=devices,
+            dtype_byte_size=dtype_byte_size,
+        )
+        stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
+
+        if self._builds_member_by_member(X_train, devices):
+            self._build_caches_member_by_member(
+                X_train,
+                y_train,
+                device=devices[0],
+                autocast=autocast,
+                save_peak_mem=save_peak_mem_during_build,
+                stage_cache_on_cpu=stage_caches_on_cpu,
+            )
+            return
+
         # Preprocess ensemble members (CPU work)
         fit_preprocess_start = time.perf_counter()
         self.ensemble_members: list[TabPFNEnsembleMember] = (
@@ -1212,15 +1260,6 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         self._speed_metrics["fit_preprocessing_seconds"] = (
             time.perf_counter() - fit_preprocess_start
         )
-
-        save_peak_mem_during_build = should_save_peak_mem(
-            memory_saving_mode=save_peak_mem,
-            X_train_shape=tuple[int, int](X_train.shape),
-            X_test_shape=(0, X_train.shape[1]),
-            devices=devices,
-            dtype_byte_size=dtype_byte_size,
-        )
-        stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
 
         # Members sharing a model and a prepared shape end up in one cache, with
         # the members along the batch dimension, so that predict runs them as one
@@ -1239,6 +1278,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             partial(
                 self._build_cache,
                 members=[members[i] for i in group],
+                model_index=members[group[0]].config._model_index,
+                train_shape=tuple[int, int](members[group[0]].X_train.shape),
                 autocast=autocast,
                 save_peak_mem=save_peak_mem_during_build,
                 stage_cache_on_cpu=stage_caches_on_cpu,
@@ -1272,11 +1313,95 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         for ensemble_member in self.ensemble_members:
             ensemble_member.X_train = None
 
-    def _build_cache(
+    def _builds_member_by_member(
+        self, X_train: np.ndarray, devices: Sequence[torch.device]
+    ) -> bool:
+        """Whether the members are preprocessed one forward at a time for the build.
+
+        For train rows that `_model_input_device` keeps in host memory, on one
+        device and with one model: every member holds its own copy of the train
+        rows, so preprocessing them all first holds one copy per member.
+        """
+        if len(devices) != 1 or len(self.model_caches) != 1:
+            return False
+        model = self.model_caches[0].get_any()
+        no_test_rows = np.empty((0, X_train.shape[1]), dtype=np.float32)
+        x_device = _model_input_device(
+            model, devices[0], X_train, no_test_rows, self.force_inference_dtype
+        )
+        return x_device != devices[0]
+
+    def _build_caches_member_by_member(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        *,
+        device: torch.device,
+        autocast: bool,
+        save_peak_mem: bool,
+        stage_cache_on_cpu: bool,
+    ) -> None:
+        """Build the caches from members that are preprocessed as they are built.
+
+        Host memory then holds the train rows of one forward's members at a time,
+        as in `InferenceEngineOnDemand`.
+        """
+        self.ensemble_members = []
+        preprocessing_seconds = 0.0
+
+        def members() -> Iterator[TabPFNEnsembleMember]:
+            nonlocal preprocessing_seconds
+            iterator = (
+                self.ensemble_preprocessor.fit_transform_ensemble_members_iterator(
+                    X_train=X_train, y_train=y_train, parallel_mode="in-order"
+                )
+            )
+            while True:
+                start = time.perf_counter()
+                member = next(iterator, None)
+                preprocessing_seconds += time.perf_counter() - start
+                if member is None:
+                    return
+                self.ensemble_members.append(member)
+                yield member
+
+        timed_caches = _TimedIterator(
+            parallel_execute(
+                [device],
+                [
+                    partial(
+                        self._build_cache,
+                        members=members(),
+                        model_index=0,
+                        train_shape=tuple[int, int](X_train.shape),
+                        autocast=autocast,
+                        save_peak_mem=save_peak_mem,
+                        stage_cache_on_cpu=stage_cache_on_cpu,
+                    )
+                ],
+                prewarm_lapack=self.ensemble_preprocessor.any_estimator_uses_gpu_svd(),
+            ),
+            [device],
+        )
+        ((caches, build_device),) = list(timed_caches)
+        # `_build_cache` numbers the members in the order it reads them.
+        self.cache_groups = [positions for positions, _ in caches]
+        self.kv_caches = [
+            cache.to(build_device) if stage_cache_on_cpu else cache
+            for _, cache in caches
+        ]
+        self._speed_metrics["fit_preprocessing_seconds"] = preprocessing_seconds
+        self._speed_metrics["fit_model_forward_seconds"] = (
+            timed_caches.elapsed_seconds - preprocessing_seconds
+        )
+
+    def _build_cache(  # noqa: C901
         self,
         *,
         device: torch.device,
-        members: list[TabPFNEnsembleMember],
+        members: Iterable[TabPFNEnsembleMember],
+        model_index: int,
+        train_shape: tuple[int, int],
         autocast: bool,
         save_peak_mem: bool,
         stage_cache_on_cpu: bool,
@@ -1289,6 +1414,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         concatenated, so the budgets bound the build but not the batch the cache
         serves at predict.
 
+        The members share the model `model_index` and train rows of `train_shape`.
+        They are read one forward's worth at a time, and a member's train rows are
+        released once its model input is prepared.
+
         Called via :func:`parallel_execute` — may run on different devices
         in parallel threads.
 
@@ -1299,17 +1428,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             (or when ``keep_cache_on_device`` is false); otherwise, they remain on
             the returned device.
         """
-        model = self.model_caches[members[0].config._model_index].get(device)
+        model = self.model_caches[model_index].get(device)
         kv_cache_precision = _resolve_kv_cache_precision(
             self.kv_cache_precision, architecture=model, device=device
         )
+        read: list[TabPFNEnsembleMember] = []
         if self.force_inference_dtype is not None:
             model.type(self.force_inference_dtype)
-
-        prepared = [
-            _prepare_train_inputs(member, device, self.force_inference_dtype)
-            for member in members
-        ]
 
         performance_options = dataclasses.replace(
             model.get_default_performance_options(),
@@ -1325,7 +1450,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             kv_cache_follows_attention_grid=kv_cache_precision == "adaptive",
         )
 
-        def build(positions: list[int]) -> KVCache:
+        def build(
+            positions: list[int],
+            prepared: dict[int, tuple[torch.Tensor, torch.Tensor, list[int]]],
+        ) -> KVCache:
             X, y = _batch_member_inputs(
                 [prepared[i][0] for i in positions],
                 [prepared[i][1] for i in positions],
@@ -1333,22 +1461,24 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             kwargs = _model_forward_kwargs(
                 model,
                 self.task_type,
-                [members[i].config.estimator_id for i in positions],
+                [read[i].config.estimator_id for i in positions],
             )
+            x, x_kwargs = _model_input_arguments(X, device)
             with (
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(),
             ):
                 _, cache = model(
-                    X,
+                    x,
                     y,
                     only_return_standard_out=True,
                     categorical_inds=[prepared[i][2] for i in positions],
                     performance_options=performance_options,
                     return_kv_cache=True,
+                    **x_kwargs,
                     **kwargs,
                     **_row_weight_kwargs(
-                        [members[i] for i in positions],
+                        [read[i] for i in positions],
                         self.ensemble_preprocessor.sample_weight_mode,
                         X,
                     ),
@@ -1358,19 +1488,60 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 cache = cache.to("cpu")
             return cache
 
-        # GPU preprocessing may have changed the members' widths, so the group is
-        # refined by the prepared shapes.
-        caches: list[tuple[list[int], KVCache]] = []
-        shapes = [tuple(X.shape) for X, _, _ in prepared]
+        # The device holds the prepared train rows of one forward's members at a
+        # time. Their prepared width is not known before they are preprocessed; the
+        # feature cap of the ensemble config bounds it, as for a full forward.
         budget = _estimator_batch_budget(model)
-        for positions in _group_equal(shapes):
-            rows, _, columns = prepared[positions[0]][0].shape
-            for forwards in _cache_builds(positions, rows, columns, budget):
-                parts = [build(members) for members in forwards]
-                cache = (
-                    parts[0] if len(parts) == 1 else type(parts[0]).concatenate(parts)
+        rows, columns = train_shape
+        columns = min(
+            columns,
+            self.ensemble_preprocessor.configs[
+                0
+            ].preprocess_config.max_features_per_estimator,
+        )
+        # A model that does not batch members builds them one at a time.
+        per_chunk = 1
+        if _batches(budget):
+            per_chunk = min(
+                len(self.ensemble_preprocessor.configs),
+                _members_per_forward(rows, columns, budget),
+            )
+        # Per prepared shape, the forwards that build its caches, in member order.
+        builds: dict[tuple[int, ...], list[tuple[list[int], KVCache]]] = {}
+        for chunk_members in _iter_chunks(iter(members), per_chunk):
+            chunk = list(range(len(read), len(read) + len(chunk_members)))
+            read.extend(chunk_members)
+            prepared = {}
+            for i in chunk:
+                prepared[i] = _prepare_train_inputs(
+                    read[i], device, self.force_inference_dtype, model
                 )
-                caches.append(([i for members in forwards for i in members], cache))
+                # The cache replaces the train rows; predict only reads `y_train`.
+                read[i].X_train = None
+            # GPU preprocessing may have changed the members' widths, so the chunk
+            # is refined by the prepared shapes.
+            shapes = [tuple(prepared[i][0].shape) for i in chunk]
+            for group in _group_equal(shapes):
+                positions = [chunk[j] for j in group]
+                shape = tuple(prepared[positions[0]][0].shape)
+                prepared_rows, _, prepared_columns = shape
+                for forwards in _cache_builds(
+                    positions, prepared_rows, prepared_columns, budget
+                ):
+                    builds.setdefault(shape, []).extend(
+                        (forward, build(forward, prepared)) for forward in forwards
+                    )
+            del prepared
+
+        caches: list[tuple[list[int], KVCache]] = []
+        for parts in builds.values():
+            if not _batches(budget):
+                # Every member has a cache of its own.
+                caches.extend(parts)
+                continue
+            built = [cache for _, cache in parts]
+            cache = built[0] if len(built) == 1 else type(built[0]).concatenate(built)
+            caches.append(([i for forward, _ in parts for i in forward], cache))
         return caches, device
 
     @override
