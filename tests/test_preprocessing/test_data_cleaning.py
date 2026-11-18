@@ -1540,7 +1540,7 @@ def test__clean_data__float32_with_categoricals__matches_the_float64_frame_path(
     assert out32.dtype == (np.float32 if fast else np.float64)
     np.testing.assert_array_equal(out32.astype(np.float64), out64)
     np.testing.assert_array_equal(X, before)
-    for data in (X, X_test):
+    for data in (X, X_test, np.asfortranarray(X_test)):
         # A float64 array is cleaned by the general path.
         np.testing.assert_array_equal(
             clean_data_transform(
@@ -1738,9 +1738,11 @@ def _two_categoricals_table(
 
 
 def _encoding_only_members(
-    estimator_cls: type, fit_mode: str
+    estimator_cls: type, fit_mode: str, max_features: int = 500
 ) -> TabPFNClassifier | TabPFNRegressor:
-    """Two members whose CPU steps only encode, so they may share a float32 table."""
+    """Two members whose CPU steps only encode, so they may share a float32 table,
+    each reading at most `max_features` of its columns.
+    """
     return estimator_cls(
         n_estimators=2,
         device="cpu",
@@ -1750,8 +1752,16 @@ def _encoding_only_members(
         inference_config={
             "ENABLE_GPU_PREPROCESSING": True,
             "PREPROCESS_TRANSFORMS": [
-                PreprocessorConfig("none", categorical_name="ordinal"),
-                PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
+                PreprocessorConfig(
+                    "none",
+                    categorical_name="ordinal",
+                    max_features_per_estimator=max_features,
+                ),
+                PreprocessorConfig(
+                    "safepower",
+                    categorical_name="ordinal_shuffled",
+                    max_features_per_estimator=max_features,
+                ),
             ],
         },
     )
@@ -1786,17 +1796,21 @@ def test__overwrite_fit_input__categoricals__members_share_the_array(
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "fit_with_cache"])
+@pytest.mark.parametrize("max_features", [500, 5])
 def test__predict__float32_with_categoricals__members_share_the_test_table(
-    estimator_cls: type, fit_mode: str
+    estimator_cls: type, fit_mode: str, max_features: int
 ) -> None:
-    """Members hold their encoded test columns and read the rest from the cleaned
-    float32 table, and predict as on the float64 table.
+    """Members hold their encoded test columns and read the rest, of all the columns
+    or of those they subsample, from the cleaned float32 table, and predict as on
+    the float64 table.
     """
     X_train, X_test, y = _two_categoricals_table(estimator_cls)
     X_test[:5, 3] = 7  # a category unseen at fit
     X_test[5, 6] = np.nan
     given = X_test.copy()
-    model = _encoding_only_members(estimator_cls, fit_mode).fit(X_train, y)
+    model = _encoding_only_members(estimator_cls, fit_mode, max_features).fit(
+        X_train, y
+    )
     predict = (
         model.predict_proba if estimator_cls is TabPFNClassifier else model.predict
     )
@@ -1808,7 +1822,7 @@ def test__predict__float32_with_categoricals__members_share_the_test_table(
         member: TabPFNEnsembleMember, X: np.ndarray
     ) -> object:
         out = transform_X_test(member, X)
-        transformed.append((X, out))
+        transformed.append((member, X, out))
         return out
 
     with mock.patch.object(
@@ -1817,12 +1831,14 @@ def test__predict__float32_with_categoricals__members_share_the_test_table(
         shared = predict(X_test)
 
     assert len(transformed) == 2
-    for X_cleaned, out in transformed:
+    for member, X_cleaned, out in transformed:
+        columns = range(8) if member.feature_indices is None else member.feature_indices
+        assert len(columns) == min(8, max_features)
         assert X_cleaned.dtype == np.float32
         assert X_cleaned.flags.c_contiguous
         assert isinstance(out, SharedColumnsTable)
         assert out.base is X_cleaned
-        assert out.own.shape[1] == 2
+        assert out.own.shape[1] == len({3, 6} & set(columns))
     np.testing.assert_array_equal(X_test, given)
     np.testing.assert_array_equal(shared, predict(X_test.astype(np.float64)))
 

@@ -109,6 +109,27 @@ def _cast_columns(
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
+_FILL_BLOCK_BYTES = 1 << 24
+"""Bytes of rows `_with_constants` copies at a time. Each block's constant columns are
+written while it is in cache: larger blocks fall out of it, smaller ones pay more
+per-block overhead."""
+
+
+def _with_constants(
+    X: np.ndarray, constant_values: dict[int, Any], dtype: Any
+) -> np.ndarray:
+    """A C-ordered copy of `X` in `dtype`, with `constant_values` in their columns."""
+    out = np.empty(X.shape, dtype=dtype)
+    columns = list(constant_values)
+    values = np.array(list(constant_values.values()), dtype=dtype)
+    rows = max(1, _FILL_BLOCK_BYTES // max(1, X.shape[1] * out.itemsize))
+    for start in range(0, X.shape[0], rows):
+        block = out[start : start + rows]
+        block[...] = X[start : start + rows]
+        block[:, columns] = values
+    return out
+
+
 def _is_plain_numeric_array(X: np.ndarray | pd.DataFrame) -> bool:
     """Whether `X` is a numpy array of a dtype that casts straight to float64.
 
@@ -157,7 +178,8 @@ def clean_data_transform(
         `X`, or a copy of it with the fit-time constant columns restored, when `X` is
         a numeric array the encoder encodes no column of; a new float32, C-ordered
         array when `X` is a float32 array whose encoded columns all held numbers at
-        fit; otherwise a new float64 array.
+        fit, and which holds no infinity if `passthrough_inf`; otherwise a new float64
+        array.
     """
     given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
@@ -169,10 +191,11 @@ def clean_data_transform(
         # A copy either way: the caller's array must not be written to.
         if not numeric:
             X = X.astype(object)
+            for index, value in constant_values.items():
+                X[:, index] = value
         else:
-            X = X.astype(X.dtype if X.dtype.kind in "fO" else np.float64)
-        for index, value in constant_values.items():
-            X[:, index] = value
+            dtype = X.dtype if X.dtype.kind in "fO" else np.float64
+            X = _with_constants(X, constant_values, dtype)
 
     if _is_plain_numeric_array(X) and _encoder_selects_nothing(ord_encoder):
         # `passthrough_inf` makes no difference here: it records the +/-inf cells,
@@ -186,8 +209,8 @@ def clean_data_transform(
         and _encodes_categoricals_only(X, cat_indices, passthrough_inf=passthrough_inf)
         and _fitted_on_numbers(ord_encoder)
     ):
-        # Filling the constant columns above made `X` a copy of the caller's array.
-        owned = X is not given and X.flags.c_contiguous
+        # Restoring the constant columns above made `X` a C-ordered copy already.
+        owned = X is not given
         X_encoded = ord_encoder.transform_into(X if owned else X.copy(order="C"))
         if X_encoded is not None:
             return X_encoded

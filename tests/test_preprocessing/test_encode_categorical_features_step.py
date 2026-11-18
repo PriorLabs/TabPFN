@@ -11,6 +11,7 @@ from unittest import mock
 import numpy as np
 import pytest
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 
 from tabpfn.preprocessing import pipeline_interface
 from tabpfn.preprocessing.datamodel import (
@@ -759,12 +760,25 @@ def test__fit_transform__input_handed_over__matches_a_fresh_output(
     np.testing.assert_array_equal(owned.transform(test).X, fresh.transform(test).X)
 
 
-def test__permute_columns_in_place__matches_fancy_indexing() -> None:
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int64])
+def test__permute_columns_in_place__matches_fancy_indexing(dtype: type) -> None:
     rng = np.random.default_rng(1)
-    X = rng.standard_normal((1000, 7)).astype(np.float32)
+    X = (rng.standard_normal((1000, 7)) * 10).astype(dtype)
     order = [3, 0, 6, 1, 5, 2, 4]
     expected = X[:, order]
-    with mock.patch.object(pipeline_interface, "PERMUTE_BLOCK_BYTES", 7 * 4 * 33):
+    with mock.patch.object(pipeline_interface, "PERMUTE_BLOCK_BYTES", 7 * 8 * 33):
         out = pipeline_interface.permute_columns_in_place(X, order)
-    assert out is X
+    assert (out is X) == (dtype is not np.int64)
     np.testing.assert_array_equal(out, expected)
+
+
+def test__transform_into__an_encoder_that_widens__falls_back() -> None:
+    """Only a one-to-one encoder is written column by column."""
+    X = np.array([[0, 1.5], [1, 2.5], [2, 3.5]], dtype=np.float32)
+    ct = EfficientColumnTransformer(
+        [("onehot", OneHotEncoder(sparse_output=False), [0])],
+        remainder=FunctionTransformer(),
+    )
+    ct.fit(X)
+
+    assert ct.transform_into(X.copy()) is None

@@ -223,6 +223,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         """
         return (
             bool(selected)
+            and self._is_one_to_one
             and self.n_features_in_ == X.shape[1]
             and not self.sparse_output_
             and self._may_assemble(X[:1], {})
