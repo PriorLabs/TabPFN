@@ -1369,6 +1369,40 @@ def test__model_input_arguments__host_input_model__reads_the_table_from_x_host()
     assert model(x, y, **kwargs) is X
 
 
+class _FreeingHostInputModel(nn.Module):
+    def forward(
+        self,
+        x: torch.Tensor | None,
+        y: torch.Tensor,  # noqa: ARG002
+        *,
+        x_host: torch.Tensor | None = None,
+        free_x_host: bool = False,  # noqa: ARG002
+    ) -> torch.Tensor:
+        return x_host if x is None else x
+
+
+@pytest.mark.parametrize(
+    ("model", "input_device", "device", "frees"),
+    [
+        (_FreeingHostInputModel(), "cpu", "cuda", True),
+        # A model that cannot free the input is not told that it may.
+        (_HostInputModel(), "cpu", "cuda", False),
+        # An input on the model's device is not passed as `x_host`.
+        (_FreeingHostInputModel(), "cpu", "cpu", False),
+    ],
+)
+def test__model_input_arguments__input_given_up__freeing_model_is_told(
+    model: nn.Module, input_device: str, device: str, *, frees: bool
+) -> None:
+    X = torch.zeros((5, 1, 3), device=input_device)
+
+    _, kwargs = _model_input_arguments(X, torch.device(device), given_up_to=model)
+
+    assert kwargs.get("free_x_host", False) is frees
+    # A caller that keeps the input never says it may be freed.
+    assert "free_x_host" not in _model_input_arguments(X, torch.device(device))[1]
+
+
 def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() -> None:
     rng = default_rng(0)
     X_train = rng.standard_normal((40, 3))

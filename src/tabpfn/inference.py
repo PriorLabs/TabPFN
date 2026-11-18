@@ -1463,7 +1463,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 self.task_type,
                 [read[i].config.estimator_id for i in positions],
             )
-            x, x_kwargs = _model_input_arguments(X, device)
+            # Nothing reads this forward's input after it.
+            x, x_kwargs = _model_input_arguments(X, device, given_up_to=model)
             with (
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(),
@@ -1937,15 +1938,24 @@ def _model_input_device(
 
 
 def _model_input_arguments(
-    X: torch.Tensor, device: torch.device
-) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
+    X: torch.Tensor, device: torch.device, *, given_up_to: torch.nn.Module | None = None
+) -> tuple[torch.Tensor | None, dict[str, torch.Tensor | bool]]:
     """The model's `x` and extra keyword arguments that pass it the input `X`.
 
     An input that `_model_input_device` kept in host memory for a model on another
     device goes as `x_host`, with `x` None.
+
+    With `given_up_to`, the caller reads `X` no more after the forward of that
+    model. A model whose `forward` takes `free_x_host` is told so with an `x_host`,
+    and may free the host memory of `X` as soon as it has read it.
     """
     if X.device.type == "cpu" and device.type != "cpu":
-        return None, {"x_host": X}
+        kwargs: dict[str, torch.Tensor | bool] = {"x_host": X}
+        if given_up_to is not None and "free_x_host" in _forward_parameters(
+            given_up_to
+        ):
+            kwargs["free_x_host"] = True
+        return None, kwargs
     return X, {}
 
 
