@@ -340,6 +340,7 @@ def create_inference_engine(  # noqa: PLR0913
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+    kv_cache_on_host: bool | None = None,
     enable_torch_compile: bool = False,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
@@ -379,6 +380,11 @@ def create_inference_engine(  # noqa: PLR0913
             semantics); ``"auto"`` keeps the computed dtype; ``"adaptive"``
             stores the grid an attention backend already rounded the keys and
             values to (``kv_grid_dtype``), else ``"int8"``.
+        kv_cache_on_host: Only for ``fit_mode="fit_with_cache"``. Whether the KV
+            cache keeps its keys and values in host memory, from where a predict
+            copies to the device only what it reads. ``None`` (default) lets the
+            architecture decide; an architecture whose cache cannot be read from
+            host memory ignores it.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -419,6 +425,7 @@ def create_inference_engine(  # noqa: PLR0913
             task_type=task_type,
             keep_cache_on_device=keep_cache_on_device,
             kv_cache_precision=kv_cache_precision,
+            kv_cache_on_host=kv_cache_on_host,
             enable_torch_compile=enable_torch_compile,
         )
     if fit_mode == "batched":

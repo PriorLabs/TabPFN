@@ -1173,6 +1173,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         task_type: str,
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+        kv_cache_on_host: bool | None = None,
         enable_torch_compile: bool = False,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
@@ -1210,6 +1211,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 stores 8-bit floats instead; ``"auto"`` keeps the computed
                 dtype; ``"adaptive"`` follows the grid an attention backend
                 left the keys and values on, else ``"int8"``.
+            kv_cache_on_host: Whether each cache keeps its keys and values in
+                host memory, from where a predict copies to the device only what
+                it reads. ``None`` (default) lets the architecture decide; an
+                architecture whose cache cannot be read from host memory ignores
+                it.
         """
         self.enable_torch_compile = enable_torch_compile
         super().__init__(
@@ -1223,6 +1229,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # Kept as the raw request; resolved per ensemble member in _build_cache
         # against that member's own architecture (see _resolve_kv_cache_precision).
         self.kv_cache_precision = kv_cache_precision
+        self.kv_cache_on_host = kv_cache_on_host
         self.ensemble_preprocessor = ensemble_preprocessor
         self.task_type = task_type
 
@@ -1448,6 +1455,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 else None
             ),
             kv_cache_follows_attention_grid=kv_cache_precision == "adaptive",
+            kv_cache_on_host=self.kv_cache_on_host,
         )
 
         def build(

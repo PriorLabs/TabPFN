@@ -408,6 +408,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         enable_torch_compile: bool = False,
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+        kv_cache_on_host: bool | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -668,6 +669,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 quantized precision on an architecture that cannot quantize
                 warns and falls back to `"auto"`.
 
+            kv_cache_on_host:
+                Only relevant when `fit_mode="fit_with_cache"`. Whether the
+                key-value cache keeps its keys and values in host memory, from
+                where a prediction copies to the inference device only what it
+                reads. `None` (default) lets the model architecture decide. An
+                architecture whose cache cannot be read from host memory ignores
+                this option.
+
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
                 results and see the scikit-learn glossary for more information.
@@ -775,6 +784,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.enable_torch_compile = enable_torch_compile
         self.keep_cache_on_device = keep_cache_on_device
         self.kv_cache_precision = kv_cache_precision
+        self.kv_cache_on_host = kv_cache_on_host
         self.random_state = random_state
         self.inference_config = inference_config
         self.presets = presets
@@ -1044,6 +1054,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             task_type="regression",
             keep_cache_on_device=self.keep_cache_on_device,
             kv_cache_precision=self.kv_cache_precision,
+            kv_cache_on_host=self.kv_cache_on_host,
             inference_mode=inference_mode,
         )
 

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, overload
+from typing import Any, Literal, overload
 from typing_extensions import override
 
 import numpy as np
@@ -1210,20 +1210,8 @@ class _TestModelRecordingCacheOptions(_TestModelWithKVCache):
         return super().forward(x, y, **kwargs)
 
 
-@pytest.mark.parametrize(
-    ("precision", "dtype", "follows_grid"),
-    [
-        ("adaptive", torch.int8, True),
-        ("int8", torch.int8, False),
-        ("auto", None, False),
-    ],
-)
-def test__explicit_kv_cache__precision__reaches_the_cache_build(
-    precision: str,
-    dtype: torch.dtype | None,
-    follows_grid: bool,
-) -> None:
-    """The "adaptive" option stores int8 unless a backend's grid applies."""
+def _cache_build_options(**engine_kwargs: Any) -> PerformanceOptions:
+    """The performance options a `fit_with_cache` engine builds its one cache with."""
     rng = default_rng(seed=0)
     n_train, n_features, n_classes = 50, 4, 3
     X_train = rng.standard_normal(size=(n_train, n_features))
@@ -1249,13 +1237,39 @@ def test__explicit_kv_cache__precision__reaches_the_cache_build(
         save_peak_mem=True,
         autocast=False,
         task_type="multiclass",
-        kv_cache_precision=precision,  # type: ignore[arg-type]
+        **engine_kwargs,
     )
 
     (options,) = model.cache_build_options
     assert options is not None
+    return options
+
+
+@pytest.mark.parametrize(
+    ("precision", "dtype", "follows_grid"),
+    [
+        ("adaptive", torch.int8, True),
+        ("int8", torch.int8, False),
+        ("auto", None, False),
+    ],
+)
+def test__explicit_kv_cache__precision__reaches_the_cache_build(
+    precision: str,
+    dtype: torch.dtype | None,
+    follows_grid: bool,
+) -> None:
+    """The "adaptive" option stores int8 unless a backend's grid applies."""
+    options = _cache_build_options(kv_cache_precision=precision)
+
     assert options.kv_cache_dtype == dtype
     assert options.kv_cache_follows_attention_grid is follows_grid
+
+
+@pytest.mark.parametrize("on_host", [None, True, False])
+def test__explicit_kv_cache__on_host__reaches_the_cache_build(
+    on_host: bool | None,
+) -> None:
+    assert _cache_build_options(kv_cache_on_host=on_host).kv_cache_on_host is on_host
 
 
 def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
