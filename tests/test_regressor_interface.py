@@ -11,6 +11,7 @@ import warnings
 from collections.abc import Callable
 from fractions import Fraction
 from functools import partial
+from pathlib import Path
 from typing import Any, Literal
 from unittest import mock
 
@@ -3308,3 +3309,191 @@ def test__fit__exp_target__warns_only_for_float32_overflow(
         with warnings.catch_warnings():
             warnings.filterwarnings("error", message=".*exp.*", category=UserWarning)
             reg.fit(X, y)
+
+
+@pytest.fixture(scope="module")
+def multi_target_data() -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 3)).astype(np.float32)
+    Y = np.stack([X[:, 0] + 0.1 * X[:, 1], 10.0 * X[:, 2] - 3.0], axis=1)
+    return X, Y
+
+
+@pytest.mark.parametrize(
+    "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
+)
+def test__fit_predict__2d_target__matches_one_regressor_per_column(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+    fit_mode: Literal["fit_preprocessors", "low_memory", "fit_with_cache"],
+) -> None:
+    X, Y = multi_target_data
+    params = {
+        "n_estimators": 2,
+        "device": "cpu",
+        "random_state": 0,
+        "fit_mode": fit_mode,
+    }
+    reg = TabPFNRegressor(**params).fit(X[:30], Y[:30])
+
+    pred = reg.predict(X[30:])
+
+    assert pred.shape == (10, 2)
+    assert reg.n_outputs_ == 2
+    for k in range(Y.shape[1]):
+        single = TabPFNRegressor(**params).fit(X[:30], Y[:30, k])
+        np.testing.assert_allclose(pred[:, k], single.predict(X[30:]), rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
+)
+def test__fit__2d_target__per_target_regressors_share_model_weights(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+    fit_mode: Literal["fit_preprocessors", "low_memory", "fit_with_cache"],
+) -> None:
+    X, Y = multi_target_data
+    reg = TabPFNRegressor(
+        n_estimators=1, device="cpu", random_state=0, fit_mode=fit_mode
+    ).fit(X, Y)
+
+    first, second = reg.target_estimators_
+    assert reg.model_ is first.models_[0] is second.models_[0]
+    # The engines hold the copies of the model on each device, so they have to
+    # share those as well for several devices not to get a copy per target.
+    assert first.executor_.model_caches is second.executor_.model_caches
+
+
+def test__predict__2d_target__output_types_gain_a_target_axis(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, Y = multi_target_data
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0)
+    reg.fit(X[:30], Y[:30])
+    levels = [0.1, 0.5, 0.9]
+
+    quantiles = reg.predict(X[30:], output_type="quantiles", quantiles=levels)
+    main = reg.predict(X[30:], output_type="main", quantiles=levels)
+
+    # One array per quantile, with one column per target.
+    assert [q.shape for q in quantiles] == [(10, 2)] * 3
+    second_target = reg.target_estimators_[1].predict(
+        X[30:], output_type="quantiles", quantiles=levels
+    )
+    np.testing.assert_array_equal(quantiles[0][:, 1], second_target[0])
+    assert main["mean"].shape == main["median"].shape == main["mode"].shape == (10, 2)
+    assert [q.shape for q in main["quantiles"]] == [(10, 2)] * 3
+
+
+def test__fit__1d_target_after_2d_target__returns_to_single_target(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, Y = multi_target_data
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0)
+    reg.fit(X[:30], Y[:30])
+
+    reg.fit(X[:30], Y[:30, 0])
+
+    assert reg.target_estimators_ is None
+    assert reg.n_outputs_ == 1
+    assert reg.predict(X[30:]).shape == (10,)
+
+
+def test__fit__2d_target_after_1d_target__drops_the_single_target_state(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, Y = multi_target_data
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0)
+    reg.fit(X[:30], Y[:30, 0])
+
+    reg.fit(X[:30], Y[:30])
+
+    # The single-target fit must not keep its engine and training data alive.
+    assert not hasattr(reg, "executor_")
+    assert not hasattr(reg, "raw_space_bardist_")
+    assert reg.n_outputs_ == 2
+    assert reg.predict(X[30:]).shape == (10, 2)
+
+
+def test__fit__2d_target_with_an_invalid_column__keeps_no_per_target_regressors(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A fit that fails on a later column must not leave a regressor that
+    predicts only the columns before it.
+    """
+    X, Y = multi_target_data
+    Y = Y.copy()
+    Y[0, 1] = np.nan
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0)
+
+    with pytest.raises(ValueError, match="NaN"):
+        reg.fit(X, Y)
+
+    assert reg.target_estimators_ is None
+
+
+def test__to__2d_target__moves_the_regressor_and_its_per_target_regressors(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, Y = multi_target_data
+    reg = TabPFNRegressor(n_estimators=1, device="auto", random_state=0).fit(X, Y)
+
+    reg.to("cpu")
+
+    assert reg.device == "cpu"
+    assert all(est.device == "cpu" for est in reg.target_estimators_)
+    assert reg.predict(X).shape == (40, 2)
+
+
+def test__unsupported_methods__2d_target__raise_not_implemented(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+    tmp_path: Path,
+) -> None:
+    X, Y = multi_target_data
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0).fit(X, Y)
+
+    with pytest.raises(NotImplementedError, match="target_estimators_"):
+        reg.get_embeddings(X)
+    with pytest.raises(NotImplementedError, match="target_estimators_"):
+        reg.forward(X)
+    with pytest.raises(NotImplementedError, match="target_estimators_"):
+        reg.predict(X, output_type="full")
+    differentiable = TabPFNRegressor(
+        n_estimators=1, device="cpu", differentiable_input=True
+    )
+    with pytest.raises(NotImplementedError, match="one target"):
+        differentiable.fit_with_differentiable_input(
+            torch.tensor(X), torch.tensor(Y, dtype=torch.float32)
+        )
+    with pytest.raises(NotImplementedError, match="one target per dataset"):
+        reg.predict_batched([X], [Y], [X])
+    # The per-target regressors hold the model in memory, which this format
+    # cannot store, so the message must not point to them.
+    with pytest.raises(NotImplementedError, match="Pickle"):
+        reg.save_fit_state(tmp_path / "multi.tabpfn_fit")
+
+
+def test__fit__2d_target__passes_the_row_weights_to_every_target(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """`sample_weight` and `label_reliability` weigh rows, so every target's fit
+    must receive them, not only the first.
+    """
+    X, Y = multi_target_data
+    weights = np.linspace(0.5, 1.5, len(X))
+    reliability = np.linspace(0.2, 1.0, len(X))
+    reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0)
+
+    # The default checkpoint takes no row weights, so skip that check and only
+    # record what each per-target fit receives.
+    with mock.patch.object(
+        TabPFNRegressor,
+        "_resolve_row_weights",
+        autospec=True,
+        return_value=(None, None),
+    ) as resolve:
+        reg.fit(X, Y, sample_weight=weights, label_reliability=reliability)
+
+    assert resolve.call_count == Y.shape[1]
+    for call in resolve.call_args_list:
+        np.testing.assert_array_equal(call.args[1], weights)
+        np.testing.assert_array_equal(call.args[2], reliability)
