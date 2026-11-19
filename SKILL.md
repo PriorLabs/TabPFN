@@ -13,19 +13,34 @@ interface.
 This file is for agents that *use* TabPFN. If you are changing this repository,
 read [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md) instead.
 
-Source of truth: this file states rules and points to code. Numbers (limits,
-defaults, versions) live in the checkpoints, the docstrings of
+Source of truth: this file states rules. For details, numbers (limits,
+defaults, versions) and current guidance, **use the Prior Labs documentation
+MCP server** (`https://docs.priorlabs.ai/mcp`; connect it as an MCP server in
+your agent) or read <https://docs.priorlabs.ai>. Do not copy numbers from
+memory. Without MCP access, the docstrings of
 [`classifier.py`](src/tabpfn/classifier.py) and
-[`regressor.py`](src/tabpfn/regressor.py), and the [README](README.md). Read
-them there, do not copy them from memory.
+[`regressor.py`](src/tabpfn/regressor.py) and the [README](README.md) are the
+fallback.
 
 ## 1. Licence and login: do not work around them
 
 - The code is Apache 2.0. The **model weights** have their own licences. The
   default weights (TabPFN-2.5 and later) are **non-commercial**. TabPFN-2
   weights use the Prior Labs License (Apache 2.0 + attribution). The licence
-  links are in the README "License" section. For commercial use, the user must
-  contact sales@priorlabs.ai.
+  links are in the README "License" section.
+- **What the non-commercial licence allows** (details: the "license" FAQ on the
+  [Models page](https://docs.priorlabs.ai/models)): free internal use for
+  research and exploration. That includes testing on the user's own data and
+  **benchmarking TabPFN against the user's own corporate baselines** (for
+  example XGBoost or an in-house model). The same holds for fine-tuning and for
+  the model's outputs: non-commercial evaluation only.
+- **What needs a commercial licence or the API agreement:** use in production
+  or in a product, in workflows that support business decisions, in client
+  projects or revenue-generating work, competitive benchmarking for procurement
+  or vendor selection, and using TabPFN or its outputs to train, distill or
+  improve another model for commercial use. If the user's task falls here, tell
+  them and point them to https://priorlabs.ai/pricing or sales@priorlabs.ai.
+  Do not decide this for them and do not hide it.
 - The first `fit` downloads the weights and checks that the user accepted the
   licence (`src/tabpfn/browser_auth.py`). With a browser, a login window opens.
   Without one (CI, SSH, notebooks on a server), `fit` raises
@@ -51,7 +66,9 @@ them there, do not copy them from memory.
   `ignore_pretraining_limits=True` to get around it; tell the user it needs a
   GPU, or use the hosted API with
   [`tabpfn-client`](https://github.com/PriorLabs/tabpfn-client) (this sends
-  the data to Prior Labs servers, so ask the user first).
+  the data to Prior Labs servers, so ask the user first; how the hosted API
+  protects data (encryption, isolation, access control) is described in the
+  [security page](https://docs.priorlabs.ai/api/security.md)).
 
 ## 3. Model choice
 
@@ -166,6 +183,9 @@ proba = clf.predict_proba(X_test)  # X_test: same columns, same order
 - Fine-tuning, prompt tuning, threshold tuning: see [`examples/`](examples).
 - Environment variables: README FAQ "What environment variables can I use to
   configure TabPFN?".
+- Anything not covered here (tuning, model versions, API, enterprise): ask the
+  Prior Labs documentation MCP server (`https://docs.priorlabs.ai/mcp`) before
+  reading the source code.
 
 ## Checklist before you run TabPFN code
 
