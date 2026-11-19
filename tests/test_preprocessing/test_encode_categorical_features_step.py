@@ -11,6 +11,7 @@ from unittest import mock
 import numpy as np
 import pytest
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder
 
 from tabpfn.preprocessing import pipeline_interface
 from tabpfn.preprocessing.datamodel import (
@@ -683,6 +684,27 @@ def test__encode_categorical__ordinal__step_output_matches_column_transformer() 
     assert np.isfortran(result.X) == np.isfortran(reference)
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("cat_indices", [[1, 3], [2], [0, 1, 2, 3]])
+def test__encode_categorical__ordinal__transform_matches_column_transformer(
+    dtype: type, cat_indices: list[int]
+) -> None:
+    """At predict, the step's values are those a plain ColumnTransformer gives."""
+    X = _ordinal_case(np.float64, cat_indices, with_nan=True)
+    schema = _make_feature_schema(X.shape[1], cat_indices)
+    step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
+    step.fit_transform(X.astype(dtype), schema)
+    reference = _plain_column_transformer(X, cat_indices).fit(X)
+    test = X[::3].astype(dtype)
+    test[1, cat_indices[0]] = 99.0  # a category unseen at fit
+
+    result = step.transform(test).X
+
+    np.testing.assert_array_equal(
+        result.astype(np.float64), reference.transform(test.astype(np.float64))
+    )
+
+
 def test__encode_categorical__ordinal__one_row_fit_learns_every_category() -> None:
     """Fitting the transformer on one row must not cost the encoder its categories.
 
@@ -738,12 +760,25 @@ def test__fit_transform__input_handed_over__matches_a_fresh_output(
     np.testing.assert_array_equal(owned.transform(test).X, fresh.transform(test).X)
 
 
-def test__permute_columns_in_place__matches_fancy_indexing() -> None:
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int64])
+def test__permute_columns_in_place__matches_fancy_indexing(dtype: type) -> None:
     rng = np.random.default_rng(1)
-    X = rng.standard_normal((1000, 7)).astype(np.float32)
+    X = (rng.standard_normal((1000, 7)) * 10).astype(dtype)
     order = [3, 0, 6, 1, 5, 2, 4]
     expected = X[:, order]
-    with mock.patch.object(pipeline_interface, "PERMUTE_BLOCK_BYTES", 7 * 4 * 33):
+    with mock.patch.object(pipeline_interface, "PERMUTE_BLOCK_BYTES", 7 * 8 * 33):
         out = pipeline_interface.permute_columns_in_place(X, order)
-    assert out is X
+    assert (out is X) == (dtype is not np.int64)
     np.testing.assert_array_equal(out, expected)
+
+
+def test__transform_into__an_encoder_that_widens__falls_back() -> None:
+    """Only a one-to-one encoder is written column by column."""
+    X = np.array([[0, 1.5], [1, 2.5], [2, 3.5]], dtype=np.float32)
+    ct = EfficientColumnTransformer(
+        [("onehot", OneHotEncoder(sparse_output=False), [0])],
+        remainder=FunctionTransformer(),
+    )
+    ct.fit(X)
+
+    assert ct.transform_into(X.copy()) is None

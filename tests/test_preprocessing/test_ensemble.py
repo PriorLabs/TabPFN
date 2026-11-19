@@ -216,7 +216,8 @@ def test__get_subsample_feature_indices__subsampling_needed():
     assert set(result[0]) | set(result[1]) == set(range(100))
 
 
-def test__transform_X_test__applies_feature_subsampling() -> None:
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test__transform_X_test__applies_feature_subsampling(dtype: type) -> None:
     """Regression test: transform_X_test must apply the same feature subsampling
     that was used during fit, otherwise the fitted pipeline's boolean masks will
     have the wrong size for the full-feature test set.
@@ -229,7 +230,7 @@ def test__transform_X_test__applies_feature_subsampling() -> None:
 
     X_train = rng.standard_normal((n_train, n_features))
     y_train = rng.integers(0, 3, n_train)
-    X_test = rng.standard_normal((n_test, n_features))
+    X_test = rng.standard_normal((n_test, n_features)).astype(dtype)
 
     feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
 
@@ -274,6 +275,10 @@ def test__transform_X_test__applies_feature_subsampling() -> None:
     for member in members:
         X_test_transformed = member.transform_X_test(X_test)
         assert X_test_transformed.shape[0] == n_test
+        np.testing.assert_array_equal(
+            np.asarray(X_test_transformed),
+            member.cpu_preprocessor.transform(X_test[:, member.feature_indices]).X,
+        )
 
 
 def test__get_subsample_feature_indices__random_method():

@@ -29,18 +29,26 @@ PERMUTE_BLOCK_BYTES = 1 << 26
 """Bytes of rows `permute_columns_in_place` moves at a time."""
 
 GATHER_BLOCK_BYTES = 1 << 26
-"""Bytes of columns `gather_columns` reads at a time."""
+"""Bytes of gathered values `gather_columns` handles at a time."""
 
 
 def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray:
-    """`X[:, indices].astype(dtype, order="C")`, with no full-size intermediate.
-
-    The columns are gathered a block at a time straight into the C-ordered result.
-    """
+    """`X[:, indices].astype(dtype, order="C")`, with no full-size intermediate."""
     out = np.empty((X.shape[0], len(indices)), dtype=dtype, order="C")
-    width = max(1, GATHER_BLOCK_BYTES // max(1, X.shape[0] * X.itemsize))
-    for start in range(0, len(indices), width):
-        out[:, start : start + width] = X[:, indices[start : start + width]]
+    # A block of rows at a time, each cast as it is written into the result.
+    rows = max(1, GATHER_BLOCK_BYTES // max(1, len(indices) * X.itemsize))
+    if X.flags.c_contiguous and X.dtype in (np.float32, np.float64):
+        # numpy gathers columns of a C-ordered array with a strided copy, which
+        # `index_select` beats; from any other layout numpy is the faster.
+        source = as_tensor_to_read(X)
+        index = torch.as_tensor(indices, dtype=torch.long)
+        target = torch.from_numpy(out)
+        for start in range(0, X.shape[0], rows):
+            block = slice(start, start + rows)
+            target[block] = source[block].index_select(1, index)
+        return out
+    for start in range(0, X.shape[0], rows):
+        out[start : start + rows] = X[start : start + rows, indices]
     return out
 
 
@@ -54,16 +62,17 @@ def step_owns_input() -> bool:
 
 
 def permute_columns_in_place(X: np.ndarray, order: list[int]) -> np.ndarray:
-    """`X[:, order]` for a permutation `order`, written into `X` a block of rows at a
-    time; returns `X`.
+    """`X[:, order]` for a permutation `order`, written into a C-ordered float `X` a
+    block of rows at a time; returns `X`, or a new array for any other `X`.
     """
-    if not X.flags.c_contiguous:
+    if not (X.flags.c_contiguous and X.dtype in (np.float32, np.float64)):
         return X[:, order]
-    index = np.asarray(order, dtype=np.intp)
+    # `index_select` beats numpy's strided gather, as in `gather_columns`.
+    table, index = torch.from_numpy(X), torch.as_tensor(order, dtype=torch.long)
     rows = max(1, PERMUTE_BLOCK_BYTES // max(1, X.shape[1] * X.itemsize))
     for start in range(0, X.shape[0], rows):
-        block = X[start : start + rows]
-        block[:] = block[:, index]
+        block = table[start : start + rows]
+        block.copy_(block.index_select(1, index))
     return X
 
 
@@ -662,12 +671,18 @@ class PreprocessingPipeline:
         return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
     def transform(
-        self, X: np.ndarray | torch.Tensor, *, may_keep_input: bool = False
+        self,
+        X: np.ndarray | torch.Tensor,
+        *,
+        feature_indices: np.ndarray | None = None,
+        may_keep_input: bool = False,
     ) -> PreprocessingPipelineResult:
         """Transform the data using the fitted pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
+            feature_indices: The columns of `X` the pipeline reads, gathered into
+                its working copy; None for all of them.
             may_keep_input: Whether the result may be `X` itself, or a
                 `SharedColumnsTable` over it, which the caller then must not write
                 into.
@@ -684,6 +699,7 @@ class PreprocessingPipeline:
             X,
             self.initial_feature_schema_,
             is_fitting=False,
+            feature_indices=feature_indices,
             may_keep_input=may_keep_input,
         )
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
@@ -721,9 +737,9 @@ class PreprocessingPipeline:
         """The array the steps run on.
 
         This is a copy of `X`, or of its `feature_indices` columns. It is `X` itself,
-        as a `SharedColumnsTable`, when nothing would write into it and
-        `may_keep_input`: a step that would copy `X` to move or rewrite its columns
-        then shares the columns it leaves alone.
+        as a `SharedColumnsTable` of those columns, when nothing would write into it
+        and `may_keep_input`: a step that would copy `X` to move or rewrite its
+        columns then shares the columns it leaves alone.
 
         One copy preserves the caller's array and saves each step its own; the cast
         is fused with it.
@@ -736,28 +752,34 @@ class PreprocessingPipeline:
         keep = self.keep_float32 and X.dtype == np.float32
         if (
             keep
-            and feature_indices is None
             and may_keep_input
             # The copy is C-ordered, and `torch.as_tensor` rejects negative strides.
             and X.flags.c_contiguous
-            and self._writes_only_owned_input(X)
+            and self._writes_only_owned_input(X, feature_indices)
         ):
-            return SharedColumnsTable.of(X)
+            table = SharedColumnsTable.of(X)
+            return table if feature_indices is None else table[:, feature_indices]
         dtype = np.float32 if keep else np.float64
         if feature_indices is None:
             return X.astype(dtype, order="C", copy=True)
         return gather_columns(X, feature_indices, dtype)
 
-    def _writes_only_owned_input(self, X: np.ndarray) -> bool:
-        """Whether the steps can run on `X` itself without anything writing into it.
+    def _writes_only_owned_input(
+        self, X: np.ndarray, feature_indices: np.ndarray | None
+    ) -> bool:
+        """Whether the steps can run on `X`'s `feature_indices` columns, or all of
+        them, without anything writing into `X`.
 
         That is not the case when a step has modalities, because the pipeline writes
-        that step's output back into its array, or when `X` holds infinities, which
-        are replaced in place. The steps themselves only write into arrays they own.
+        that step's output back into its array, or when the columns hold infinities,
+        which are replaced in place. The steps themselves only write into arrays they
+        own.
         """
         if any(modalities for _, modalities in self.steps):
             return False
         (has_inf,) = any_per_column(X, [np.isinf])
+        if feature_indices is not None:
+            has_inf = has_inf[feature_indices]
         return not has_inf.any()
 
     def _process_steps(
@@ -767,7 +789,7 @@ class PreprocessingPipeline:
         *,
         is_fitting: bool,
         may_keep_input: bool,
-        feature_indices: np.ndarray | None = None,
+        feature_indices: np.ndarray | None,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Process all pipeline steps.
 

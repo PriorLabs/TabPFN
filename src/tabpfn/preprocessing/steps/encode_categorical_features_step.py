@@ -494,6 +494,23 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 return out
         return ct.fit_transform(X)
 
+    @staticmethod
+    def _apply_transformer(ct: ColumnTransformer, X: np.ndarray) -> np.ndarray:
+        """`ct.transform(X)`, written as `_ordinal_fit_transform` writes its output."""
+        if isinstance(X, SharedColumnsTable):
+            # An encoding other than onehot is this transformer.
+            assert isinstance(ct, EfficientColumnTransformer)
+            return ct.transform_shared(X)
+        if (
+            isinstance(ct, EfficientColumnTransformer)
+            and X.dtype.kind == "f"
+            and X.ndim == 2
+        ):
+            out = ct.transform_into(X if step_owns_input() else X.copy())
+            if out is not None:
+                return out
+        return ct.transform(X)
+
     @override
     def fit_transform(
         self,
@@ -520,12 +537,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             warnings.filterwarnings(
                 "ignore", message=".*Found unknown categories in col.*"
             )  # These warnings are expected when transforming test data
-            if isinstance(X, SharedColumnsTable):
-                # An encoding other than onehot is this transformer.
-                assert isinstance(ct, EfficientColumnTransformer)
-                transformed = ct.transform_shared(X)
-            else:
-                transformed = ct.transform(X)
+            transformed = self._apply_transformer(ct, X)
         if self.categorical_transform_name.endswith("_shuffled"):
             for col, mapping in self.random_mappings_.items():
                 values = _writeable_column(transformed, col)

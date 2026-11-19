@@ -85,9 +85,9 @@ class TabPFNEnsembleMember:
 
         The result may be `X` itself, so the caller must not write into it.
         """
-        if self.feature_indices is not None:
-            X = X[..., self.feature_indices]
-        return self.cpu_preprocessor.transform(X, may_keep_input=True).X
+        return self.cpu_preprocessor.transform(
+            X, feature_indices=self.feature_indices, may_keep_input=True
+        ).X
 
 
 class TabPFNEnsemblePreprocessor:

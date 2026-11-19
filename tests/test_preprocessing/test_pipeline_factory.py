@@ -224,7 +224,9 @@ def test__keep_float32_pipeline__copies_an_input_that_is_not_c_ordered(
 
 
 def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
-    """Infinities are replaced in place, so such an input is copied first."""
+    """Infinities are replaced in place, so such an input is copied first, unless
+    they are in columns the pipeline does not read.
+    """
     pipeline = PreprocessingPipeline(
         [ReshapeFeatureDistributionsStep(transform_name="none")]
     )
@@ -236,6 +238,13 @@ def test__keep_float32_pipeline__copies_an_input_with_infinities() -> None:
 
     assert not np.shares_memory(result.X, X)
     assert np.isinf(X[0, 0])
+
+    two = FeatureSchema.from_only_categorical_indices([], num_columns=2)
+    for indices, shared in (([0, 2], False), ([1, 2], True)):
+        result = pipeline.fit_transform(
+            X, two, feature_indices=np.array(indices), may_keep_input=True
+        )
+        assert isinstance(result.X, SharedColumnsTable) == shared
 
 
 class _NewArrayStep(PreprocessingStep):

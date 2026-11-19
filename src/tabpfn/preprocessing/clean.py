@@ -109,6 +109,25 @@ def _cast_columns(
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
+_FILL_BLOCK_BYTES = 1 << 24
+"""Bytes of rows `_with_constants` copies at a time. Each block's constant columns are
+written while it is in cache: larger blocks fall out of it, smaller ones pay more
+per-block overhead."""
+
+
+def _with_constants(X: np.ndarray, constant_values: dict[int, Any]) -> np.ndarray:
+    """A C-ordered copy of `X`, with `constant_values` in their columns."""
+    out = np.empty(X.shape, dtype=X.dtype)
+    columns = list(constant_values)
+    values = np.array(list(constant_values.values()), dtype=X.dtype)
+    rows = max(1, _FILL_BLOCK_BYTES // max(1, X.shape[1] * out.itemsize))
+    for start in range(0, X.shape[0], rows):
+        block = out[start : start + rows]
+        block[...] = X[start : start + rows]
+        block[:, columns] = values
+    return out
+
+
 def _is_plain_numeric_array(X: np.ndarray | pd.DataFrame) -> bool:
     """Whether `X` is a numpy array of a dtype that casts straight to float64.
 
@@ -154,8 +173,13 @@ def clean_data_transform(
             encoding stage unchanged instead of crashing it.
 
     Returns:
-        The cleaned data as a float64 array.
+        `X`, or a copy of it with the fit-time constant columns restored, when `X` is
+        a numeric array the encoder encodes no column of; a new float32, C-ordered
+        array when `X` is a float32 array whose encoded columns all held numbers at
+        fit, and which holds no infinity if `passthrough_inf`; otherwise a new float64
+        array.
     """
+    given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
         # A column constant at fit gets its fit-time value back, so it is cleaned
         # exactly as at fit, whatever it holds at predict.
@@ -163,18 +187,34 @@ def clean_data_transform(
             isinstance(v, (int, float, np.number)) for v in constant_values.values()
         )
         # A copy either way: the caller's array must not be written to.
-        if not numeric:
-            X = X.astype(object)
+        if numeric and X.dtype == np.float32:
+            # The float32 paths below read a C-ordered table.
+            X = _with_constants(X, constant_values)
         else:
-            X = X.astype(X.dtype if X.dtype.kind in "fO" else np.float64)
-        for index, value in constant_values.items():
-            X[:, index] = value
+            if not numeric:
+                X = X.astype(object)
+            else:
+                X = X.astype(X.dtype if X.dtype.kind in "fO" else np.float64)
+            for index, value in constant_values.items():
+                X[:, index] = value
 
     if _is_plain_numeric_array(X) and _encoder_selects_nothing(ord_encoder):
         # `passthrough_inf` makes no difference here: it records the +/-inf cells,
         # NaNs them so the encoder does not choke, and writes them back at the same
         # positions afterwards -- an exact round trip when nothing is encoded.
         return X
+
+    if (
+        ord_encoder is not None
+        and cat_indices is not None
+        and _encodes_categoricals_only(X, cat_indices, passthrough_inf=passthrough_inf)
+        and _fitted_on_numbers(ord_encoder)
+    ):
+        # Restoring the constant columns above made `X` a C-ordered copy already.
+        owned = X is not given
+        X_encoded = ord_encoder.transform_into(X if owned else X.copy(order="C"))
+        if X_encoded is not None:
+            return X_encoded
 
     return process_text_na_dataframe(
         X=fix_dtypes(X=X, cat_indices=cat_indices),
@@ -255,12 +295,12 @@ _INF_SCAN_COLUMNS = 64
 def _encodes_categoricals_only(
     X: np.ndarray, cat_indices: Sequence[int], *, passthrough_inf: bool
 ) -> bool:
-    """Whether `clean_data` can encode a float32 array's categorical columns alone.
+    """Whether cleaning can encode a float32 array's categorical columns alone.
 
     The general path makes a float64 frame of the whole array, and a float64 output
     from it. Encoding only the categorical columns into a float32 copy gives the same
-    values and the same fitted encoder. With `passthrough_inf`, an array holding an
-    infinity takes the general path, which carries it through the encoder.
+    values and, at fit, the same fitted encoder. With `passthrough_inf`, an array
+    holding an infinity takes the general path, which carries it through the encoder.
     """
     if not (
         isinstance(X, np.ndarray)
@@ -275,6 +315,16 @@ def _encodes_categoricals_only(
         if np.isinf(X[:, start : start + _INF_SCAN_COLUMNS]).any():
             return False
     return True
+
+
+def _fitted_on_numbers(ord_encoder: OrderPreservingColumnTransformer) -> bool:
+    """Whether every column the fitted encoder encodes held numbers at fit.
+
+    The general path casts a column that held strings at fit back to strings, which
+    a float32 array cannot hold.
+    """
+    categories = ord_encoder.named_transformers_["encoder"].categories_
+    return all(c.dtype.kind in "fiu" for c in categories)
 
 
 def _with_categoricals(X: np.ndarray, cat_indices: Sequence[int]) -> pd.DataFrame:
