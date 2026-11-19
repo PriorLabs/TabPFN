@@ -32,9 +32,8 @@ from tabpfn.architectures.shared.scaled_dot_product_attention import (
 
 def _has_fa4_gpu() -> bool:
     """Hopper or Blackwell: the architectures ``fa4_backend`` dispatches on."""
-    if not torch.cuda.is_available():
-        return False
-    return torch.cuda.get_device_capability(0)[0] in fa4_backend._FA4_MAX_HEAD_DIM
+    major = fa4_backend._compute_capability_major(torch.device("cuda", 0))
+    return major in fa4_backend._FA4_MAX_HEAD_DIM
 
 
 _FA4_RUNNABLE = _has_fa4_gpu() and FA4_BACKEND.is_available()
@@ -186,10 +185,11 @@ def test__fa4_bf16_gate_does_not_break_the_graph(
 
 def test__fa4_eligibility_head_dim_range_per_arch() -> None:
     """FA4's head-dim range differs by architecture: 256 on sm_90, 128 on sm_100+."""
-    if not torch.cuda.is_available():
-        pytest.skip("eligibility check needs CUDA")
     device = torch.device("cuda")
-    major = torch.cuda.get_device_capability(device)[0]
+    # The backend's own guard, so ROCm (gfx90a reports 9.0) skips rather than fails.
+    major = fa4_backend._compute_capability_major(device)
+    if major is None:
+        pytest.skip("eligibility check needs an Nvidia CUDA device")
     if major not in fa4_backend._FA4_MAX_HEAD_DIM:
         pytest.skip(f"FA4 has no kernels for compute capability {major}.x")
     max_hd = fa4_backend._FA4_MAX_HEAD_DIM[major]
