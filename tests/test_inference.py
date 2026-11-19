@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, overload
+from typing import Any, Literal, overload
 from typing_extensions import override
 
 import numpy as np
@@ -44,7 +44,9 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     generate_classification_ensemble_configs,
 )
+from tabpfn.preprocessing.clean import overwrite_fit_input
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.preprocessing.torch import FeatureSchema
 from tabpfn.regressor import _concat_block_outputs
 from tabpfn.settings import settings
@@ -1297,6 +1299,72 @@ def test__prepare_model_inputs__row_blocks__match_one_concatenation(
     torch.testing.assert_close(X_full, expected, rtol=0, atol=0)
     assert X_full.is_contiguous()
     torch.testing.assert_close(y, torch.as_tensor(y_train, dtype=torch.float32))
+
+
+@pytest.mark.parametrize(
+    "estimator_cls", [TabPFNClassifier, TabPFNRegressor], ids=lambda c: c.__name__
+)
+@pytest.mark.parametrize("inference_precision", ["auto", torch.float64])
+def test__fit_with_cache__shared_member_tables__train_inputs_built_by_row_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    estimator_cls: type[TabPFNClassifier | TabPFNRegressor],
+    inference_precision: torch.dtype | str,
+) -> None:
+    """Members that share the caller's table build their caches without ever
+    building the whole table, and predict as members holding their own arrays.
+    """
+    rng = default_rng(0)
+    X_train = rng.standard_normal((80, 6)).astype(np.float32)
+    X_test = rng.standard_normal((9, 6)).astype(np.float32)
+    # A categorical column, which the members encode and hold as their own.
+    X_train[:, 0] = rng.integers(0, 3, 80)
+    X_test[:, 0] = rng.integers(0, 3, 9)
+    y_train = (
+        rng.integers(0, 3, 80)
+        if estimator_cls is TabPFNClassifier
+        else rng.standard_normal(80)
+    )
+
+    def fit() -> TabPFNClassifier | TabPFNRegressor:
+        return estimator_cls(
+            n_estimators=2,
+            device="cpu",
+            random_state=0,
+            fit_mode="fit_with_cache",
+            inference_precision=inference_precision,
+            categorical_features_indices=[0],
+            # The members share a table only when every CPU step selects or encodes.
+            inference_config={"ENABLE_GPU_PREPROCESSING": True},
+        ).fit(X_train, y_train)
+
+    expected = fit().predict(X_test)
+
+    gathered: list[tuple[int, int]] = []
+    built_widths: list[int] = []
+    copy_rows_into = SharedColumnsTable.copy_rows_into
+    build_whole = SharedColumnsTable.__array__
+
+    def spy_gather(
+        table: SharedColumnsTable, start: int, stop: int, out: Tensor
+    ) -> None:
+        gathered.append((stop - start, table.shape[1]))
+        copy_rows_into(table, start, stop, out)
+
+    def spy_build(table: SharedColumnsTable, *args: Any, **kwargs: Any) -> np.ndarray:
+        built_widths.append(table.shape[1])
+        return build_whole(table, *args, **kwargs)
+
+    monkeypatch.setattr(SharedColumnsTable, "copy_rows_into", spy_gather)
+    monkeypatch.setattr(SharedColumnsTable, "__array__", spy_build)
+    monkeypatch.setattr("tabpfn.inference._MODEL_INPUT_BLOCK_BYTES", 6 * 4 * 16)
+    with overwrite_fit_input():
+        model = fit()
+
+    assert X_train.shape[1] not in built_widths
+    member_blocks = [rows for rows, width in gathered if width == X_train.shape[1]]
+    assert member_blocks
+    assert max(member_blocks) <= 16
+    np.testing.assert_array_equal(model.predict(X_test), expected)
 
 
 class _DeviceInputModel(nn.Module):
