@@ -26,6 +26,8 @@ from torch.utils.data import DataLoader
 
 from tabpfn.architectures.shared.bar_distribution import BarDistribution
 from tabpfn.constants import ModelVersion
+from tabpfn.errors import TabPFNValidationError
+from tabpfn.finetuning import finetuned_base, finetuned_regressor
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,
@@ -654,3 +656,137 @@ def test__forward_with_loss__target_sign_flip__own_buckets_and_negated_target() 
     torch.testing.assert_close(
         loss.call_args.kwargs["targets_BQ"], torch.cat([standardized, -standardized])
     )
+
+
+@pytest.mark.parametrize("explicit_validation", [False, True])
+def test__finetuned_tabpfn_regressor__2d_target__one_task_per_target(
+    synthetic_regression_data: tuple[np.ndarray, np.ndarray],
+    explicit_validation: bool,
+) -> None:
+    """A 2D target finetunes one model on one (X, y_k) task per target column."""
+    X, y = synthetic_regression_data
+    Y = np.stack([y, -2.0 * y + 1.0, X[:, 0]], axis=1).astype(np.float32)
+    X_train, X_test, Y_train, Y_test = train_test_split(
+        X, Y, test_size=0.3, random_state=42
+    )
+    validation = {"X_val": X_test, "y_val": Y_test} if explicit_validation else {}
+    finetuned_reg = FinetunedTabPFNRegressor(
+        device="cpu",
+        epochs=1,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        n_finetune_ctx_plus_query_samples=60,
+        finetune_ctx_query_split_ratio=0.2,
+        random_state=42,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+    )
+    eval_results: list[EvalResult] = []
+    evaluate_model = FinetunedTabPFNRegressor._evaluate_model
+
+    def evaluate_and_record(self: FinetunedTabPFNRegressor, *args) -> EvalResult:
+        eval_results.append(evaluate_model(self, *args))
+        return eval_results[-1]
+
+    with (
+        mock.patch(
+            "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
+            autospec=True,
+            side_effect=create_mock_architecture_forward_regression(),
+        ),
+        mock.patch.object(
+            finetuned_base,
+            "get_preprocessed_dataset_chunks",
+            wraps=finetuned_base.get_preprocessed_dataset_chunks,
+        ) as chunks,
+        mock.patch.object(
+            FinetunedTabPFNRegressor, "_evaluate_model", evaluate_and_record
+        ),
+    ):
+        finetuned_reg.fit(X_train, Y_train, **validation)
+
+    y_raw = chunks.call_args.kwargs["y_raw"]
+    assert len(y_raw) == 3
+    assert all(col.ndim == 1 for col in y_raw)
+    # A failing evaluation is logged and reported as NaN, so check it ran.
+    assert eval_results
+    assert all(np.isfinite(result.primary) for result in eval_results)
+    inference = finetuned_reg.finetuned_inference_regressor_
+    assert len({id(est.models_[0]) for est in inference.target_estimators_}) == 1
+    assert finetuned_reg.predict(X_test).shape == (X_test.shape[0], 3)
+
+
+def _evaluate_with_predictions(
+    y_train: np.ndarray, y_val: np.ndarray, predictions: np.ndarray
+) -> EvalResult:
+    """Run `_evaluate_model` with an eval regressor that predicts `predictions`."""
+    eval_regressor = mock.Mock()
+    eval_regressor.predict.return_value = predictions
+    finetuned_reg = FinetunedTabPFNRegressor(device="cpu")
+    finetuned_reg.finetuned_estimator_ = mock.Mock()
+    with mock.patch.object(
+        finetuned_regressor, "clone_model_for_evaluation", return_value=eval_regressor
+    ):
+        return finetuned_reg._evaluate_model(
+            {}, np.zeros((len(y_train), 3)), y_train, np.zeros((len(y_val), 3)), y_val
+        )
+
+
+def test__evaluate_model__2d_target__weighs_targets_equally_whatever_their_scale() -> (
+    None
+):
+    """The validation metric measures each target's error in standard deviations of
+    its training values, so a large-scale target does not decide early stopping.
+    """
+    local_rng = np.random.default_rng(0)
+    scales = np.array([1.0, 1000.0])
+    y_train = local_rng.normal(size=(50, 2)) * scales
+    y_val = local_rng.normal(size=(20, 2)) * scales
+    # Half a standard deviation off on the first target, a quarter on the second.
+    errors = np.std(y_train, axis=0) * [0.5, 0.25]
+
+    result = _evaluate_with_predictions(y_train, y_val, y_val + errors)
+
+    assert result.primary == pytest.approx((0.25 + 0.0625) / 2)
+
+
+def test__evaluate_model__2d_target__constant_training_target_keeps_raw_error() -> None:
+    """A target that is constant in training must not be divided by its ~0 std:
+    its error would be inf, and early stopping would never see an improvement.
+    """
+    local_rng = np.random.default_rng(0)
+    y_train = np.stack([local_rng.normal(size=50), np.full(50, 0.1)], axis=1).astype(
+        np.float32
+    )
+    y_val = np.stack([local_rng.normal(size=20), np.ones(20)], axis=1)
+    predictions = y_val.copy()
+    predictions[:, 1] = 0.1
+
+    result = _evaluate_with_predictions(y_train, y_val, predictions)
+
+    assert result.primary == pytest.approx((0.0 + 0.81) / 2)
+
+
+@pytest.mark.parametrize("y_val_columns", [slice(0, 2), 0])
+def test__finetuned_tabpfn_regressor__validation_targets_of_another_shape__raise(
+    synthetic_regression_data: tuple[np.ndarray, np.ndarray],
+    y_val_columns: slice | int,
+) -> None:
+    """A validation target that does not match the training targets is rejected
+    up front; every evaluation would otherwise fail and only log a warning.
+    """
+    X, y = synthetic_regression_data
+    Y = np.stack([y, -y, 2.0 * y], axis=1)
+    finetuned_reg = FinetunedTabPFNRegressor(
+        device="cpu",
+        epochs=1,
+        n_finetune_ctx_plus_query_samples=60,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        random_state=42,
+    )
+
+    with pytest.raises(TabPFNValidationError, match="y_val has shape"):
+        finetuned_reg.fit(X, Y, X_val=X, y_val=Y[:, y_val_columns])

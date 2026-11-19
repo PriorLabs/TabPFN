@@ -257,6 +257,7 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
+    multi_output: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Validate the values of already-shape-captured fit inputs.
 
@@ -267,6 +268,7 @@ def ensure_compatible_fit_inputs_sklearn(
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
+        multi_output: Whether to accept a 2D target of shape (n_samples, n_targets).
 
     Returns:
         A tuple of the validated input data X and target data y.
@@ -285,6 +287,7 @@ def ensure_compatible_fit_inputs_sklearn(
             ensure_min_samples=2,
             ensure_min_features=1,
             y_numeric=ensure_y_numeric,
+            multi_output=multi_output,
             estimator=estimator,
         )
 
