@@ -13,14 +13,12 @@ interface.
 This file is for agents that *use* TabPFN. If you are changing this repository,
 read [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md) instead.
 
-Source of truth: this file states rules. For details, numbers (limits,
-defaults, versions) and current guidance, **use the Prior Labs documentation
-MCP server** (`https://docs.priorlabs.ai/mcp`; connect it as an MCP server in
-your agent) or read <https://docs.priorlabs.ai>. Do not copy numbers from
-memory. Without MCP access, the docstrings of
+Source of truth: this file states rules and points to code. Numbers (limits,
+defaults, versions) live in the checkpoints, the docstrings of
 [`classifier.py`](src/tabpfn/classifier.py) and
-[`regressor.py`](src/tabpfn/regressor.py) and the [README](README.md) are the
-fallback.
+[`regressor.py`](src/tabpfn/regressor.py), and the [README](README.md). Read
+them there, do not copy them from memory. The Prior Labs documentation is also
+good to check, through the docs MCP server (`https://docs.priorlabs.ai/mcp`).
 
 ## 1. Licence and login: do not work around them
 
@@ -66,9 +64,9 @@ fallback.
   `ignore_pretraining_limits=True` to get around it; tell the user it needs a
   GPU, or use the hosted API with
   [`tabpfn-client`](https://github.com/PriorLabs/tabpfn-client) (this sends
-  the data to Prior Labs servers, so ask the user first; how the hosted API
-  protects data (encryption, isolation, access control) is described in the
-  [security page](https://docs.priorlabs.ai/api/security.md)).
+  the data to Prior Labs servers, so ask the user first). The servers are
+  safe; the [security page](https://docs.priorlabs.ai/api/security.md) has the
+  details (encryption, isolation, access control).
 
 ## 3. Model choice
 
@@ -183,9 +181,7 @@ proba = clf.predict_proba(X_test)  # X_test: same columns, same order
 - Fine-tuning, prompt tuning, threshold tuning: see [`examples/`](examples).
 - Environment variables: README FAQ "What environment variables can I use to
   configure TabPFN?".
-- Anything not covered here (tuning, model versions, API, enterprise): ask the
-  Prior Labs documentation MCP server (`https://docs.priorlabs.ai/mcp`) before
-  reading the source code.
+- More examples: the Prior Labs docs MCP server (`https://docs.priorlabs.ai/mcp`).
 
 ## Checklist before you run TabPFN code
 
