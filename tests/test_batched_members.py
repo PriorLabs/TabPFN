@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import functools
 import pickle
+from typing import Any
 from typing_extensions import override
 
 import numpy as np
@@ -12,6 +14,7 @@ import torch
 from numpy.random import default_rng
 from torch import Tensor
 
+from tabpfn import inference
 from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.interface import (
     Architecture,
@@ -322,6 +325,82 @@ def test__explicit_kv_cache__built_one_member_at_a_time_matches_one_forward(
     assert engine.cache_groups == [list(range(N_MEMBERS))]
     (cache,) = engine.kv_caches
     assert cache.train_shape == (N_MEMBERS, N_TRAIN)
+    for (out, _), (out_expected, _) in zip(_predict(engine), expected, strict=True):
+        torch.testing.assert_close(out, out_expected, atol=1e-5, rtol=1e-5)
+
+
+def _record_build_events(
+    monkeypatch: pytest.MonkeyPatch, model: Architecture
+) -> list[str]:
+    """Record when a member is preprocessed, prepared, and forwarded, in order."""
+    events: list[str] = []
+    preprocess = TabPFNEnsemblePreprocessor.fit_transform_ensemble_members_iterator
+    prepare = inference._prepare_train_inputs
+    forward = type(model).forward
+
+    def preprocessing(*args: Any, **kwargs: Any) -> Any:
+        for member in preprocess(*args, **kwargs):
+            events.append("member")
+            yield member
+
+    def preparing(*args: Any, **kwargs: Any) -> Any:
+        events.append("prepare")
+        return prepare(*args, **kwargs)
+
+    @functools.wraps(forward)
+    def forwarding(*args: Any, **kwargs: Any) -> Any:
+        events.append("forward")
+        return forward(*args, **kwargs)
+
+    monkeypatch.setattr(
+        TabPFNEnsemblePreprocessor,
+        "fit_transform_ensemble_members_iterator",
+        preprocessing,
+    )
+    monkeypatch.setattr(inference, "_prepare_train_inputs", preparing)
+    monkeypatch.setattr(type(model), "forward", forwarding)
+    return events
+
+
+@torch.no_grad()
+def test__explicit_kv_cache__prepares_one_forward_of_members_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The device holds the train rows of one forward's members, not of all."""
+    model = _model()
+    monkeypatch.setattr(settings.tabpfn, "max_batched_estimator_rows", N_TRAIN)
+    events = _record_build_events(monkeypatch, model)
+
+    engine = _engine("explicit_kv_cache", model)
+
+    assert isinstance(engine, InferenceEngineExplicitKVCache)
+    built = [event for event in events if event != "member"]
+    assert built == ["prepare", "forward"] * N_MEMBERS
+    assert all(member.X_train is None for member in engine.ensemble_members)
+
+
+@torch.no_grad()
+def test__explicit_kv_cache__built_member_by_member__matches_the_default_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Members preprocessed as they are built give the cache of the default build."""
+    model = _model()
+    expected = _predict(_engine("explicit_kv_cache", model))
+
+    monkeypatch.setattr(settings.tabpfn, "max_batched_estimator_rows", N_TRAIN)
+    monkeypatch.setattr(
+        InferenceEngineExplicitKVCache,
+        "_builds_member_by_member",
+        lambda *_args, **_kwargs: True,
+    )
+    events = _record_build_events(monkeypatch, model)
+    engine = _engine("explicit_kv_cache", model)
+
+    assert isinstance(engine, InferenceEngineExplicitKVCache)
+    # A member is preprocessed only once the one before it has been forwarded.
+    assert events == ["member", "prepare", "forward"] * N_MEMBERS
+    assert len(engine.ensemble_members) == N_MEMBERS
+    assert engine.cache_groups == [list(range(N_MEMBERS))]
     for (out, _), (out_expected, _) in zip(_predict(engine), expected, strict=True):
         torch.testing.assert_close(out, out_expected, atol=1e-5, rtol=1e-5)
 
