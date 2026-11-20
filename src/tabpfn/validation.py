@@ -292,19 +292,52 @@ def ensure_compatible_fit_inputs_sklearn(
                 ensure_2d=False,
             )
     except (ValueError, TypeError) as e:
-        e_str = str(e)
-        if "X contains infinity" in e_str:
-            e_str += (
-                "\nHint: TabPFN uses infinite values as missing completely at random "  # noqa: S608
-                "(MCAR) markers. If this matches your use case, try using "
-                f"{estimator.__class__.__name__}"
-                '(inference_config={"PASSTHROUGH_INF": True}).\n'
-                "Otherwise, replace your infinite values with NaN to indicate "
-                "missingness."
-            )
-        raise TabPFNValidationError(e_str) from e
+        raise _fit_validation_error(e, estimator) from e
 
     return X, y
+
+
+def ensure_compatible_fit_columns(
+    X: XType, *, estimator: TabPFNRegressor | TabPFNClassifier
+) -> np.ndarray:
+    """Validate the values of more columns of a fit input whose targets were validated.
+
+    Checks them as `ensure_compatible_fit_inputs_sklearn` checks its `X`, for a fit
+    input validated a range of columns at a time.
+    """
+    if isinstance(X, pd.DataFrame):
+        X = coerce_nullable_dtypes_to_numpy(X)
+    try:
+        result = check_array(
+            X,
+            accept_sparse=False,
+            dtype=None,
+            ensure_all_finite=False
+            if estimator.get_inference_config().PASSTHROUGH_INF
+            else "allow-nan",
+            ensure_min_samples=2,
+            ensure_min_features=1,
+            estimator=estimator,
+        )
+    except (ValueError, TypeError) as e:
+        raise _fit_validation_error(e, estimator) from e
+    return typing.cast("np.ndarray", result)
+
+
+def _fit_validation_error(
+    e: ValueError | TypeError, estimator: TabPFNRegressor | TabPFNClassifier
+) -> TabPFNValidationError:
+    e_str = str(e)
+    if "X contains infinity" in e_str:
+        e_str += (
+            "\nHint: TabPFN uses infinite values as missing completely at random "  # noqa: S608
+            "(MCAR) markers. If this matches your use case, try using "
+            f"{estimator.__class__.__name__}"
+            '(inference_config={"PASSTHROUGH_INF": True}).\n'
+            "Otherwise, replace your infinite values with NaN to indicate "
+            "missingness."
+        )
+    return TabPFNValidationError(e_str)
 
 
 def validate_num_classes(
