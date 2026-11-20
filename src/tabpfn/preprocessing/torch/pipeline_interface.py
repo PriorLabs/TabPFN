@@ -43,8 +43,9 @@ class TorchPreprocessingStep(abc.ABC):
     Such a step fits and transforms an input it may write into a block of
     columns at a time, its cache tensors' last dimension indexing the columns
     (but for `shared_cache_keys`). A column's fitted values are the same whichever
-    other columns it is fitted with, up to float rounding and the tolerance of any
-    search the fit runs. Its `_fit` and `_transform` say all it does: the block
+    block it is fitted in, up to float rounding; a fit that reads columns together
+    gives their number in `fit_column_group`. Its `_fit` and `_transform` say all it
+    does: the block
     runners call them directly, so it does not override `fit_transform`.
     """
 
@@ -137,7 +138,10 @@ class TorchPreprocessingStep(abc.ABC):
         """
         columns = torch.as_tensor(column_indices, device=x.device)
         row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-        width = max(1, IN_PLACE_BLOCK_BYTES // max(1, row_bytes))
+        width = _whole_groups(
+            IN_PLACE_BLOCK_BYTES // max(1, row_bytes),
+            self.fit_column_group(num_train_rows),
+        )
         if fitted_cache is not None:
             fitted_cache = _move_cache_to_device(fitted_cache, device)
         parts: list[dict[str, torch.Tensor]] = []
@@ -158,6 +162,15 @@ class TorchPreprocessingStep(abc.ABC):
         if fitted_cache is None:
             fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+    def fit_column_group(self, num_train_rows: int) -> int:  # noqa: ARG002
+        """Columns of one table that a columnwise step's fit reads together.
+
+        The block runners cut blocks only between whole groups, counted from the
+        first column, so the fit sees the columns together that a fit of all of them
+        would.
+        """
+        return 1
 
     def _compute_device(self, device: torch.device) -> torch.device:
         """The device the step computes on for an input on `device`."""
@@ -538,7 +551,9 @@ def _fit_transform_on_device(
     # Wide blocks, sliced where the columns are contiguous, keep the host-side
     # copies fast; the step's own blocks then bound its intermediates on `device`.
     row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-    width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
+    width = _whole_groups(
+        DEVICE_BLOCK_BYTES // max(1, row_bytes), step.fit_column_group(num_train_rows)
+    )
     if fitted_cache is not None:
         fitted_cache = _move_cache_to_device(fitted_cache, device)
     parts: list[dict[str, torch.Tensor]] = []
@@ -565,6 +580,11 @@ def _fit_transform_on_device(
     if fitted_cache is None:
         fitted_cache = _join_column_caches(parts, step.shared_cache_keys)
     return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+
+def _whole_groups(width: int, group: int) -> int:
+    """`width` columns rounded down to whole groups of `group`, at least one group."""
+    return max(group, width - width % group)
 
 
 def _join_column_caches(

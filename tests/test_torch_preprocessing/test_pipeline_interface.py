@@ -719,13 +719,9 @@ _TARGETS = [0, 2, 3, 5, 7, 8, 9]
 
 _ROUNDING = {"rtol": 1e-6, "atol": 1e-6}
 """How far a fit may move with the columns fitted beside it: reductions over rows can
-round differently on some platforms, and safepower's lambda search stops within its
-tolerance."""
+round differently on some platforms."""
 
-_FITS_UP_TO_ROUNDING = (
-    TorchSelectiveQuantileTransformerStep,
-    TorchSelectiveSafePowerStep,
-)
+_FITS_UP_TO_ROUNDING = (TorchSelectiveQuantileTransformerStep,)
 
 
 @pytest.mark.parametrize(
@@ -764,6 +760,36 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
     assert expected.fitted_cache is not None
     for key, value in expected.fitted_cache.items():
         torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test__fit_transform__safepower_in_column_blocks__equals_the_whole_fit(
+    monkeypatch: pytest.MonkeyPatch, *, staged: bool
+) -> None:
+    # Fit chunks of 2 columns of 50 rows, blocks of 3 columns: a block that ended
+    # inside a chunk would split it.
+    monkeypatch.setattr(
+        "tabpfn.preprocessing.torch.torch_safe_power_transformer._CHUNK_TARGET_BYTES",
+        2 * 8 * 6 * 50,
+    )
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * 4)
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 64 * 4)
+    x = _wide_input()
+    step = TorchSelectiveSafePowerStep(_TARGETS)
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+
+    if staged:
+        actual = pipeline_interface._fit_transform_on_device(
+            step, x, _TARGETS, 50, None, torch.device("cpu")
+        )
+    else:
+        actual = step.fit_transform(x, _TARGETS, num_train_rows=50, in_place=True)
+
+    torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
+    assert actual.fitted_cache is not None
+    assert expected.fitted_cache is not None
+    for key, value in expected.fitted_cache.items():
+        assert torch.equal(actual.fitted_cache[key], value)
 
 
 _SELECTIVE_STEPS = [
