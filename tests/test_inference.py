@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 from typing import Literal, overload
 from typing_extensions import override
 
@@ -46,6 +47,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.torch import FeatureSchema
+from tabpfn.preprocessing.torch.member_rows import MemberRowSource
 from tabpfn.regressor import _concat_block_outputs
 from tabpfn.settings import settings
 
@@ -1382,3 +1384,54 @@ def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() ->
     torch.testing.assert_close(X_full, expected, rtol=0, atol=0)
     assert X_full.device == cpu
     assert y.device == cpu
+
+
+def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Of an input held off the device, a model that reads row sources is passed the
+    members' rows to read, and predicts as from the input built whole.
+    """
+    rng = default_rng(0)
+    X = rng.standard_normal((90, 6))
+    X[:, 2] = rng.integers(0, 3, len(X))
+    y = rng.integers(0, 2, 70)
+    config = {
+        "ENABLE_GPU_PREPROCESSING": True,
+        "FINGERPRINT_FEATURE": False,
+        "FEATURE_SHIFT_METHOD": "shuffle",
+        "OUTLIER_REMOVAL_STD": 12.0,
+    }
+    model = TabPFNClassifier(
+        n_estimators=2, device="cpu", random_state=0, inference_config=config
+    ).fit(X[:70], y)
+    expected = model.predict_proba(X[70:])
+    architecture = type(model.models_[0])
+    forward = architecture.forward
+    sources: list[MemberRowSource] = []
+
+    @functools.wraps(forward)
+    def reading_forward(
+        self: nn.Module, x: Tensor | None, *args: object, **kwargs: object
+    ) -> object:
+        source = kwargs.pop("x_host", None)
+        if x is None:
+            assert isinstance(source, MemberRowSource)
+            sources.append(source)
+            R, _, C = source.shape
+            x = source.read(slice(0, R), slice(0, C), torch.device("cpu"))
+            x = x.transpose(0, 1)
+        return forward(self, x, *args, **kwargs)
+
+    monkeypatch.setattr(architecture, "forward", reading_forward)
+    monkeypatch.setattr(architecture, "reads_row_sources", True, raising=False)
+    # Reported as held off the device, which the CPU cannot show otherwise; only the
+    # row source is ever built there.
+    monkeypatch.setattr(
+        "tabpfn.inference._model_input_device", lambda *_: torch.device("meta")
+    )
+
+    actual = model.predict_proba(X[70:])
+
+    assert sources
+    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
