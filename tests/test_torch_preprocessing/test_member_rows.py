@@ -98,12 +98,8 @@ def _eager(
 
 
 def _assert_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
-    """Equal on CUDA. On the CPU, a vectorized elementwise kernel can round an element
-    in its last bit by where it falls in a tensor of another shape.
-    """
-    exact = {"rtol": 0, "atol": 0} if actual.device.type == "cuda" else {}
     torch.testing.assert_close(
-        actual, expected.to(actual.device), equal_nan=True, **exact
+        actual, expected.to(actual.device), rtol=0, atol=0, equal_nan=True
     )
 
 
