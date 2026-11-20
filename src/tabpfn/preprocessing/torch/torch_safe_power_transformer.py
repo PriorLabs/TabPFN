@@ -36,8 +36,7 @@ class TorchSafePowerTransformer:
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit lambdas and scaler statistics on ``x`` of shape [n_rows, ...]."""
         x = x.reshape(x.shape[0], -1)
-        bytes_per_col = 8 * _OVERHEAD_FACTOR * max(x.shape[0], 1)
-        n_cols = max(1, _CHUNK_TARGET_BYTES // bytes_per_col)
+        n_cols = fit_chunk_columns(x.shape[0])
         caches = [
             _fit_chunk(x[:, i : i + n_cols].to(torch.float64))
             for i in range(0, x.shape[1], n_cols)
@@ -58,6 +57,16 @@ class TorchSafePowerTransformer:
                 x[i : i + n_rows].to(torch.float64), fitted_cache
             )
         return out.reshape(shape)
+
+
+def fit_chunk_columns(n_rows: int) -> int:
+    """Columns ``TorchSafePowerTransformer.fit`` fits together, from the first.
+
+    A column's lambda depends on the columns of its chunk: the search runs as many
+    steps as the widest bracket among them needs.
+    """
+    bytes_per_col = 8 * _OVERHEAD_FACTOR * max(n_rows, 1)
+    return max(1, _CHUNK_TARGET_BYTES // bytes_per_col)
 
 
 def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
