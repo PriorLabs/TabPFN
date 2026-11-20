@@ -225,13 +225,26 @@ class SharedColumnsTable:
         """Writes rows `start:stop` into `out`, a contiguous CPU tensor of their
         shape in `base`'s dtype.
         """
+        self._fill(
+            as_tensor_to_read(self.base[start:stop]),
+            torch.from_numpy(self.own[start:stop]),
+            out,
+        )
+
+    def rows_at(self, rows: np.ndarray) -> torch.Tensor:
+        """Rows `rows`, in their order, as a new CPU tensor."""
+        base = torch.from_numpy(self.base[rows])
+        out = torch.empty((len(rows), self.shape[1]), dtype=base.dtype)
+        self._fill(base, torch.from_numpy(self.own[rows]), out)
+        return out
+
+    def _fill(self, base: torch.Tensor, own: torch.Tensor, out: torch.Tensor) -> None:
+        """Writes the table's columns of `base`'s and `own`'s rows into `out`."""
         from_base, own_at, own_from = self._gather_indices
-        rows = stop - start
+        rows = len(base)
         # Every column from `base` in one gather, then the own ones over theirs.
-        base = as_tensor_to_read(self.base[start:stop])
         torch.gather(base, 1, from_base.expand(rows, -1), out=out)
         if own_at.numel():
-            own = torch.from_numpy(self.own[start:stop])
             values = torch.gather(own, 1, own_from.expand(rows, -1))
             out.scatter_(1, own_at.expand(rows, -1), values)
 
