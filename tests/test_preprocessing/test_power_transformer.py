@@ -388,6 +388,38 @@ def test__safe_power_transformer__relative_to_geometric_mean__inverse_transform(
     np.testing.assert_allclose(X_inverse, X_test, rtol=1e-9)
 
 
+@pytest.mark.parametrize("log_mean", [0.7, -0.7])
+@pytest.mark.parametrize(
+    ("value", "lmbda"),
+    [
+        (np.finfo(np.float32).max, 0.0),
+        (np.finfo(np.float32).max, 0.5),
+        (-np.finfo(np.float32).max, 1.5),
+        (-np.finfo(np.float32).max, 2.0),
+    ],
+)
+def test__safe_power_transformer__relative_to_geometric_mean__inverse_float32_boundary(
+    value: float, lmbda: float, log_mean: float
+):
+    """Extreme float32 values invert to finite values without an overflow warning.
+
+    The same cases as for the classic inverse above.
+    """
+    transformer = SafePowerTransformer(
+        standardize=False, relative_to_geometric_mean=True
+    )
+    transformer.lambdas_ = np.array([lmbda])
+    transformer.log_means_ = np.array([log_mean])
+    transformer.n_features_in_ = 1
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = transformer.inverse_transform(np.array([[value]], dtype=np.float32))
+
+    assert result.dtype == np.float32
+    assert np.all(np.isfinite(result))
+
+
 @pytest.mark.parametrize("lmbda", [0.0, 2.0, 0.5])
 @pytest.mark.parametrize("log_mean", [0.7, -0.7])
 def test__yeojohnson_centered_transform__same_as_classic_once_standardized(

@@ -262,13 +262,19 @@ def _yeojohnson_centered_transform(
 def _yeojohnson_centered_inverse_transform(
     z: np.ndarray, lmbda: float, log_mean: float
 ) -> np.ndarray:
-    """Inverse of `_yeojohnson_centered_transform`: its steps undone in reverse."""
-    z = np.asarray(z, dtype=np.float64)
+    """Inverse of `_yeojohnson_centered_transform`: its steps undone in reverse.
+
+    As `_yeojohnson_inverse_transform`, the result stays inside the range of the
+    dtype of ``z``, so that extreme values neither overflow nor warn.
+    """
+    z = np.asarray(z)
     lmbda, log_mean = float(lmbda), float(log_mean)
     if log_mean < 0:
         # The mirror image, as in the transform.
         return -_yeojohnson_centered_inverse_transform(-z, 2 - lmbda, -log_mean)
 
+    limit = np.finfo(z.dtype if np.issubdtype(z.dtype, np.floating) else float).max
+    z = z.astype(np.float64)
     x_at_mean = np.expm1(log_mean)
     value_at_zero = _power_transform_from_log(-log_mean, lmbda)
     # The transform is increasing, so its value at x = 0 separates the two parts.
@@ -282,13 +288,16 @@ def _yeojohnson_centered_inverse_transform(
     if abs(lmbda) >= np.spacing(1.0):
         log_ratio = np.log1p(lmbda * log_ratio) / lmbda
     # Undo step 1: recover x from the ratio. Written around x_at_mean, so that
-    # rows near the mean keep their differences.
+    # rows near the mean keep their differences. The log of 1 + x is capped just
+    # below the largest float, as in the classic inverse, so exp cannot overflow.
+    log_max = np.log(np.finfo(np.float64).max)
+    log_ratio = np.minimum(log_ratio, log_max - 4 * np.spacing(log_max) - log_mean)
     x[nonnegative] = x_at_mean + (1 + x_at_mean) * np.expm1(log_ratio)
 
     # Values from x < 0: undo the shift and the scale, then the classic formula.
     classic = (z[~nonnegative] - value_at_zero) * np.exp(lmbda * log_mean)
     x[~nonnegative] = _yeojohnson_inverse_transform(classic, lmbda)
-    return x
+    return np.clip(x, -limit, limit)
 
 
 def _fit_yeojohnson_centered(x: np.ndarray) -> tuple[float, float]:
