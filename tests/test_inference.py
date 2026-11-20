@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Literal, overload
 from typing_extensions import override
 
@@ -1337,6 +1338,26 @@ def test__model_input_device__large_input_of_a_host_input_model__stays_on_the_ho
     actual = _model_input_device(model, torch.device(device), X_train, X_test, None)
 
     assert actual == torch.device(expected)
+
+
+@pytest.mark.parametrize(("device", "expected"), [("cuda", True), ("mps", False)])
+def test__builds_member_by_member__mps__keeps_the_default_build(
+    device: str, *, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MPS runs every member alone, which only the default build ensures."""
+    monkeypatch.setattr("tabpfn.inference.HOST_MODEL_INPUT_MIN_BYTES", 0)
+    engine = SimpleNamespace(
+        model_caches=[SimpleNamespace(get_any=_HostInputModel)],
+        force_inference_dtype=None,
+    )
+
+    actual = InferenceEngineExplicitKVCache._builds_member_by_member(
+        engine,  # type: ignore[arg-type]
+        np.zeros((30, 4)),
+        [torch.device(device)],
+    )
+
+    assert actual is expected
 
 
 @pytest.mark.parametrize(
