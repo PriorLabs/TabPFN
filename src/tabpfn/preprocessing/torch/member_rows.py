@@ -269,7 +269,11 @@ def _rows_of(
 
 
 def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch.Tensor:
-    """`table`'s `columns` at `rows`, as a new float32 CPU tensor."""
+    """`table`'s `columns` at `rows`, as a new row-major float32 CPU tensor.
+
+    Row-major as the built input's blocks are: a fit's reductions add up in an order
+    that follows the layout, so another one can round a fitted value differently.
+    """
     if isinstance(table, SharedColumnsTable):
         selected = table[:, columns]
         if isinstance(rows, slice):
@@ -283,4 +287,4 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
         out = as_tensor_to_read(table[rows][:, columns])
     else:
         out = as_tensor_to_read(table[np.ix_(rows, columns)])
-    return out.to(torch.float32)
+    return out.to(torch.float32).contiguous()
