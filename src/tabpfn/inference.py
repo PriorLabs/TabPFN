@@ -1328,8 +1328,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         For train rows that `_model_input_device` keeps in host memory, on one
         device and with one model: every member holds its own copy of the train
         rows, so preprocessing them all first holds one copy per member.
+
+        Not on MPS: that build batches the members, and MPS runs every member
+        alone (see `_member_key`).
         """
         if len(devices) != 1 or len(self.model_caches) != 1:
+            return False
+        if devices[0].type == "mps":
             return False
         model = self.model_caches[0].get_any()
         no_test_rows = np.empty((0, X_train.shape[1]), dtype=np.float32)
