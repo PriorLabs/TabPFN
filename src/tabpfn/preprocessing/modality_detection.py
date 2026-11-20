@@ -64,9 +64,36 @@ def detect_feature_modalities(
     Returns:
         The inferred `FeatureSchema`.
     """
+    feature_schema = named_feature_modalities(
+        X,
+        build_input_feature_names(feature_names, X.shape[1]),
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
+        provided_categorical_indices=provided_categorical_indices,
+    )
+    warn_on_text(feature_schema)
+    return feature_schema
+
+
+def named_feature_modalities(
+    X: np.ndarray,
+    unique_feature_names: list[str],
+    *,
+    min_samples_for_inference: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
+    provided_categorical_indices: Sequence[int] | None = None,
+) -> FeatureSchema:
+    """`detect_feature_modalities` with the features' final names, and no warning.
+
+    Each column is decided on its own, so a table can be decided a range of columns
+    at a time, with the names `build_input_feature_names` gives the whole table.
+    """
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
-    unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
     provided = set(provided_categorical_indices or ())
     decided_at = _decided_at(
         max_unique_for_category=max_unique_for_category,
@@ -97,9 +124,7 @@ def detect_feature_modalities(
                 big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
             )
         features.append(Feature(name=feature_name, modality=feat_modality))
-    feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema)
-    return feature_schema
+    return FeatureSchema(features=features)
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -111,7 +136,7 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_on_text(feature_schema: FeatureSchema) -> None:
+def warn_on_text(feature_schema: FeatureSchema) -> None:
     """Warn about any free-text columns.
 
     A column declared categorical is never `TEXT`, so it never shows up here.
