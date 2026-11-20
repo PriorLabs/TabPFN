@@ -10,15 +10,17 @@ registers the in-tree backends at import, and external packages call
 :func:`register_attention_backend` from their own setup function.
 
 A backend is offered an :class:`AttentionSpec` — the call's geometry, not its
-tensors — and cannot tell which stage of which architecture it belongs to.
-Backends are a *performance* seam and fail open: if none prefers the call,
-the ordinary SDPA path runs.
+tensors. The only provenance it carries is an optional :class:`AttentionRole`,
+which an architecture sets on the few calls whose tensors other calls reuse;
+everything else is anonymous. Backends are a *performance* seam and fail open:
+if none prefers the call, the ordinary SDPA path runs.
 """
 
 from __future__ import annotations
 
 import contextlib
 import dataclasses
+import enum
 import logging
 import threading
 from contextvars import ContextVar
@@ -30,6 +32,23 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
     from tabpfn.architectures.kv_cache import QuantizedKVCacheEntry
+
+
+class AttentionRole(str, enum.Enum):
+    """What an attention call is, where shapes alone cannot tell.
+
+    Set by the architecture on the calls listed here and ``None`` on every
+    other call, so a backend that needs one of these facts must treat ``None``
+    as "not this call".
+    """
+
+    ICL_TRAIN = "icl_train"
+    """The in-context call whose queries are the training rows (alone, or
+    together with the test rows in one fused call) and whose keys/values are
+    the training rows' own. The same ``k``/``v`` tensors are then read by the
+    layer's test-row call (as slices) and by its KV cache entry, so a backend
+    that writes to them in place changes what those see. No other call may be
+    written to: its ``k``/``v`` can be views, broadcasts or cached tensors."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,6 +92,10 @@ class AttentionSpec:
     is_grad_enabled: bool = False
     """Whether grad mode is on, i.e. whether a backward may follow."""
 
+    role: AttentionRole | None = None
+    """What the call is, when the architecture says so; see
+    :class:`AttentionRole`. ``None`` for every call it does not list."""
+
 
 @runtime_checkable
 class AttentionBackend(Protocol):
@@ -92,7 +115,9 @@ class AttentionBackend(Protocol):
 
     Implementations should name only the keyword arguments they consume and
     absorb the rest with ``**kwargs``: informational context may grow over
-    time, and an open signature keeps existing backends compatible.
+    time, and an open signature keeps existing backends compatible. ``role``
+    is such context: the call's :class:`AttentionRole` (also on the spec),
+    passed to ``run`` only when it is not ``None``.
 
     A backend that leaves the ``k``/``v`` it was handed rounded onto a
     lower-precision grid -- one scale per KV head -- declares that grid's dtype
@@ -121,6 +146,7 @@ class AttentionBackend(Protocol):
         v_BSJD: torch.Tensor | None,
         *,
         quantized_kv: QuantizedKVCacheEntry | None = None,
+        role: AttentionRole | None = None,
     ) -> torch.Tensor:
         """Compute attention, returning ``(B, S_q, H, D)`` in a float dtype."""
         ...
@@ -191,6 +217,7 @@ def _spec_from_tensors(
     v_BSJD: torch.Tensor | None,  # noqa: ARG001  (symmetry with run())
     *,
     quantized_kv: QuantizedKVCacheEntry | None = None,
+    role: AttentionRole | None = None,
 ) -> AttentionSpec:
     """Describe the call about to run, for the registry to match against."""
     k = quantized_kv.key if quantized_kv is not None else k_BSJD
@@ -209,6 +236,7 @@ def _spec_from_tensors(
             else None
         ),
         is_grad_enabled=torch.is_grad_enabled(),
+        role=role,
     )
 
 
@@ -218,6 +246,7 @@ def find_attention_backend(
     v_BSJD: torch.Tensor | None,
     *,
     quantized_kv: QuantizedKVCacheEntry | None = None,
+    role: AttentionRole | None = None,
 ) -> AttentionBackend | None:
     """The backend for this call, or ``None`` for the standard SDPA path.
 
@@ -225,7 +254,9 @@ def find_attention_backend(
     it. This is the one selection routine: the architectures call it (through
     the SDPA wrapper) and own no selection logic themselves.
     """
-    spec = _spec_from_tensors(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
+    spec = _spec_from_tensors(
+        q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv, role=role
+    )
     backend: AttentionBackend | None = None
     for candidate in _consult_order:
         if candidate.is_preferred(spec):
@@ -284,11 +315,12 @@ def kv_grid_dtype(
 def _log_selection(spec: AttentionSpec, backend: AttentionBackend | None) -> None:
     """Debug-log one selection (the shapes make the stage recognisable)."""
     _logger.debug(
-        "attention q=%s kv=%s heads=%s/%s head_dim=%s -> %s",
+        "attention q=%s kv=%s heads=%s/%s head_dim=%s role=%s -> %s",
         spec.seq_len_q,
         spec.seq_len_kv,
         spec.num_heads,
         spec.num_kv_heads,
         spec.head_dim,
+        None if spec.role is None else spec.role.value,
         "sdpa" if backend is None else backend.name,
     )

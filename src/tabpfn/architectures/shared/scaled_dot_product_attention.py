@@ -20,7 +20,10 @@ from tabpfn.architectures.shared.torch_mps_backend import TORCH_MPS_BACKEND
 
 if TYPE_CHECKING:
     from tabpfn.architectures.kv_cache import QuantizedKVCacheEntry
-    from tabpfn.architectures.shared.attention_backends import AttentionBackend
+    from tabpfn.architectures.shared.attention_backends import (
+        AttentionBackend,
+        AttentionRole,
+    )
 
 register_attention_backend(
     # Listed in consult order: the first one that prefers a call takes it.
@@ -41,6 +44,7 @@ def scaled_dot_product_attention(
     *,
     quantized_kv: QuantizedKVCacheEntry | None = None,
     backend: AttentionBackend | None | Literal["auto"] = "auto",
+    role: AttentionRole | None = None,
 ) -> torch.Tensor:
     """Attention dispatch: run a registered backend, or the torch SDPA path.
 
@@ -51,6 +55,10 @@ def scaled_dot_product_attention(
     ``quantized_kv`` supplies the keys/values as a quantized cache entry
     instead of ``k_BSJD``/``v_BSJD``.
 
+    ``role`` says what the call is, for the few calls an architecture labels
+    (see ``AttentionRole``). It reaches the backend on the spec and, when set,
+    as a keyword to ``run``; the standard SDPA path ignores it.
+
     A quantized entry is handled exactly once, here: whoever takes the call
     receives dense ``k``/``v`` cast to q's dtype, with the scales folded into
     q and the output — unless it is a backend declaring
@@ -58,19 +66,24 @@ def scaled_dot_product_attention(
     """
     if isinstance(backend, str):  # "auto"
         backend = find_attention_backend(
-            q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv
+            q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv, role=role
         )
     record_attention_backend(backend)
+    # Passed only when set, so a backend that does not take it keeps working
+    # on every call that has no role.
+    role_kwargs = {} if role is None else {"role": role}
 
     if quantized_kv is not None and not getattr(
         backend, "consumes_quantized_kv", False
     ):
         return _attend_to_quantized_kv(
-            q_BSHD, quantized_kv, backend, _backends_override
+            q_BSHD, quantized_kv, backend, _backends_override, role_kwargs
         )
 
     if backend is not None:
-        return backend.run(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
+        return backend.run(
+            q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv, **role_kwargs
+        )
     return _torch_sdpa(q_BSHD, k_BSJD, v_BSJD, _backends_override)
 
 
@@ -79,6 +92,7 @@ def _attend_to_quantized_kv(
     quantized_kv: QuantizedKVCacheEntry,
     backend: AttentionBackend | None,
     _backends_override: list[SDPBackend] | None,
+    role_kwargs: dict[str, AttentionRole],
 ) -> torch.Tensor:
     """Attention over a quantized entry, with its scales folded into q and the output.
 
@@ -99,7 +113,7 @@ def _attend_to_quantized_kv(
     k_BSJD = quantized_kv.key.to(dtype)
     v_BSJD = quantized_kv.value.to(dtype)
     if backend is not None:
-        out_BSHD = backend.run(q_BSHD, k_BSJD, v_BSJD)
+        out_BSHD = backend.run(q_BSHD, k_BSJD, v_BSJD, **role_kwargs)
     else:
         out_BSHD = _torch_sdpa(q_BSHD, k_BSJD, v_BSJD, _backends_override)
     return out_BSHD * quantized_kv.value_scale.to(dtype)

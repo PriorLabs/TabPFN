@@ -55,6 +55,7 @@ from tabpfn.architectures.kv_cache import (
     QuantizedKVCacheEntry,
 )
 from tabpfn.architectures.shared.attention_backends import (
+    AttentionRole,
     kv_grid_dtype,
     recorded_attention_backends,
 )
@@ -806,6 +807,7 @@ def _batched_scaled_dot_product_attention(
     softmax_scaling_layer: nn.Module | None = None,
     _backends_override: list[SDPBackend] | None = None,
     quantized_kv: QuantizedKVCacheEntry | None = None,
+    role: AttentionRole | None = None,
 ) -> torch.Tensor:
     """SDPA with optional query scaling.
 
@@ -823,6 +825,7 @@ def _batched_scaled_dot_product_attention(
         v_BSJD,
         _backends_override,
         quantized_kv=quantized_kv,
+        role=role,
     )
 
 
@@ -1062,6 +1065,7 @@ class ICLAttention(nn.Module):
                         k,
                         v,
                         softmax_scaling_layer=self.softmax_scaling_layer,
+                        role=AttentionRole.ICL_TRAIN,
                     )
                 # Test rows: fewer KV heads (GQA / MQA)
                 nh_test_heads = self.num_kv_heads_test
@@ -1079,6 +1083,7 @@ class ICLAttention(nn.Module):
                         k,
                         v,
                         softmax_scaling_layer=self.softmax_scaling_layer,
+                        role=AttentionRole.ICL_TRAIN,
                     )
 
         result = self.out_projection(out.reshape(B, R, self.head_dim * self.num_heads))

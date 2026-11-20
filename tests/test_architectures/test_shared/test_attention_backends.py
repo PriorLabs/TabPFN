@@ -255,3 +255,57 @@ def test_recorded_attention_backends_sees_each_dispatched_call() -> None:
     scaled_dot_product_attention(q, k, v)
 
     assert calls == [backend, None]
+
+
+class _ClosedSignatureBackend:
+    """A backend written before ``role``: its run() takes no extra keywords."""
+
+    name = "closed"
+
+    def is_preferred(self, _spec: attention_backends.AttentionSpec) -> bool:
+        return True
+
+    def run(self, q, k, v, *, quantized_kv=None):  # noqa: ANN202, ARG002
+        return torch.full_like(q, 7.0)
+
+
+@pytest.mark.usefixtures("registry_sandbox")
+def test_role_reaches_spec_and_run_only_when_set() -> None:
+    backend = _RecordingBackend()
+    seen_roles: list = []
+    original_run = backend.run
+
+    def run(q, k, v, **kwargs):  # noqa: ANN202
+        seen_roles.append(kwargs.get("role", "absent"))
+        return original_run(q, k, v, **kwargs)
+
+    backend.run = run  # type: ignore[method-assign]
+    attention_backends.register_attention_backend(backend)
+    q, k, v = _qkv()
+
+    scaled_dot_product_attention(q, k, v)
+    scaled_dot_product_attention(
+        q, k, v, role=attention_backends.AttentionRole.ICL_TRAIN
+    )
+
+    assert [s.role for s in backend.specs] == [
+        None,
+        attention_backends.AttentionRole.ICL_TRAIN,
+    ]
+    assert seen_roles == ["absent", attention_backends.AttentionRole.ICL_TRAIN]
+
+
+@pytest.mark.usefixtures("registry_sandbox")
+def test_backend_without_role_keyword_still_runs_unlabelled_calls() -> None:
+    attention_backends.register_attention_backend(_ClosedSignatureBackend())
+    q, k, v = _qkv()
+    assert torch.all(scaled_dot_product_attention(q, k, v) == 7.0)
+
+
+def test_role_does_not_change_the_sdpa_path() -> None:
+    q, k, v = _qkv()
+    expected = scaled_dot_product_attention(q, k, v, backend=None)
+    got = scaled_dot_product_attention(
+        q, k, v, backend=None, role=attention_backends.AttentionRole.ICL_TRAIN
+    )
+    assert torch.equal(got, expected)

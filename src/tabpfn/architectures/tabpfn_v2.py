@@ -35,6 +35,7 @@ from tabpfn.architectures.kv_cache import (
     KVCache,
     KVCacheEntry,
 )
+from tabpfn.architectures.shared.attention_backends import AttentionRole
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
@@ -223,10 +224,12 @@ class AlongColumnAttention(Attention):
             v_BcNHD = self.v_projection(x_BcRE[:, :N]).view(Bc, N, -1, self.head_dim)
 
             if single_eval_pos == R:
-                output_BcSHD = scaled_dot_product_attention(q_BcRHD, k_BcNHD, v_BcNHD)
+                output_BcSHD = scaled_dot_product_attention(
+                    q_BcRHD, k_BcNHD, v_BcNHD, role=AttentionRole.ICL_TRAIN
+                )
             else:
                 out_train_BcNHD = scaled_dot_product_attention(
-                    q_BcRHD[:, :N], k_BcNHD, v_BcNHD
+                    q_BcRHD[:, :N], k_BcNHD, v_BcNHD, role=AttentionRole.ICL_TRAIN
                 )
                 out_test_BcMHD = scaled_dot_product_attention(
                     q_BcRHD[:, N:], k_BcNHD[:, :, :1], v_BcNHD[:, :, :1]
