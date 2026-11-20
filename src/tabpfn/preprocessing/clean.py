@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import ctypes
 import dataclasses
+import mmap
+import sys
 import typing
 import warnings
 import weakref
@@ -399,6 +402,12 @@ def overwrite_fit_input() -> Iterator[None]:
     and preprocessing that writes nothing keeps the array rather than a copy. A
     read-only array's categorical columns are coded in a copy, as outside the block.
 
+    The same holds for an input that is cleaned into a float32 table of its own: a
+    frame is emptied of its columns once they are in the table, and a writeable
+    numeric array of a wider dtype is narrowed to float32 in its own memory, the
+    rest of which is handed back to the system. Its memory is then freed, or
+    reused, provided the caller holds no other reference to it.
+
     Each array may be given to one `fit` only. Its contents are undefined after that
     fit, and the fitted model may keep it, so the caller must neither read nor
     write it. A later `fit` given the same array raises a `ValueError`.
@@ -438,6 +447,62 @@ def may_overwrite_fit_input(X: Any, given: Any) -> bool:
             and _OVERWRITE_FIT_INPUT.get()
         )
     return is_private_copy(X, given)
+
+
+_NARROW_BLOCK_BYTES = 1 << 26
+"""Bytes of rows `narrow_fit_input_in_place` casts at a time. Each block is cast into a
+temporary first: larger blocks hold a larger one, smaller ones pay the per-block
+overhead more often."""
+
+_MADV_DONTNEED = 4
+"""Linux's `madvise` advice to drop a range of pages."""
+
+
+def narrow_fit_input_in_place(X: np.ndarray) -> np.ndarray:
+    """`X`'s values as a float32 table written over the start of `X`'s own memory.
+
+    For a fit inside `overwrite_fit_input()` given `X`, a writeable C-ordered numeric
+    array of at least four bytes per value. The rest of `X`'s memory is handed back to
+    the system, and `X` holds no meaningful values afterwards.
+    """
+    n_rows, n_columns = X.shape
+    table = X.reshape(-1).view(np.float32)[: X.size].reshape(n_rows, n_columns)
+    rows = max(1, _NARROW_BLOCK_BYTES // max(1, n_columns * X.itemsize))
+    for start in range(0, n_rows, rows):
+        # Cast before it is written, and written where it ends before the rows not
+        # read yet begin, so no value is overwritten before it is read.
+        table[start : start + rows] = X[start : start + rows].astype(np.float32)
+    _release_pages(X, table.nbytes)
+    _OVERWRITTEN_FIT_INPUTS[id(X)] = X
+    return table
+
+
+def _release_pages(X: np.ndarray, start: int) -> None:
+    """Hand the whole pages of `X`'s memory from byte `start` on back to the system.
+
+    Linux only: elsewhere they stay, which costs memory but changes no value. A page
+    dropped this way reads as zeros if anything touches it again.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    page = mmap.PAGESIZE
+    first = -(-(X.ctypes.data + start) // page) * page
+    last = (X.ctypes.data + X.nbytes) // page * page
+    if last <= first:
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    if libc.madvise(first, last - first, _MADV_DONTNEED) != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, f"madvise failed: {errno}")
+
+
+def empty_fit_frame(X: pd.DataFrame) -> None:
+    """Drop every column of `X`, the caller's frame, so its memory is freed once
+    nothing else holds it. For a fit inside `overwrite_fit_input()`.
+    """
+    # In place is the point: the caller's object has to let go of its blocks.
+    X.drop(columns=X.columns, inplace=True)  # noqa: PD002
 
 
 def is_private_copy(X: Any, given: Any) -> bool:

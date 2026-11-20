@@ -48,7 +48,10 @@ from tabpfn.preprocessing.clean import (
     ColumnRangeEncoders,
     clean_data,
     clean_data_transform,
+    empty_fit_frame,
     may_overwrite_fit_input,
+    narrow_fit_input_in_place,
+    overwriting_fit_input,
 )
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
@@ -668,14 +671,21 @@ def validate_and_clean_fit_input(
     table = None
     if isinstance(X, np.ndarray):
         # Cleaning that encodes no column leaves every value as it is, so the table
-        # is `X` cast, which reads it row by row rather than in strided ranges; the
-        # ranges are read without a table to write into.
+        # is `X` narrowed, in its own memory where the caller lets go of it, else
+        # cast, which reads it row by row rather than in strided ranges; the ranges
+        # are read without a table to write into.
         y_clean, ranges, feature_schema = clean_ranges(None)
         if not any(encoder.selected_columns() for _, _, encoder in ranges):
-            table = X.astype(dtype)
+            table = (
+                narrow_fit_input_in_place(X)
+                if _narrows_in_place(X, X_given, dtype)
+                else X.astype(dtype)
+            )
     if table is None:
         table = np.empty((n_rows, n_columns), dtype=dtype)
         y_clean, ranges, feature_schema = clean_ranges(table)
+        if overwriting_fit_input() and isinstance(X_given, pd.DataFrame):
+            empty_fit_frame(X_given)
     warn_on_text(feature_schema)
     return (
         table,
@@ -840,6 +850,24 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
         and dtype == np.float32
         and X.dtype.kind in "biuf"
         and X.dtype != np.float32
+    )
+
+
+def _narrows_in_place(X: XType, X_given: XType, dtype: np.dtype) -> bool:
+    """Whether the float32 table may be `X` narrowed in its own memory.
+
+    So it may when `X` is the caller's own writeable C-ordered numeric array, of at
+    least four bytes per value, given to a fit inside `overwrite_fit_input()`.
+    """
+    return (
+        dtype == np.float32
+        and isinstance(X, np.ndarray)
+        and X.ndim == 2
+        and X.dtype.kind in "iuf"
+        and X.dtype.itemsize >= 4
+        and X.dtype != np.float32
+        and X.flags.c_contiguous
+        and may_overwrite_fit_input(X, X_given)
     )
 
 

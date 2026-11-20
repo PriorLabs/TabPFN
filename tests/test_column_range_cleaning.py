@@ -1,6 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""A fit input cleaned a range of columns at a time matches it cleaned whole."""
+"""A fit input cleaned a range of columns at a time matches it cleaned whole, and
+inside `overwrite_fit_input()` lets go of the caller's memory.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +16,8 @@ import tabpfn.base
 import tabpfn.classifier
 import tabpfn.regressor
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.preprocessing.clean import ColumnRangeEncoders
+from tabpfn.preprocessing.clean import ColumnRangeEncoders, overwrite_fit_input
+from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 
 N_ROWS = 240
 N_TEST = 60
@@ -157,3 +160,90 @@ def test__column_ranges__split_by_kind_and_width(
         (4, 5),
         (5, 6),
     ]
+
+
+def _gpu_preprocessing_model(estimator_cls: type) -> TabPFNClassifier | TabPFNRegressor:
+    return estimator_cls(
+        n_estimators=2,
+        device="cpu",
+        random_state=0,
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    )
+
+
+def _targets(estimator_cls: type, n: int) -> np.ndarray:
+    rng = np.random.default_rng(1)
+    if estimator_cls is TabPFNClassifier:
+        return rng.integers(0, 2, n)
+    return rng.standard_normal(n)
+
+
+def _predict(model: TabPFNClassifier | TabPFNRegressor, X: Any) -> np.ndarray:
+    if isinstance(model, TabPFNClassifier):
+        return model.predict_proba(X)
+    return model.predict(X)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__overwrite_fit_input__frame__is_emptied_and_predicts_as_a_copy(
+    estimator_cls: type,
+) -> None:
+    X = _mixed_frame(N_ROWS + N_TEST)
+    y = _targets(estimator_cls, N_ROWS)
+    expected = _gpu_preprocessing_model(estimator_cls).fit(X.iloc[:N_ROWS].copy(), y)
+    given = X.iloc[:N_ROWS].copy()
+
+    with overwrite_fit_input():
+        model = _gpu_preprocessing_model(estimator_cls).fit(given, y)
+
+    assert given.shape == (N_ROWS, 0)
+    np.testing.assert_array_equal(
+        _predict(model, X.iloc[N_ROWS:]), _predict(expected, X.iloc[N_ROWS:])
+    )
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+@pytest.mark.parametrize("dtype", [np.float64, np.int64, np.int32])
+def test__overwrite_fit_input__wide_array__members_share_it_narrowed(
+    estimator_cls: type, dtype: type
+) -> None:
+    """The members read one float32 table in the caller's own memory, and predict as
+    members of a fit on a copy.
+    """
+    rng = np.random.default_rng(0)
+    X = (rng.standard_normal((N_ROWS + N_TEST, 6)) * 1000).astype(dtype)
+    y = _targets(estimator_cls, N_ROWS)
+    expected = _gpu_preprocessing_model(estimator_cls).fit(X[:N_ROWS].copy(), y)
+    given = X[:N_ROWS].copy()
+
+    with overwrite_fit_input():
+        model = _gpu_preprocessing_model(estimator_cls).fit(given, y)
+
+    for member in model.executor_.ensemble_members:
+        table = member.X_train
+        base = table.base if isinstance(table, SharedColumnsTable) else table
+        assert base.dtype == np.float32
+        assert np.shares_memory(base, given)
+    np.testing.assert_array_equal(
+        _predict(model, X[N_ROWS:]), _predict(expected, X[N_ROWS:])
+    )
+    with overwrite_fit_input(), pytest.raises(ValueError, match="overwritten"):
+        _gpu_preprocessing_model(estimator_cls).fit(given, y)
+
+
+def test__overwrite_fit_input__wide_array_with_a_categorical__is_copied() -> None:
+    """A column that is encoded keeps the table from being the array narrowed."""
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((N_ROWS + N_TEST, 4))
+    X[:, 1] = rng.integers(0, 3, len(X))
+    y = _targets(TabPFNClassifier, N_ROWS)
+    expected = _gpu_preprocessing_model(TabPFNClassifier).fit(X[:N_ROWS].copy(), y)
+    given = X[:N_ROWS].copy()
+
+    with overwrite_fit_input():
+        model = _gpu_preprocessing_model(TabPFNClassifier).fit(given, y)
+
+    np.testing.assert_array_equal(given, X[:N_ROWS])
+    np.testing.assert_array_equal(
+        model.predict_proba(X[N_ROWS:]), expected.predict_proba(X[N_ROWS:])
+    )
