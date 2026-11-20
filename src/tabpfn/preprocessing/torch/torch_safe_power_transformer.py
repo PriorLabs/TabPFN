@@ -23,14 +23,18 @@ _OVERHEAD_FACTOR = 6
 class TorchSafePowerTransformer:
     """Yeo-Johnson power transform followed by a NaN-safe standard scaler.
 
-    Mirrors the CPU ``safepower`` preset: ``SafePowerTransformer(standardize=False)``
-    then ``make_scaler_safe(StandardScaler())``. Each column's lambda maximises the
+    Mirrors the CPU ``safepower`` preset:
+    ``SafePowerTransformer(standardize=False, relative_to_geometric_mean=True)`` then
+    ``make_scaler_safe(StandardScaler())``. Each column's lambda maximises the
     Yeo-Johnson log-likelihood within scipy's overflow-safe bounds, found by a
-    batched golden-section search. Computes in float64, so it cannot run on MPS.
-    Fit runs on column chunks and transform on row chunks to keep the float64
-    working set near ``_CHUNK_TARGET_BYTES``. A fit chunk holds at least one
-    whole column, so beyond about 22M rows the fit working set grows with the
-    row count.
+    batched golden-section search. The transform is computed relative to each
+    column's geometric mean, which keeps columns far from zero, such as years,
+    from collapsing to a constant. ``_yeojohnson_centered_transform`` describes
+    its two steps, which ``_log_ratios`` and ``_yeo_johnson`` implement here.
+    Computes in float64, so it cannot run on MPS. Fit runs on column chunks and
+    transform on row chunks to keep the float64 working set near
+    ``_CHUNK_TARGET_BYTES``. A fit chunk holds at least one whole column, so
+    beyond about 22M rows the fit working set grows with the row count.
     """
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -61,8 +65,8 @@ class TorchSafePowerTransformer:
 
 
 def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
-    lambdas = _fit_lambdas(x)
-    y = _yeo_johnson(x, torch.log1p(x.abs()), lambdas)
+    lambdas, log_means = _fit_lambdas(x)
+    y = _yeo_johnson(*_log_ratios(x, log_means), lambdas, log_means)
     y.masked_fill_(torch.isinf(y), torch.nan)
     impute_mean = torch.nan_to_num(y.nanmean(dim=0), nan=0.0)
     torch.where(torch.isnan(y), impute_mean, y, out=y)
@@ -72,6 +76,7 @@ def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
     scale = torch.where(_is_constant(var, mean, x.shape[0]), 1.0, var.sqrt())
     return {
         "lambdas": lambdas,
+        "log_means": log_means,
         "impute_mean": impute_mean,
         "mean": mean,
         "scale": scale,
@@ -81,13 +86,20 @@ def _fit_chunk(x: torch.Tensor) -> dict[str, torch.Tensor]:
 def _transform_chunk(
     x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
 ) -> torch.Tensor:
-    y = _yeo_johnson(x, torch.log1p(x.abs()), fitted_cache["lambdas"])
+    lambdas = fitted_cache["lambdas"]
+    # A cache fitted before the log means existed has none. Zero gives the
+    # classic transform it was fitted with.
+    log_means = fitted_cache.get("log_means", torch.zeros_like(lambdas))
+    y = _yeo_johnson(*_log_ratios(x, log_means), lambdas, log_means)
     torch.where(torch.isfinite(y), y, fitted_cache["impute_mean"], out=y)
     return y.sub_(fitted_cache["mean"]).div_(fitted_cache["scale"])
 
 
-def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
-    """Per-column ``_yeojohnson_normmax`` with sklearn's special cases."""
+def _fit_lambdas(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fit every column: its maximum-likelihood lambda and its ``log_mean``.
+
+    The batched counterpart of ``_fit_yeojohnson_centered``.
+    """
     invalid = torch.isnan(x)
     n_valid = x.shape[0] - invalid.sum(dim=0)
     abs_max = x.abs().nan_to_num_(nan=0.0).amax(dim=0)
@@ -114,44 +126,113 @@ def _fit_lambdas(x: torch.Tensor) -> torch.Tensor:
     lb = torch.where(skip, 0.0, lb)
     ub = torch.where(skip, 1.0, ub)
 
-    # Lambda-independent terms of the log-likelihood, computed once.
-    log1p_abs = torch.log1p(x.abs())
-    sum_log = log1p_abs.copysign(x).nansum(dim=0)
+    # The log of the geometric mean is the mean of the logs. Each log carries the
+    # sign of its value, so that a mostly negative column gets a negative mean.
+    log_means = torch.log1p(x.abs()).copysign_(x).nansum(dim=0) / n_valid
+    # Zero for the columns without a search: with lambda = 1 it leaves them
+    # unchanged.
+    log_means = torch.where(skip, 0.0, log_means)
+    # Step 1 of the transform does not depend on lambda, so the search computes
+    # it once and repeats only step 2.
+    log_ratios, nonnegative = _log_ratios(x, log_means)
 
     def neg_llf(lambdas: torch.Tensor) -> torch.Tensor:
-        y = _yeo_johnson(x, log1p_abs, lambdas).masked_fill_(invalid, 0.0)
+        # The Yeo-Johnson log-likelihood has two terms: one in the variance of the
+        # transformed column and one in the sum of its logs. Dividing by the
+        # geometric mean makes the second term constant, so the variance alone
+        # decides.
+        y = _yeo_johnson(log_ratios, nonnegative, lambdas, log_means)
+        y.masked_fill_(invalid, 0.0)
         mean = y.sum(dim=0) / n_valid
         y.sub_(mean).masked_fill_(invalid, 0.0)
         var = y.square_().sum(dim=0) / n_valid
-        llf = -n_valid / 2 * var.log() + (lambdas - 1) * sum_log
-        # scipy rejects near-zero variance as an infinite likelihood.
-        return torch.where(var < finfo.tiny, torch.inf, -llf)
+        llf = -n_valid / 2 * var.log()
+        # Reject a vanishing or undefined variance, as SafePowerTransformer does.
+        return torch.where(var >= finfo.tiny, -llf, torch.inf)
 
     lambdas = _golden_section_search(neg_llf, lb, ub)
     lambdas = torch.where(constant, 1.0, lambdas)
-    return torch.where(n_valid == 0, torch.nan, lambdas)
+    return torch.where(n_valid == 0, torch.nan, lambdas), log_means
+
+
+def _log_ratios(
+    x: torch.Tensor, log_means: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Step 1 of ``_yeojohnson_centered_transform``, for all columns at once.
+
+    Returns the log that step 2, ``_yeo_johnson``, takes a power of, and whether
+    each value is nonnegative once mostly negative columns have been mirrored.
+    """
+    # A mostly negative column is transformed as its mirror image, which
+    # ``_yeo_johnson`` completes.
+    x = x * torch.where(log_means >= 0, 1.0, -1.0).to(x.dtype)
+    nonnegative = x >= 0
+    abs_x = x.abs_()
+    x_at_mean = log_means.abs().expm1()  # the x at which 1 + x equals g
+
+    # Values x >= 0:
+    #
+    # 1. ratio = (1 + x) / g, kept as its log.
+    #    For a row near the mean, log(1 + x) and log(g) are almost equal, and
+    #    subtracting them would lose the digits that tell rows apart. There the
+    #    ratio is formed from x - x_at_mean instead, a subtraction that is exact
+    #    when the two are within a factor of two (Sterbenz lemma). Far from the
+    #    mean that route fails in turn, and the two logs are safe to subtract.
+    #
+    # Values x < 0 get the log that the classic formula uses, in the same pass.
+    near_mean = nonnegative & (abs_x >= x_at_mean / 2) & (abs_x <= 2 * x_at_mean)
+    distance = (abs_x - x_at_mean).div_(1 + x_at_mean)
+    logs = torch.where(near_mean, distance, abs_x).log1p_()
+    del distance, abs_x
+    far_from_mean = nonnegative & ~near_mean
+    del near_mean
+    logs.sub_(torch.where(far_from_mean, log_means.abs(), 0.0))
+    del far_from_mean
+    # For x < 0 the classic formula uses the log with a negative sign.
+    return logs.mul_(torch.where(nonnegative, 1.0, -1.0)), nonnegative
 
 
 def _yeo_johnson(
-    x: torch.Tensor, log1p_abs: torch.Tensor, lambdas: torch.Tensor
+    log_ratios: torch.Tensor,
+    nonnegative: torch.Tensor,
+    lambdas: torch.Tensor,
+    log_means: torch.Tensor,
 ) -> torch.Tensor:
-    """Yeo-Johnson transform with one lambda per column, as in scipy.
+    """Step 2 of ``_yeojohnson_centered_transform``, for all columns at once.
 
-    Both branches equal ``sign(x) * expm1(m * log1p(|x|)) / m``, with
-    ``m = lambda`` for ``x >= 0`` and ``m = 2 - lambda`` otherwise, and the
-    ``m -> 0`` limit ``sign(x) * log1p(|x|)``.
+    Takes ``log_ratios`` and ``nonnegative`` from ``_log_ratios``. With
+    ``log_means = 0`` the result is the classic transform.
     """
-    pos = x >= 0
-    m = torch.where(pos, lambdas, 2 - lambdas)
-    m_abs = m.abs()
-    # scipy's lambda == 0 test is strict, its lambda == 2 test is not.
-    m_is_0 = torch.where(pos, m_abs < _EPS, m_abs <= _EPS)
-    del m_abs, pos
-    m.masked_fill_(m_is_0, 1.0)
-    y = torch.mul(m, log1p_abs).expm1_().div_(m)
-    del m
-    torch.where(m_is_0, log1p_abs, y, out=y)
-    return y.copysign_(x)
+    # A mostly negative column is transformed as its mirror image. Yeo-Johnson
+    # is symmetric: flipping the sign of x and replacing lambda by 2 - lambda
+    # flips the sign of the result. ``_log_ratios`` flipped x, and the last line
+    # here flips the result back.
+    mirrored = log_means < 0
+    lambdas = torch.where(mirrored, 2 - lambdas, lambdas)
+    log_means = log_means.abs()
+
+    # 2. y = (ratio^power - 1) / power, from the log of the ratio.
+    #    The power is lambda for the values x >= 0. The values x < 0 go through
+    #    the same line with the power of the classic formula, lambda - 2.
+    power = torch.where(nonnegative, lambdas, lambdas - 2)
+    power_is_0 = power.abs() < _EPS
+    power.masked_fill_(power_is_0, 1.0)
+    y = torch.mul(power, log_ratios).expm1_().div_(power)
+    del power
+    torch.where(power_is_0, log_ratios, y, out=y)
+    del power_is_0
+
+    # Values x < 0 now hold the classic result, which is accurate for them.
+    # Compared with it, step 1 scaled and shifted the values x >= 0. The same
+    # scale and shift here make the two parts join at x = 0.
+    lambda_is_0 = lambdas.abs() < _EPS
+    safe_lambdas = lambdas.masked_fill(lambda_is_0, 1.0)
+    value_at_zero = (-safe_lambdas * log_means).expm1_().div_(safe_lambdas)
+    value_at_zero = torch.where(lambda_is_0, -log_means, value_at_zero)
+    rescaled = (y * (-lambdas * log_means).exp_()).add_(value_at_zero)
+    torch.where(nonnegative, y, rescaled, out=y)
+    del rescaled
+    return y.mul_(torch.where(mirrored, -1.0, 1.0))
 
 
 def _golden_section_search(
