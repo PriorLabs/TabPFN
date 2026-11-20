@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import dataclasses
 import typing
 import warnings
 import weakref
@@ -359,6 +360,24 @@ def _encode_categoricals(
     if out is X:
         _OVERWRITTEN_FIT_INPUTS[id(X)] = X
     return out
+
+
+@dataclasses.dataclass
+class ColumnRangeEncoders:
+    """The fitted cleaning of a table that was cleaned a range of columns at a time.
+
+    Each range has the encoder `clean_data` fitted on it alone; predict input is
+    cleaned by the same ranges into a table of `dtype`.
+    """
+
+    ranges: list[tuple[int, int, OrderPreservingColumnTransformer]]
+    """`(start, stop, encoder)` per range of columns, in column order."""
+    dtype: np.dtype
+
+    @property
+    def n_columns(self) -> int:
+        """The width of the cleaned table."""
+        return self.ranges[-1][1]
 
 
 _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
