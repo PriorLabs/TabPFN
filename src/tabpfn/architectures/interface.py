@@ -121,6 +121,19 @@ class PerformanceOptions:
     values on (``kv_grid_dtype``), when there is one, instead of ``kv_cache_dtype``.
     """
 
+    kv_cache_on_host: bool | None = None
+    """Whether a KV cache keeps its keys and values in host memory.
+
+    ``True`` keeps them there, and a forward on the cache copies to the device only
+    what it reads. ``False`` keeps them on the device. ``None`` (default) lets the
+    architecture decide. An architecture whose cache cannot be read from host memory
+    ignores this option.
+
+    The placement belongs to the cache: one built with its keys and values in host
+    memory keeps them there when it is moved with ``to``, so a forward on the cache
+    does not take this option again.
+    """
+
 
 class ArchitectureModule(Protocol):
     """Interface that modules containing model architectures should implement."""
