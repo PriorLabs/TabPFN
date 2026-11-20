@@ -45,13 +45,14 @@ def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray
         target = torch.from_numpy(out)
         rows = max(1, GATHER_BLOCK_BYTES // max(1, len(indices) * out.itemsize))
         for start in range(0, X.shape[0], rows):
-            block = source[start : start + rows]
-            block_index = index.expand(len(block), -1)
+            block = slice(start, start + rows)
+            values = source[block]
+            block_index = index.expand(len(values), -1)
             if X.dtype == out.dtype:
-                torch.gather(block, 1, block_index, out=target[start : start + rows])
+                torch.gather(values, 1, block_index, out=target[block])
             else:
                 # `gather` does not cast, so the block is cast as it is written.
-                target[start : start + rows] = torch.gather(block, 1, block_index)
+                target[block] = torch.gather(values, 1, block_index)
         return out
     # A block of columns at a time, each cast as it is written into the result.
     # numpy's fancy indexing over a block of rows is far slower.
