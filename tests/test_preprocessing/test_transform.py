@@ -20,7 +20,7 @@ from tabpfn.preprocessing.steps import RemoveConstantFeaturesStep
 from tabpfn.preprocessing.transform import _fit_preprocessing_one
 
 
-@pytest.mark.parametrize("source", [np.float32, np.int64])
+@pytest.mark.parametrize("source", [np.float32, np.float64, np.int64])
 @pytest.mark.parametrize("order", ["C", "F"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test__gather_columns__blocks__match_fancy_indexing_and_cast(
@@ -29,7 +29,7 @@ def test__gather_columns__blocks__match_fancy_indexing_and_cast(
     monkeypatch.setattr(pipeline_interface, "GATHER_BLOCK_BYTES", 3 * 50 * 4)
     rng = np.random.default_rng(0)
     X = np.asarray(rng.standard_normal((50, 17)) * 10, dtype=source, order=order)
-    if source is np.float32:
+    if source is not np.int64:
         X[3, 4] = np.nan
     indices = rng.permutation(17)[:11]
 

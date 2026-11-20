@@ -35,20 +35,29 @@ GATHER_BLOCK_BYTES = 1 << 26
 def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray:
     """`X[:, indices].astype(dtype, order="C")`, with no full-size intermediate."""
     out = np.empty((X.shape[0], len(indices)), dtype=dtype, order="C")
-    # A block of rows at a time, each cast as it is written into the result.
-    rows = max(1, GATHER_BLOCK_BYTES // max(1, len(indices) * X.itemsize))
-    if X.flags.c_contiguous and X.dtype in (np.float32, np.float64):
-        # numpy gathers columns of a C-ordered array with a strided copy, which
-        # `index_select` beats; from any other layout numpy is the faster.
+    if X.dtype in (np.float32, np.float64) and (
+        X.flags.c_contiguous or X.flags.f_contiguous
+    ):
+        # `torch.gather` with one index row broadcast over a block of rows outpaces
+        # `index_select` and numpy's fancy indexing from either layout.
         source = as_tensor_to_read(X)
-        index = torch.as_tensor(indices, dtype=torch.long)
+        index = torch.as_tensor(indices, dtype=torch.long).view(1, -1)
         target = torch.from_numpy(out)
+        rows = max(1, GATHER_BLOCK_BYTES // max(1, len(indices) * out.itemsize))
         for start in range(0, X.shape[0], rows):
-            block = slice(start, start + rows)
-            target[block] = source[block].index_select(1, index)
+            block = source[start : start + rows]
+            block_index = index.expand(len(block), -1)
+            if X.dtype == out.dtype:
+                torch.gather(block, 1, block_index, out=target[start : start + rows])
+            else:
+                # `gather` does not cast, so the block is cast as it is written.
+                target[start : start + rows] = torch.gather(block, 1, block_index)
         return out
-    for start in range(0, X.shape[0], rows):
-        out[start : start + rows] = X[start : start + rows, indices]
+    # A block of columns at a time, each cast as it is written into the result.
+    # numpy's fancy indexing over a block of rows is far slower.
+    width = max(1, GATHER_BLOCK_BYTES // max(1, X.shape[0] * X.itemsize))
+    for start in range(0, len(indices), width):
+        out[:, start : start + width] = X[:, indices[start : start + width]]
     return out
 
 
@@ -67,7 +76,7 @@ def permute_columns_in_place(X: np.ndarray, order: list[int]) -> np.ndarray:
     """
     if not (X.flags.c_contiguous and X.dtype in (np.float32, np.float64)):
         return X[:, order]
-    # `index_select` beats numpy's strided gather, as in `gather_columns`.
+    # `index_select` beats numpy's fancy indexing over a block of rows.
     table, index = torch.from_numpy(X), torch.as_tensor(order, dtype=torch.long)
     rows = max(1, PERMUTE_BLOCK_BYTES // max(1, X.shape[1] * X.itemsize))
     for start in range(0, X.shape[0], rows):
