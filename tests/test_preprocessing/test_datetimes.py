@@ -245,6 +245,40 @@ class TestExpansion:
         assert "date_year" in names
         assert "date_year_1" in names
 
+    def test__kept_columns__share_the_input_s_memory(self) -> None:
+        values = np.arange(12, dtype=np.float32).reshape(3, 4)
+        X = pd.concat(
+            [
+                pd.DataFrame(values, columns=list("abcd"), copy=False),
+                pd.DataFrame({"date": pd.date_range("2020-01-01", periods=3)}),
+            ],
+            axis=1,
+        ).set_axis([10, 11, 12], axis=0)
+        # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
+        blocks = [b.values for b in X._mgr.blocks]  # noqa: PD011
+        block = next(v for v in blocks if v.dtype == np.float32)
+        before = X.copy()
+
+        out = self._expander().fit_transform(X)
+
+        # `iloc` would copy the columns on pandas < 3, so the blocks are read instead.
+        assert any(np.shares_memory(b.values, block) for b in out._mgr.blocks)
+        np.testing.assert_array_equal(out.iloc[:, :4].to_numpy(), values)
+        assert list(out.index) == [0, 1, 2]
+        pd.testing.assert_frame_equal(X, before)
+
+    def test__repeated_labels__drop_only_the_expanded_position(self) -> None:
+        X = pd.DataFrame(
+            [[1.0, pd.Timestamp("2020-01-01"), 3.0]] * 3, columns=["x", "x", "y"]
+        ).astype({"y": float})
+        X.isetitem(0, [1.0, 2.0, 3.0])
+        X.isetitem(1, pd.date_range("2020-01-01", periods=3))
+
+        out = self._expander().fit_transform(X)
+
+        assert list(out.columns[:2]) == ["x", "y"]
+        np.testing.assert_array_equal(out.iloc[:, 0], [1.0, 2.0, 3.0])
+
 
 class TestExpansionAtPredictTime:
     """`transform` reapplies the encoder fit on the training column, not a new one."""

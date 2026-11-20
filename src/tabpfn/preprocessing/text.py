@@ -37,6 +37,7 @@ from skrub import StringEncoder
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import make_names_unique
+from tabpfn.preprocessing.datetimes import drop_and_append
 from tabpfn.preprocessing.modality_detection import (
     _get_unique_with_sklearn_compatible_error,
     _is_numeric_pandas_series,
@@ -131,7 +132,7 @@ class TextTransformer:
         blocks = self._fit(X)
         if not isinstance(X, pd.DataFrame) or not blocks:
             return X
-        return _drop_and_append(X.reset_index(drop=True), self.expanded_indices, blocks)
+        return drop_and_append(X, self.expanded_indices, blocks)
 
     def transform(self, X: XType) -> XType:
         """Reapply the expansion `fit` decided on, so the width holds.
@@ -169,7 +170,7 @@ class TextTransformer:
             self._apply_one(X.iloc[:, i], self.fitted_columns_[i])
             for i in self.expanded_indices
         ]
-        return _drop_and_append(X.reset_index(drop=True), self.expanded_indices, blocks)
+        return drop_and_append(X, self.expanded_indices, blocks)
 
     def output_indices(self, indices: Sequence[int] | None) -> list[int] | None:
         """Where each of `indices`, input positions, sits in the transformed frame.
@@ -300,18 +301,6 @@ def _text_positions(
             continue
         positions.append(i)
     return positions
-
-
-def _drop_and_append(
-    frame: pd.DataFrame, expanded: Sequence[int], blocks: Sequence[pd.DataFrame]
-) -> pd.DataFrame:
-    """Drop the `expanded` positions and append `blocks` after the kept columns.
-
-    skrub's output is default-indexed, so the kept columns must be too, or
-    `concat` aligns the two by label instead of position.
-    """
-    keep = [i for i in range(frame.shape[1]) if i not in set(expanded)]
-    return pd.concat([frame.iloc[:, keep], *blocks], axis=1)
 
 
 def _name_columns(X: pd.DataFrame, positions: Sequence[int]) -> str:
