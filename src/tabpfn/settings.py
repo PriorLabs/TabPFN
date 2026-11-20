@@ -98,6 +98,14 @@ class TabPFNSettings(BaseSettings):
         "each architecture applies its own default. Set to 0 to run every estimator "
         "in its own forward pass and its own cache.",
     )
+    host_model_input_min_bytes: int = Field(
+        default=16 << 30,
+        ge=0,
+        description="Model inputs of at least this many bytes stay in host memory "
+        "instead of on the inference device, for a model that reads its input from "
+        "there. Lower it when the device has little memory or shares it. Set to 0 to "
+        "keep every input of such a model in host memory.",
+    )
 
     def model_post_init(self, _: Any) -> None:
         """Configure MPS memory limits after settings are initialized.

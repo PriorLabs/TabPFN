@@ -1914,10 +1914,6 @@ def _prepare_model_inputs(
 _MODEL_INPUT_BLOCK_BYTES = 1 << 28
 """Bytes of rows `_prepare_model_inputs` converts and copies at a time."""
 
-HOST_MODEL_INPUT_MIN_BYTES = 16 << 30
-"""Model inputs at least this large stay in host memory, for a model that reads its
-input from there: one whose `forward` takes an `x_host` argument."""
-
 
 def _model_input_device(
     model: torch.nn.Module,
@@ -1928,15 +1924,16 @@ def _model_input_device(
 ) -> torch.device:
     """Where `_prepare_model_inputs` puts the model input for `model` on `device`.
 
-    In host memory when the model's `forward` takes an `x_host` argument and the input
-    takes `HOST_MODEL_INPUT_MIN_BYTES`; else on `device`.
+    In host memory when the model reads its input from there (its `forward` takes an
+    `x_host` argument) and the input takes at least the `host_model_input_min_bytes`
+    of the settings; else on `device`.
     """
     if "x_host" not in _forward_parameters(model) or device.type == "cpu":
         return device
     dtype = force_inference_dtype if force_inference_dtype else torch.float32
     num_columns = X_train.shape[1] if len(X_train) else X_test.shape[1]
     nbytes = (len(X_train) + len(X_test)) * num_columns * dtype.itemsize
-    if nbytes >= HOST_MODEL_INPUT_MIN_BYTES:
+    if nbytes >= settings.tabpfn.host_model_input_min_bytes:
         return torch.device("cpu")
     return device
 
