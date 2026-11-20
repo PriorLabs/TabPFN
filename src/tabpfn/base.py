@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import pathlib
 import typing
 from collections.abc import Sequence
@@ -659,19 +660,81 @@ def validate_and_clean_fit_input(
 
     y_name = str(y.name) if isinstance(y, pd.Series) else None
     n_rows, n_columns = X.shape
-    names = build_input_feature_names(feature_names, n_columns)
-    declared = sorted(categorical_indices or ())
-    table = np.empty((n_rows, n_columns), dtype=dtype)
+    clean_ranges = functools.partial(
+        _clean_ranges,
+        estimator,
+        X,
+        y,
+        names=build_input_feature_names(feature_names, n_columns),
+        declared=sorted(categorical_indices or ()),
+        group_feature_index=group_feature_index,
+        ensure_y_numeric=ensure_y_numeric,
+        thresholds=thresholds,
+        passthrough_inf=passthrough_inf,
+    )
+    table = None
+    if isinstance(X, np.ndarray):
+        # Cleaning that encodes no column leaves every value as it is, so the table
+        # is `X` cast, which reads it row by row rather than in strided ranges; the
+        # ranges are read without a table to write into.
+        y_clean, ranges, feature_schema = clean_ranges(None)
+        if not any(encoder.selected_columns() for _, _, encoder in ranges):
+            table = X.astype(dtype)
+    if table is None:
+        table = np.empty((n_rows, n_columns), dtype=dtype)
+        y_clean, ranges, feature_schema = clean_ranges(table)
+    warn_on_text(feature_schema)
+    return (
+        table,
+        y_clean,
+        y_name,
+        as_group_feature(
+            feature_schema, group_feature_index, FeatureModality.CATEGORICAL
+        ),
+        ColumnRangeEncoders(ranges=ranges, dtype=dtype),
+    )
+
+
+def _clean_ranges(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    X: pd.DataFrame | np.ndarray,
+    y: YType,
+    table: np.ndarray | None,
+    *,
+    names: list[str],
+    declared: list[int],
+    group_feature_index: int | None,
+    ensure_y_numeric: bool,
+    thresholds: dict[str, int],
+    passthrough_inf: bool,
+) -> tuple[
+    np.ndarray,
+    list[tuple[int, int, OrderPreservingColumnTransformer]],
+    FeatureSchema,
+]:
+    """Validate, type and clean `X` a range of columns at a time, into `table`.
+
+    Returns the validated targets, each range's fitted encoder and the schema.
+    """
+    config = estimator.inference_config_
     ranges: list[tuple[int, int, OrderPreservingColumnTransformer]] = []
     features = []
+    # A numeric array is validated whole, in place: a range of it is a strided view,
+    # which reads slowly. A frame is validated a range at a time, which converts it.
+    whole = isinstance(X, np.ndarray)
     for start, stop in _column_ranges(X):
         part = _columns(X, start, stop)
         if start == 0:
             # The targets are validated with the first range, and the size limits
             # checked before the rest is read.
-            part, y = ensure_compatible_fit_inputs_sklearn(
-                part, y, estimator=estimator, ensure_y_numeric=ensure_y_numeric
+            validated, y = ensure_compatible_fit_inputs_sklearn(
+                X if whole else part,
+                y,
+                estimator=estimator,
+                ensure_y_numeric=ensure_y_numeric,
             )
+            if not whole:
+                part = validated
             validate_dataset_size(
                 X=X,
                 y=y,
@@ -681,7 +744,7 @@ def validate_and_clean_fit_input(
                 devices=estimator.devices_,
                 ignore_pretraining_limits=estimator.ignore_pretraining_limits,
             )
-        else:
+        elif not whole:
             part = ensure_compatible_fit_columns(part, estimator=estimator)
         schema = named_feature_modalities(
             part,
@@ -699,20 +762,11 @@ def validate_and_clean_fit_input(
         cleaned, encoder, schema = clean_data(
             X=part, feature_schema=schema, passthrough_inf=passthrough_inf
         )
-        table[:, start:stop] = cleaned
+        if table is not None:
+            table[:, start:stop] = cleaned
         ranges.append((start, stop, encoder))
         features += schema.features
-    feature_schema = FeatureSchema(features=features)
-    warn_on_text(feature_schema)
-    return (
-        table,
-        y,
-        y_name,
-        as_group_feature(
-            feature_schema, group_feature_index, FeatureModality.CATEGORICAL
-        ),
-        ColumnRangeEncoders(ranges=ranges, dtype=dtype),
-    )
+    return np.asarray(y), ranges, FeatureSchema(features=features)
 
 
 def clean_predict_input(
