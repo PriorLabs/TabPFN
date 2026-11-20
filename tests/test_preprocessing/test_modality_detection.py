@@ -28,8 +28,8 @@ from tabpfn.preprocessing.modality_detection import (
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
-    _warn_on_text,
     detect_feature_modalities,
+    warn_on_text,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
 
@@ -605,7 +605,7 @@ def _text_schema(*names: str) -> FeatureSchema:
 
 
 class TestWarnOnText:
-    """Schema-level unit tests for `_warn_on_text`."""
+    """Schema-level unit tests for `warn_on_text`."""
 
     def test__no_text_features__does_not_warn(self) -> None:
         schema = FeatureSchema(
@@ -617,11 +617,11 @@ class TestWarnOnText:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_text(schema)
+            warn_on_text(schema)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(_text_schema("review"))
+            warn_on_text(_text_schema("review"))
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -639,7 +639,7 @@ class TestWarnOnText:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(schema)
+            warn_on_text(schema)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
