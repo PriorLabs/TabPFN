@@ -128,6 +128,10 @@ class PerformanceOptions:
     what it reads. ``False`` keeps them on the device. ``None`` (default) lets the
     architecture decide. An architecture whose cache cannot be read from host memory
     ignores this option.
+
+    The placement belongs to the cache: one built with its keys and values in host
+    memory keeps them there when it is moved with ``to``, so a forward on the cache
+    does not take this option again.
     """
 
 
