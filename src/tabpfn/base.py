@@ -553,7 +553,8 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
     A member reads float32 when its CPU pipeline only selects, reorders, compares and
     encodes values, and the model takes float32. Narrowing a wider input first then
     changes what reaches the model only where values that differ round to the same
-    float32.
+    float32. In `"batched"` mode the table goes to the fine-tuning datasets, whose
+    members are built without GPU preprocessing.
     """
     config = estimator.inference_config_
     reads_float32 = estimator.forced_inference_dtype_ in (
@@ -563,7 +564,8 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
         config.PREPROCESS_TRANSFORMS,
         polynomial_features=config.POLYNOMIAL_FEATURES,
         add_fingerprint_feature=config.FINGERPRINT_FEATURE,
-        enable_gpu_preprocessing=config.ENABLE_GPU_PREPROCESSING,
+        enable_gpu_preprocessing=config.ENABLE_GPU_PREPROCESSING
+        and estimator.fit_mode != "batched",
     )
     return np.dtype(np.float32 if reads_float32 else np.float64)
 
@@ -771,8 +773,11 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
     So it is when reading it whole would build a converted copy of all of it: a frame
     of more than one block or of a non-numeric one, or a numeric frame or array of
     another dtype than a float32 table. A numeric frame of one block or a numeric
-    array otherwise is read as it is, without a copy.
+    array otherwise is read as it is, without a copy. An input without a column is
+    left to the whole-table validation, which refuses it.
     """
+    if len(getattr(X, "shape", ())) == 2 and X.shape[1] == 0:
+        return False
     if isinstance(X, pd.DataFrame):
         blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
         if blocks is None or len(blocks) != 1:
