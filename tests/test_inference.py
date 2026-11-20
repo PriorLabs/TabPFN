@@ -1346,7 +1346,7 @@ def test__model_input_device__large_input_of_a_host_input_model__stays_on_the_ho
     expected: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("tabpfn.inference.HOST_MODEL_INPUT_MIN_BYTES", min_bytes)
+    monkeypatch.setattr(settings.tabpfn, "host_model_input_min_bytes", min_bytes)
     X_train, X_test = np.zeros((30, 4)), np.zeros((5, 4))
 
     actual = _model_input_device(model, torch.device(device), X_train, X_test, None)
@@ -1359,7 +1359,7 @@ def test__builds_member_by_member__mps__keeps_the_default_build(
     device: str, *, expected: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """MPS runs every member alone, which only the default build ensures."""
-    monkeypatch.setattr("tabpfn.inference.HOST_MODEL_INPUT_MIN_BYTES", 0)
+    monkeypatch.setattr(settings.tabpfn, "host_model_input_min_bytes", 0)
     engine = SimpleNamespace(
         model_caches=[SimpleNamespace(get_any=_HostInputModel)],
         force_inference_dtype=None,
