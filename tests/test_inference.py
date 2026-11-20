@@ -1396,11 +1396,16 @@ def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one
     X = rng.standard_normal((90, 6))
     X[:, 2] = rng.integers(0, 3, len(X))
     y = rng.integers(0, 2, 70)
+    # Steps that run by blocks, whatever the checkpoint's own preprocessing.
     config = {
         "ENABLE_GPU_PREPROCESSING": True,
         "FINGERPRINT_FEATURE": False,
         "FEATURE_SHIFT_METHOD": "shuffle",
         "OUTLIER_REMOVAL_STD": 12.0,
+        "PREPROCESS_TRANSFORMS": [
+            PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
+            PreprocessorConfig("quantile_norm", categorical_name="ordinal"),
+        ],
     }
     model = TabPFNClassifier(
         n_estimators=2, device="cpu", random_state=0, inference_config=config
