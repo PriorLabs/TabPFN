@@ -10,7 +10,7 @@ from typing import Any, TypedDict
 
 import pytest
 import torch
-from torch.nn.attention import SDPBackend
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.torch_version import TorchVersion
 
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
@@ -386,3 +386,124 @@ def test__gqa_is_supported__per_device__follows_version_capability_and_dtype(
         assert gqa_is_supported(torch.device(device), dtype) is expected
     finally:
         gqa_is_supported.cache_clear()
+
+
+# Packing never runs on ROCm, so tests that expect it need NVIDIA CUDA. Tests that
+# expect no packing set `torch.version.hip` themselves and run on any CUDA device.
+_CUDA_ONLY = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+_NVIDIA_CUDA_ONLY = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.version.hip is not None,
+    reason="needs NVIDIA CUDA",
+)
+
+
+@_NVIDIA_CUDA_ONLY
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize(("head_dim", "value_dim"), [(64, 64), (16, 32)])
+def test__torch_sdpa__mqa__packs_heads_into_query_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    dtype: torch.dtype,
+    head_dim: int,
+    value_dim: int,
+) -> None:
+    """With one shared K/V head, SDPA gets a single query head with all rows."""
+    seq_q = 10
+    shapes = _record_sdpa_calls(monkeypatch)
+    q = torch.empty(2, seq_q, 16, head_dim, device="cuda", dtype=dtype)
+    k = torch.empty(2, 1_024, 1, head_dim, device="cuda", dtype=dtype)
+    v = torch.empty(2, 1_024, 1, value_dim, device="cuda", dtype=dtype)
+
+    with torch.inference_mode():
+        out = _torch_sdpa(q, k, v)
+
+    assert shapes == [torch.Size([2, 1, seq_q * 16, head_dim])]
+    assert out.shape == (2, seq_q, 16, value_dim)
+
+
+@_NVIDIA_CUDA_ONLY
+def test__torch_sdpa__packed_mqa__empty_query_preserves_value_width() -> None:
+    """Empty queries still return the value head width."""
+    q = torch.empty(2, 0, 16, 64, device="cuda", dtype=torch.float16)
+    k = torch.empty(2, 8, 1, 64, device="cuda", dtype=torch.float16)
+    v = torch.empty(2, 8, 1, 32, device="cuda", dtype=torch.float16)
+
+    with torch.inference_mode():
+        out = _torch_sdpa(q, k, v, [SDPBackend.MATH])
+
+    assert out.shape == (2, 0, 16, 32)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["cpu"]
+    + [
+        pytest.param(case, marks=_CUDA_ONLY)
+        for case in (
+            "fp32",
+            "grouped_kv",
+            "grad",
+            "compiling",
+            "rocm",
+            "flash_override",
+        )
+    ],
+)
+def test__torch_sdpa__packing_not_applicable__keeps_query_heads(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Keep the query heads when packing is disabled."""
+    device = "cpu" if case == "cpu" else "cuda"
+    dtype = torch.float32 if case == "fp32" else torch.float16
+    seq_q = 10
+    kv_heads = 2 if case == "grouped_kv" else 1
+    q = torch.empty(2, seq_q, 16, 64, device=device, dtype=dtype)
+    k = torch.empty(2, 1_024, kv_heads, 64, device=device, dtype=dtype)
+    v = torch.empty_like(k)
+    shapes = _record_sdpa_calls(monkeypatch)
+    if case == "compiling":
+        monkeypatch.setattr(torch.compiler, "is_compiling", lambda: True)
+    monkeypatch.setattr(torch.version, "hip", "6.4" if case == "rocm" else None)
+    if case == "flash_override":
+        monkeypatch.setattr(
+            torch.nn.attention,
+            "current_flash_attention_impl",
+            lambda: "FA4",
+            raising=False,
+        )
+
+    with torch.set_grad_enabled(case == "grad"):
+        out = _torch_sdpa(q, k, v)
+
+    assert shapes == [torch.Size([2, 16, seq_q, 64])]
+    assert out.shape == q.shape
+
+
+@_NVIDIA_CUDA_ONLY
+@pytest.mark.parametrize("seq_q", [1, 10, 256])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("strided", [False, True])
+def test__torch_sdpa__packed_mqa__matches_fp32_attention(
+    seq_q: int, dtype: torch.dtype, *, strided: bool
+) -> None:
+    """Each original row/head attends to the same KV, including strided inputs."""
+    factor = 2 if strided else 1
+    q = torch.randn(2, seq_q * factor, 16, 64, device="cuda", dtype=dtype)
+    k = torch.randn(2, 1_024 * factor, 1, 64, device="cuda", dtype=dtype)
+    v = torch.randn_like(k)
+    if strided:
+        q, k, v = q[:, ::2], k[:, ::2], v[:, ::2]
+
+    with torch.inference_mode():
+        out = _torch_sdpa(q, k, v)
+        with sdpa_kernel([SDPBackend.MATH]):
+            expected = torch.nn.functional.scaled_dot_product_attention(
+                q.float().permute(0, 2, 1, 3),
+                k.float().permute(0, 2, 1, 3),
+                v.float().permute(0, 2, 1, 3),
+                enable_gqa=True,
+            ).permute(0, 2, 1, 3)
+
+    assert out.shape == q.shape
+    assert out.dtype == dtype
+    atol, rtol = (2e-4, 2e-3) if dtype == torch.float16 else (1e-3, 1e-2)
+    torch.testing.assert_close(out.float(), expected, atol=atol, rtol=rtol)
