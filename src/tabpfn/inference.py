@@ -155,58 +155,35 @@ def _prepare_train_inputs(
     member: TabPFNEnsembleMember,
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
-    model: torch.nn.Module | None = None,
+    model: torch.nn.Module,
 ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
     """A member's train rows as ``(rows, 1, C)``, targets, and categorical indices.
 
-    With ``model``, train rows that `_model_input_device` keeps in host memory stay
+    Train rows that `_model_input_device` keeps in host memory for ``model`` stay
     there, and the GPU preprocessing reads them from there, as for a full forward.
     """
-    tensor_dtype = force_inference_dtype or torch.float32
-    X_train, y_train = member.X_train, member.y_train
-    if model is not None:
-        no_test_rows = np.empty((0, X_train.shape[1]), dtype=np.float32)
-        x_device = _model_input_device(
+    X_train = member.X_train
+    no_test_rows = np.empty((0, X_train.shape[1]), dtype=np.float32)
+    X, y = _prepare_model_inputs(
+        device,
+        force_inference_dtype,
+        X_train,
+        no_test_rows,
+        member.y_train,
+        x_device=_model_input_device(
             model, device, X_train, no_test_rows, force_inference_dtype
-        )
-        if x_device != device:
-            X, y = _prepare_model_inputs(
-                device,
-                force_inference_dtype,
-                X_train,
-                no_test_rows,
-                y_train,
-                x_device=x_device,
-            )
-            X, feature_schema = _maybe_run_gpu_preprocessing(
-                X,
-                gpu_preprocessor=member.gpu_preprocessor,
-                num_train_rows=X.shape[0],
-                feature_schema=member.feature_schema,
-                consume_input=True,
-                compute_device=device,
-            )
-            return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
-    if not isinstance(X_train, torch.Tensor):
-        # A `SharedColumnsTable` is built whole here.
-        X_train = as_tensor_to_read(
-            np.asarray(X_train), dtype=tensor_dtype, device=device
-        )
-    else:
-        X_train = X_train.to(device)
-    X = X_train.unsqueeze(1)
-    if not isinstance(y_train, torch.Tensor):
-        y = torch.as_tensor(y_train, dtype=tensor_dtype, device=device)
-    else:
-        y = y_train.to(device)
+        ),
+    )
+    # `X` is this function's own copy, so the steps write into it a block of
+    # columns at a time.
     X, feature_schema = _maybe_run_gpu_preprocessing(
         X,
         gpu_preprocessor=member.gpu_preprocessor,
+        num_train_rows=X.shape[0],
         feature_schema=member.feature_schema,
+        consume_input=True,
+        compute_device=device,
     )
-    if force_inference_dtype is not None:
-        X = X.type(force_inference_dtype)
-        y = y.type(force_inference_dtype)
     return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
 

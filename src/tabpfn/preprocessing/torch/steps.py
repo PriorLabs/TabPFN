@@ -26,6 +26,7 @@ from tabpfn.preprocessing.torch.torch_quantile_transformer import (
 from tabpfn.preprocessing.torch.torch_robust_scaler import TorchRobustScaler
 from tabpfn.preprocessing.torch.torch_safe_power_transformer import (
     TorchSafePowerTransformer,
+    fit_chunk_columns,
 )
 from tabpfn.preprocessing.torch.torch_soft_clip_outliers import TorchSoftClipOutliers
 from tabpfn.preprocessing.torch.torch_squashing_scaler import TorchSquashingScaler
@@ -327,6 +328,10 @@ class TorchSelectiveSafePowerStep(TorchSelectiveStep):
         super().__init__()
         self._transformer = TorchSafePowerTransformer()
         self._target_column_indices = target_column_indices
+
+    @override
+    def fit_column_group(self, num_train_rows: int) -> int:
+        return fit_chunk_columns(num_train_rows)
 
     @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
