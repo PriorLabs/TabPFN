@@ -1439,4 +1439,4 @@ def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one
     actual = model.predict_proba(X[70:])
 
     assert sources
-    np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
+    np.testing.assert_array_equal(actual, expected)
