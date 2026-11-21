@@ -18,7 +18,11 @@ import tabpfn.base
 import tabpfn.classifier
 import tabpfn.regressor
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.preprocessing.clean import ColumnRangeEncoders, overwrite_fit_input
+from tabpfn.preprocessing.clean import (
+    DELETING_COLUMNS_COPIES,
+    ColumnRangeEncoders,
+    overwrite_fit_input,
+)
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 
 N_ROWS = 240
@@ -251,6 +255,9 @@ def test__overwrite_fit_input__wide_array_with_a_categorical__is_copied() -> Non
     )
 
 
+@pytest.mark.skipif(
+    DELETING_COLUMNS_COPIES, reason="The frame is emptied at the end on pandas < 2"
+)
 def test__overwrite_fit_input__frame__frees_the_smaller_blocks_before_the_largest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

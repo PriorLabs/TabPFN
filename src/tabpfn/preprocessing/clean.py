@@ -58,6 +58,8 @@ BYTES_DTYPE_KINDS = "Sa"
 # `c` complex, `M` datetime64. Not needed, just for completeness.
 UNSUPPORTED_DTYPE_KINDS = "cM"
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
+# Before 2.0, deleting a frame's column copies the rest of its block.
+DELETING_COLUMNS_COPIES = Version(pd.__version__) < Version("2.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
 _ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}

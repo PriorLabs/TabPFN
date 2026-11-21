@@ -45,6 +45,7 @@ from tabpfn.model_loading import (
     resolve_model_version,
 )
 from tabpfn.preprocessing.clean import (
+    DELETING_COLUMNS_COPIES,
     ColumnRangeEncoders,
     clean_data,
     clean_data_transform,
@@ -683,12 +684,15 @@ def validate_and_clean_fit_input(
             )
     if table is None:
         table = np.empty((n_rows, n_columns), dtype=dtype)
-        release = overwriting_fit_input() and isinstance(X_given, pd.DataFrame)
+        given_up = overwriting_fit_input() and isinstance(X_given, pd.DataFrame)
+        release = given_up and not DELETING_COLUMNS_COPIES
         if release and X is not X_given:
             # Then only `X` holds the caller's blocks, and lets go of them range by
             # range.
             empty_fit_frame(X_given)
         y_clean, ranges, feature_schema = clean_ranges(table, release=release)
+        if given_up and not release:
+            empty_fit_frame(X_given)
     warn_on_text(feature_schema)
     return (
         table,
