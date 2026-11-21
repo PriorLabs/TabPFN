@@ -6,6 +6,8 @@ inside `overwrite_fit_input()` lets go of the caller's memory.
 
 from __future__ import annotations
 
+import gc
+import weakref
 from typing import Any
 
 import numpy as np
@@ -247,3 +249,46 @@ def test__overwrite_fit_input__wide_array_with_a_categorical__is_copied() -> Non
     np.testing.assert_array_equal(
         model.predict_proba(X[N_ROWS:]), expected.predict_proba(X[N_ROWS:])
     )
+
+
+def test__overwrite_fit_input__frame__frees_the_smaller_blocks_before_the_largest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each block is freed with its last cleaned column, the largest block last, so
+    it is never beside the table together with the others.
+    """
+    rng = np.random.default_rng(0)
+    floats = rng.standard_normal((N_ROWS, 6)).astype(np.float32)
+    ints = rng.integers(0, 1000, (N_ROWS, 2)).astype(np.int32)
+    given = pd.concat(
+        [pd.DataFrame(floats, copy=False), pd.DataFrame(ints, columns=[6, 7])],
+        axis=1,
+        copy=False,
+    )
+    # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
+    blocks = {b.values.dtype: weakref.ref(b.values) for b in given._mgr.blocks}  # noqa: PD011
+    del floats, ints
+    alive_when_cleaned: list[tuple[str, bool]] = []
+    clean_data = tabpfn.base.clean_data
+
+    def spy(*, X: np.ndarray, **kwargs: Any) -> Any:
+        alive_when_cleaned.append(
+            (str(X.dtype), blocks[np.dtype(np.int32)]() is not None)
+        )
+        return clean_data(X=X, **kwargs)
+
+    monkeypatch.setattr(tabpfn.base, "clean_data", spy)
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
+
+    with overwrite_fit_input():
+        _gpu_preprocessing_model(TabPFNClassifier).fit(
+            given, _targets(TabPFNClassifier, N_ROWS)
+        )
+
+    first_float = next(
+        i for i, (dtype, _) in enumerate(alive_when_cleaned) if dtype == "float32"
+    )
+    assert all(dtype == "int32" for dtype, _ in alive_when_cleaned[:first_float])
+    assert not alive_when_cleaned[first_float][1]
+    gc.collect()
+    assert all(ref() is None for ref in blocks.values())

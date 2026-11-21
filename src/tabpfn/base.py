@@ -83,7 +83,7 @@ from tabpfn.validation import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
@@ -683,9 +683,12 @@ def validate_and_clean_fit_input(
             )
     if table is None:
         table = np.empty((n_rows, n_columns), dtype=dtype)
-        y_clean, ranges, feature_schema = clean_ranges(table)
-        if overwriting_fit_input() and isinstance(X_given, pd.DataFrame):
+        release = overwriting_fit_input() and isinstance(X_given, pd.DataFrame)
+        if release and X is not X_given:
+            # Then only `X` holds the caller's blocks, and lets go of them range by
+            # range.
             empty_fit_frame(X_given)
+        y_clean, ranges, feature_schema = clean_ranges(table, release=release)
     warn_on_text(feature_schema)
     return (
         table,
@@ -698,7 +701,7 @@ def validate_and_clean_fit_input(
     )
 
 
-def _clean_ranges(
+def _clean_ranges(  # noqa: PLR0913
     estimator: TabPFNClassifier | TabPFNRegressor,
     X: pd.DataFrame | np.ndarray,
     y: YType,
@@ -710,6 +713,7 @@ def _clean_ranges(
     ensure_y_numeric: bool,
     thresholds: dict[str, int],
     passthrough_inf: bool,
+    release: bool = False,
 ) -> tuple[
     np.ndarray,
     list[tuple[int, int, OrderPreservingColumnTransformer]],
@@ -717,17 +721,26 @@ def _clean_ranges(
 ]:
     """Validate, type and clean `X` a range of columns at a time, into `table`.
 
+    With `release`, `X` is a frame given up by the caller: each range's columns are
+    deleted from it once cleaned, so each block's memory is freed with its last
+    column. The ranges of the smaller blocks go first, so the largest block is the
+    last one left beside the table.
+
     Returns the validated targets, each range's fitted encoder and the schema.
     """
     config = estimator.inference_config_
-    ranges: list[tuple[int, int, OrderPreservingColumnTransformer]] = []
-    features = []
+    by_range: dict[int, tuple[int, OrderPreservingColumnTransformer, list]] = {}
     # A numeric array is validated whole, in place: a range of it is a strided view,
     # which reads slowly. A frame is validated a range at a time, which converts it.
     whole = isinstance(X, np.ndarray)
-    for start, stop in _column_ranges(X):
-        part = _columns(X, start, stop)
-        if start == 0:
+    order = list(_column_ranges(X))
+    if release:
+        order.sort(key=_largest_block_of(X))
+        # Labels by position, which stay put as columns are deleted.
+        X.columns = pd.RangeIndex(X.shape[1])
+    for start, stop in order:
+        part = X[list(range(start, stop))] if release else _columns(X, start, stop)
+        if not by_range:
             # The targets are validated with the first range, and the size limits
             # checked before the rest is read.
             validated, y = ensure_compatible_fit_inputs_sklearn(
@@ -767,9 +780,29 @@ def _clean_ranges(
         )
         if table is not None:
             table[:, start:stop] = cleaned
-        ranges.append((start, stop, encoder))
-        features += schema.features
+        if release:
+            del part
+            for column in range(start, stop):
+                del X[column]
+        by_range[start] = (stop, encoder, schema.features)
+    ranges = [
+        (start, stop, encoder) for start, (stop, encoder, _) in sorted(by_range.items())
+    ]
+    features = [
+        f
+        for _, (_, _, range_features) in sorted(by_range.items())
+        for f in range_features
+    ]
     return np.asarray(y), ranges, FeatureSchema(features=features)
+
+
+def _largest_block_of(X: pd.DataFrame) -> Callable[[tuple[int, int]], int]:
+    """The columns of the largest block a range of `X`'s columns has one in."""
+    sizes = np.zeros(X.shape[1], dtype=np.intp)
+    for block in X._mgr.blocks:
+        positions = block.mgr_locs.as_array
+        sizes[positions] = len(positions)
+    return lambda columns: int(sizes[columns[0] : columns[1]].max())
 
 
 def clean_predict_input(
