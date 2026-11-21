@@ -20,6 +20,7 @@ Column handling is positional throughout: labels are the caller's and can repeat
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -238,11 +239,7 @@ class DateTransformer:
         )
         if not blocks:
             return converted
-        # skrub's output is default-indexed, so the kept columns must be too, or
-        # `concat` aligns the two by label instead of position.
-        return _drop_and_append(
-            converted.reset_index(drop=True), self.expanded_indices, blocks
-        )
+        return drop_and_append(converted, self.expanded_indices, blocks)
 
     @staticmethod
     def _fit_one(
@@ -321,12 +318,37 @@ def _replace_columns_positionally(
     return out
 
 
-def _drop_and_append(
+def drop_and_append(
     frame: pd.DataFrame, expanded: Sequence[int], blocks: Sequence[pd.DataFrame]
 ) -> pd.DataFrame:
-    """Drop the `expanded` positions and append `blocks` after the kept columns."""
-    keep = [i for i in range(frame.shape[1]) if i not in set(expanded)]
-    return pd.concat([frame.iloc[:, keep], *blocks], axis=1)
+    """`frame` without its `expanded` positions, with `blocks` after the kept columns.
+
+    The kept columns share `frame`'s memory, and `frame` is left untouched. The result
+    is default-indexed, as skrub's output is.
+    """
+    out = frame.copy(deep=False)
+    labels = out.columns
+    # A temporary integer axis makes every label unique, so each deletion removes one
+    # position even when the caller's labels repeat. Selecting the kept columns
+    # instead would copy the blocks they sit in.
+    out.columns = pd.RangeIndex(out.shape[1])
+    for position in expanded:
+        del out[position]
+    out.columns = labels.delete(list(expanded))
+    out.index = pd.RangeIndex(len(out))
+    # Inserted one column at a time: before pandas 3, `concat` merges the appended
+    # columns into the kept block of their dtype, which copies that block.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
+        for block in blocks:
+            for j, name in enumerate(block.columns):
+                out.insert(
+                    out.shape[1],
+                    name,
+                    block.iloc[:, j].to_numpy(),
+                    allow_duplicates=True,
+                )
+    return out
 
 
 def _name_columns(X: pd.DataFrame, positions: Sequence[int]) -> str:
