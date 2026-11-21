@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import pathlib
 import typing
 from collections.abc import Sequence
@@ -43,9 +44,25 @@ from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
 )
-from tabpfn.preprocessing.clean import clean_data_transform
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.clean import (
+    ColumnRangeEncoders,
+    clean_data,
+    clean_data_transform,
+    may_overwrite_fit_input,
+)
+from tabpfn.preprocessing.datamodel import (
+    FeatureModality,
+    FeatureSchema,
+    build_input_feature_names,
+)
 from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.group_ids import as_group_feature
+from tabpfn.preprocessing.modality_detection import (
+    detect_feature_modalities,
+    named_feature_modalities,
+    warn_on_text,
+)
+from tabpfn.preprocessing.pipeline_factory import pipelines_keep_float32
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
@@ -54,15 +71,24 @@ from tabpfn.utils import (
 )
 from tabpfn.validation import (
     check_input_shape_matches,
+    ensure_compatible_fit_columns,
+    ensure_compatible_fit_inputs,
+    ensure_compatible_fit_inputs_sklearn,
     ensure_compatible_predict_input_sklearn,
     validate_categorical_features_indices,
+    validate_dataset_size,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
-    from tabpfn.constants import MemorySavingMode
+    from tabpfn.constants import MemorySavingMode, YType
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
     from tabpfn.regressor import TabPFNRegressor
 
 
@@ -521,6 +547,340 @@ def transform_columns(
     return X, groups if model.group_aggregator_.pool_ else None
 
 
+def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dtype:
+    """The dtype the cleaned fit input is kept in: float32 when every member reads
+    it as float32, float64 otherwise.
+
+    A member reads float32 when its CPU pipeline only selects, reorders, compares and
+    encodes values, and the model takes float32. Narrowing a wider input first then
+    changes what reaches the model only where values that differ round to the same
+    float32. In `"batched"` mode the table goes to the fine-tuning datasets, whose
+    members are built without GPU preprocessing.
+    """
+    config = estimator.inference_config_
+    reads_float32 = estimator.forced_inference_dtype_ in (
+        None,
+        torch.float32,
+    ) and pipelines_keep_float32(
+        config.PREPROCESS_TRANSFORMS,
+        polynomial_features=config.POLYNOMIAL_FEATURES,
+        add_fingerprint_feature=config.FINGERPRINT_FEATURE,
+        enable_gpu_preprocessing=config.ENABLE_GPU_PREPROCESSING
+        and estimator.fit_mode != "batched",
+    )
+    return np.dtype(np.float32 if reads_float32 else np.float64)
+
+
+def validate_and_clean_fit_input(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    X: XType,
+    y: YType,
+    *,
+    X_given: XType,
+    feature_names: list[str] | None,
+    categorical_indices: list[int] | None,
+    group_feature_index: int | None,
+    ensure_y_numeric: bool,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    str | None,
+    FeatureSchema,
+    OrderPreservingColumnTransformer | ColumnRangeEncoders,
+]:
+    """Validate the expanded fit input, decide its modalities and clean it.
+
+    Args:
+        estimator: The estimator being fit.
+        X: The fit input after date, text and group expansion.
+        y: The targets.
+        X_given: The input the caller passed to `fit`.
+        feature_names: `X`'s column labels, `None` for an array.
+        categorical_indices: Positions in `X` declared categorical.
+        group_feature_index: Position of the group feature, which is cleaned as a
+            numerical feature and marked categorical after.
+        ensure_y_numeric: Whether the targets must be numeric.
+
+    Returns:
+        The cleaned table, the validated targets, the targets' name when they came as
+        a `Series`, the feature schema, and the fitted encoders `clean_predict_input`
+        reapplies.
+    """
+    config = estimator.inference_config_
+    dtype = cleaned_table_dtype(estimator)
+    min_samples = config.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE
+    thresholds = {
+        "min_samples_for_inference": min_samples,
+        "max_unique_for_category": config.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+        "min_unique_for_numerical": config.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+        "min_cardinality_for_text": config.MIN_CARDINALITY_FOR_TEXT,
+    }
+    passthrough_inf = estimator.get_inference_config().PASSTHROUGH_INF
+    if not _cleans_by_column_ranges(X, dtype):
+        X, y, y_name = ensure_compatible_fit_inputs(
+            X,
+            y,
+            estimator=estimator,
+            max_num_samples=config.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=config.MAX_NUMBER_OF_FEATURES,
+            max_cpu_samples=config.MAX_CPU_SAMPLES,
+            ignore_pretraining_limits=estimator.ignore_pretraining_limits,
+            ensure_y_numeric=ensure_y_numeric,
+            devices=estimator.devices_,
+        )
+        feature_schema = detect_feature_modalities(
+            X=X,
+            feature_names=feature_names,
+            provided_categorical_indices=categorical_indices,
+            **thresholds,
+        )
+        # Numerical through cleaning, so neither the ordinal encoder nor the
+        # constant-column restore rewrites an unseen group's NaN; categorical
+        # after it, whatever the number of groups.
+        feature_schema = as_group_feature(
+            feature_schema, group_feature_index, FeatureModality.NUMERICAL
+        )
+        X, encoder, feature_schema = clean_data(
+            X=X,
+            feature_schema=feature_schema,
+            passthrough_inf=passthrough_inf,
+            overwrite_input=may_overwrite_fit_input(X, X_given),
+        )
+        if X.dtype != dtype and dtype == np.float32:
+            X = X.astype(np.float32)
+        return (
+            X,
+            y,
+            y_name,
+            as_group_feature(
+                feature_schema, group_feature_index, FeatureModality.CATEGORICAL
+            ),
+            encoder,
+        )
+
+    y_name = str(y.name) if isinstance(y, pd.Series) else None
+    n_rows, n_columns = X.shape
+    clean_ranges = functools.partial(
+        _clean_ranges,
+        estimator,
+        X,
+        y,
+        names=build_input_feature_names(feature_names, n_columns),
+        declared=sorted(categorical_indices or ()),
+        group_feature_index=group_feature_index,
+        ensure_y_numeric=ensure_y_numeric,
+        thresholds=thresholds,
+        passthrough_inf=passthrough_inf,
+    )
+    table = None
+    if isinstance(X, np.ndarray):
+        # Cleaning that encodes no column leaves every value as it is, so the table
+        # is `X` cast, which reads it row by row rather than in strided ranges; the
+        # ranges are read without a table to write into.
+        y_clean, ranges, feature_schema = clean_ranges(None)
+        if not any(encoder.selected_columns() for _, _, encoder in ranges):
+            table = X.astype(dtype)
+    if table is None:
+        table = np.empty((n_rows, n_columns), dtype=dtype)
+        y_clean, ranges, feature_schema = clean_ranges(table)
+    warn_on_text(feature_schema)
+    return (
+        table,
+        y_clean,
+        y_name,
+        as_group_feature(
+            feature_schema, group_feature_index, FeatureModality.CATEGORICAL
+        ),
+        ColumnRangeEncoders(ranges=ranges, dtype=dtype),
+    )
+
+
+def _clean_ranges(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    X: pd.DataFrame | np.ndarray,
+    y: YType,
+    table: np.ndarray | None,
+    *,
+    names: list[str],
+    declared: list[int],
+    group_feature_index: int | None,
+    ensure_y_numeric: bool,
+    thresholds: dict[str, int],
+    passthrough_inf: bool,
+) -> tuple[
+    np.ndarray,
+    list[tuple[int, int, OrderPreservingColumnTransformer]],
+    FeatureSchema,
+]:
+    """Validate, type and clean `X` a range of columns at a time, into `table`.
+
+    Returns the validated targets, each range's fitted encoder and the schema.
+    """
+    config = estimator.inference_config_
+    ranges: list[tuple[int, int, OrderPreservingColumnTransformer]] = []
+    features = []
+    # A numeric array is validated whole, in place: a range of it is a strided view,
+    # which reads slowly. A frame is validated a range at a time, which converts it.
+    whole = isinstance(X, np.ndarray)
+    for start, stop in _column_ranges(X):
+        part = _columns(X, start, stop)
+        if start == 0:
+            # The targets are validated with the first range, and the size limits
+            # checked before the rest is read.
+            validated, y = ensure_compatible_fit_inputs_sklearn(
+                X if whole else part,
+                y,
+                estimator=estimator,
+                ensure_y_numeric=ensure_y_numeric,
+            )
+            if not whole:
+                part = validated
+            validate_dataset_size(
+                X=X,
+                y=y,
+                max_num_samples=config.MAX_NUMBER_OF_SAMPLES,
+                max_num_features=config.MAX_NUMBER_OF_FEATURES,
+                max_cpu_samples=config.MAX_CPU_SAMPLES,
+                devices=estimator.devices_,
+                ignore_pretraining_limits=estimator.ignore_pretraining_limits,
+            )
+        elif not whole:
+            part = ensure_compatible_fit_columns(part, estimator=estimator)
+        schema = named_feature_modalities(
+            part,
+            names[start:stop],
+            provided_categorical_indices=[
+                i - start for i in declared if start <= i < stop
+            ],
+            **thresholds,
+        )
+        if group_feature_index is not None and start <= group_feature_index < stop:
+            schema = as_group_feature(
+                schema, group_feature_index - start, FeatureModality.NUMERICAL
+            )
+        # Each range is a copy or a view the caller still owns, never written to.
+        cleaned, encoder, schema = clean_data(
+            X=part, feature_schema=schema, passthrough_inf=passthrough_inf
+        )
+        if table is not None:
+            table[:, start:stop] = cleaned
+        ranges.append((start, stop, encoder))
+        features += schema.features
+    return np.asarray(y), ranges, FeatureSchema(features=features)
+
+
+def clean_predict_input(
+    estimator: TabPFNClassifier | TabPFNRegressor, X: XType
+) -> np.ndarray:
+    """Validate and clean predict input the way `validate_and_clean_fit_input` did
+    the fit input.
+    """
+    encoder = getattr(estimator, "ordinal_encoder_", None)
+    cat_indices = estimator.inferred_feature_schema_.indices_for(
+        FeatureModality.CATEGORICAL
+    )
+    passthrough_inf = estimator.get_inference_config().PASSTHROUGH_INF
+    if (
+        not isinstance(encoder, ColumnRangeEncoders)
+        or not isinstance(X, (pd.DataFrame, np.ndarray))
+        or X.ndim != 2
+    ):
+        X = ensure_compatible_predict_input_sklearn(X, estimator)
+    if not isinstance(encoder, ColumnRangeEncoders):
+        return clean_data_transform(
+            X,
+            cat_indices=cat_indices,
+            ord_encoder=encoder,
+            passthrough_inf=passthrough_inf,
+        )
+    table = np.empty((X.shape[0], encoder.n_columns), dtype=encoder.dtype)
+    for start, stop, range_encoder in encoder.ranges:
+        part = ensure_compatible_predict_input_sklearn(
+            _columns(X, start, stop), estimator
+        )
+        table[:, start:stop] = clean_data_transform(
+            part,
+            cat_indices=[i - start for i in cat_indices if start <= i < stop],
+            ord_encoder=range_encoder,
+            passthrough_inf=passthrough_inf,
+        )
+    return table
+
+
+_RANGE_BYTES = 1 << 30
+"""Transient bytes a range of columns takes, at most, while it is validated and
+cleaned. Wider ranges cost memory; narrower ones pay the validation and the encoder
+fit of a range more often."""
+
+_NUMERIC_CELL_BYTES = 32
+"""Bytes a numeric cell can take while its range is cleaned: a few copies, the widest
+in float64."""
+
+_OBJECT_CELL_BYTES = 256
+"""Bytes any other cell can take while its range is cleaned: it passes through
+Python objects and a few frames."""
+
+
+def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
+    """Whether the fit input is validated and cleaned a range of columns at a time.
+
+    So it is when reading it whole would build a converted copy of all of it: a frame
+    of more than one block or of a non-numeric one, or a numeric frame or array of
+    another dtype than a float32 table. A numeric frame of one block or a numeric
+    array otherwise is read as it is, without a copy. An input without a column is
+    left to the whole-table validation, which refuses it.
+    """
+    if len(getattr(X, "shape", ())) == 2 and X.shape[1] == 0:
+        return False
+    if isinstance(X, pd.DataFrame):
+        blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
+        if blocks is None or len(blocks) != 1:
+            return True
+        # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
+        values = blocks[0].values  # noqa: PD011
+        if not isinstance(values, np.ndarray) or values.dtype.kind not in "biuf":
+            return True
+        return dtype == np.float32 and values.dtype != np.float32
+    return (
+        isinstance(X, np.ndarray)
+        and X.ndim == 2
+        and dtype == np.float32
+        and X.dtype.kind in "biuf"
+        and X.dtype != np.float32
+    )
+
+
+def _column_ranges(X: pd.DataFrame | np.ndarray) -> Iterator[tuple[int, int]]:
+    """`(start, stop)` ranges covering `X`'s columns, each of one kind, numeric or
+    not, and as wide as `_RANGE_BYTES` allows.
+    """
+    n_rows, n_columns = X.shape
+    if isinstance(X, pd.DataFrame):
+        numeric = [getattr(dtype, "kind", "O") in "biuf" for dtype in X.dtypes]
+    else:
+        numeric = [True] * n_columns
+    start = 0
+    while start < n_columns:
+        cell_bytes = _NUMERIC_CELL_BYTES if numeric[start] else _OBJECT_CELL_BYTES
+        width = max(1, _RANGE_BYTES // max(1, n_rows * cell_bytes))
+        stop = start + 1
+        while (
+            stop < n_columns
+            and stop - start < width
+            and numeric[stop] == numeric[start]
+        ):
+            stop += 1
+        yield start, stop
+        start = stop
+
+
+def _columns(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
+    """`X`'s columns from `start` to `stop`, as the same kind of container."""
+    if isinstance(X, pd.DataFrame):
+        return X.iloc[:, start:stop]
+    return X[:, start:stop]
+
+
 def reject_categoricals_for_differentiable_input(
     categorical_features_indices: Sequence[int] | None,
 ) -> None:
@@ -824,15 +1184,7 @@ def get_embeddings(
 
     check_input_shape_matches(X, estimator=model)
     X, _ = transform_columns(model, X)
-    X = ensure_compatible_predict_input_sklearn(X, model)
-    X = clean_data_transform(
-        X,
-        cat_indices=model.inferred_feature_schema_.indices_for(
-            FeatureModality.CATEGORICAL
-        ),
-        ord_encoder=getattr(model, "ordinal_encoder_", None),
-        passthrough_inf=model.get_inference_config().PASSTHROUGH_INF,
-    )
+    X = clean_predict_input(model, X)
 
     embeddings: list[np.ndarray] = []
 
