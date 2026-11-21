@@ -261,20 +261,26 @@ def test__overwrite_fit_input__wide_array_with_a_categorical__is_copied() -> Non
 def test__overwrite_fit_input__frame__frees_the_smaller_blocks_before_the_largest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Each block is freed with its last cleaned column, the largest block last, so
-    it is never beside the table together with the others.
+    """Each block is freed with its last cleaned column, and the largest is copied
+    last, by rows: it is never beside the table together with the others. The model
+    predicts as one fit on a copy.
     """
     rng = np.random.default_rng(0)
-    floats = rng.standard_normal((N_ROWS, 6)).astype(np.float32)
-    ints = rng.integers(0, 1000, (N_ROWS, 2)).astype(np.int32)
-    given = pd.concat(
+    floats = rng.standard_normal((N_ROWS + N_TEST, 6)).astype(np.float32)
+    ints = rng.integers(0, 1000, (N_ROWS + N_TEST, 2)).astype(np.int32)
+    X = pd.concat(
         [pd.DataFrame(floats, copy=False), pd.DataFrame(ints, columns=[6, 7])],
         axis=1,
         copy=False,
     )
+    del floats, ints
+    y = _targets(TabPFNClassifier, N_ROWS)
+    expected = _gpu_preprocessing_model(TabPFNClassifier).fit(X.iloc[:N_ROWS].copy(), y)
+    X_test = X.iloc[N_ROWS:].copy()
+    given = X.iloc[:N_ROWS]
+    del X
     # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
     blocks = {b.values.dtype: weakref.ref(b.values) for b in given._mgr.blocks}  # noqa: PD011
-    del floats, ints
     alive_when_cleaned: list[tuple[str, bool]] = []
     clean_data = tabpfn.base.clean_data
 
@@ -284,18 +290,31 @@ def test__overwrite_fit_input__frame__frees_the_smaller_blocks_before_the_larges
         )
         return clean_data(X=X, **kwargs)
 
+    copied: list[int] = []
+    copy_into = tabpfn.base._StreamedBlock.copy_into
+
+    def copy_spy(self: Any, table: np.ndarray) -> None:
+        copied.append(int(self.copied.sum()))
+        copy_into(self, table)
+
     monkeypatch.setattr(tabpfn.base, "clean_data", spy)
+    monkeypatch.setattr(tabpfn.base._StreamedBlock, "copy_into", copy_spy)
     monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
+    # Several blocks of rows.
+    monkeypatch.setattr(tabpfn.base, "_STREAM_BLOCK_BYTES", 7 * 6 * 4)
 
     with overwrite_fit_input():
-        _gpu_preprocessing_model(TabPFNClassifier).fit(
-            given, _targets(TabPFNClassifier, N_ROWS)
-        )
+        model = _gpu_preprocessing_model(TabPFNClassifier).fit(given, y)
 
     first_float = next(
         i for i, (dtype, _) in enumerate(alive_when_cleaned) if dtype == "float32"
     )
     assert all(dtype == "int32" for dtype, _ in alive_when_cleaned[:first_float])
     assert not alive_when_cleaned[first_float][1]
+    assert copied == [6]
+    del given
     gc.collect()
     assert all(ref() is None for ref in blocks.values())
+    np.testing.assert_array_equal(
+        model.predict_proba(X_test), expected.predict_proba(X_test)
+    )

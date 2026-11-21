@@ -479,8 +479,17 @@ def narrow_fit_input_in_place(X: np.ndarray) -> np.ndarray:
     return table
 
 
-def _release_pages(X: np.ndarray, start: int) -> None:
-    """Hand the whole pages of `X`'s memory from byte `start` on back to the system.
+def release_rows(X: np.ndarray, start: int, stop: int) -> None:
+    """Hand the whole pages of rows `start:stop` of `X`, a C-ordered array given up
+    by the caller of a fit inside `overwrite_fit_input()`, back to the system.
+    """
+    row_bytes = X.strides[0]
+    _release_pages(X, start * row_bytes, stop * row_bytes)
+
+
+def _release_pages(X: np.ndarray, start: int, stop: int | None = None) -> None:
+    """Hand the whole pages of `X`'s memory from byte `start` to byte `stop`, by
+    default its end, back to the system.
 
     Linux only: elsewhere they stay, which costs memory but changes no value. A page
     dropped this way reads as zeros if anything touches it again.
@@ -488,8 +497,9 @@ def _release_pages(X: np.ndarray, start: int) -> None:
     if not sys.platform.startswith("linux"):
         return
     page = mmap.PAGESIZE
+    stop = X.nbytes if stop is None else stop
     first = -(-(X.ctypes.data + start) // page) * page
-    last = (X.ctypes.data + X.nbytes) // page * page
+    last = (X.ctypes.data + stop) // page * page
     if last <= first:
         return
     libc = ctypes.CDLL(None, use_errno=True)
