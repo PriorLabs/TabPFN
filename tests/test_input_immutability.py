@@ -134,10 +134,11 @@ def _assert_unchanged(after: Any, before: Any, what: str) -> None:
 @pytest.mark.parametrize(
     "gpu_preprocessing", [False, True], ids=["cpu_preprocessing", "gpu_preprocessing"]
 )
+@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "fit_with_cache"])
 # torch warns once per process, so this catches the warning only in a fresh one.
 @pytest.mark.filterwarnings("error:The given NumPy array is not writable")
 def test__fit_predict__leave_every_input_untouched(
-    estimator_cls: type, input_kind: str, *, gpu_preprocessing: bool
+    estimator_cls: type, input_kind: str, fit_mode: str, *, gpu_preprocessing: bool
 ) -> None:
     """A whole fit + predict changes nothing the caller passed in."""
     X_train, X_test = _split(INPUTS[input_kind]())
@@ -157,6 +158,7 @@ def test__fit_predict__leave_every_input_untouched(
     model = estimator_cls(
         n_estimators=2,
         device="cpu",
+        fit_mode=fit_mode,
         random_state=0,
         inference_config={
             **PASSTHROUGH_INF,

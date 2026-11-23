@@ -335,7 +335,7 @@ def _record_build_events(
     """Record when a member is preprocessed, prepared, and forwarded, in order."""
     events: list[str] = []
     preprocess = TabPFNEnsemblePreprocessor.fit_transform_ensemble_members_iterator
-    prepare = inference._prepare_train_inputs
+    prepare = inference._prepare_member_inputs
     forward = type(model).forward
 
     def preprocessing(*args: Any, **kwargs: Any) -> Any:
@@ -357,7 +357,7 @@ def _record_build_events(
         "fit_transform_ensemble_members_iterator",
         preprocessing,
     )
-    monkeypatch.setattr(inference, "_prepare_train_inputs", preparing)
+    monkeypatch.setattr(inference, "_prepare_member_inputs", preparing)
     monkeypatch.setattr(type(model), "forward", forwarding)
     return events
 

@@ -151,27 +151,27 @@ def _members_per_forward(
     return max(1, min(by_rows, by_cells))
 
 
-def _prepare_train_inputs(
+def _prepare_member_inputs(
     member: TabPFNEnsembleMember,
+    X_test: torch.Tensor | np.ndarray | SharedColumnsTable,
     device: torch.device,
     force_inference_dtype: torch.dtype | None,
     model: torch.nn.Module,
 ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
-    """A member's train rows as ``(rows, 1, C)``, targets, and categorical indices.
+    """A member's train rows, then ``X_test``, as one ``(rows, 1, C)`` table, its
+    targets, and categorical indices.
 
-    Train rows that `_model_input_device` keeps in host memory for ``model`` stay
-    there, and the GPU preprocessing reads them from there, as for a full forward.
+    The table stays in host memory where `_model_input_device` keeps it for
+    ``model``, and the GPU preprocessing reads it from there.
     """
-    X_train = member.X_train
-    no_test_rows = np.empty((0, X_train.shape[1]), dtype=np.float32)
     X, y = _prepare_model_inputs(
         device,
         force_inference_dtype,
-        X_train,
-        no_test_rows,
+        member.X_train,
+        X_test,
         member.y_train,
         x_device=_model_input_device(
-            model, device, X_train, no_test_rows, force_inference_dtype
+            model, device, member.X_train, X_test, force_inference_dtype
         ),
     )
     # `X` is this function's own copy, so the steps write into it a block of
@@ -179,7 +179,7 @@ def _prepare_train_inputs(
     X, feature_schema = _maybe_run_gpu_preprocessing(
         X,
         gpu_preprocessor=member.gpu_preprocessor,
-        num_train_rows=X.shape[0],
+        num_train_rows=member.X_train.shape[0],
         feature_schema=member.feature_schema,
         consume_input=True,
         compute_device=device,
@@ -1504,8 +1504,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             read.extend(chunk_members)
             prepared = {}
             for i in chunk:
-                prepared[i] = _prepare_train_inputs(
-                    read[i], device, self.force_inference_dtype, model
+                no_test_rows = np.empty((0, read[i].X_train.shape[1]), np.float32)
+                prepared[i] = _prepare_member_inputs(
+                    read[i], no_test_rows, device, self.force_inference_dtype, model
                 )
                 # The cache replaces the train rows; predict only reads `y_train`.
                 read[i].X_train = None
@@ -1796,26 +1797,8 @@ def _call_model_on_members(  # noqa: PLR0913
     model = model_caches[members[0].config._model_index].get(device)
     prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
     for member, X_test in zip(members, X_tests, strict=True):
-        X_full, y_train = _prepare_model_inputs(
-            device,
-            force_inference_dtype,
-            member.X_train,
-            X_test,
-            member.y_train,
-            x_device=_model_input_device(
-                model, device, member.X_train, X_test, force_inference_dtype
-            ),
-        )
-        X_full, feature_schema = _maybe_run_gpu_preprocessing(
-            X_full,
-            gpu_preprocessor=member.gpu_preprocessor,
-            num_train_rows=member.X_train.shape[0],
-            feature_schema=member.feature_schema,
-            consume_input=True,
-            compute_device=device,
-        )
         prepared.append(
-            (X_full, y_train, feature_schema.indices_for(FeatureModality.CATEGORICAL))
+            _prepare_member_inputs(member, X_test, device, force_inference_dtype, model)
         )
     performance_options = dataclasses.replace(
         model.get_default_performance_options(),
@@ -1971,7 +1954,7 @@ def _maybe_run_gpu_preprocessing(
     gpu_preprocessor: TorchPreprocessingPipeline | None,
     feature_schema: FeatureSchema,
     *,
-    num_train_rows: int | None = None,
+    num_train_rows: int,
     use_fitted_cache: bool = False,
     consume_input: bool = False,
     compute_device: torch.device | None = None,
