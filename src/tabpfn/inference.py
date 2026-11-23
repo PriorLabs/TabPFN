@@ -184,6 +184,9 @@ def _prepare_member_inputs(
         consume_input=True,
         compute_device=device,
     )
+    if force_inference_dtype is not None:
+        # A step may compute and return float32 under a lower precision.
+        X = X.type(force_inference_dtype)
     return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
 

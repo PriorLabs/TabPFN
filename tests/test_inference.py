@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import types
 from types import SimpleNamespace
 from typing import Any, Literal, overload
 from typing_extensions import override
@@ -36,6 +37,7 @@ from tabpfn.inference import (
     MultiDeviceInferenceEngine,
     _model_input_arguments,
     _model_input_device,
+    _prepare_member_inputs,
     _prepare_model_inputs,
     _resolve_kv_cache_precision,
 )
@@ -628,6 +630,33 @@ def test__explicit_kv_cache__drops_member_train_features_after_build() -> None:
     assert all(member.y_train is not None for member in engine.ensemble_members)
     outputs = list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))
     assert len(outputs) == len(engine.ensemble_members)
+
+
+def test__prepare_member_inputs__forced_dtype__holds_after_gpu_preprocessing() -> None:
+    """A pipeline that returns float32 still gives the model the forced dtype."""
+
+    def upcasting_pipeline(X: Tensor, feature_schema: FeatureSchema, **_: Any) -> Any:
+        return types.SimpleNamespace(
+            x=X.to(torch.float32), feature_schema=feature_schema
+        )
+
+    member = types.SimpleNamespace(
+        X_train=np.ones((5, 3), dtype=np.float32),
+        y_train=np.zeros(5),
+        gpu_preprocessor=upcasting_pipeline,
+        feature_schema=FeatureSchema.from_only_categorical_indices([], 3),
+    )
+
+    X, y, _ = _prepare_member_inputs(
+        member,  # type: ignore[arg-type]
+        np.empty((0, 3), np.float32),
+        torch.device("cpu"),
+        torch.float16,
+        _DeviceInputModel(),
+    )
+
+    assert X.dtype == torch.float16
+    assert y.dtype == torch.float16
 
 
 def test__explicit_kv_cache__outlier_removal__fits_a_block_of_columns_at_a_time(
