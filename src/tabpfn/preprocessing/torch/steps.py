@@ -330,7 +330,7 @@ class TorchSelectiveSafePowerStep(TorchSelectiveStep):
         self._target_column_indices = target_column_indices
 
     @override
-    def fit_column_group(self, num_train_rows: int) -> int:
+    def _fit_column_group(self, num_train_rows: int) -> int:
         return fit_chunk_columns(num_train_rows)
 
     @override

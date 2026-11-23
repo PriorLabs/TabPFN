@@ -740,9 +740,13 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
     step: TorchPreprocessingStep, monkeypatch: pytest.MonkeyPatch, batch_size: int
 ) -> None:
     # Three columns of 64 float32 rows per batch entry per block: three blocks for
-    # seven targets.
+    # seven targets. Safe power fits chunks of 2 flattened columns of 50 train rows.
     monkeypatch.setattr(
         pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * 64 * batch_size * 4
+    )
+    monkeypatch.setattr(
+        "tabpfn.preprocessing.torch.torch_safe_power_transformer._CHUNK_TARGET_BYTES",
+        2 * 8 * 6 * 50,
     )
     x = torch.cat([_wide_input() * (1 + b) for b in range(batch_size)], dim=1)
     expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
@@ -751,9 +755,12 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
         x, _TARGETS, 50, None, torch.device("cpu")
     )
 
-    tolerance = (
-        _ROUNDING if isinstance(step, _FITS_UP_TO_ROUNDING) else {"rtol": 0, "atol": 0}
+    # Safe power flattens a batch into its columns, so its chunks cross the tables
+    # of a batch, which column blocks cannot follow.
+    rounds = isinstance(step, _FITS_UP_TO_ROUNDING) or (
+        isinstance(step, TorchSelectiveSafePowerStep) and batch_size > 1
     )
+    tolerance = _ROUNDING if rounds else {"rtol": 0, "atol": 0}
     assert actual.x.data_ptr() == x.data_ptr()
     torch.testing.assert_close(actual.x, expected.x, equal_nan=True, **tolerance)
     assert actual.fitted_cache is not None
@@ -762,12 +769,14 @@ def test__fit_transform_column_blocks__columnwise_step__matches_fit_transform(
         torch.testing.assert_close(actual.fitted_cache[key], value, **tolerance)
 
 
+@pytest.mark.parametrize("num_train_rows", [50, 10])
 @pytest.mark.parametrize("staged", [False, True])
 def test__fit_transform__safepower_in_column_blocks__equals_the_whole_fit(
-    monkeypatch: pytest.MonkeyPatch, *, staged: bool
+    monkeypatch: pytest.MonkeyPatch, *, staged: bool, num_train_rows: int
 ) -> None:
-    # Fit chunks of 2 columns of 50 rows, blocks of 3 columns: a block that ended
-    # inside a chunk would split it.
+    # Fit chunks of 2 columns of 50 train rows, 10 of 10; blocks of 3 columns of all
+    # 64 rows. A block that ended inside a chunk would split it, and a block of a
+    # whole chunk of 10 would exceed its budget.
     monkeypatch.setattr(
         "tabpfn.preprocessing.torch.torch_safe_power_transformer._CHUNK_TARGET_BYTES",
         2 * 8 * 6 * 50,
@@ -776,15 +785,28 @@ def test__fit_transform__safepower_in_column_blocks__equals_the_whole_fit(
     monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 3 * 64 * 4)
     x = _wide_input()
     step = TorchSelectiveSafePowerStep(_TARGETS)
-    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=50)
+    expected = step.fit_transform(x.clone(), _TARGETS, num_train_rows=num_train_rows)
+    transformed_widths: list[int] = []
+    transform = step._transform
+
+    def recording_transform(
+        x: torch.Tensor, fitted_cache: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        transformed_widths.append(x.shape[-1])
+        return transform(x, fitted_cache)
+
+    monkeypatch.setattr(step, "_transform", recording_transform)
 
     if staged:
         actual = pipeline_interface._fit_transform_on_device(
-            step, x, _TARGETS, 50, None, torch.device("cpu")
+            step, x, _TARGETS, num_train_rows, None, torch.device("cpu")
         )
     else:
-        actual = step.fit_transform(x, _TARGETS, num_train_rows=50, in_place=True)
+        actual = step.fit_transform(
+            x, _TARGETS, num_train_rows=num_train_rows, in_place=True
+        )
 
+    assert max(transformed_widths) <= 3
     torch.testing.assert_close(actual.x, expected.x, rtol=0, atol=0, equal_nan=True)
     assert actual.fitted_cache is not None
     assert expected.fitted_cache is not None
