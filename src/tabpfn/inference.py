@@ -187,8 +187,12 @@ def _prepare_train_inputs(
                 compute_device=device,
             )
             return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
-    if not isinstance(X_train, torch.Tensor):
-        # A `SharedColumnsTable` is built whole here.
+    if isinstance(X_train, SharedColumnsTable) and not X_train.is_base():
+        X_device = torch.empty(X_train.shape, dtype=tensor_dtype, device=device)
+        _chunked_copy_(X_train, X_device)
+        X_train = X_device
+    elif not isinstance(X_train, torch.Tensor):
+        # An array, or a table that is its base, is read in place.
         X_train = as_tensor_to_read(
             np.asarray(X_train), dtype=tensor_dtype, device=device
         )
@@ -1901,23 +1905,35 @@ def _prepare_model_inputs(
         dtype=dtype,
         device=device if x_device is None else x_device,
     )
-    rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, num_columns * dtype.itemsize))
     for offset, part in ((0, X_train), (num_train, X_test)):
-        for start in range(0, len(part), rows):
-            stop = min(start + rows, len(part))
-            target = X_full[offset + start : offset + stop, 0]
-            if (
-                isinstance(part, SharedColumnsTable)
-                and target.device.type == "cpu"
-                # A table's base is float32, as the no-copy path requires.
-                and target.dtype == torch.float32
-            ):
-                # Straight from the table into the model input, with no block between.
-                part.copy_rows_into(start, stop, target)
-            else:
-                target.copy_(as_tensor_to_read(part[start:stop]))
+        _chunked_copy_(part, X_full[offset : offset + len(part), 0])
     y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
     return X_full, y_train
+
+
+def _chunked_copy_(
+    part: torch.Tensor | np.ndarray | SharedColumnsTable, out: torch.Tensor
+) -> None:
+    """Writes `part` into `out` in chunks, handling devices."""
+    rows = max(1, _MODEL_INPUT_BLOCK_BYTES // max(1, out.shape[1] * out.element_size()))
+    gathered = isinstance(part, SharedColumnsTable) and not part.is_base()
+    block = None
+    for start in range(0, len(part), rows):
+        stop = min(start + rows, len(part))
+        target = out[start:stop]
+        if not gathered:
+            # Rows of an array, or of a table that is its base, are views.
+            target.copy_(as_tensor_to_read(part[start:stop]))
+        elif target.device.type == "cpu" and target.dtype == torch.float32:
+            # A table's base is float32, so its rows go straight into `out`.
+            part.copy_rows_into(start, stop, target)
+        else:
+            if block is None:
+                block = torch.from_numpy(
+                    np.empty((min(rows, len(part)), part.shape[1]), part.dtype)
+                )
+            part.copy_rows_into(start, stop, block[: stop - start])
+            target.copy_(block[: stop - start])
 
 
 _MODEL_INPUT_BLOCK_BYTES = 1 << 28
