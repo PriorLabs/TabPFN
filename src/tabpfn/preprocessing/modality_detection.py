@@ -300,7 +300,10 @@ def _numeric_n_unique_per_column(
 
 
 _DISTINCT_COUNT_BLOCK_BYTES = 1 << 28
-"""Bytes of columns `_count_distinct_per_column` sorts at a time, per thread."""
+"""Bytes of columns `_count_distinct_per_column` sorts at a time per thread, at most."""
+_DISTINCT_COUNT_MIN_BLOCK_BYTES = 1 << 22
+"""Bytes of columns below which a block is not split further to give threads work:
+smaller blocks pay more for their thread than the sort saves."""
 _DISTINCT_COUNT_BUDGET_BYTES = 4 << 30
 """Bytes the threads of `_count_distinct_per_column` hold at once, at most: each holds
 a block's copy and its sort, about three blocks."""
@@ -320,7 +323,14 @@ def _count_distinct_per_column(
     n_columns = len(columns)
     if n_columns == 0:
         return np.zeros(0, dtype=np.int64)
-    width = max(1, _DISTINCT_COUNT_BLOCK_BYTES // max(1, n_rows * X.itemsize))
+    column_bytes = max(1, n_rows * X.itemsize)
+    threads = _usable_cpus()
+    # As wide as fills every thread, within the block bounds.
+    width = max(
+        1,
+        _DISTINCT_COUNT_MIN_BLOCK_BYTES // column_bytes,
+        min(_DISTINCT_COUNT_BLOCK_BYTES // column_bytes, -(-n_columns // threads)),
+    )
 
     def block_of(start: int, stop: int) -> np.ndarray:
         picked = columns[start:stop]
@@ -338,8 +348,8 @@ def _count_distinct_per_column(
 
     workers = min(
         len(blocks),
-        _usable_cpus(),
-        max(1, _DISTINCT_COUNT_BUDGET_BYTES // (3 * _DISTINCT_COUNT_BLOCK_BYTES)),
+        threads,
+        max(1, _DISTINCT_COUNT_BUDGET_BYTES // (3 * width * column_bytes)),
     )
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(count, blocks))
