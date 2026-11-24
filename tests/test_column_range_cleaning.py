@@ -226,6 +226,11 @@ def test__fit__infinity_after_the_first_range__refused_as_the_whole_table_is(
     if refused:
         with pytest.raises(ValueError, match="PASSTHROUGH_INF"):
             model.fit(X, y)
+        X.loc[3, "f"] = 0.0
+        model.fit(X, y)
+        X.loc[3, "f"] = np.inf
+        with pytest.raises(ValueError, match="infinity"):
+            model.predict_proba(X)
     else:
         model.fit(X, y)
         model.predict_proba(X)

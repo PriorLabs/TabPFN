@@ -167,3 +167,27 @@ def test__codes_float32_cannot_hold__keep_a_float64_table(
 
     assert table.dtype == np.float64
     np.testing.assert_array_equal(proba, expected)
+
+
+def test__batched_fit__keeps_a_float64_table() -> None:
+    """The fine-tuning datasets of "batched" mode fit their members on the table
+    without the decisions, so it keeps the cleaned values.
+    """
+    X, y = _with_tiny_steps(N_ROWS)
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        fit_mode="batched",
+        inference_config={
+            "FINGERPRINT_FEATURE": False,
+            "POLYNOMIAL_FEATURES": "no",
+            "PREPROCESS_TRANSFORMS": [
+                PreprocessorConfig("none", categorical_name="numeric")
+            ],
+        },
+    )
+    model._initialize_model_variables()
+
+    _, table, _, _ = model._initialize_dataset_preprocessing(X=X, y=y, random_state=0)
+
+    assert table.dtype == np.float64
