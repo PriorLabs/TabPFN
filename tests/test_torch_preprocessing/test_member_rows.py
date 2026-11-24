@@ -14,7 +14,11 @@ from tabpfn.base import clean_predict_input
 from tabpfn.inference import _maybe_run_gpu_preprocessing, _prepare_model_inputs
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.preprocessing.torch import pipeline_interface
-from tabpfn.preprocessing.torch.member_rows import MemberRows, MemberRowSource
+from tabpfn.preprocessing.torch.member_rows import (
+    MemberRows,
+    MemberRowSource,
+    _SignsOp,
+)
 
 N_TRAIN = 120
 N_TEST = 30
@@ -256,3 +260,30 @@ def test__fit__with_a_step_that_reads_whole_rows__is_none() -> None:
     )
 
     assert rows is None
+
+
+def test__fit__on_cuda__leaves_nothing_on_the_device() -> None:
+    """The model sizes its chunks from free device memory, which must be what the
+    input built whole leaves free.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("Needs a GPU")
+    device = torch.device("cuda")
+    members, X_test = _members()
+    for member in members:
+        torch.cuda.synchronize()
+        before = torch.cuda.memory_allocated(device)
+        rows = MemberRows.fit(
+            member.X_train,
+            member.transform_X_test(X_test),
+            member.gpu_preprocessor,
+            member.feature_schema,
+            device,
+        )
+        torch.cuda.synchronize()
+
+        assert rows is not None
+        assert torch.cuda.memory_allocated(device) == before
+        for op in rows.ops:
+            held = [op.signs] if isinstance(op, _SignsOp) else op.cache.values()
+            assert all(tensor.device.type == "cpu" for tensor in held)
