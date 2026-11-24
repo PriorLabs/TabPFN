@@ -28,9 +28,10 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import Any, Literal
 
+    from tabpfn.constants import XType
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -169,11 +170,12 @@ def _encoder_selects_nothing(
 
 
 def clean_data_transform(
-    X: np.ndarray | pd.DataFrame,
+    X: XType,
     *,
     cat_indices: Sequence[int | str] | None,
-    ord_encoder: OrderPreservingColumnTransformer | None,
+    ord_encoder: OrderPreservingColumnTransformer | ColumnRangeEncoders | None,
     passthrough_inf: bool = False,
+    validate: Callable[[XType], np.ndarray] | None = None,
 ) -> np.ndarray:
     """Clean data being predicted on, the way `clean_data` cleaned the training data.
 
@@ -184,17 +186,30 @@ def clean_data_transform(
     Args:
         X: The data to clean.
         cat_indices: Indices of the columns the encoder was fitted on.
-        ord_encoder: The encoder `clean_data` returned at fit time.
+        ord_encoder: A fitted estimator's `ordinal_encoder_`: the encoder
+            `clean_data` returned at fit time, or the `ColumnRangeEncoders` of a fit
+            input cleaned a range of columns at a time.
         passthrough_inf: If True, +/-inf values are carried through the ordinal
             encoding stage unchanged instead of crashing it.
+        validate: Validates `X`, or each range of its columns, before it is
+            cleaned. None when `X` is validated already.
 
     Returns:
-        `X`, or a copy of it with the fit-time constant columns restored, when `X` is
-        a numeric array the encoder encodes no column of; a new float32, C-ordered
-        array when `X` is a float32 array whose encoded columns all held numbers at
-        fit, and which holds no infinity if `passthrough_inf`; otherwise a new float64
-        array.
+        For `ColumnRangeEncoders`, a new table of their `dtype`. Otherwise `X`, or a
+        copy of it with the fit-time constant columns restored, when `X` is a numeric
+        array the encoder encodes no column of; a new float32, C-ordered array when
+        `X` is a float32 array whose encoded columns all held numbers at fit, and
+        which holds no infinity if `passthrough_inf`; otherwise a new float64 array.
     """
+    if isinstance(ord_encoder, ColumnRangeEncoders):
+        return ord_encoder.transform(
+            X,
+            cat_indices=typing.cast("Sequence[int]", cat_indices),
+            passthrough_inf=passthrough_inf,
+            validate=validate,
+        )
+    if validate is not None:
+        X = validate(X)
     given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
         # A column constant at fit gets its fit-time value back, so it is cleaned
@@ -393,6 +408,39 @@ class ColumnRangeEncoders:
     def n_columns(self) -> int:
         """The width of the cleaned table."""
         return self.ranges[-1][1]
+
+    def transform(
+        self,
+        X: XType,
+        *,
+        cat_indices: Sequence[int],
+        passthrough_inf: bool,
+        validate: Callable[[XType], np.ndarray] | None,
+    ) -> np.ndarray:
+        """`clean_data_transform` of `X` by these ranges."""
+        if validate is not None and (
+            not isinstance(X, (pd.DataFrame, np.ndarray)) or X.ndim != 2
+        ):
+            # Only a frame or a 2-D array is cut into ranges; validating anything
+            # else converts it to one or refuses it.
+            X = validate(X)
+        table = np.empty((X.shape[0], self.n_columns), dtype=self.dtype)
+        for start, stop, encoder in self.ranges:
+            table[:, start:stop] = clean_data_transform(
+                column_range(X, start, stop),
+                cat_indices=[i - start for i in cat_indices if start <= i < stop],
+                ord_encoder=encoder,
+                passthrough_inf=passthrough_inf,
+                validate=validate,
+            )
+        return table
+
+
+def column_range(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
+    """`X`'s columns from `start` to `stop`, as the same kind of container."""
+    if isinstance(X, pd.DataFrame):
+        return X.iloc[:, start:stop]
+    return X[:, start:stop]
 
 
 _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(

@@ -50,6 +50,7 @@ from tabpfn.preprocessing.clean import (
     clean_data,
     clean_data_transform,
     coerce_nullable_dtypes_to_numpy,
+    column_range,
     may_overwrite_fit_input,
 )
 from tabpfn.preprocessing.configs import (
@@ -770,7 +771,7 @@ def _clean_ranges(  # noqa: PLR0913
     # `check_array` refuses only when it is numeric, not of objects.
     check_finite = whole or _interleaved_dtype(X).kind != "O"
     for start, stop in _column_ranges(X):
-        part = _columns(X, start, stop)
+        part = column_range(X, start, stop)
         if start == 0:
             # The targets are validated with the first range, and the size limits
             # checked before the rest is read.
@@ -915,36 +916,17 @@ def clean_predict_input(
     """Validate and clean predict input the way `validate_and_clean_fit_input` did
     the fit input.
     """
-    encoder = getattr(estimator, "ordinal_encoder_", None)
-    cat_indices = estimator.inferred_feature_schema_.indices_for(
-        FeatureModality.CATEGORICAL
+    return clean_data_transform(
+        X,
+        cat_indices=estimator.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        ),
+        ord_encoder=getattr(estimator, "ordinal_encoder_", None),
+        passthrough_inf=estimator.get_inference_config().PASSTHROUGH_INF,
+        validate=functools.partial(
+            ensure_compatible_predict_input_sklearn, estimator=estimator
+        ),
     )
-    passthrough_inf = estimator.get_inference_config().PASSTHROUGH_INF
-    if (
-        not isinstance(encoder, ColumnRangeEncoders)
-        or not isinstance(X, (pd.DataFrame, np.ndarray))
-        or X.ndim != 2
-    ):
-        X = ensure_compatible_predict_input_sklearn(X, estimator)
-    if not isinstance(encoder, ColumnRangeEncoders):
-        return clean_data_transform(
-            X,
-            cat_indices=cat_indices,
-            ord_encoder=encoder,
-            passthrough_inf=passthrough_inf,
-        )
-    table = np.empty((X.shape[0], encoder.n_columns), dtype=encoder.dtype)
-    for start, stop, range_encoder in encoder.ranges:
-        part = ensure_compatible_predict_input_sklearn(
-            _columns(X, start, stop), estimator
-        )
-        table[:, start:stop] = clean_data_transform(
-            part,
-            cat_indices=[i - start for i in cat_indices if start <= i < stop],
-            ord_encoder=range_encoder,
-            passthrough_inf=passthrough_inf,
-        )
-    return table
 
 
 _RANGE_BYTES = 1 << 30
@@ -1035,13 +1017,6 @@ def _column_ranges(X: pd.DataFrame | np.ndarray) -> Iterator[tuple[int, int]]:
             stop += 1
         yield start, stop
         start = stop
-
-
-def _columns(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
-    """`X`'s columns from `start` to `stop`, as the same kind of container."""
-    if isinstance(X, pd.DataFrame):
-        return X.iloc[:, start:stop]
-    return X[:, start:stop]
 
 
 def reject_categoricals_for_differentiable_input(
