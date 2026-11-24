@@ -670,6 +670,53 @@ def test__overwrite_fit_input__narrowed_array__a_later_fit_on_a_view_raises() ->
 
 
 @pytest.mark.usefixtures("ranges_narrower_than_the_input")
+def test__overwrite_fit_input__narrowed_rows__a_fit_on_other_rows_is_accepted() -> None:
+    """Only the rows a fit wrote into are refused, not the rest of their array."""
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((2 * N_ROWS, 6))
+    rest = X[N_ROWS:].copy()
+    y = _targets(TabPFNClassifier, N_ROWS)
+    with overwrite_fit_input():
+        _gpu_preprocessing_model(TabPFNClassifier).fit(X[:N_ROWS], y)
+
+    with overwrite_fit_input():
+        model = _gpu_preprocessing_model(TabPFNClassifier).fit(X[N_ROWS:], y)
+
+    expected = _gpu_preprocessing_model(TabPFNClassifier).fit(rest, y)
+    np.testing.assert_array_equal(
+        _predict(model, rest[:N_TEST]), _predict(expected, rest[:N_TEST])
+    )
+
+
+@pytest.mark.skipif(
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
+)
+@pytest.mark.usefixtures("ranges_narrower_than_the_input", "pages_dropped")
+def test__overwrite_fit_input__frame_over_an_array_a_model_fitted_outside_reads() -> (
+    None
+):
+    """A model fitted outside the block that keeps the caller's array is protected as
+    well: a later fit inside the block does not release that memory.
+    """
+    rng = np.random.default_rng(0)
+    train = rng.standard_normal((PAGED_ROWS, 6)).astype(np.float32)
+    kept = train.copy()
+    y = _targets(TabPFNClassifier, PAGED_ROWS)
+    TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        fit_mode="low_memory",
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    ).fit(train, y)
+
+    with overwrite_fit_input():
+        _gpu_preprocessing_model(TabPFNClassifier).fit(_frame_over(train), y)
+
+    np.testing.assert_array_equal(train, kept)
+
+
+@pytest.mark.usefixtures("ranges_narrower_than_the_input")
 def test__overwrite_fit_input__frame__invalid_targets__leave_it_whole() -> None:
     X = _mixed_frame(N_ROWS)
     kept = X.copy()

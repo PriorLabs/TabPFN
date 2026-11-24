@@ -24,6 +24,11 @@ import numpy as np
 import pandas as pd
 from packaging.version import Version
 
+try:
+    from numpy.lib.array_utils import byte_bounds
+except ImportError:  # numpy < 2
+    from numpy import byte_bounds  # type: ignore[attr-defined,no-redef]
+
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_interface import _usable_cpus
@@ -499,14 +504,20 @@ _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_overwrite_fit_input", default=False
 )
 
-_OVERWRITTEN_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
-    weakref.WeakValueDictionary()
-)
-"""The live arrays whose memory a `fit` wrote into or released, by `id`."""
-_KEPT_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
-    weakref.WeakValueDictionary()
-)
-"""The live arrays that a fitted model reads without a copy, by `id`."""
+
+@dataclasses.dataclass(frozen=True)
+class _FitMemory:
+    """A byte range of an array's memory, recorded while the array owning it lives."""
+
+    owner: weakref.ref[np.ndarray]
+    start: int
+    stop: int
+
+
+_OVERWRITTEN_FIT_MEMORY: list[_FitMemory] = []
+"""The memory that a `fit` wrote into or released."""
+_KEPT_FIT_MEMORY: list[_FitMemory] = []
+"""The memory that a fitted model reads without a copy."""
 _EMPTIED_FIT_FRAMES: weakref.WeakValueDictionary[int, pd.DataFrame] = (
     weakref.WeakValueDictionary()
 )
@@ -564,7 +575,7 @@ def check_fit_input(given: Any) -> None:
     """
     if (
         isinstance(given, pd.DataFrame) and _EMPTIED_FIT_FRAMES.get(id(given)) is given
-    ) or _shares_memory(_arrays_of(given), _OVERWRITTEN_FIT_INPUTS):
+    ) or _shares_memory(_arrays_of(given), _OVERWRITTEN_FIT_MEMORY):
         raise ValueError(
             "This input was overwritten by an earlier fit inside "
             "`overwrite_fit_input()` and no longer holds its original data. Pass "
@@ -594,8 +605,8 @@ def may_write_fit_memory(X: np.ndarray) -> bool:
     return (
         _OVERWRITE_FIT_INPUT.get()
         and X.flags.writeable
-        and not _shares_memory([X], _KEPT_FIT_INPUTS)
-        and not _shares_memory([X], _OVERWRITTEN_FIT_INPUTS)
+        and not _shares_memory([X], _KEPT_FIT_MEMORY)
+        and not _shares_memory([X], _OVERWRITTEN_FIT_MEMORY)
     )
 
 
@@ -603,12 +614,14 @@ def mark_fit_memory(X: np.ndarray, *, overwritten: bool) -> None:
     """Record that a `fit` writes into or releases the memory of `X` (`overwritten`),
     or that a fitted model reads it without a copy.
     """
-    root = X
-    while isinstance(root.base, np.ndarray):
-        root = root.base
-    # Register the root array: it lives as long as any view of its memory.
-    registry = _OVERWRITTEN_FIT_INPUTS if overwritten else _KEPT_FIT_INPUTS
-    registry[id(root)] = root
+    owner = X
+    while isinstance(owner.base, np.ndarray):
+        owner = owner.base
+    registry = _OVERWRITTEN_FIT_MEMORY if overwritten else _KEPT_FIT_MEMORY
+    # An entry whose owner is gone no longer describes live memory.
+    registry[:] = [memory for memory in registry if memory.owner() is not None]
+    start, stop = byte_bounds(X)
+    registry.append(_FitMemory(weakref.ref(owner), start, stop))
 
 
 def _arrays_of(given: Any) -> list[np.ndarray]:
@@ -622,13 +635,15 @@ def _arrays_of(given: Any) -> list[np.ndarray]:
     return []
 
 
-def _shares_memory(
-    arrays: list[np.ndarray],
-    registry: weakref.WeakValueDictionary[int, np.ndarray],
-) -> bool:
-    """Whether any of `arrays` may share memory with an array in `registry`."""
-    held = list(registry.values())
-    return any(np.may_share_memory(a, b) for a in arrays for b in held)
+def _shares_memory(arrays: list[np.ndarray], registry: list[_FitMemory]) -> bool:
+    """Whether the bytes of any of `arrays` overlap live memory in `registry`."""
+    # A copy of the list, so that a fit on another thread can append meanwhile.
+    held = [memory for memory in list(registry) if memory.owner() is not None]
+    for array in arrays:
+        start, stop = byte_bounds(array)
+        if any(memory.start < stop and start < memory.stop for memory in held):
+            return True
+    return False
 
 
 _NARROW_BLOCK_BYTES = 1 << 26
