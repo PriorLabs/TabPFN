@@ -14,7 +14,9 @@ import tabpfn.base
 import tabpfn.classifier
 import tabpfn.regressor
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.preprocessing.clean import ColumnRangeEncoders
+from tabpfn.preprocessing.clean import ColumnRangeEncoders, clean_data_transform
+from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 N_ROWS = 240
 N_TEST = 60
@@ -112,6 +114,37 @@ def test__mixed_frame__cleaned_by_ranges__matches_the_whole_table(
     np.testing.assert_array_equal(table, whole[0].astype(np.float32))
     np.testing.assert_array_equal(test_table, whole[3].astype(np.float32))
     np.testing.assert_array_equal(predictions, whole[4])
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__clean_data_transform__range_encoders__match_clean_predict_input(
+    estimator_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller that validates predict input whole and cleans it with
+    `ordinal_encoder_` gets what predict cleans.
+    """
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
+    X = _mixed_frame(N_ROWS + N_TEST)
+    y = np.arange(N_ROWS) % 2
+    model = estimator_cls(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    ).fit(X.iloc[:N_ROWS], y)
+    X_test, _ = tabpfn.base.transform_columns(model, X.iloc[N_ROWS:])
+
+    cleaned = clean_data_transform(
+        ensure_compatible_predict_input_sklearn(X_test, model),
+        cat_indices=model.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        ),
+        ord_encoder=model.ordinal_encoder_,
+        passthrough_inf=model.get_inference_config().PASSTHROUGH_INF,
+    )
+
+    expected = tabpfn.base.clean_predict_input(model, X_test)
+    assert cleaned.dtype == expected.dtype
+    np.testing.assert_array_equal(cleaned, expected)
 
 
 def test__gpu_preprocessing_off__keeps_a_float64_table(
