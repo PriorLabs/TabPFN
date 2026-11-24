@@ -959,8 +959,8 @@ def _clean_ranges(
        its copy.
     2. Clean the ranges of the other blocks, smallest block first.
 
-    The columns of each range are deleted from the frame after cleaning, so the
-    memory of each block is freed with its last column.
+    A block is deleted from the frame once its last range is cleaned, which frees
+    its memory.
 
     Returns:
         The fitted encoder of each range and the schema.
@@ -976,6 +976,11 @@ def _clean_ranges(
         # Label the columns by position. These labels do not change when columns are
         # deleted.
         X.columns = pd.RangeIndex(X.shape[1])
+        blocks = [block.mgr_locs.as_array for block in X._mgr.blocks]
+        block_of = np.empty(X.shape[1], dtype=np.intp)
+        for number, positions in enumerate(blocks):
+            block_of[positions] = number
+        left = np.array([len(positions) for positions in blocks])
     by_range: dict[int, tuple[int, OrderPreservingColumnTransformer, list]] = {}
 
     def clean(start: int, stop: int) -> tuple[np.ndarray, bool]:
@@ -989,8 +994,10 @@ def _clean_ranges(
     for start, stop in order:
         table[:, start:stop], _ = clean(start, stop)
         if release:
-            for column in range(start, stop):
-                del X[column]
+            np.subtract.at(left, block_of[start:stop], 1)
+            for number in np.unique(block_of[start:stop]):
+                if left[number] == 0:
+                    _delete_columns(X, blocks[number])
     ranges = sorted(by_range.items())
     return (
         [(start, stop, encoder) for start, (stop, encoder, _) in ranges],
@@ -1022,9 +1029,23 @@ def _stream(
     streamed.copy_into(table)
     for start, stop, cleaned in encoded:
         table[:, start:stop] = cleaned
-    for column in streamed.positions:
-        del X[column]
+    _delete_columns(X, streamed.positions)
     return [r for r in order if not streamed.holds(*r)]
+
+
+def _delete_columns(X: pd.DataFrame, labels: np.ndarray) -> None:
+    """Delete the columns `labels` from `X` in one call.
+
+    Deleting part of a block splits it into one block per column, and each later
+    delete then scans every block. Deleting whole blocks leaves the others as they
+    are.
+    """
+    X._mgr = X._mgr.idelete(X.columns.get_indexer(labels))
+    # As `del X[label]` does: a cached column keeps its block's memory alive.
+    cache = getattr(X, "_item_cache", None)
+    if cache is not None:
+        for label in labels:
+            cache.pop(label, None)
 
 
 def _largest_block_of(X: pd.DataFrame) -> Callable[[tuple[int, int]], int]:
