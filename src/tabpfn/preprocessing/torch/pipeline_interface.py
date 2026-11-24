@@ -137,18 +137,23 @@ class TorchPreprocessingStep(abc.ABC):
         `device`.
         """
         columns = torch.as_tensor(column_indices, device=x.device)
-        width = column_block_width(
-            IN_PLACE_BLOCK_BYTES, x.shape[0] * x.shape[1] * x.element_size()
+        plan = column_blocks(
+            self,
+            len(column_indices),
+            x.shape[0],
+            num_train_rows,
+            x.shape[1] * x.element_size(),
+            staged=False,
         )
-        if fitted_cache is None and self._fit_column_group(num_train_rows) > 1:
+        if fitted_cache is None and plan.fit_groups is not None:
             fitted_cache = _fit_column_groups(
-                self, x, column_indices, num_train_rows, device, IN_PLACE_BLOCK_BYTES
+                self, x, column_indices, num_train_rows, device, plan.fit_groups
             )
         if fitted_cache is not None:
             fitted_cache = _move_cache_to_device(fitted_cache, device)
         parts: list[dict[str, torch.Tensor]] = []
-        for start in range(0, len(column_indices), width):
-            block = slice(start, start + width)
+        (blocks,) = plan.groups
+        for block in blocks:
             # Indexing by a tensor copies, also when `device` is `x`'s.
             selected = x[:, :, columns[block]].to(device)
             if fitted_cache is None:
@@ -337,7 +342,7 @@ class TorchPreprocessingPipeline:
         staged = (
             consume_input
             and compute_device is not None
-            and not _same_device(torch.device(compute_device), x.device)
+            and runs_staged(x.device, compute_device)
         )
         if staged:
             # Run whole, such a step would read all of `x` and could copy it.
@@ -476,6 +481,13 @@ def _in_place_kwargs(step: TorchPreprocessingStep) -> dict[str, bool]:
     return {"in_place": True} if _accepts_in_place(type(step)) else {}
 
 
+def runs_staged(x_device: torch.device, compute_device: torch.device) -> bool:
+    """Whether the pipeline, given `consume_input`, moves an input on `x_device` to
+    `compute_device` a block at a time.
+    """
+    return not _same_device(torch.device(compute_device), x_device)
+
+
 def _same_device(a: torch.device, b: torch.device) -> bool:
     """Whether `a` and `b` name one device, an index of None meaning the current
     one of its type.
@@ -549,28 +561,28 @@ def _fit_transform_on_device(
 
     Returns the fitted cache on `device`.
     """
-    # Wide blocks, sliced where the columns are contiguous, keep the host-side
-    # copies fast; the step's own blocks then bound its intermediates on `device`.
-    width = column_block_width(
-        DEVICE_BLOCK_BYTES, x.shape[0] * x.shape[1] * x.element_size()
+    plan = column_blocks(
+        step,
+        len(column_indices),
+        x.shape[0],
+        num_train_rows,
+        x.shape[1] * x.element_size(),
+        staged=True,
     )
-    if fitted_cache is None and step._fit_column_group(num_train_rows) > 1:
+    if fitted_cache is None and plan.fit_groups is not None:
         fitted_cache = _fit_column_groups(
-            step, x, column_indices, num_train_rows, device, DEVICE_BLOCK_BYTES
+            step, x, column_indices, num_train_rows, device, plan.fit_groups
         )
     if fitted_cache is not None:
         fitted_cache = _move_cache_to_device(fitted_cache, device)
     parts: list[dict[str, torch.Tensor]] = []
-    for start in range(0, len(column_indices), width):
-        selected = column_indices[start : start + width]
+    for blocks in plan.groups:
+        group = slice(blocks[0].start, blocks[-1].stop)
+        selected = column_indices[group]
         index = _column_index(selected)
         cache = None
         if fitted_cache is not None:
-            cache = _slice_column_cache(
-                fitted_cache,
-                slice(start, start + len(selected)),
-                step.shared_cache_keys,
-            )
+            cache = _slice_column_cache(fitted_cache, group, step.shared_cache_keys)
         result = step._fit_transform_column_blocks(
             x[:, :, index].to(device),
             list(range(len(selected))),
@@ -586,25 +598,70 @@ def _fit_transform_on_device(
     return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
 
-def column_block_width(block_bytes: int, column_bytes: int) -> int:
-    """How many columns of `column_bytes` each fit in `block_bytes`, at least one."""
-    return max(1, block_bytes // max(1, column_bytes))
-
-
-def fit_group_width(
-    step: TorchPreprocessingStep,
-    num_train_rows: int,
-    train_column_bytes: int,
-    block_bytes: int,
-) -> int:
-    """Columns per fit block of a step that fits `_fit_column_group` columns together.
-
-    The width is as many whole groups as fit in `block_bytes` of train rows, at least
-    one group.
+@dataclasses.dataclass(frozen=True)
+class ColumnBlocks:
+    """The blocks of a columnwise step's target columns, by position, that the
+    pipeline runs the step on.
     """
-    group = step._fit_column_group(num_train_rows)
-    width = block_bytes // max(1, train_column_bytes)
-    return max(group, width - width % group)
+
+    groups: list[list[slice]]
+    """Consecutive blocks, grouped by what moves to the compute device at a time:
+    one group when the input is on it.
+
+    The step fits on each block's train rows, unless `fit_groups` is set, and
+    transforms the block.
+    """
+
+    fit_groups: list[slice] | None
+    """For a step whose fit reads columns together, the blocks of whole fit groups
+    that it fits on, before it transforms any block.
+    """
+
+    def fit_blocks(self) -> list[slice]:
+        """The blocks the step fits on."""
+        if self.fit_groups is not None:
+            return self.fit_groups
+        return [block for blocks in self.groups for block in blocks]
+
+
+def column_blocks(
+    step: TorchPreprocessingStep,
+    num_columns: int,
+    num_rows: int,
+    num_train_rows: int,
+    cell_bytes: int,
+    *,
+    staged: bool,
+) -> ColumnBlocks:
+    """The blocks a columnwise step runs on, for `num_columns` target columns of
+    `num_rows` rows, `cell_bytes` per row of a column.
+
+    Staged, the input is held off the compute device; else it is on it.
+    """
+    column_bytes = max(1, num_rows * cell_bytes)
+    width = max(1, IN_PLACE_BLOCK_BYTES // column_bytes)
+    # Wide groups, sliced where the columns are contiguous, keep the host-side
+    # copies fast; the narrow blocks bound the step's intermediates on the device.
+    # A staged step runs in place on each group's copy, so a group's blocks are the
+    # in-place blocks of that copy.
+    group_width = max(1, DEVICE_BLOCK_BYTES // column_bytes) if staged else num_columns
+    groups = [
+        _spans(group.start, group.stop, width)
+        for group in _spans(0, num_columns, group_width)
+    ]
+    fit_group = step._fit_column_group(num_train_rows)
+    if fit_group == 1:
+        return ColumnBlocks(groups, None)
+    # As many whole fit groups as fit in a block of train rows, at least one.
+    block_bytes = DEVICE_BLOCK_BYTES if staged else IN_PLACE_BLOCK_BYTES
+    fit_width = block_bytes // max(1, num_train_rows * cell_bytes)
+    fit_width = max(fit_group, fit_width - fit_width % fit_group)
+    return ColumnBlocks(groups, _spans(0, num_columns, fit_width))
+
+
+def _spans(start: int, stop: int, width: int) -> list[slice]:
+    """`start:stop` cut into slices of `width` columns, the last one narrower."""
+    return [slice(a, min(a + width, stop)) for a in range(start, stop, width)]
 
 
 def _fit_column_groups(
@@ -613,28 +670,16 @@ def _fit_column_groups(
     column_indices: list[int],
     num_train_rows: int,
     device: torch.device,
-    block_bytes: int,
+    blocks: list[slice],
 ) -> dict[str, torch.Tensor]:
-    """`step._fit` on the train rows of `column_indices`, a block of whole fit groups
-    at a time moved to `device`.
-
-    A group's train rows fit in `block_bytes`: its width comes from the train rows.
+    """`step._fit` on the train rows of `column_indices`, one block of positions at a
+    time moved to `device`.
     """
     train = x[:num_train_rows]
-    width = fit_group_width(
-        step,
-        num_train_rows,
-        train.shape[0] * train.shape[1] * x.element_size(),
-        block_bytes,
-    )
     return _join_column_caches(
         [
-            step._fit(
-                train[:, :, _column_index(column_indices[start : start + width])].to(
-                    device
-                )
-            )
-            for start in range(0, len(column_indices), width)
+            step._fit(train[:, :, _column_index(column_indices[block])].to(device))
+            for block in blocks
         ],
         step.shared_cache_keys,
     )
