@@ -115,7 +115,7 @@ class MemberRows:
                 member.order = member.order[permutation]
                 schema = schema.apply_permutation(permutation)
             elif isinstance(step, TorchRandomSignFlipStep):
-                signs = step.signs(1, len(targets)).reshape(-1).to(device)
+                signs = step.signs(1, len(targets)).reshape(-1)
                 member.ops.append(_SignsOp(member.order[targets], signs))
             elif step.columnwise:
                 columns = member.order[targets]
@@ -139,7 +139,10 @@ class MemberRows:
                     for block in plan.fit_blocks()
                 ]
                 cache = _join_column_caches(parts, step.shared_cache_keys)
-                member.ops.append(_ColumnwiseOp(step, columns, cache))
+                # Kept in host memory: the model sizes its chunks from the free memory
+                # of `device`, which must be what the input built whole leaves free.
+                cpu_cache = {key: value.cpu() for key, value in cache.items()}
+                member.ops.append(_ColumnwiseOp(step, columns, cpu_cache))
             else:
                 return None
         member.feature_schema = schema.clear_gpu_transform_marks()
@@ -183,7 +186,9 @@ class MemberRows:
                 cells[:, :, at] *= op.signs[of].to(cells)
                 continue
             cache = {
-                key: value if key in op.step.shared_cache_keys else value[..., of]
+                key: (value if key in op.step.shared_cache_keys else value[..., of]).to(
+                    cells.device
+                )
                 for key, value in op.cache.items()
             }
             transformed, _, _ = op.step._transform(cells[:, :, at], fitted_cache=cache)
