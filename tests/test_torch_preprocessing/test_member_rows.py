@@ -154,8 +154,8 @@ def test__read__equals_the_host_staged_model_input(
         _assert_equal(rows.read(across, some, device), expected[across][:, some])
         picked = np.sort(rng.permutation(R)[:20])
         _assert_equal(rows.read(picked, some, device), expected[picked][:, some])
-        with pytest.raises(ValueError, match="ascending"):
-            rows.read(picked[::-1].copy(), some, device)
+        backwards = picked[::-1].copy()
+        _assert_equal(rows.read(backwards, some, device), expected[backwards][:, some])
 
 
 @pytest.mark.usefixtures("small_blocks")
