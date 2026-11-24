@@ -261,7 +261,7 @@ class TestExpansion:
 
         out = self._expander().fit_transform(X)
 
-        # `iloc` would copy the columns on pandas < 3, so the blocks are read instead.
+        # Read the blocks directly, because `iloc` copies the columns on older pandas.
         assert any(np.shares_memory(b.values, block) for b in out._mgr.blocks)
         np.testing.assert_array_equal(out.iloc[:, :4].to_numpy(), values)
         assert list(out.index) == [0, 1, 2]

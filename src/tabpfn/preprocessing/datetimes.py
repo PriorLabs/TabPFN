@@ -321,23 +321,23 @@ def _replace_columns_positionally(
 def drop_and_append(
     frame: pd.DataFrame, expanded: Sequence[int], blocks: Sequence[pd.DataFrame]
 ) -> pd.DataFrame:
-    """`frame` without its `expanded` positions, with `blocks` after the kept columns.
+    """Drop the `expanded` positions of `frame` and append `blocks` after the rest.
 
-    The kept columns share `frame`'s memory, and `frame` is left untouched. The result
-    is default-indexed, as skrub's output is.
+    The kept columns share `frame`'s memory. `frame` does not change. The result has
+    a default index, like skrub's output.
     """
     out = frame.copy(deep=False)
     labels = out.columns
-    # A temporary integer axis makes every label unique, so each deletion removes one
-    # position even when the caller's labels repeat. Selecting the kept columns
-    # instead would copy the blocks they sit in.
+    # Temporary integer labels are unique, so each `del` removes exactly one
+    # position, also when the caller's labels repeat. `del` does not copy the kept
+    # columns. Selecting them with `iloc` would copy the blocks that hold them.
     out.columns = pd.RangeIndex(out.shape[1])
     for position in expanded:
         del out[position]
     out.columns = labels.delete(list(expanded))
     out.index = pd.RangeIndex(len(out))
-    # Inserted one column at a time: before pandas 3, `concat` merges the appended
-    # columns into the kept block of their dtype, which copies that block.
+    # Insert one column at a time. On older pandas, `concat` merges the new columns
+    # into the kept block of the same dtype, and that copies the block.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
         for block in blocks:
