@@ -525,11 +525,9 @@ def check_fit_input(given: Any) -> None:
 def may_overwrite_fit_input(X: Any, given: Any) -> bool:
     """Whether `fit` may write into `X`, the array it made from the caller's `given`.
 
-    Raises:
-        ValueError: If an earlier `fit` inside `overwrite_fit_input()` wrote into
-            `given`.
+    The caller has already refused, with `check_fit_input`, a `given` that an earlier
+    fit overwrote.
     """
-    check_fit_input(given)
     if X is given:
         return isinstance(X, np.ndarray) and may_write_fit_memory(X)
     return is_private_copy(X, given)
