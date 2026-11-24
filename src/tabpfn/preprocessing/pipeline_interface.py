@@ -239,7 +239,10 @@ class SharedColumnsTable:
         return out
 
     def _fill(self, base: torch.Tensor, own: torch.Tensor, out: torch.Tensor) -> None:
-        """Writes the table's columns of `base`'s and `own`'s rows into `out`."""
+        """Writes the table's columns of some rows into `out`.
+
+        `base` and `own` hold these rows of the base array and of the own array.
+        """
         from_base, own_at, own_from = self._gather_indices
         rows = len(base)
         # Every column from `base` in one gather, then the own ones over theirs.
