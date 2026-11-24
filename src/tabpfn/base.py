@@ -628,6 +628,10 @@ def validate_and_clean_fit_input(
     """
     config = estimator.inference_config_
     dtype = cleaned_table_dtype(estimator)
+    if dtype == np.float32 and len(X) > _FLOAT32_EXACT_INTEGERS:
+        # Category and group codes count up from 0 and are fewer than the rows. So
+        # only an input with more rows can have a code that float32 cannot hold.
+        dtype = np.dtype(np.float64)
     min_samples = config.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE
     thresholds = {
         "min_samples_for_inference": min_samples,
@@ -670,11 +674,7 @@ def validate_and_clean_fit_input(
             overwrite_input=may_overwrite_fit_input(X, X_given),
         )
         decisions = None
-        if (
-            X.dtype != dtype
-            and dtype == np.float32
-            and _float32_holds_codes(encoder, X, group_feature_index)
-        ):
+        if X.dtype != dtype and dtype == np.float32:
             decisions = _source_decisions(estimator, y, X.shape, random_state)
             decisions.take(0, X)
             X = X.astype(np.float32)
@@ -705,20 +705,14 @@ def validate_and_clean_fit_input(
         random_state=random_state,
     )
     table = None
-    try:
-        if isinstance(X, np.ndarray):
-            # Clean the ranges without a table first. If no range encodes a column,
-            # cleaning keeps every value, so the table is `X.astype(dtype)`. That
-            # reads `X` row by row instead of in strided column ranges.
-            y_clean, ranges, feature_schema, decisions = clean_ranges(None, dtype)
-            if not any(encoder.selected_columns() for _, _, encoder in ranges):
-                table = X.astype(dtype)
-        if table is None:
-            table = np.empty((n_rows, n_columns), dtype=dtype)
-            y_clean, ranges, feature_schema, decisions = clean_ranges(table, dtype)
-    except _Float32CannotHoldError:
-        del table
-        dtype = np.dtype(np.float64)
+    if isinstance(X, np.ndarray):
+        # Clean the ranges without a table first. If no range encodes a column,
+        # cleaning keeps every value, so the table is `X.astype(dtype)`. That reads
+        # `X` row by row instead of in strided column ranges.
+        y_clean, ranges, feature_schema, decisions = clean_ranges(None, dtype)
+        if not any(encoder.selected_columns() for _, _, encoder in ranges):
+            table = X.astype(dtype)
+    if table is None:
         table = np.empty((n_rows, n_columns), dtype=dtype)
         y_clean, ranges, feature_schema, decisions = clean_ranges(table, dtype)
     warn_on_text(feature_schema)
@@ -762,10 +756,6 @@ def _clean_ranges(  # noqa: PLR0913
         The validated targets, the fitted encoder of each range, the schema, and the
         ensemble's decisions taken on each range before the cast to float32. The
         decisions are `None` unless `dtype` is float32 and a column of `X` is not.
-
-    Raises:
-        _Float32CannotHoldError: If `dtype` is float32 and a range has codes that
-            float32 cannot hold exactly.
     """
     config = estimator.inference_config_
     ranges: list[tuple[int, int, OrderPreservingColumnTransformer]] = []
@@ -828,13 +818,6 @@ def _clean_ranges(  # noqa: PLR0913
         cleaned, encoder, schema = clean_data(
             X=part, feature_schema=schema, passthrough_inf=passthrough_inf
         )
-        group = group_feature_index
-        if dtype == np.float32 and not _float32_holds_codes(
-            encoder,
-            cleaned,
-            None if group is None or not start <= group < stop else group - start,
-        ):
-            raise _Float32CannotHoldError
         if decisions is not None:
             decisions.take(start, cleaned)
         if table is not None:
@@ -850,32 +833,8 @@ def _has_wider_columns(X: pd.DataFrame | np.ndarray) -> bool:
     return any(dtype != np.float32 for dtype in dtypes)
 
 
-class _Float32CannotHoldError(Exception):
-    """A cleaned range has codes that float32 cannot hold exactly."""
-
-
 _FLOAT32_EXACT_INTEGERS = 2**24
 """Float32 holds every integer up to this one exactly."""
-
-
-def _float32_holds_codes(
-    encoder: OrderPreservingColumnTransformer,
-    cleaned: np.ndarray,
-    group_column: int | None,
-) -> bool:
-    """Whether float32 holds exactly the codes in the encoded columns of `cleaned` and
-    in its group column at `group_column`.
-
-    A member encodes these codes again on the CPU. If two codes round to the same
-    float32, two categories or groups become one.
-    """
-    # Codes count up from 0, so the number of categories bounds them.
-    categories = getattr(encoder.named_transformers_.get("encoder"), "categories_", [])
-    if any(len(c) - 1 > _FLOAT32_EXACT_INTEGERS for c in categories):
-        return False
-    return group_column is None or not bool(
-        (cleaned[:, group_column] > _FLOAT32_EXACT_INTEGERS).any()
-    )
 
 
 def _source_decisions(
@@ -971,27 +930,21 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
     goes to the whole-table validation, which refuses it. An input whose converted
     copy fits in one range is read whole.
     """
-    if len(getattr(X, "shape", ())) == 2 and X.shape[1] == 0:
-        return False
     if _converted_bytes(X) <= _RANGE_BYTES:
-        # Each range adds a fixed cost to validation and cleaning.
+        # Each range adds a fixed cost to validation and cleaning. This also sends
+        # an input with no columns, and anything not a 2-D frame or array, to the
+        # whole-table validation.
         return False
     if isinstance(X, pd.DataFrame):
-        blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
-        if blocks is None or len(blocks) != 1:
+        blocks = X._mgr.blocks
+        if len(blocks) != 1:
             return True
         # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
         values = blocks[0].values  # noqa: PD011
         if not isinstance(values, np.ndarray) or values.dtype.kind not in "biuf":
             return True
         return dtype == np.float32 and values.dtype != np.float32
-    return (
-        isinstance(X, np.ndarray)
-        and X.ndim == 2
-        and dtype == np.float32
-        and X.dtype.kind in "biuf"
-        and X.dtype != np.float32
-    )
+    return dtype == np.float32 and X.dtype.kind in "biuf" and X.dtype != np.float32
 
 
 def _interleaved_dtype(X: pd.DataFrame) -> np.dtype:
