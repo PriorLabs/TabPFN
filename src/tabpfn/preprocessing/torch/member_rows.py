@@ -148,10 +148,7 @@ class MemberRows:
     def read(
         self, rows: slice | np.ndarray, columns: np.ndarray, device: torch.device
     ) -> torch.Tensor:
-        """The input's `columns` at `rows`, `(rows, columns)` float32 on `device`.
-
-        An index of `rows` must ascend.
-        """
+        """The input's `columns` at `rows`, `(rows, columns)` float32 on `device`."""
         return self._read_input(rows, self.order[columns], device)[:, 0]
 
     def _read_input(
@@ -219,7 +216,7 @@ class MemberRowSource:
         device: torch.device,
         batch: int | None = None,
     ) -> torch.Tensor:
-        """See `HostRowSource.read`. An index of rows must ascend."""
+        """See `HostRowSource.read`."""
         column_index = np.arange(self.shape[2])[
             columns if isinstance(columns, slice) else columns.cpu().numpy()
         ]
@@ -258,11 +255,7 @@ def _rows_of(
     rows: slice | np.ndarray,
     columns: np.ndarray,
 ) -> torch.Tensor:
-    """`columns` at `rows` of the train table followed by the test table, float32.
-
-    Raises:
-        ValueError: If `rows` is an index that does not ascend.
-    """
+    """`columns` at `rows` of the train table followed by the test table, float32."""
     if isinstance(rows, slice):
         train: slice | np.ndarray = slice(
             min(rows.start, num_train), min(rows.stop, num_train)
@@ -272,9 +265,16 @@ def _rows_of(
             max(rows.stop, num_train) - num_train,
         )
         sizes = (train.stop - train.start, test.stop - test.start)
+    elif np.any(rows[1:] < rows[:-1]):
+        # Out of order, the train and test rows interleave: gather each in place.
+        in_train = rows < num_train
+        out = torch.empty((len(rows), len(columns)), dtype=torch.float32)
+        out[torch.from_numpy(in_train)] = _cells(tables[0], rows[in_train], columns)
+        out[torch.from_numpy(~in_train)] = _cells(
+            tables[1], rows[~in_train] - num_train, columns
+        )
+        return out
     else:
-        if np.any(rows[1:] < rows[:-1]):
-            raise ValueError("A member's rows are read in ascending order.")
         split = int(np.searchsorted(rows, num_train))
         train, test = rows[:split], rows[split:] - num_train
         sizes = (split, len(rows) - split)
