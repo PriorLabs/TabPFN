@@ -909,10 +909,26 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X: XType,
         y: YType,
         random_state: int | np.random.Generator,
+    ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
+        """Initialize the model for standard input."""
+        ensemble_configs, X, y, _ = (
+            self._initialize_dataset_preprocessing_with_decisions(
+                X=X, y=y, random_state=random_state
+            )
+        )
+        return ensemble_configs, X, y
+
+    def _initialize_dataset_preprocessing_with_decisions(
+        self,
+        X: XType,
+        y: YType,
+        random_state: int | np.random.Generator,
     ) -> tuple[
         list[ClassifierEnsembleConfig], np.ndarray, np.ndarray, SourceDecisions | None
     ]:
-        """Initialize the model for standard input."""
+        """`_initialize_dataset_preprocessing`, and the decisions the ensemble takes
+        on the fit input before it is cast to float32.
+        """
         # feature_names_in_/n_features_in_ have to describe what the caller passed,
         # not the wider frame expansion can make of it, so they come off the raw
         # input here, before any conversion.
@@ -1147,7 +1163,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, source_decisions = (
-            self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
+            self._initialize_dataset_preprocessing_with_decisions(
+                X=X, y=y, random_state=static_seed
+            )
         )
         self.ensemble_configs_ = ensemble_configs
         row_weights, sample_weight_mode = self._resolve_row_weights(

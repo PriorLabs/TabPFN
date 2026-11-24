@@ -843,7 +843,7 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
     ] = []
     for X_item, y_item in zip(X_split, y_split, strict=True):
         if model_type == "classifier":
-            ensemble_configs, X_mod, y_mod, _ = (
+            ensemble_configs, X_mod, y_mod = (
                 calling_instance._initialize_dataset_preprocessing(
                     X=X_item,
                     y=y_item,
@@ -860,7 +860,7 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
                 cat_ix=current_cat_ix,
             )
         elif model_type == "regressor":
-            ensemble_configs, X_mod, y_mod, bardist_, _ = (
+            ensemble_configs, X_mod, y_mod, bardist_ = (
                 calling_instance._initialize_dataset_preprocessing(
                     X=X_item,
                     y=y_item,

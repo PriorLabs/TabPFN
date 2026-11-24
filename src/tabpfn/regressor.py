@@ -1159,6 +1159,25 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         np.ndarray,
         np.ndarray,
         FullSupportBarDistribution,
+    ]:
+        """Prepare ensemble configs and validate X, y for one dataset/chunk."""
+        ensemble_configs, X, y, bardist, _ = (
+            self._initialize_dataset_preprocessing_with_decisions(
+                X=X, y=y, random_state=random_state
+            )
+        )
+        return ensemble_configs, X, y, bardist
+
+    def _initialize_dataset_preprocessing_with_decisions(
+        self,
+        X: XType,
+        y: YType,
+        random_state: int | np.random.Generator,
+    ) -> tuple[
+        list[RegressorEnsembleConfig],
+        np.ndarray,
+        np.ndarray,
+        FullSupportBarDistribution,
         SourceDecisions | None,
     ]:
         """Prepare ensemble configs and validate X, y for one dataset/chunk.
@@ -1641,7 +1660,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, znorm_space_bardist, source_decisions = (
-            self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
+            self._initialize_dataset_preprocessing_with_decisions(
+                X=X, y=y, random_state=static_seed
+            )
         )
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs

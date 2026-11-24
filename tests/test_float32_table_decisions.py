@@ -188,6 +188,6 @@ def test__batched_fit__keeps_a_float64_table() -> None:
     )
     model._initialize_model_variables()
 
-    _, table, _, _ = model._initialize_dataset_preprocessing(X=X, y=y, random_state=0)
+    _, table, _ = model._initialize_dataset_preprocessing(X=X, y=y, random_state=0)
 
     assert table.dtype == np.float64
