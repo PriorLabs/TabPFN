@@ -36,6 +36,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
+    _member_rows,
     _model_input_arguments,
     _model_input_device,
     _prepare_member_inputs,
@@ -1657,3 +1658,36 @@ def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one
 
     assert sources
     np.testing.assert_array_equal(actual, expected)
+
+
+def test__member_rows__gpu_step_that_reads_whole_rows__warns_and_builds_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At the sizes that hold the input in host memory, building it whole can run out
+    of memory, so the fallback says so.
+    """
+    rng = default_rng(0)
+    X = rng.standard_normal((60, 4))
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    ).fit(X[:40], rng.integers(0, 2, 40))
+    member = model.executor_.ensemble_members[0]
+    architecture = model.models_[0]
+    monkeypatch.setattr(type(architecture), "reads_row_sources", True, raising=False)
+    monkeypatch.setattr(
+        "tabpfn.inference._model_input_device", lambda *_: torch.device("meta")
+    )
+    monkeypatch.setattr("tabpfn.inference.MemberRows.fit", lambda *_: None)
+
+    with pytest.warns(UserWarning, match="reads whole rows"):
+        rows = _member_rows(
+            member,
+            member.transform_X_test(X[40:]),
+            torch.device("cpu"),
+            None,
+            architecture,
+        )
+
+    assert rows is None
