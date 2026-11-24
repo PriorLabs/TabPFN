@@ -626,7 +626,7 @@ def validate_and_clean_fit_input(
     """
     config = estimator.inference_config_
     dtype = cleaned_table_dtype(estimator)
-    if dtype == np.float32 and len(X) > _FLOAT32_EXACT_INTEGERS:
+    if dtype == np.float32 and np.shape(X)[0] > _FLOAT32_EXACT_INTEGERS:
         # Category and group codes count up from 0 and are fewer than the rows. So
         # only an input with more rows can have a code that float32 cannot hold.
         dtype = np.dtype(np.float64)
