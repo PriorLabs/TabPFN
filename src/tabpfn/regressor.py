@@ -156,6 +156,7 @@ if TYPE_CHECKING:
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
     from tabpfn.preprocessing.row_weights import SampleWeightMode
+    from tabpfn.preprocessing.source_decisions import SourceDecisions
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -1000,6 +1001,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         inference_mode: bool,
         row_weights: np.ndarray | None,
         sample_weight_mode: SampleWeightMode | None,
+        source_decisions: SourceDecisions | None,
     ) -> None:
         """Build ``self.ensemble_preprocessor_`` and ``self.executor_``.
 
@@ -1034,6 +1036,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             task_type=self.estimator_type,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            source_decisions=source_decisions,
         )
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
@@ -1154,6 +1157,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         np.ndarray,
         np.ndarray,
         FullSupportBarDistribution,
+        SourceDecisions | None,
     ]:
         """Prepare ensemble configs and validate X, y for one dataset/chunk.
 
@@ -1200,15 +1204,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             feature_names = [*feature_names, *self.group_aggregator_.names_]
 
         self.group_feature_index_ = self.group_encoder_.feature_index(feature_names)
-        X, y, _, feature_schema, ordinal_encoder = validate_and_clean_fit_input(
-            self,
-            X,
-            y,
-            X_given=X_given,
-            feature_names=feature_names,
-            categorical_indices=categorical_indices,
-            group_feature_index=self.group_feature_index_,
-            ensure_y_numeric=True,
+        X, y, _, feature_schema, ordinal_encoder, decisions = (
+            validate_and_clean_fit_input(
+                self,
+                X,
+                y,
+                X_given=X_given,
+                feature_names=feature_names,
+                categorical_indices=categorical_indices,
+                group_feature_index=self.group_feature_index_,
+                ensure_y_numeric=True,
+                random_state=random_state,
+            )
         )
         # Set class variables for sklearn compatibility
         self.n_train_samples_ = len(X)
@@ -1308,7 +1315,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         assert len(ensemble_configs) == self.n_estimators_
 
-        return ensemble_configs, X, y, self.znorm_space_bardist_
+        return ensemble_configs, X, y, self.znorm_space_bardist_, decisions
 
     def _compute_downsample_correction(self, *, y_raw: np.ndarray) -> None:
         """Set `downsample_correction_log_weights_` from the fitted row sampler.
@@ -1565,6 +1572,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_mode=False,
             row_weights=None,
             sample_weight_mode=None,
+            source_decisions=None,
         )
         # `y` is z-normalized by now; histogramming on the raw-space borders
         # needs the original target values.
@@ -1630,7 +1638,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        ensemble_configs, X, y, znorm_space_bardist = (
+        ensemble_configs, X, y, znorm_space_bardist, source_decisions = (
             self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
         self.znorm_space_bardist_ = znorm_space_bardist
@@ -1694,6 +1702,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_mode=True,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            source_decisions=source_decisions,
         )
         self._compute_downsample_correction(y_raw=y_raw)
 
