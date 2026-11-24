@@ -626,7 +626,7 @@ def validate_and_clean_fit_input(
     """
     config = estimator.inference_config_
     dtype = cleaned_table_dtype(estimator)
-    if dtype == np.float32 and np.shape(X)[0] > _FLOAT32_EXACT_INTEGERS:
+    if dtype == np.float32 and _rows_of(X) > _FLOAT32_EXACT_INTEGERS:
         # Category and group codes count up from 0 and are fewer than the rows. So
         # only an input with more rows can have a code that float32 cannot hold.
         dtype = np.dtype(np.float64)
@@ -820,6 +820,17 @@ def _clean_ranges(  # noqa: PLR0913
         ranges.append((start, stop, encoder))
         features += schema.features
     return np.asarray(y), ranges, FeatureSchema(features=features), decisions
+
+
+def _rows_of(X: XType) -> int:
+    """The number of rows of `X`, without converting it.
+
+    An object without `shape` or `len` (e.g. sklearn's `_NotAnArray`) counts as 0:
+    it is small enough to convert, and its conversion comes later.
+    """
+    if hasattr(X, "shape"):
+        return int(X.shape[0])
+    return len(X) if hasattr(X, "__len__") else 0
 
 
 def _has_wider_columns(X: pd.DataFrame | np.ndarray) -> bool:
