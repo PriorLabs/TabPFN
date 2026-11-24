@@ -8,6 +8,7 @@ import dataclasses
 import functools
 import pathlib
 import typing
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -51,18 +52,27 @@ from tabpfn.preprocessing.clean import (
     coerce_nullable_dtypes_to_numpy,
     may_overwrite_fit_input,
 )
+from tabpfn.preprocessing.configs import (
+    FeatureSubsamplingMethod,
+    SampleSubsamplingMethod,
+)
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
     FeatureSchema,
     build_input_feature_names,
 )
 from tabpfn.preprocessing.datetimes import DateTransformer
+from tabpfn.preprocessing.ensemble import (
+    draw_fit_rows,
+    scale_n_estimators_for_feature_coverage,
+)
 from tabpfn.preprocessing.group_ids import as_group_feature
 from tabpfn.preprocessing.modality_detection import (
     named_feature_modalities,
     warn_on_text,
 )
 from tabpfn.preprocessing.pipeline_factory import pipelines_keep_float32
+from tabpfn.preprocessing.source_decisions import SourceDecisions
 from tabpfn.preprocessing.text import TextTransformer
 from tabpfn.utils import (
     DevicesSpecification,
@@ -552,10 +562,11 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
     it as float32, float64 otherwise.
 
     A member reads float32 when its CPU pipeline only selects, reorders, compares and
-    encodes values, and the model takes float32. Narrowing a wider input first then
-    changes what reaches the model only where values that differ round to the same
-    float32. In `"batched"` mode the table goes to the fine-tuning datasets, whose
-    members are built without GPU preprocessing.
+    encodes values, and the model takes float32: its values reach the model as they
+    would from a float64 table. What it decides from them can differ, where values
+    that differ round to the same float32; `SourceDecisions` takes those decisions
+    before the table narrows the input. In `"batched"` mode the table goes to the
+    fine-tuning datasets, whose members are built without GPU preprocessing.
     """
     config = estimator.inference_config_
     reads_float32 = estimator.forced_inference_dtype_ in (
@@ -581,12 +592,14 @@ def validate_and_clean_fit_input(
     categorical_indices: list[int] | None,
     group_feature_index: int | None,
     ensure_y_numeric: bool,
+    random_state: int | np.random.Generator,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
     str | None,
     FeatureSchema,
     OrderPreservingColumnTransformer | ColumnRangeEncoders,
+    SourceDecisions | None,
 ]:
     """Validate the expanded fit input, decide its modalities and clean it.
 
@@ -600,11 +613,13 @@ def validate_and_clean_fit_input(
         group_feature_index: Position of the group feature, which is cleaned as a
             numerical feature and marked categorical after.
         ensure_y_numeric: Whether the targets must be numeric.
+        random_state: The seed the ensemble preprocessor draws its rows with.
 
     Returns:
         The cleaned table, the validated targets, the targets' name when they came as
-        a `Series`, the feature schema, and the fitted encoders `clean_predict_input`
-        reapplies.
+        a `Series`, the feature schema, the fitted encoders `clean_predict_input`
+        reapplies, and the ensemble's decisions taken before a float32 table
+        narrowed the input, `None` when it did not.
     """
     config = estimator.inference_config_
     dtype = cleaned_table_dtype(estimator)
@@ -648,11 +663,14 @@ def validate_and_clean_fit_input(
             passthrough_inf=passthrough_inf,
             overwrite_input=may_overwrite_fit_input(X, X_given),
         )
+        decisions = None
         if (
             X.dtype != dtype
             and dtype == np.float32
             and _float32_holds_codes(encoder, X, group_feature_index)
         ):
+            decisions = _source_decisions(estimator, y, X.shape, random_state)
+            decisions.take(0, X)
             X = X.astype(np.float32)
         return (
             X,
@@ -662,6 +680,7 @@ def validate_and_clean_fit_input(
                 feature_schema, group_feature_index, FeatureModality.CATEGORICAL
             ),
             encoder,
+            decisions,
         )
 
     y_name = str(y.name) if isinstance(y, pd.Series) else None
@@ -677,6 +696,7 @@ def validate_and_clean_fit_input(
         ensure_y_numeric=ensure_y_numeric,
         thresholds=thresholds,
         passthrough_inf=passthrough_inf,
+        random_state=random_state,
     )
     table = None
     try:
@@ -684,17 +704,17 @@ def validate_and_clean_fit_input(
             # Cleaning that encodes no column leaves every value as it is, so the
             # table is `X` cast, which reads it row by row rather than in strided
             # ranges; the ranges are read without a table to write into.
-            y_clean, ranges, feature_schema = clean_ranges(None, dtype)
+            y_clean, ranges, feature_schema, decisions = clean_ranges(None, dtype)
             if not any(encoder.selected_columns() for _, _, encoder in ranges):
                 table = X.astype(dtype)
         if table is None:
             table = np.empty((n_rows, n_columns), dtype=dtype)
-            y_clean, ranges, feature_schema = clean_ranges(table, dtype)
+            y_clean, ranges, feature_schema, decisions = clean_ranges(table, dtype)
     except _Float32CannotHoldError:
         del table
         dtype = np.dtype(np.float64)
         table = np.empty((n_rows, n_columns), dtype=dtype)
-        y_clean, ranges, feature_schema = clean_ranges(table, dtype)
+        y_clean, ranges, feature_schema, decisions = clean_ranges(table, dtype)
     warn_on_text(feature_schema)
     return (
         table,
@@ -704,6 +724,7 @@ def validate_and_clean_fit_input(
             feature_schema, group_feature_index, FeatureModality.CATEGORICAL
         ),
         ColumnRangeEncoders(ranges=ranges, dtype=dtype),
+        decisions,
     )
 
 
@@ -720,15 +741,19 @@ def _clean_ranges(  # noqa: PLR0913
     ensure_y_numeric: bool,
     thresholds: dict[str, int],
     passthrough_inf: bool,
+    random_state: int | np.random.Generator,
 ) -> tuple[
     np.ndarray,
     list[tuple[int, int, OrderPreservingColumnTransformer]],
     FeatureSchema,
+    SourceDecisions | None,
 ]:
     """Validate, type and clean `X` a range of columns at a time, into `table` of
     `dtype`.
 
-    Returns the validated targets, each range's fitted encoder and the schema.
+    Returns the validated targets, each range's fitted encoder, the schema, and,
+    for a float32 table of an input with wider columns, the ensemble's decisions
+    taken on the ranges before they are narrowed.
 
     Raises:
         _Float32CannotHoldError: For a float32 table, when a range's codes exceed what
@@ -737,6 +762,7 @@ def _clean_ranges(  # noqa: PLR0913
     config = estimator.inference_config_
     ranges: list[tuple[int, int, OrderPreservingColumnTransformer]] = []
     features = []
+    decisions: SourceDecisions | None = None
     # A numeric array is validated whole, in place: a range of it is a strided view,
     # which reads slowly. A frame is validated a range at a time, which converts it.
     whole = isinstance(X, np.ndarray)
@@ -766,6 +792,11 @@ def _clean_ranges(  # noqa: PLR0913
                 devices=estimator.devices_,
                 ignore_pretraining_limits=estimator.ignore_pretraining_limits,
             )
+            decisions = (
+                _source_decisions(estimator, y, X.shape, random_state)
+                if dtype == np.float32 and _has_wider_columns(X)
+                else None
+            )
         elif not whole:
             part = ensure_compatible_fit_columns(
                 part, estimator=estimator, check_finite=check_finite
@@ -793,11 +824,19 @@ def _clean_ranges(  # noqa: PLR0913
             None if group is None or not start <= group < stop else group - start,
         ):
             raise _Float32CannotHoldError
+        if decisions is not None:
+            decisions.take(start, cleaned)
         if table is not None:
             table[:, start:stop] = cleaned
         ranges.append((start, stop, encoder))
         features += schema.features
-    return np.asarray(y), ranges, FeatureSchema(features=features)
+    return np.asarray(y), ranges, FeatureSchema(features=features), decisions
+
+
+def _has_wider_columns(X: pd.DataFrame | np.ndarray) -> bool:
+    """Whether a column of `X` is of another dtype than float32."""
+    dtypes = X.dtypes if isinstance(X, pd.DataFrame) else [X.dtype]
+    return any(dtype != np.float32 for dtype in dtypes)
 
 
 class _Float32CannotHoldError(Exception):
@@ -826,6 +865,48 @@ def _float32_holds_codes(
     return group_column is None or not bool(
         (cleaned[:, group_column] > _FLOAT32_EXACT_INTEGERS).any()
     )
+
+
+def _source_decisions(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    y: np.ndarray,
+    shape: tuple[int, int],
+    random_state: int | np.random.Generator,
+) -> SourceDecisions:
+    """Decisions, still to be taken, for the rows `estimator`'s ensemble will draw
+    from the cleaned fit input of `shape` with `random_state`.
+    """
+    config = estimator.inference_config_
+    n_rows, n_columns = shape
+    with warnings.catch_warnings():
+        # `fit` warns about the ensemble's size when it sizes it.
+        warnings.simplefilter("ignore")
+        n_members = scale_n_estimators_for_feature_coverage(
+            n_estimators=resolved_n_estimators(estimator),
+            n_total_features=n_columns,
+            preprocessor_configs=config.PREPROCESS_TRANSFORMS,
+            auto_scale_n_estimators=estimator.auto_scale_n_estimators,
+        )
+    member_rows, importance_rows = draw_fit_rows(
+        random_state=random_state,
+        n_members=n_members,
+        n_samples=n_rows,
+        n_features=n_columns,
+        y=np.asarray(y),
+        task_type=estimator.estimator_type,
+        max_features_per_estimator=[
+            c.max_features_per_estimator for c in config.PREPROCESS_TRANSFORMS
+        ],
+        feature_subsampling_method=FeatureSubsamplingMethod(
+            config.FEATURE_SUBSAMPLING_METHOD
+        ),
+        importance_top_k_count=config.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+        subsample_samples=config.SUBSAMPLE_SAMPLES,
+        sample_subsampling_method=SampleSubsamplingMethod(
+            config.SAMPLE_SUBSAMPLING_METHOD
+        ),
+    )
+    return SourceDecisions.for_rows(member_rows, importance_rows, n_columns)
 
 
 def clean_predict_input(

@@ -92,7 +92,7 @@ def _fit_predict(
         )
         model.fit(X.iloc[:N_ROWS], y)
         predictions = model.predict(X.iloc[N_ROWS:])
-    table, _, _, schema, encoders = captured["fit"]
+    table, _, _, schema, encoders, _ = captured["fit"]
     return table, schema, encoders, captured["predict"], predictions
 
 
