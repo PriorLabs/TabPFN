@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import types
 from types import SimpleNamespace
 from typing import Any, Literal, overload
 from typing_extensions import override
@@ -36,6 +37,7 @@ from tabpfn.inference import (
     MultiDeviceInferenceEngine,
     _model_input_arguments,
     _model_input_device,
+    _prepare_member_inputs,
     _prepare_model_inputs,
     _resolve_kv_cache_precision,
 )
@@ -48,7 +50,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.clean import overwrite_fit_input
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
-from tabpfn.preprocessing.torch import FeatureSchema
+from tabpfn.preprocessing.torch import FeatureSchema, TorchSoftClipOutliers
 from tabpfn.regressor import _concat_block_outputs
 from tabpfn.settings import settings
 
@@ -628,6 +630,82 @@ def test__explicit_kv_cache__drops_member_train_features_after_build() -> None:
     assert all(member.y_train is not None for member in engine.ensemble_members)
     outputs = list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))
     assert len(outputs) == len(engine.ensemble_members)
+
+
+def test__prepare_member_inputs__forced_dtype__holds_after_gpu_preprocessing() -> None:
+    """A pipeline that returns float32 still gives the model the forced dtype."""
+
+    def upcasting_pipeline(X: Tensor, feature_schema: FeatureSchema, **_: Any) -> Any:
+        return types.SimpleNamespace(
+            x=X.to(torch.float32), feature_schema=feature_schema
+        )
+
+    member = types.SimpleNamespace(
+        X_train=np.ones((5, 3), dtype=np.float32),
+        y_train=np.zeros(5),
+        gpu_preprocessor=upcasting_pipeline,
+        feature_schema=FeatureSchema.from_only_categorical_indices([], 3),
+    )
+
+    X, y, _ = _prepare_member_inputs(
+        member,  # type: ignore[arg-type]
+        np.empty((0, 3), np.float32),
+        torch.device("cpu"),
+        torch.float16,
+        _DeviceInputModel(),
+    )
+
+    assert X.dtype == torch.float16
+    assert y.dtype == torch.float16
+
+
+def test__explicit_kv_cache__outlier_removal__fits_a_block_of_columns_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cache build preprocesses the train rows in place, a block at a time."""
+    rng = default_rng(seed=0)
+    n_train = 50
+    X_train = rng.standard_normal(size=(n_train, 4))
+    y_train = rng.integers(low=0, high=2, size=(n_train, 1))
+    # One column per block.
+    monkeypatch.setattr(
+        "tabpfn.preprocessing.torch.pipeline_interface.IN_PLACE_BLOCK_BYTES",
+        n_train * 4,
+    )
+    fitted_widths: list[int] = []
+    fit = TorchSoftClipOutliers.fit
+
+    def recording_fit(
+        self: TorchSoftClipOutliers, x: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        fitted_widths.append(x.shape[-1])
+        return fit(self, x)
+
+    monkeypatch.setattr(TorchSoftClipOutliers, "fit", recording_fit)
+
+    InferenceEngineExplicitKVCache(
+        X_train,
+        y_train,
+        ensemble_preprocessor=TabPFNEnsemblePreprocessor(
+            configs=_create_test_ensemble_configs(
+                n_configs=2, n_classes=2, num_models=1, outlier_removal_std=1.0
+            ),
+            n_samples=n_train,
+            feature_schema=FeatureSchema.from_only_categorical_indices([], 4),
+            random_state=rng,
+            n_preprocessing_jobs=1,
+        ),
+        models=[_TestModelWithKVCache()],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=True,
+        autocast=False,
+        task_type="multiclass",
+    )
+
+    assert fitted_widths
+    assert max(fitted_widths) == 1
 
 
 @pytest.mark.parametrize(
