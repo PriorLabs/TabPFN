@@ -675,6 +675,8 @@ def test__overwrite_fit_input__released_tensor_memory__a_later_fit_on_it_raises(
 
     with pytest.raises(ValueError, match="overwritten"):
         _gpu_preprocessing_model(TabPFNClassifier).fit(_frame_over(values.numpy()), y)
+    with pytest.raises(ValueError, match="overwritten"):
+        _gpu_preprocessing_model(TabPFNClassifier).fit(values, y)
 
 
 @pytest.mark.usefixtures("ranges_narrower_than_the_input")
