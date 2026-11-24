@@ -686,7 +686,7 @@ def validate_and_clean_fit_input(
             decisions = _source_decisions(estimator, y, X.shape, random_state)
             decisions.take(0, X)
             X = X.astype(np.float32)
-        if overwriting_fit_input() and not is_private_copy(X, X_given):
+        if not is_private_copy(X, X_given):
             # The fitted model can read the caller's memory without a copy, so no
             # later fit may write into it.
             mark_fit_memory(X, overwritten=False)
