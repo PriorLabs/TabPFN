@@ -318,6 +318,7 @@ def ensure_compatible_fit_columns(
             ensure_min_samples=2,
             ensure_min_features=1,
             estimator=estimator,
+            input_name="X",
         )
     except (ValueError, TypeError) as e:
         raise _fit_validation_error(e, estimator) from e
