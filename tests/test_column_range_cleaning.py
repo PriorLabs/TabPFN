@@ -157,3 +157,26 @@ def test__column_ranges__split_by_kind_and_width(
         (4, 5),
         (5, 6),
     ]
+
+
+@pytest.mark.parametrize("order", [["f", "s"], ["s", "f"]])
+def test__fit__infinity_in_any_range__hints_at_passthrough_inf(
+    order: list[str],
+) -> None:
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "f": rng.standard_normal(N_ROWS),
+            "s": rng.choice(np.array(["a", "b"], dtype=object), N_ROWS),
+        }
+    )[order]
+    X.loc[3, "f"] = np.inf
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    )
+
+    with pytest.raises(ValueError, match="PASSTHROUGH_INF"):
+        model.fit(X, rng.integers(0, 2, N_ROWS))
