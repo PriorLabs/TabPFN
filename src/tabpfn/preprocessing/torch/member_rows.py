@@ -257,12 +257,13 @@ class MemberRowSource:
         column_index = np.arange(self.shape[2])[
             columns if isinstance(columns, slice) else columns.cpu().numpy()
         ]
+        n_rows = self.shape[0]
         if batch is not None:
-            return self.members[batch].read(_rows(rows), column_index, device)
+            return self.members[batch].read(_rows(rows, n_rows), column_index, device)
         return torch.stack(
             [
                 member.read(
-                    _rows(rows if isinstance(rows, slice) else rows[b]),
+                    _rows(rows if isinstance(rows, slice) else rows[b], n_rows),
                     column_index,
                     device,
                 )
@@ -271,8 +272,12 @@ class MemberRowSource:
         )
 
 
-def _rows(rows: slice | torch.Tensor) -> slice | np.ndarray:
-    return rows if isinstance(rows, slice) else rows.cpu().numpy()
+def _rows(rows: slice | torch.Tensor, n_rows: int) -> slice | np.ndarray:
+    """`rows` as a slice with int bounds or as an index array."""
+    if isinstance(rows, slice):
+        start, stop, _ = rows.indices(n_rows)
+        return slice(start, stop)
+    return rows.cpu().numpy()
 
 
 def _reads_by_blocks(step: TorchPreprocessingStep) -> bool:
@@ -345,7 +350,8 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
             out = whole[torch.from_numpy(rows)[:, None], index[None, :]]
         elif len(columns) and bool((np.diff(columns) == 1).all()):
             # A run of columns is a slice, which copies much faster than a gather.
-            out = whole[rows, int(columns[0]) : int(columns[-1]) + 1]
+            # A clone: the slice is a view of the table, which the steps write into.
+            out = whole[rows, int(columns[0]) : int(columns[-1]) + 1].clone()
         else:
             out = whole[rows][:, index]
     return out.to(torch.float32).contiguous()
