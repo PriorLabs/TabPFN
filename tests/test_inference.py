@@ -1604,14 +1604,14 @@ def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() ->
 def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Of an input held off the device, a model that reads row sources is passed the
-    members' rows to read, and predicts as from the input built whole.
+    """When the input is held off the device, a model that reads row sources gets the
+    members' rows as a row source, and predicts the same as from the built input.
     """
     rng = default_rng(0)
     X = rng.standard_normal((90, 6))
     X[:, 2] = rng.integers(0, 3, len(X))
     y = rng.integers(0, 2, 70)
-    # Steps that run by blocks, whatever the checkpoint's own preprocessing.
+    # Use steps that run by blocks, independent of the checkpoint's preprocessing.
     config = {
         "ENABLE_GPU_PREPROCESSING": True,
         "FINGERPRINT_FEATURE": False,
@@ -1640,14 +1640,15 @@ def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one
             sources.append(source)
             R, _, C = source.shape
             x = source.read(slice(0, R), slice(0, C), torch.device("cpu"))
-            # Contiguous as the built input is: a strided `x` can round differently.
+            # Make `x` contiguous like the built input. A strided `x` can round
+            # differently.
             x = x.transpose(0, 1).contiguous()
         return forward(self, x, *args, **kwargs)
 
     monkeypatch.setattr(architecture, "forward", reading_forward)
     monkeypatch.setattr(architecture, "reads_row_sources", True, raising=False)
-    # Reported as held off the device, which the CPU cannot show otherwise; only the
-    # row source is ever built there.
+    # Report the input as held off the device, which a CPU run cannot show otherwise.
+    # Every member takes the row-source path, so no input is built on that device.
     monkeypatch.setattr(
         "tabpfn.inference._model_input_device", lambda *_: torch.device("meta")
     )

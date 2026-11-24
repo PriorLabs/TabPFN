@@ -198,11 +198,15 @@ def _member_rows(
     force_inference_dtype: torch.dtype | None,
     model: torch.nn.Module,
 ) -> tuple[MemberRows, torch.Tensor, list[int]] | None:
-    """A member's model input read a block at a time, its targets, and categorical
-    indices, for a model that reads row sources of an input kept in host memory.
+    """A member's model input to read one block at a time, its targets and its
+    categorical indices, for a model that reads row sources from host memory.
 
-    None when the input is built whole: the model reads no row source, the input
-    goes to the device, or a step of the member's GPU preprocessing reads whole rows.
+    Returns None if the input must be built whole:
+
+    - the model reads no row source,
+    - the inference dtype is forced to a dtype other than float32,
+    - the input goes to the device, or
+    - a step of the member's GPU preprocessing reads whole rows.
     """
     if (
         not getattr(model, "reads_row_sources", False)
@@ -362,7 +366,7 @@ def _batch_member_inputs(
 
 
 def _batch_targets(ys: Sequence[torch.Tensor]) -> torch.Tensor:
-    """Members' targets as `_batch_member_inputs` batches them."""
+    """Batch the members' targets as `_batch_member_inputs` does."""
     if len(ys) == 1:
         return ys[0]
     return torch.cat([y.reshape(y.shape[0], -1) for y in ys], dim=1)
