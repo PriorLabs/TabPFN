@@ -587,7 +587,7 @@ def _fit_transform_on_device(
 
 
 def column_block_width(block_bytes: int, column_bytes: int) -> int:
-    """Columns of `column_bytes` each in a block of `block_bytes`, at least one."""
+    """How many columns of `column_bytes` each fit in `block_bytes`, at least one."""
     return max(1, block_bytes // max(1, column_bytes))
 
 
@@ -597,8 +597,10 @@ def fit_group_width(
     train_column_bytes: int,
     block_bytes: int,
 ) -> int:
-    """Columns per fit block of a step whose fit reads `_fit_column_group` columns
-    together: as many whole groups as `block_bytes` holds of train rows, at least one.
+    """Columns per fit block of a step that fits `_fit_column_group` columns together.
+
+    The width is as many whole groups as fit in `block_bytes` of train rows, at least
+    one group.
     """
     group = step._fit_column_group(num_train_rows)
     width = block_bytes // max(1, train_column_bytes)
