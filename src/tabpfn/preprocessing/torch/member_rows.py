@@ -100,6 +100,14 @@ class MemberRows:
         member = cls((X_train, X_test), np.arange(X_train.shape[1]), [], feature_schema)
         if gpu_preprocessor is None:
             return member
+        if any(
+            not _reads_by_blocks(step)
+            and step.target_columns(feature_schema, modalities)
+            for step, modalities in gpu_preprocessor.steps
+        ):
+            # A shuffle keeps the set of columns each step targets, so the schema
+            # before the steps tells which steps run.
+            return None
         # The pipeline stages an input held off `device`, as the host tables are. The
         # other columns in a block can change how a column's fitted values round, so
         # each columnwise step fits on the pipeline's blocks.
@@ -111,13 +119,16 @@ class MemberRows:
             if not targets:
                 continue
             if isinstance(step, TorchShuffleFeaturesStep):
-                permutation = step.permutation(len(member.order))
+                # The shuffle and the sign flip fit on the shape of the input only.
+                empty = torch.empty((0, 1, len(member.order)))
+                permutation = step._fit(empty)["permutation"].tolist()
                 member.order = member.order[permutation]
                 schema = schema.apply_permutation(permutation)
             elif isinstance(step, TorchRandomSignFlipStep):
-                signs = step.signs(1, len(targets)).reshape(-1)
+                signs = step._fit(torch.empty((0, 1, len(targets))))["signs"]
+                signs = signs.reshape(-1)
                 member.ops.append(_SignsOp(member.order[targets], signs))
-            elif step.columnwise:
+            else:
                 columns = member.order[targets]
                 plan = column_blocks(
                     step,
@@ -143,8 +154,6 @@ class MemberRows:
                 # of `device`, which must be what the input built whole leaves free.
                 cpu_cache = {key: value.cpu() for key, value in cache.items()}
                 member.ops.append(_ColumnwiseOp(step, columns, cpu_cache))
-            else:
-                return None
         member.feature_schema = schema.clear_gpu_transform_marks()
         return member
 
@@ -243,6 +252,13 @@ def _rows(rows: slice | torch.Tensor) -> slice | np.ndarray:
     return rows if isinstance(rows, slice) else rows.cpu().numpy()
 
 
+def _reads_by_blocks(step: TorchPreprocessingStep) -> bool:
+    """Whether `MemberRows` can apply `step` to any block of cells."""
+    return step.columnwise or isinstance(
+        step, (TorchShuffleFeaturesStep, TorchRandomSignFlipStep)
+    )
+
+
 def _positions(columns: np.ndarray, of: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """The positions in `columns` of the columns that are in `of`, and their positions
     in `of`.
@@ -312,10 +328,12 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
     else:
         # Torch gathers with many threads. NumPy fancy indexing uses one thread.
         whole = as_tensor_to_read(table)
-        picked = (
-            whole[rows]
-            if isinstance(rows, slice)
-            else whole.index_select(0, torch.from_numpy(rows))
-        )
-        out = picked.index_select(1, torch.from_numpy(columns))
+        index = torch.from_numpy(columns)
+        if not isinstance(rows, slice):
+            out = whole[torch.from_numpy(rows)[:, None], index[None, :]]
+        elif len(columns) and bool((np.diff(columns) == 1).all()):
+            # A run of columns is a slice, which copies much faster than a gather.
+            out = whole[rows, int(columns[0]) : int(columns[-1]) + 1]
+        else:
+            out = whole[rows][:, index]
     return out.to(torch.float32).contiguous()
