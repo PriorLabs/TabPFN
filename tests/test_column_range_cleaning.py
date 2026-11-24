@@ -159,24 +159,48 @@ def test__column_ranges__split_by_kind_and_width(
     ]
 
 
-@pytest.mark.parametrize("order", [["f", "s"], ["s", "f"]])
-def test__fit__infinity_in_any_range__hints_at_passthrough_inf(
-    order: list[str],
+@pytest.mark.parametrize(
+    ("other", "refused"),
+    [
+        (np.arange(N_ROWS, dtype=np.int32), True),
+        (np.where(np.arange(N_ROWS) % 2, "a", "b").astype(object), False),
+    ],
+    ids=["numeric", "strings"],
+)
+@pytest.mark.parametrize("by_range", [False, True])
+def test__fit__infinity_after_the_first_range__refused_as_the_whole_table_is(
+    monkeypatch: pytest.MonkeyPatch,
+    other: np.ndarray,
+    refused: bool,
+    by_range: bool,
 ) -> None:
+    """A frame with a string column is one array of objects to the whole-table
+    validation, which refuses no infinity; a numeric one is refused, with the hint.
+    """
+    if by_range:
+        monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", N_ROWS * 32)
     rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {
-            "f": rng.standard_normal(N_ROWS),
-            "s": rng.choice(np.array(["a", "b"], dtype=object), N_ROWS),
-        }
-    )[order]
+    X = pd.DataFrame({"o": other, "f": rng.standard_normal(N_ROWS)})
     X.loc[3, "f"] = np.inf
-
     model = TabPFNClassifier(
         n_estimators=1,
         device="cpu",
         inference_config={"ENABLE_GPU_PREPROCESSING": True},
     )
+    y = rng.integers(0, 2, N_ROWS)
 
-    with pytest.raises(ValueError, match="PASSTHROUGH_INF"):
-        model.fit(X, rng.integers(0, 2, N_ROWS))
+    if refused:
+        with pytest.raises(ValueError, match="PASSTHROUGH_INF"):
+            model.fit(X, y)
+    else:
+        model.fit(X, y)
+
+
+def test__cleans_by_column_ranges__input_within_one_range__is_read_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    X = _mixed_frame(N_ROWS)
+
+    assert not tabpfn.base._cleans_by_column_ranges(X, np.dtype(np.float32))
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
+    assert tabpfn.base._cleans_by_column_ranges(X, np.dtype(np.float32))
