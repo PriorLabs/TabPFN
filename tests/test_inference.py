@@ -1640,7 +1640,8 @@ def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one
             sources.append(source)
             R, _, C = source.shape
             x = source.read(slice(0, R), slice(0, C), torch.device("cpu"))
-            x = x.transpose(0, 1)
+            # Contiguous as the built input is: a strided `x` can round differently.
+            x = x.transpose(0, 1).contiguous()
         return forward(self, x, *args, **kwargs)
 
     monkeypatch.setattr(architecture, "forward", reading_forward)
