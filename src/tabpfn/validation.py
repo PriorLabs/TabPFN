@@ -245,6 +245,7 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
+    check_finite: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Validate the values of already-shape-captured fit inputs.
 
@@ -255,6 +256,7 @@ def ensure_compatible_fit_inputs_sklearn(
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
+        check_finite: Whether X may hold no infinity, unless `PASSTHROUGH_INF`.
 
     Returns:
         A tuple of the validated input data X and target data y.
@@ -267,9 +269,7 @@ def ensure_compatible_fit_inputs_sklearn(
             y,
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
-            ensure_all_finite=False
-            if estimator.get_inference_config().PASSTHROUGH_INF
-            else "allow-nan",
+            ensure_all_finite=_ensure_all_finite(estimator, check_finite=check_finite),
             ensure_min_samples=2,
             ensure_min_features=1,
             y_numeric=ensure_y_numeric,
@@ -298,7 +298,10 @@ def ensure_compatible_fit_inputs_sklearn(
 
 
 def ensure_compatible_fit_columns(
-    X: XType, *, estimator: TabPFNRegressor | TabPFNClassifier
+    X: XType,
+    *,
+    estimator: TabPFNRegressor | TabPFNClassifier,
+    check_finite: bool,
 ) -> np.ndarray:
     """Validate the values of more columns of a fit input whose targets were validated.
 
@@ -312,9 +315,7 @@ def ensure_compatible_fit_columns(
             X,
             accept_sparse=False,
             dtype=None,
-            ensure_all_finite=False
-            if estimator.get_inference_config().PASSTHROUGH_INF
-            else "allow-nan",
+            ensure_all_finite=_ensure_all_finite(estimator, check_finite=check_finite),
             ensure_min_samples=2,
             ensure_min_features=1,
             estimator=estimator,
@@ -323,6 +324,17 @@ def ensure_compatible_fit_columns(
     except (ValueError, TypeError) as e:
         raise _fit_validation_error(e, estimator) from e
     return typing.cast("np.ndarray", result)
+
+
+def _ensure_all_finite(
+    estimator: TabPFNRegressor | TabPFNClassifier, *, check_finite: bool
+) -> bool | str:
+    """`check_array`'s `ensure_all_finite` for a fit input's X: NaN marks a missing
+    value, and an infinity is refused unless `PASSTHROUGH_INF` lets it through.
+    """
+    if not check_finite or estimator.get_inference_config().PASSTHROUGH_INF:
+        return False
+    return "allow-nan"
 
 
 def _fit_validation_error(

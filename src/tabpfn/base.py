@@ -48,6 +48,7 @@ from tabpfn.preprocessing.clean import (
     ColumnRangeEncoders,
     clean_data,
     clean_data_transform,
+    coerce_nullable_dtypes_to_numpy,
     may_overwrite_fit_input,
 )
 from tabpfn.preprocessing.datamodel import (
@@ -58,7 +59,6 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.group_ids import as_group_feature
 from tabpfn.preprocessing.modality_detection import (
-    detect_feature_modalities,
     named_feature_modalities,
     warn_on_text,
 )
@@ -628,12 +628,14 @@ def validate_and_clean_fit_input(
             ensure_y_numeric=ensure_y_numeric,
             devices=estimator.devices_,
         )
-        feature_schema = detect_feature_modalities(
-            X=X,
-            feature_names=feature_names,
+        feature_schema = named_feature_modalities(
+            X,
+            build_input_feature_names(feature_names, X.shape[1]),
             provided_categorical_indices=categorical_indices,
             **thresholds,
         )
+        # Warned from here as the ranges are, so both reach the caller's `fit`.
+        warn_on_text(feature_schema)
         # Numerical through cleaning, so neither the ordinal encoder nor the
         # constant-column restore rewrites an unseen group's NaN; categorical
         # after it, whatever the number of groups.
@@ -722,6 +724,9 @@ def _clean_ranges(
     # A numeric array is validated whole, in place: a range of it is a strided view,
     # which reads slowly. A frame is validated a range at a time, which converts it.
     whole = isinstance(X, np.ndarray)
+    # The whole-table validation reads a frame as one array, whose infinities
+    # `check_array` refuses only when it is numeric, not of objects.
+    check_finite = whole or _interleaved_dtype(X).kind != "O"
     for start, stop in _column_ranges(X):
         part = _columns(X, start, stop)
         if start == 0:
@@ -732,6 +737,7 @@ def _clean_ranges(
                 y,
                 estimator=estimator,
                 ensure_y_numeric=ensure_y_numeric,
+                check_finite=check_finite,
             )
             if not whole:
                 part = validated
@@ -745,7 +751,9 @@ def _clean_ranges(
                 ignore_pretraining_limits=estimator.ignore_pretraining_limits,
             )
         elif not whole:
-            part = ensure_compatible_fit_columns(part, estimator=estimator)
+            part = ensure_compatible_fit_columns(
+                part, estimator=estimator, check_finite=check_finite
+            )
         schema = named_feature_modalities(
             part,
             names[start:stop],
@@ -828,9 +836,13 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
     of more than one block or of a non-numeric one, or a numeric frame or array of
     another dtype than a float32 table. A numeric frame of one block or a numeric
     array otherwise is read as it is, without a copy. An input without a column is
-    left to the whole-table validation, which refuses it.
+    left to the whole-table validation, which refuses it, and one whose converted
+    copy fits in one range is read whole, as one range would be.
     """
     if len(getattr(X, "shape", ())) == 2 and X.shape[1] == 0:
+        return False
+    if _converted_bytes(X) <= _RANGE_BYTES:
+        # Per range, validation and cleaning cost a fixed overhead each.
         return False
     if isinstance(X, pd.DataFrame):
         blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
@@ -850,15 +862,34 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
     )
 
 
+def _interleaved_dtype(X: pd.DataFrame) -> np.dtype:
+    """The dtype of the one array `check_array` reads all of `X`'s columns into."""
+    return coerce_nullable_dtypes_to_numpy(X.iloc[:0]).to_numpy().dtype
+
+
+def _numeric_columns(X: pd.DataFrame | np.ndarray) -> list[bool]:
+    """Whether each of `X`'s columns is numeric."""
+    if isinstance(X, pd.DataFrame):
+        return [getattr(dtype, "kind", "O") in "biuf" for dtype in X.dtypes]
+    return [True] * X.shape[1]
+
+
+def _converted_bytes(X: XType) -> int:
+    """The bytes reading all of `X` at once may take, as `_column_ranges` counts."""
+    if not isinstance(X, (pd.DataFrame, np.ndarray)) or X.ndim != 2:
+        return 0
+    numeric = sum(_numeric_columns(X))
+    cell_bytes = numeric * _NUMERIC_CELL_BYTES
+    cell_bytes += (X.shape[1] - numeric) * _OBJECT_CELL_BYTES
+    return X.shape[0] * cell_bytes
+
+
 def _column_ranges(X: pd.DataFrame | np.ndarray) -> Iterator[tuple[int, int]]:
     """`(start, stop)` ranges covering `X`'s columns, each of one kind, numeric or
     not, and as wide as `_RANGE_BYTES` allows.
     """
     n_rows, n_columns = X.shape
-    if isinstance(X, pd.DataFrame):
-        numeric = [getattr(dtype, "kind", "O") in "biuf" for dtype in X.dtypes]
-    else:
-        numeric = [True] * n_columns
+    numeric = _numeric_columns(X)
     start = 0
     while start < n_columns:
         cell_bytes = _NUMERIC_CELL_BYTES if numeric[start] else _OBJECT_CELL_BYTES
