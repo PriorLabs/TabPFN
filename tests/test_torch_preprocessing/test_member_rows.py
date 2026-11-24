@@ -17,6 +17,7 @@ from tabpfn.preprocessing.torch import pipeline_interface
 from tabpfn.preprocessing.torch.member_rows import (
     MemberRows,
     MemberRowSource,
+    _cells,
     _SignsOp,
 )
 
@@ -207,6 +208,15 @@ def _record_fits(
     return fits
 
 
+def test__cells__of_whole_rows__does_not_share_the_tables_memory() -> None:
+    """The steps write into the cells a read returns."""
+    table = np.zeros((4, 3), dtype=np.float32)
+
+    cells = _cells(table, slice(0, 4), np.arange(3))
+
+    assert not np.shares_memory(cells.numpy(), table)
+
+
 @pytest.mark.usefixtures("small_blocks")
 def test__row_source__reads_each_member_along_the_batch() -> None:
     members, X_test = _members()
@@ -221,13 +231,14 @@ def test__row_source__reads_each_member_along_the_batch() -> None:
         for m in members[:2]
     ]
     source = MemberRowSource(fitted)
-    R, B, _C = source.shape
+    R, B, C = source.shape
     rows_BP = torch.stack(
         [torch.arange(0, R, 7), torch.arange(1, R, 7)[: len(range(0, R, 7))]]
     )
 
     gathered = source.read(rows_BP, slice(2, 6), torch.device("cpu"))
     one = source.read(torch.arange(3, 9), torch.tensor([0, 4]), torch.device("cpu"), 1)
+    every = source.read(slice(None), slice(None), torch.device("cpu"), 0)
 
     for b in range(B):
         torch.testing.assert_close(
@@ -240,6 +251,13 @@ def test__row_source__reads_each_member_along_the_batch() -> None:
     torch.testing.assert_close(
         one,
         fitted[1].read(np.arange(3, 9), np.array([0, 4]), torch.device("cpu")),
+        rtol=0,
+        atol=0,
+        equal_nan=True,
+    )
+    torch.testing.assert_close(
+        every,
+        fitted[0].read(slice(0, R), np.arange(C), torch.device("cpu")),
         rtol=0,
         atol=0,
         equal_nan=True,
