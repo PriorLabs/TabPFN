@@ -567,10 +567,9 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
     different values can round to the same float32. `SourceDecisions` takes those
     decisions before the cast to float32.
     """
-    if estimator.tuning_config is not None or estimator.fit_mode == "batched":
-        # Tuning's holdout models, and the fine-tuning datasets in "batched" mode, fit
-        # their members on this table without `SourceDecisions`, so they take their
-        # decisions on its values.
+    if estimator.tuning_config is not None:
+        # Tuning's holdout models fit their members on this table without
+        # `SourceDecisions`, so they take their decisions on its values.
         return np.dtype(np.float64)
     config = estimator.inference_config_
     reads_float32 = estimator.forced_inference_dtype_ in (
@@ -596,6 +595,7 @@ def validate_and_clean_fit_input(
     group_feature_index: int | None,
     ensure_y_numeric: bool,
     random_state: int | np.random.Generator,
+    may_cast_to_float32: bool,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -617,6 +617,8 @@ def validate_and_clean_fit_input(
             numerical and then marked categorical.
         ensure_y_numeric: Whether the targets must be numeric.
         random_state: The seed the ensemble preprocessor draws its rows with.
+        may_cast_to_float32: Whether the caller passes the returned decisions on to
+            the ensemble. If not, the table is float64.
 
     Returns:
         The cleaned table, the validated targets, the targets' name if `y` is a
@@ -625,7 +627,9 @@ def validate_and_clean_fit_input(
         (`None` if the input was not cast).
     """
     config = estimator.inference_config_
-    dtype = cleaned_table_dtype(estimator)
+    dtype = (
+        cleaned_table_dtype(estimator) if may_cast_to_float32 else np.dtype(np.float64)
+    )
     if dtype == np.float32 and _rows_of(X) > _FLOAT32_EXACT_INTEGERS:
         # Category and group codes count up from 0 and are fewer than the rows. So
         # only an input with more rows can have a code that float32 cannot hold.
@@ -825,11 +829,11 @@ def _clean_ranges(  # noqa: PLR0913
 def _rows_of(X: XType) -> int:
     """The number of rows of `X`, without converting it.
 
-    An object without `shape` or `len` (e.g. sklearn's `_NotAnArray`) counts as 0:
-    it is small enough to convert, and its conversion comes later.
+    An object without rows (e.g. sklearn's `_NotAnArray`, a 0-d array) counts as 0:
+    it is small enough to convert, and its conversion and validation come later.
     """
     if hasattr(X, "shape"):
-        return int(X.shape[0])
+        return int(X.shape[0]) if len(X.shape) > 0 else 0
     return len(X) if hasattr(X, "__len__") else 0
 
 

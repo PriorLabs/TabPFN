@@ -910,10 +910,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: YType,
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
-        """Initialize the model for standard input."""
+        """Initialize the model for standard input.
+
+        The table is float64: the caller gets no decisions to pass to the ensemble.
+        """
         ensemble_configs, X, y, _ = (
             self._initialize_dataset_preprocessing_with_decisions(
-                X=X, y=y, random_state=random_state
+                X=X, y=y, random_state=random_state, may_cast_to_float32=False
             )
         )
         return ensemble_configs, X, y
@@ -923,6 +926,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X: XType,
         y: YType,
         random_state: int | np.random.Generator,
+        *,
+        may_cast_to_float32: bool,
     ) -> tuple[
         list[ClassifierEnsembleConfig], np.ndarray, np.ndarray, SourceDecisions | None
     ]:
@@ -979,6 +984,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 group_feature_index=self.group_feature_index_,
                 ensure_y_numeric=False,
                 random_state=random_state,
+                may_cast_to_float32=may_cast_to_float32,
             )
         )
         self.inferred_feature_schema_ = feature_schema
@@ -1164,7 +1170,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, source_decisions = (
             self._initialize_dataset_preprocessing_with_decisions(
-                X=X, y=y, random_state=static_seed
+                X=X, y=y, random_state=static_seed, may_cast_to_float32=True
             )
         )
         self.ensemble_configs_ = ensemble_configs

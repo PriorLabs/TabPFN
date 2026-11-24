@@ -1160,10 +1160,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         np.ndarray,
         FullSupportBarDistribution,
     ]:
-        """Prepare ensemble configs and validate X, y for one dataset/chunk."""
+        """Prepare ensemble configs and validate X, y for one dataset/chunk.
+
+        The table is float64: the caller gets no decisions to pass to the ensemble.
+        """
         ensemble_configs, X, y, bardist, _ = (
             self._initialize_dataset_preprocessing_with_decisions(
-                X=X, y=y, random_state=random_state
+                X=X, y=y, random_state=random_state, may_cast_to_float32=False
             )
         )
         return ensemble_configs, X, y, bardist
@@ -1173,6 +1176,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: XType,
         y: YType,
         random_state: int | np.random.Generator,
+        *,
+        may_cast_to_float32: bool,
     ) -> tuple[
         list[RegressorEnsembleConfig],
         np.ndarray,
@@ -1236,6 +1241,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 group_feature_index=self.group_feature_index_,
                 ensure_y_numeric=True,
                 random_state=random_state,
+                may_cast_to_float32=may_cast_to_float32,
             )
         )
         # Set class variables for sklearn compatibility
@@ -1661,7 +1667,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, znorm_space_bardist, source_decisions = (
             self._initialize_dataset_preprocessing_with_decisions(
-                X=X, y=y, random_state=static_seed
+                X=X, y=y, random_state=static_seed, may_cast_to_float32=True
             )
         )
         self.znorm_space_bardist_ = znorm_space_bardist
