@@ -567,9 +567,10 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
     different values can round to the same float32. `SourceDecisions` takes those
     decisions before the cast to float32.
     """
-    if getattr(estimator, "tuning_config", None) is not None:
-        # Tuning fits its holdout models on this table, and they take their decisions
-        # on its values, without `SourceDecisions`.
+    if estimator.tuning_config is not None or estimator.fit_mode == "batched":
+        # Tuning's holdout models, and the fine-tuning datasets in "batched" mode, fit
+        # their members on this table without `SourceDecisions`, so they take their
+        # decisions on its values.
         return np.dtype(np.float64)
     config = estimator.inference_config_
     reads_float32 = estimator.forced_inference_dtype_ in (
@@ -579,10 +580,7 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
         config.PREPROCESS_TRANSFORMS,
         polynomial_features=config.POLYNOMIAL_FEATURES,
         add_fingerprint_feature=config.FINGERPRINT_FEATURE,
-        # In "batched" mode the fine-tuning datasets read the table, and they build
-        # their members without GPU preprocessing.
-        enable_gpu_preprocessing=config.ENABLE_GPU_PREPROCESSING
-        and estimator.fit_mode != "batched",
+        enable_gpu_preprocessing=config.ENABLE_GPU_PREPROCESSING,
     )
     return np.dtype(np.float32 if reads_float32 else np.float64)
 
@@ -765,10 +763,7 @@ def _clean_ranges(  # noqa: PLR0913
     # view that is slow to read. Validation converts a frame, so validate a frame one
     # range at a time.
     whole = isinstance(X, np.ndarray)
-    # Refuse infinities only where the whole-table validation does. It reads a frame
-    # as one array, and `check_array` refuses infinities only in a numeric array, not
-    # in an object array.
-    check_finite = whole or _interleaved_dtype(X).kind != "O"
+    check_finite = _whole_table_checks_finite(X)
     for start, stop in _column_ranges(X):
         part = column_range(X, start, stop)
         if start == 0:
@@ -895,10 +890,7 @@ def clean_predict_input(
         validate=functools.partial(
             ensure_compatible_predict_input_sklearn,
             estimator=estimator,
-            # As at fit: the whole-table validation reads a frame as one array, and
-            # `check_array` refuses infinities only in a numeric array.
-            check_finite=not isinstance(X, pd.DataFrame)
-            or _interleaved_dtype(X).kind != "O",
+            check_finite=_whole_table_checks_finite(X),
         ),
     )
 
@@ -945,6 +937,16 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
             return True
         return dtype == np.float32 and values.dtype != np.float32
     return dtype == np.float32 and X.dtype.kind in "biuf" and X.dtype != np.float32
+
+
+def _whole_table_checks_finite(X: XType) -> bool:
+    """Whether the whole-table validation refuses infinities in `X`, so validation
+    by ranges must refuse them too.
+
+    It reads a frame as one array, and `check_array` refuses infinities only in a
+    numeric array, not in an array of objects.
+    """
+    return not isinstance(X, pd.DataFrame) or _interleaved_dtype(X).kind != "O"
 
 
 def _interleaved_dtype(X: pd.DataFrame) -> np.dtype:
