@@ -1040,7 +1040,11 @@ def _delete_columns(X: pd.DataFrame, labels: np.ndarray) -> None:
     delete then scans every block. Deleting whole blocks leaves the others as they
     are.
     """
-    X._mgr = X._mgr.idelete(X.columns.get_indexer(labels))
+    positions = X.columns.get_indexer(labels)
+    # -1 marks a missing label, which `idelete` would take as the last column.
+    if (positions < 0).any():
+        raise RuntimeError(f"Columns {labels} are not all in the frame.")
+    X._mgr = X._mgr.idelete(positions)
     # As `del X[label]` does: a cached column keeps its block's memory alive.
     cache = getattr(X, "_item_cache", None)
     if cache is not None:
