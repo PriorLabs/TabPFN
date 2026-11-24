@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import torch
 from packaging.version import Version
 
 try:
@@ -486,7 +487,9 @@ def overwrite_fit_input() -> Iterator[None]:
     - For a float32 table, a writeable numeric array of a wider dtype is cast to
       float32 in its own memory, and the rest of that memory is released.
 
-    Released memory reads as zeros through any array that shares it.
+    Released memory reads as zeros through any array or frame that shares it. This
+    includes frames the input was derived from without a copy, e.g. under pandas
+    copy-on-write.
 
     A later `fit` raises a `ValueError` for an input whose memory a fit wrote into or
     released, and for a frame that a fit emptied. A fit never writes into or releases
@@ -586,9 +589,13 @@ def _owner_ref(X: np.ndarray) -> weakref.ref[Any]:
 
 
 def _arrays_of(given: Any) -> list[np.ndarray]:
-    """The arrays that hold the values of `given`: the array, or a frame's blocks."""
+    """The arrays that hold the values of `given`: the array, a frame's blocks, or a
+    CPU tensor's memory.
+    """
     if isinstance(given, np.ndarray):
         return [given]
+    if isinstance(given, torch.Tensor):
+        return [given.detach().numpy()] if given.device.type == "cpu" else []
     if isinstance(given, pd.DataFrame):
         # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
         blocks = [block.values for block in given._mgr.blocks]  # noqa: PD011
