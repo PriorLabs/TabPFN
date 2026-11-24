@@ -140,6 +140,7 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
     from tabpfn.preprocessing.row_weights import SampleWeightMode
+    from tabpfn.preprocessing.source_decisions import SourceDecisions
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -906,7 +907,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X: XType,
         y: YType,
         random_state: int | np.random.Generator,
-    ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
+    ) -> tuple[
+        list[ClassifierEnsembleConfig], np.ndarray, np.ndarray, SourceDecisions | None
+    ]:
         """Initialize the model for standard input."""
         # feature_names_in_/n_features_in_ have to describe what the caller passed,
         # not the wider frame expansion can make of it, so they come off the raw
@@ -947,7 +950,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             feature_names = [*feature_names, *self.group_aggregator_.names_]
 
         self.group_feature_index_ = self.group_encoder_.feature_index(feature_names)
-        X, y, original_y_name, feature_schema, ordinal_encoder = (
+        X, y, original_y_name, feature_schema, ordinal_encoder, decisions = (
             validate_and_clean_fit_input(
                 self,
                 X,
@@ -957,6 +960,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 categorical_indices=categorical_indices,
                 group_feature_index=self.group_feature_index_,
                 ensure_y_numeric=False,
+                random_state=random_state,
             )
         )
         self.inferred_feature_schema_ = feature_schema
@@ -1000,7 +1004,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         assert len(ensemble_configs) == self.n_estimators_
 
-        return ensemble_configs, X, y
+        return ensemble_configs, X, y, decisions
 
     def _compute_downsample_correction(self, *, y_encoded: np.ndarray) -> None:
         """Set `downsample_correction_weights_` from the fitted row sampler.
@@ -1140,8 +1144,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        ensemble_configs, X, y = self._initialize_dataset_preprocessing(
-            X=X, y=y, random_state=static_seed
+        ensemble_configs, X, y, source_decisions = (
+            self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
         self.ensemble_configs_ = ensemble_configs
         row_weights, sample_weight_mode = self._resolve_row_weights(
@@ -1172,6 +1176,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             task_type=self.estimator_type,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            source_decisions=source_decisions,
         )
 
         # Needs the row sampler's context prior, and must precede the tuning
