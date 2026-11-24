@@ -106,13 +106,17 @@ class TorchRandomSignFlipStep(TorchPreprocessingStep):
 
         return TorchPreprocessingStepResult(x=transformed, fitted_cache=fitted_cache)
 
-    @override
-    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def signs(self, batch_size: int, num_columns: int) -> torch.Tensor:
+        """The int8 signs, `(1, batch_size, num_columns)`, that the columns get."""
         rng = np.random.default_rng(self.seed)
-        signs = rng.integers(0, 2, size=(1, x.shape[1], x.shape[2])).astype(np.int8)
+        signs = rng.integers(0, 2, size=(1, batch_size, num_columns)).astype(np.int8)
         signs *= -2
         signs += 1
-        return {"signs": torch.as_tensor(signs, device=x.device)}
+        return torch.from_numpy(signs)
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        return {"signs": self.signs(x.shape[1], x.shape[2]).to(x.device)}
 
     @override
     def _transform(
@@ -435,10 +439,8 @@ class TorchShuffleFeaturesStep(TorchPreprocessingStep):
             schema_permutation=perm.tolist(),
         )
 
-    @override
-    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Compute the permutation identically to CPU ShuffleFeaturesStep."""
-        n_cols = x.shape[-1]
+    def permutation(self, n_cols: int) -> list[int]:
+        """The new order of `n_cols` columns, as CPU ShuffleFeaturesStep computes it."""
         _, rng = infer_random_state(self.random_state)
 
         if self.shuffle_method == "rotate":
@@ -449,8 +451,12 @@ class TorchShuffleFeaturesStep(TorchPreprocessingStep):
             perm = list(range(n_cols))
         else:
             raise ValueError(f"Unknown shuffle method {self.shuffle_method}")
+        return perm
 
-        return {"permutation": torch.tensor(perm, dtype=torch.long)}
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        permutation = self.permutation(x.shape[-1])
+        return {"permutation": torch.tensor(permutation, dtype=torch.long)}
 
     @override
     def _transform(

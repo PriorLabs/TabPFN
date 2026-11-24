@@ -111,15 +111,12 @@ class MemberRows:
             if not targets:
                 continue
             if isinstance(step, TorchShuffleFeaturesStep):
-                empty = torch.empty((0, 1, len(member.order)))
-                permutation = step._fit(empty)["permutation"].tolist()
+                permutation = step.permutation(len(member.order))
                 member.order = member.order[permutation]
                 schema = schema.apply_permutation(permutation)
             elif isinstance(step, TorchRandomSignFlipStep):
-                signs = step._fit(torch.empty((0, 1, len(targets))))["signs"]
-                member.ops.append(
-                    _SignsOp(member.order[targets], signs.reshape(-1).to(device))
-                )
+                signs = step.signs(1, len(targets)).reshape(-1).to(device)
+                member.ops.append(_SignsOp(member.order[targets], signs))
             elif step.columnwise:
                 columns = member.order[targets]
                 plan = column_blocks(
