@@ -1,5 +1,7 @@
 # Instructions for AI agents
 
+**Using TabPFN to make predictions** (not changing this repository)? Read [`SKILL.md`](SKILL.md) instead. It covers the licence and login, raw-data input with categorical columns, large datasets and fast prediction.
+
 These instructions apply to any AI agent preparing a pull request or issue for this repository on behalf of someone outside Prior Labs.
 
 **IMPORTANT:** Before you open or update a pull request or issue, read [`CONTRIBUTING.md`](CONTRIBUTING.md), in particular "What we fix" and "AI-assisted contributions". Then honestly re-evaluate whether your change is worth the maintainers' review time:
