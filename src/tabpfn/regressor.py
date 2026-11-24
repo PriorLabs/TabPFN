@@ -155,6 +155,7 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.clean import ColumnRangeEncoders
     from tabpfn.preprocessing.row_weights import SampleWeightMode
     from tabpfn.preprocessing.source_decisions import SourceDecisions
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
@@ -325,8 +326,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    ordinal_encoder_: OrderPreservingColumnTransformer
-    """The column transformer used to preprocess categorical data to be numeric."""
+    ordinal_encoder_: OrderPreservingColumnTransformer | ColumnRangeEncoders
+    """The fitted cleaning that makes categorical data numeric, as
+    `clean_data_transform` reapplies it to predict input."""
 
     date_transformer_: DateTransformer
     """The transformer that converted every temporal column before validation."""
