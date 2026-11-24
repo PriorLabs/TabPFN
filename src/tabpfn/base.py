@@ -1154,19 +1154,16 @@ def _converted_bytes(X: XType) -> int:
     return X.shape[0] * cell_bytes
 
 
-def _narrows_in_place(X: XType, X_given: XType, dtype: np.dtype) -> bool:
-    """Whether the float32 table may be `X` cast in its own memory.
+def _narrows_in_place(X: np.ndarray, X_given: XType, dtype: np.dtype) -> bool:
+    """Whether the float32 table may be `X`, a numeric array cleaned by ranges, cast
+    in its own memory.
 
-    This needs a C-ordered numeric array `X` with at least four bytes per value, not
-    float32, that `may_overwrite_fit_input` lets the fit write into.
+    This needs a C-ordered `X` with at least four bytes per value, which
+    `may_overwrite_fit_input` lets the fit write into.
     """
     return (
         dtype == np.float32
-        and isinstance(X, np.ndarray)
-        and X.ndim == 2
-        and X.dtype.kind in "iuf"
         and X.dtype.itemsize >= 4
-        and X.dtype != np.float32
         and X.flags.c_contiguous
         and may_overwrite_fit_input(X, X_given)
     )
@@ -1181,10 +1178,7 @@ def _column_ranges(
     No range mixes columns in `apart` with columns not in `apart`.
     """
     n_rows, n_columns = X.shape
-    if isinstance(X, pd.DataFrame):
-        numerics = [getattr(dtype, "kind", "O") in "biuf" for dtype in X.dtypes]
-    else:
-        numerics = [True] * n_columns
+    numerics = _numeric_columns(X)
     in_apart = np.zeros(n_columns, dtype=bool)
     if apart is not None:
         in_apart[apart] = True
