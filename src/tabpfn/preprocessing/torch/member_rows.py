@@ -47,6 +47,8 @@ class _ColumnwiseOp:
     step: TorchPreprocessingStep
     columns: np.ndarray
     cache: dict[str, torch.Tensor]
+    position: np.ndarray
+    """Per input column, its position in `columns`, or -1."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -55,6 +57,15 @@ class _SignsOp:
 
     columns: np.ndarray
     signs: torch.Tensor
+    position: np.ndarray
+    """Per input column, its position in `columns`, or -1."""
+
+
+def _position_map(columns: np.ndarray, num_columns: int) -> np.ndarray:
+    """Per input column of `num_columns`, its position in `columns`, or -1."""
+    position = np.full(num_columns, -1)
+    position[columns] = np.arange(len(columns))
+    return position
 
 
 class MemberRows:
@@ -127,7 +138,10 @@ class MemberRows:
             elif isinstance(step, TorchRandomSignFlipStep):
                 signs = step._fit(torch.empty((0, 1, len(targets))))["signs"]
                 signs = signs.reshape(-1)
-                member.ops.append(_SignsOp(member.order[targets], signs))
+                columns = member.order[targets]
+                member.ops.append(
+                    _SignsOp(columns, signs, _position_map(columns, len(member.order)))
+                )
             else:
                 columns = member.order[targets]
                 plan = column_blocks(
@@ -153,7 +167,14 @@ class MemberRows:
                 # Kept in host memory: the model sizes its chunks from the free memory
                 # of `device`, which must be what the input built whole leaves free.
                 cpu_cache = {key: value.cpu() for key, value in cache.items()}
-                member.ops.append(_ColumnwiseOp(step, columns, cpu_cache))
+                member.ops.append(
+                    _ColumnwiseOp(
+                        step,
+                        columns,
+                        cpu_cache,
+                        _position_map(columns, len(member.order)),
+                    )
+                )
         member.feature_schema = schema.clear_gpu_transform_marks()
         return member
 
@@ -188,7 +209,9 @@ class MemberRows:
             values = cells[infinite]
             cells[infinite] = float("nan")
         for op in self.ops:
-            at, of = _positions(columns, op.columns)
+            of = op.position[columns]
+            at = np.flatnonzero(of >= 0)
+            of = of[at]
             if not len(at):
                 continue
             if isinstance(op, _SignsOp):
@@ -259,17 +282,6 @@ def _reads_by_blocks(step: TorchPreprocessingStep) -> bool:
     )
 
 
-def _positions(columns: np.ndarray, of: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The positions in `columns` of the columns that are in `of`, and their positions
-    in `of`.
-    """
-    order = np.argsort(of, kind="stable")
-    found = np.searchsorted(of, columns, sorter=order)
-    found = np.minimum(found, len(of) - 1)
-    hit = of[order[found]] == columns
-    return np.flatnonzero(hit), order[found[hit]]
-
-
 def _rows_of(
     tables: tuple[Table, Table],
     num_train: int,
@@ -286,19 +298,19 @@ def _rows_of(
             max(rows.stop, num_train) - num_train,
         )
         sizes = (train.stop - train.start, test.stop - test.start)
-    elif np.any(rows[1:] < rows[:-1]):
-        # Out of order, the train and test rows interleave: gather each in place.
+    else:
         in_train = rows < num_train
+        if in_train.all():
+            return _cells(tables[0], rows, columns)
+        if not in_train.any():
+            return _cells(tables[1], rows - num_train, columns)
+        # The train and test rows can interleave: gather each into its places.
         out = torch.empty((len(rows), len(columns)), dtype=torch.float32)
         out[torch.from_numpy(in_train)] = _cells(tables[0], rows[in_train], columns)
         out[torch.from_numpy(~in_train)] = _cells(
             tables[1], rows[~in_train] - num_train, columns
         )
         return out
-    else:
-        split = int(np.searchsorted(rows, num_train))
-        train, test = rows[:split], rows[split:] - num_train
-        sizes = (split, len(rows) - split)
     parts = [
         _cells(table, part, columns)
         for table, part, size in zip(tables, (train, test), sizes, strict=True)
