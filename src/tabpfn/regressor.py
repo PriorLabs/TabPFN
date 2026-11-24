@@ -327,8 +327,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The inference engine used to make predictions."""
 
     ordinal_encoder_: OrderPreservingColumnTransformer | ColumnRangeEncoders
-    """The fitted cleaning that makes categorical data numeric, as
-    `clean_data_transform` reapplies it to predict input."""
+    """The fitted cleaning that makes categorical data numeric.
+    `clean_data_transform` applies it to predict input."""
 
     date_transformer_: DateTransformer
     """The transformer that converted every temporal column before validation."""

@@ -171,13 +171,14 @@ def clean_data_transform(
     Args:
         X: The data to clean.
         cat_indices: Indices of the columns the encoder was fitted on.
-        ord_encoder: A fitted estimator's `ordinal_encoder_`: the encoder
-            `clean_data` returned at fit time, or the `ColumnRangeEncoders` of a fit
-            input cleaned a range of columns at a time.
+        ord_encoder: The `ordinal_encoder_` of a fitted estimator. This is the
+            encoder that `clean_data` returned at fit time, or the
+            `ColumnRangeEncoders` of a fit input cleaned one range of columns at a
+            time.
         passthrough_inf: If True, +/-inf values are carried through the ordinal
             encoding stage unchanged instead of crashing it.
-        validate: Validates `X`, or each range of its columns, before it is
-            cleaned. None when `X` is validated already.
+        validate: Validates `X`, or each column range of `X`, before cleaning. None
+            if `X` is already validated.
 
     Returns:
         For `ColumnRangeEncoders`, a new table of their `dtype`. Otherwise `X`, or a
@@ -379,10 +380,10 @@ def _encode_categoricals(
 
 @dataclasses.dataclass
 class ColumnRangeEncoders:
-    """The fitted cleaning of a table that was cleaned a range of columns at a time.
+    """The fitted cleaning of a fit input cleaned one range of columns at a time.
 
-    Each range has the encoder `clean_data` fitted on it alone; predict input is
-    cleaned by the same ranges into a table of `dtype`.
+    `clean_data` fitted one encoder on each range. Predict input is cleaned with the
+    same ranges into a table of `dtype`.
     """
 
     ranges: list[tuple[int, int, OrderPreservingColumnTransformer]]
@@ -406,8 +407,8 @@ class ColumnRangeEncoders:
         if validate is not None and (
             not isinstance(X, (pd.DataFrame, np.ndarray)) or X.ndim != 2
         ):
-            # Only a frame or a 2-D array is cut into ranges; validating anything
-            # else converts it to one or refuses it.
+            # Only a frame or a 2-D array can be cut into ranges. Validation converts
+            # any other input to an array or refuses it.
             X = validate(X)
         table = np.empty((X.shape[0], self.n_columns), dtype=self.dtype)
         for start, stop, encoder in self.ranges:
@@ -422,7 +423,7 @@ class ColumnRangeEncoders:
 
 
 def column_range(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
-    """`X`'s columns from `start` to `stop`, as the same kind of container."""
+    """The columns `start:stop` of `X`, in the same container type."""
     if isinstance(X, pd.DataFrame):
         return X.iloc[:, start:stop]
     return X[:, start:stop]

@@ -150,10 +150,10 @@ def pipelines_keep_float32(
     add_fingerprint_feature: bool,
     enable_gpu_preprocessing: bool,
 ) -> bool:
-    """Whether every member's CPU pipeline keeps a float32 input float32.
+    """Whether the CPU pipeline of every member keeps a float32 input as float32.
 
-    Asked of the pipelines this factory builds for `preprocess_configs`, so it is
-    `PreprocessingPipeline.keep_float32` of every member such configs lead to.
+    The answer is `PreprocessingPipeline.keep_float32` of the pipelines that this
+    factory builds for `preprocess_configs`.
     """
     return all(
         create_preprocessing_pipeline(

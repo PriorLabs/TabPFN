@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""A float32 table predicts as a float64 one where float32 rounds values together."""
+"""A float32 table predicts as a float64 table when float32 rounds values together."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _fit(
 
 
 def _with_tiny_steps(n: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
-    """Features with a last column of steps float32 rounds away, and targets."""
+    """Features whose last column has steps too small for float32, and targets."""
     rng = np.random.default_rng(seed)
     X = rng.standard_normal((n, 5))
     X[:, 4] = 1 + 1e-12 * np.arange(n)
@@ -82,8 +82,8 @@ def test__column_constant_in_float32_on_one_members_rows__predicts_as_float64(
     by_ranges: bool,
 ) -> None:
     X, y = _with_tiny_steps(N_ROWS + N_TEST)
-    # Not constant over all rows, only on rows that leave these out: the last
-    # column in float32 alone, the one before in float64 too.
+    # Both columns are constant only on rows that leave out the first three: the
+    # last column only in float32, the column before it also in float64.
     X[:, 3] = 1.0
     X[:3, 3:] = 5.0
 
@@ -105,7 +105,8 @@ def test__importance_order__predicts_as_a_float64_table() -> None:
     rng = np.random.default_rng(0)
     n = 1500 + N_TEST
     X = rng.standard_normal((n, 10))
-    # Ids float32 rounds into fewer, mixed groups: the target is their low bit.
+    # The target is the low bit of the id. float32 rounds the ids into fewer groups,
+    # and each group mixes both targets.
     ids = rng.integers(0, 8, n)
     X[:, 0] = 2.0**25 + ids
     y = ids % 2

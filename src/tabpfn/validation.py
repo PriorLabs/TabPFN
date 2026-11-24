@@ -256,7 +256,7 @@ def ensure_compatible_fit_inputs_sklearn(
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
-        check_finite: Whether X may hold no infinity, unless `PASSTHROUGH_INF`.
+        check_finite: If True, refuse infinities in X unless `PASSTHROUGH_INF` is set.
 
     Returns:
         A tuple of the validated input data X and target data y.
@@ -303,10 +303,9 @@ def ensure_compatible_fit_columns(
     estimator: TabPFNRegressor | TabPFNClassifier,
     check_finite: bool,
 ) -> np.ndarray:
-    """Validate the values of more columns of a fit input whose targets were validated.
+    """Validate a range of fit input columns after the targets are validated.
 
-    Checks them as `ensure_compatible_fit_inputs_sklearn` checks its `X`, for a fit
-    input validated a range of columns at a time.
+    The checks are the ones that `ensure_compatible_fit_inputs_sklearn` applies to `X`.
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
@@ -329,8 +328,10 @@ def ensure_compatible_fit_columns(
 def _ensure_all_finite(
     estimator: TabPFNRegressor | TabPFNClassifier, *, check_finite: bool
 ) -> bool | str:
-    """`check_array`'s `ensure_all_finite` for a fit input's X: NaN marks a missing
-    value, and an infinity is refused unless `PASSTHROUGH_INF` lets it through.
+    """The `ensure_all_finite` argument of `check_array` for fit input X.
+
+    NaN marks a missing value and is allowed. Infinities are refused unless
+    `check_finite` is False or `PASSTHROUGH_INF` is set.
     """
     if not check_finite or estimator.get_inference_config().PASSTHROUGH_INF:
         return False
