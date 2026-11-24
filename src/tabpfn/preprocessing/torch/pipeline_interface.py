@@ -137,8 +137,9 @@ class TorchPreprocessingStep(abc.ABC):
         `device`.
         """
         columns = torch.as_tensor(column_indices, device=x.device)
-        row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-        width = max(1, IN_PLACE_BLOCK_BYTES // max(1, row_bytes))
+        width = column_block_width(
+            IN_PLACE_BLOCK_BYTES, x.shape[0] * x.shape[1] * x.element_size()
+        )
         if fitted_cache is None and self._fit_column_group(num_train_rows) > 1:
             fitted_cache = _fit_column_groups(
                 self, x, column_indices, num_train_rows, device, IN_PLACE_BLOCK_BYTES
@@ -550,8 +551,9 @@ def _fit_transform_on_device(
     """
     # Wide blocks, sliced where the columns are contiguous, keep the host-side
     # copies fast; the step's own blocks then bound its intermediates on `device`.
-    row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-    width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
+    width = column_block_width(
+        DEVICE_BLOCK_BYTES, x.shape[0] * x.shape[1] * x.element_size()
+    )
     if fitted_cache is None and step._fit_column_group(num_train_rows) > 1:
         fitted_cache = _fit_column_groups(
             step, x, column_indices, num_train_rows, device, DEVICE_BLOCK_BYTES
@@ -584,6 +586,25 @@ def _fit_transform_on_device(
     return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
 
+def column_block_width(block_bytes: int, column_bytes: int) -> int:
+    """Columns of `column_bytes` each in a block of `block_bytes`, at least one."""
+    return max(1, block_bytes // max(1, column_bytes))
+
+
+def fit_group_width(
+    step: TorchPreprocessingStep,
+    num_train_rows: int,
+    train_column_bytes: int,
+    block_bytes: int,
+) -> int:
+    """Columns per fit block of a step whose fit reads `_fit_column_group` columns
+    together: as many whole groups as `block_bytes` holds of train rows, at least one.
+    """
+    group = step._fit_column_group(num_train_rows)
+    width = block_bytes // max(1, train_column_bytes)
+    return max(group, width - width % group)
+
+
 def _fit_column_groups(
     step: TorchPreprocessingStep,
     x: torch.Tensor,
@@ -597,10 +618,13 @@ def _fit_column_groups(
 
     A group's train rows fit in `block_bytes`: its width comes from the train rows.
     """
-    group = step._fit_column_group(num_train_rows)
     train = x[:num_train_rows]
-    width = block_bytes // max(1, train.shape[0] * train.shape[1] * x.element_size())
-    width = max(group, width - width % group)
+    width = fit_group_width(
+        step,
+        num_train_rows,
+        train.shape[0] * train.shape[1] * x.element_size(),
+        block_bytes,
+    )
     return _join_column_caches(
         [
             step._fit(
