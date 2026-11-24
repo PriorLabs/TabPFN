@@ -14,6 +14,7 @@ import ctypes
 import dataclasses
 import mmap
 import sys
+import threading
 import typing
 import warnings
 import weakref
@@ -445,11 +446,13 @@ _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 class _FitMemory:
     """A byte range of an array's memory, recorded while the array owning it lives."""
 
-    owner: weakref.ref[np.ndarray]
+    owner: weakref.ref[Any]
     start: int
     stop: int
 
 
+_FIT_MEMORY_LOCK = threading.Lock()
+"""Guards both registries against fits on other threads."""
 _OVERWRITTEN_FIT_MEMORY: list[_FitMemory] = []
 """The memory that a `fit` wrote into or released."""
 _KEPT_FIT_MEMORY: list[_FitMemory] = []
@@ -549,14 +552,39 @@ def mark_fit_memory(X: np.ndarray, *, overwritten: bool) -> None:
     """Record that a `fit` writes into or releases the memory of `X` (`overwritten`),
     or that a fitted model reads it without a copy.
     """
-    owner = X
+    start, stop = byte_bounds(X)
+    entry = _FitMemory(_owner_ref(X), start, stop)
+    registry = _OVERWRITTEN_FIT_MEMORY if overwritten else _KEPT_FIT_MEMORY
+    with _FIT_MEMORY_LOCK:
+        # An entry whose owner is gone no longer describes live memory.
+        registry[:] = [memory for memory in registry if memory.owner() is not None]
+        registry.append(entry)
+
+
+def _owner_ref(X: np.ndarray) -> weakref.ref[Any]:
+    """A weak reference to the object that owns the memory of `X`, as far as the
+    chain of bases leads to one that takes weak references.
+
+    The memory lives as long as its owner. An array made from a torch tensor or a
+    buffer has a base that is not an array; for a tensor, its storage owns the
+    memory.
+    """
+    owner: Any = X
     while isinstance(owner.base, np.ndarray):
         owner = owner.base
-    registry = _OVERWRITTEN_FIT_MEMORY if overwritten else _KEPT_FIT_MEMORY
-    # An entry whose owner is gone no longer describes live memory.
-    registry[:] = [memory for memory in registry if memory.owner() is not None]
-    start, stop = byte_bounds(X)
-    registry.append(_FitMemory(weakref.ref(owner), start, stop))
+    base = owner.base
+    if isinstance(base, memoryview):
+        base = base.obj
+    if callable(getattr(base, "untyped_storage", None)):
+        # `Tensor.numpy()` makes an alias tensor that dies with the array. The
+        # storage is shared and lives as long as the memory.
+        base = base.untyped_storage()
+    try:
+        return weakref.ref(base)
+    except TypeError:
+        # No base, or one without weak references (e.g. `bytes`): the owning array
+        # is as far as the chain can be followed.
+        return weakref.ref(owner)
 
 
 def _arrays_of(given: Any) -> list[np.ndarray]:
@@ -572,8 +600,8 @@ def _arrays_of(given: Any) -> list[np.ndarray]:
 
 def _shares_memory(arrays: list[np.ndarray], registry: list[_FitMemory]) -> bool:
     """Whether the bytes of any of `arrays` overlap live memory in `registry`."""
-    # A copy of the list, so that a fit on another thread can append meanwhile.
-    held = [memory for memory in list(registry) if memory.owner() is not None]
+    with _FIT_MEMORY_LOCK:
+        held = [memory for memory in registry if memory.owner() is not None]
     for array in arrays:
         start, stop = byte_bounds(array)
         if any(memory.start < stop and start < memory.stop for memory in held):
@@ -654,8 +682,13 @@ def _release_pages(X: np.ndarray, start: int, stop: int | None = None) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
     if libc.madvise(first, last - first, _MADV_DONTNEED) != 0:
-        errno = ctypes.get_errno()
-        raise OSError(errno, f"madvise failed: {errno}")
+        # Locked or huge pages cannot be released. They only cost memory, and the fit
+        # has already written its input, so it continues.
+        warnings.warn(
+            f"madvise could not release fit input memory (errno "
+            f"{ctypes.get_errno()}), so it stays in use.",
+            stacklevel=2,
+        )
 
 
 def empty_fit_frame(X: pd.DataFrame) -> None:
