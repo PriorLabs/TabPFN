@@ -221,6 +221,11 @@ def _member_rows(
         member.X_train, X_test, member.gpu_preprocessor, member.feature_schema, device
     )
     if rows is None:
+        warnings.warn(
+            "A step of the member's GPU preprocessing reads whole rows, so the "
+            "member's model input is built whole in host memory.",
+            stacklevel=2,
+        )
         return None
     return (
         rows,
