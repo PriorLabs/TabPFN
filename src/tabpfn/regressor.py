@@ -2166,13 +2166,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `ensemble_softmax_temperature_` applied.
         """
         return self._aggregate_cleaned_logits(
-            self._clean_predict_input(X),
+            clean_predict_input(self, X),
             apply_downsample_correction=apply_downsample_correction,
         )
-
-    def _clean_predict_input(self, X: XType) -> np.ndarray:
-        """Validate predict input and apply the fit-time cleaning to it."""
-        return clean_predict_input(self, X)
 
     def _aggregate_cleaned_logits(
         self,
@@ -2181,7 +2177,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         apply_downsample_correction: bool = True,
         show_progress_bar: bool | None = None,
     ) -> torch.Tensor:
-        """`_compute_aggregated_logits` for input `_clean_predict_input` returned.
+        """`_compute_aggregated_logits` for input `clean_predict_input` returned.
 
         Args:
             X: The cleaned input data.

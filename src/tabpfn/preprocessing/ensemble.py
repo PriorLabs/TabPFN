@@ -232,6 +232,11 @@ class TabPFNEnsemblePreprocessor:
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
             y_for_importance = _targets_to_numpy(y_train)
+            if source_decisions is not None and source_decisions.importance is None:
+                raise RuntimeError(
+                    "The fit input was cast to float32 without reading the rows of "
+                    "the feature-importance model."
+                )
             importance_feature_order = _compute_feature_importance_order(
                 X=X_train,
                 y=y_for_importance,
@@ -240,7 +245,7 @@ class TabPFNEnsemblePreprocessor:
                 rng=rng_features,
                 source_rows=None
                 if source_decisions is None
-                else source_decisions.importance_source(),
+                else source_decisions.importance,
             )
 
         self.subsample_feature_indices = _get_subsample_feature_indices(

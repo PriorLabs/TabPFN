@@ -405,11 +405,6 @@ class ColumnRangeEncoders:
     """`(start, stop, encoder)` per range of columns, in column order."""
     dtype: np.dtype
 
-    @property
-    def n_columns(self) -> int:
-        """The width of the cleaned table."""
-        return self.ranges[-1][1]
-
     def transform(
         self,
         X: XType,
@@ -425,7 +420,7 @@ class ColumnRangeEncoders:
             # Only a frame or a 2-D array can be cut into ranges. Validation converts
             # any other input to an array or refuses it.
             X = validate(X)
-        table = np.empty((X.shape[0], self.n_columns), dtype=self.dtype)
+        table = np.empty((X.shape[0], self.ranges[-1][1]), dtype=self.dtype)
         for start, stop, encoder in self.ranges:
             table[:, start:stop] = clean_data_transform(
                 column_range(X, start, stop),
