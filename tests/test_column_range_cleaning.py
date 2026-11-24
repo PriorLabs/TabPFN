@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 import tabpfn.base
 import tabpfn.classifier
@@ -655,6 +656,25 @@ def test__overwrite_fit_input__memory_given_back__a_later_fit_on_it_raises() -> 
 
     with pytest.raises(ValueError, match="overwritten"):
         _gpu_preprocessing_model(TabPFNClassifier).fit(values, y)
+
+
+@pytest.mark.skipif(
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
+)
+@pytest.mark.usefixtures("ranges_narrower_than_the_input", "pages_dropped")
+def test__overwrite_fit_input__released_tensor_memory__a_later_fit_on_it_raises() -> (
+    None
+):
+    """The memory of `Tensor.numpy()` is owned by the tensor, not by an array."""
+    torch.manual_seed(0)
+    values = torch.randn(PAGED_ROWS, 6)
+    y = _targets(TabPFNClassifier, PAGED_ROWS)
+    with overwrite_fit_input():
+        _gpu_preprocessing_model(TabPFNClassifier).fit(_frame_over(values.numpy()), y)
+
+    with pytest.raises(ValueError, match="overwritten"):
+        _gpu_preprocessing_model(TabPFNClassifier).fit(_frame_over(values.numpy()), y)
 
 
 @pytest.mark.usefixtures("ranges_narrower_than_the_input")
