@@ -61,7 +61,7 @@ BYTES_DTYPE_KINDS = "Sa"
 # `c` complex, `M` datetime64. Not needed, just for completeness.
 UNSUPPORTED_DTYPE_KINDS = "cM"
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
-# Before 2.0, deleting a frame's column copies the rest of its block.
+# Below this version, deleting a column of a frame copies the rest of its block.
 DELETING_COLUMNS_COPIES = Version(pd.__version__) < Version("2.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
@@ -438,11 +438,11 @@ _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 _OVERWRITTEN_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
     weakref.WeakValueDictionary()
 )
-"""The live arrays whose memory a `fit` wrote into or gave back, by `id`."""
+"""The live arrays whose memory a `fit` wrote into or released, by `id`."""
 _KEPT_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
     weakref.WeakValueDictionary()
 )
-"""The live arrays a fitted model reads as they were given, by `id`."""
+"""The live arrays that a fitted model reads without a copy, by `id`."""
 _EMPTIED_FIT_FRAMES: weakref.WeakValueDictionary[int, pd.DataFrame] = (
     weakref.WeakValueDictionary()
 )
@@ -458,19 +458,26 @@ def overwrite_fit_input() -> Iterator[None]:
     and preprocessing that writes nothing keeps the array rather than a copy. A
     read-only array's categorical columns are coded in a copy, as outside the block.
 
-    The same holds for an input that is cleaned into a float32 table of its own: a
-    frame is emptied once its targets are validated, and its blocks are freed as
-    their columns reach the table, the largest one's memory handed back to the
-    system by rows (on pandas 2 and later); a writeable numeric array of a wider
-    dtype is narrowed to float32 in its own memory, the rest of which is handed
-    back. Memory handed back reads as zeros through any array that shares it.
+    The caller gives up each input that it passes to a `fit` inside this block. Pass
+    each input, and anything that shares its memory, to one `fit` only. After that
+    fit, the caller must not read or write them. Their contents are undefined, and the
+    fitted model may keep them.
 
-    Each input may be given to one `fit` only, and so may anything that shares its
-    memory: its contents are undefined after that fit, and the fitted model may keep
-    it, so the caller must neither read nor write it. A later `fit` given an input
-    whose memory a fit wrote into or gave back, or a frame it emptied, raises a
-    `ValueError`. A fit never writes into or gives back memory that a read-only
-    array holds, or that another fitted model reads: it copies instead.
+    When `fit` cleans a given-up input into a new table:
+
+    - A frame is emptied after its targets are validated. Its blocks are freed as
+      their columns are copied into the table. If pandas can delete a column without
+      copying its block, the memory of the largest block is released to the system
+      a slice of rows at a time.
+    - For a float32 table, a writeable numeric array of a wider dtype is cast to
+      float32 in its own memory, and the rest of that memory is released.
+
+    Released memory reads as zeros through any array that shares it.
+
+    A later `fit` raises a `ValueError` for an input whose memory a fit wrote into or
+    released, and for a frame that a fit emptied. A fit never writes into or releases
+    memory that a read-only array holds or that another fitted model reads. It copies
+    instead.
     """
     token = _OVERWRITE_FIT_INPUT.set(True)
     try:
@@ -485,19 +492,19 @@ def overwriting_fit_input() -> bool:
 
 
 def check_fit_input(given: Any) -> None:
-    """Refuse a fit input that an earlier `fit` inside `overwrite_fit_input()` wrote
-    into, gave back or emptied.
+    """Refuse a fit input whose memory an earlier `fit` wrote into or released, or a
+    frame that an earlier `fit` emptied.
 
     Raises:
-        ValueError: If it did.
+        ValueError: If `given` is such an input.
     """
     if (
         isinstance(given, pd.DataFrame) and _EMPTIED_FIT_FRAMES.get(id(given)) is given
     ) or _shares_memory(_arrays_of(given), _OVERWRITTEN_FIT_INPUTS):
         raise ValueError(
             "This input was overwritten by an earlier fit inside "
-            "`overwrite_fit_input()`, so it no longer holds the data it was given "
-            "with. Pass each input to one fit only, or fit on a copy."
+            "`overwrite_fit_input()` and no longer holds its original data. Pass "
+            "each input to one fit only, or fit on a copy."
         )
 
 
@@ -515,8 +522,10 @@ def may_overwrite_fit_input(X: Any, given: Any) -> bool:
 
 
 def may_write_fit_memory(X: np.ndarray) -> bool:
-    """Whether a `fit` may write into or give back the memory of `X`, the caller's
-    own: inside `overwrite_fit_input()`, writeable, and read by no fitted model.
+    """Whether a `fit` may write into or release the memory of `X`, the caller's array.
+
+    True inside `overwrite_fit_input()` if `X` is writeable and no fitted model reads
+    its memory or has overwritten it.
     """
     return (
         _OVERWRITE_FIT_INPUT.get()
@@ -527,19 +536,19 @@ def may_write_fit_memory(X: np.ndarray) -> bool:
 
 
 def mark_fit_memory(X: np.ndarray, *, overwritten: bool) -> None:
-    """Record that a `fit` writes into or gives back the memory of `X`, or, without
-    `overwritten`, that the fitted model reads it as it is.
+    """Record that a `fit` writes into or releases the memory of `X` (`overwritten`),
+    or that a fitted model reads it without a copy.
     """
     root = X
     while isinstance(root.base, np.ndarray):
         root = root.base
-    # The root lives as long as any view of the memory does.
+    # Register the root array: it lives as long as any view of its memory.
     registry = _OVERWRITTEN_FIT_INPUTS if overwritten else _KEPT_FIT_INPUTS
     registry[id(root)] = root
 
 
 def _arrays_of(given: Any) -> list[np.ndarray]:
-    """The arrays holding `given`'s values: itself, or a frame's blocks."""
+    """The arrays that hold the values of `given`: the array, or a frame's blocks."""
     if isinstance(given, np.ndarray):
         return [given]
     if isinstance(given, pd.DataFrame):
@@ -559,20 +568,20 @@ def _shares_memory(
 
 
 _NARROW_BLOCK_BYTES = 1 << 26
-"""Bytes of rows `narrow_fit_input_in_place` casts at a time. Each block is cast into a
-temporary first: larger blocks hold a larger one, smaller ones pay the per-block
-overhead more often."""
+"""Bytes of rows that `narrow_fit_input_in_place` casts at a time. Each block is cast
+into a temporary array first. Larger blocks need a larger temporary array. Smaller
+blocks pay the per-block overhead more often."""
 
 _MADV_DONTNEED = 4
 """Linux's `madvise` advice to drop a range of pages."""
 
 
 def narrow_fit_input_in_place(X: np.ndarray) -> np.ndarray:
-    """`X`'s values as a float32 table written over the start of `X`'s own memory.
+    """Return the values of `X` as a float32 table over the start of the memory of `X`.
 
-    For a fit inside `overwrite_fit_input()` given `X`, a writeable C-ordered numeric
-    array of at least four bytes per value. The rest of `X`'s memory is handed back to
-    the system, and `X` holds no meaningful values afterwards.
+    `X` must be a given-up, writeable, C-ordered numeric array with at least four
+    bytes per value. The rest of its memory is released to the system. Afterwards `X`
+    holds no meaningful values.
     """
     n_rows, n_columns = X.shape
     table = X.reshape(-1).view(np.float32)[: X.size].reshape(n_rows, n_columns)
@@ -580,18 +589,20 @@ def narrow_fit_input_in_place(X: np.ndarray) -> np.ndarray:
     ratio = X.itemsize // table.itemsize
 
     def narrow(start: int, stop: int) -> None:
-        # Cast into a temporary before it is written.
+        # `astype` reads the whole block into a temporary array before the write, so
+        # the write can overlap the block's own input.
         table[start:stop] = X[start:stop].astype(np.float32)
 
-    # Narrowed, rows `[w, ratio * w)` land on input rows `[w / ratio, w)`, which the
-    # waves before have read, so the blocks of one wave can run in any order. The first
-    # block lands on itself and goes alone. At equal width each row lands on itself
-    # only, and one wave holds them all.
+    # Output rows `[w, ratio * w)` overwrite the memory of input rows `[w / ratio, w)`.
+    # Earlier waves have read those input rows, so the blocks of one wave can run in
+    # any order. The first block overwrites its own input and runs alone. If
+    # `ratio == 1`, each row overwrites only itself, so one wave holds all rows.
     waves = [(0, n_rows)] if ratio == 1 else [(0, min(rows, n_rows))]
     while waves[-1][1] < n_rows:
         start = waves[-1][1]
         waves.append((start, min(ratio * start, n_rows)))
-    # Recorded before the first write, so a fit that fails midway leaves it refused.
+    # Mark before the first write, so that a later fit refuses `X` even if this fit
+    # fails midway.
     mark_fit_memory(X, overwritten=True)
     with ThreadPoolExecutor(max_workers=_usable_cpus()) as pool:
         for wave_start, wave_stop in waves:
@@ -603,19 +614,20 @@ def narrow_fit_input_in_place(X: np.ndarray) -> np.ndarray:
 
 
 def release_rows(X: np.ndarray, start: int, stop: int) -> None:
-    """Hand the whole pages of rows `start:stop` of `X`, a C-ordered array given up
-    by the caller of a fit inside `overwrite_fit_input()`, back to the system.
+    """Release the whole pages of rows `start:stop` of `X` to the system.
+
+    `X` must be a given-up, C-ordered array.
     """
     row_bytes = X.strides[0]
     _release_pages(X, start * row_bytes, stop * row_bytes)
 
 
 def _release_pages(X: np.ndarray, start: int, stop: int | None = None) -> None:
-    """Hand the whole pages of `X`'s memory from byte `start` to byte `stop`, by
-    default its end, back to the system.
+    """Release the whole pages of the memory of `X` from byte `start` to byte `stop`
+    (default: the end) to the system.
 
-    Linux only: elsewhere they stay, which costs memory but changes no value. A page
-    dropped this way reads as zeros if anything touches it again.
+    This works on Linux only. On other systems the pages stay, which costs memory but
+    changes no value. A released page reads as zeros when it is read again.
     """
     if not sys.platform.startswith("linux"):
         return
@@ -633,10 +645,10 @@ def _release_pages(X: np.ndarray, start: int, stop: int | None = None) -> None:
 
 
 def empty_fit_frame(X: pd.DataFrame) -> None:
-    """Drop every column of `X`, the caller's frame, so its memory is freed once
-    nothing else holds it. For a fit inside `overwrite_fit_input()`.
+    """Drop every column of `X`, a given-up frame, so that its memory is freed when
+    nothing else holds it.
     """
-    # In place is the point: the caller's object has to let go of its blocks.
+    # Drop in place: the caller's frame object must stop referencing its blocks.
     X.drop(columns=X.columns, inplace=True)  # noqa: PD002
     _EMPTIED_FIT_FRAMES[id(X)] = X
 

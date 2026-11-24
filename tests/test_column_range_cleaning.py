@@ -1,7 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""A fit input cleaned a range of columns at a time matches it cleaned whole, and
-inside `overwrite_fit_input()` lets go of the caller's memory.
+"""Cleaning a fit input one range of columns at a time matches cleaning it whole, and
+frees the caller's memory inside `overwrite_fit_input()`.
 """
 
 from __future__ import annotations
@@ -262,8 +262,8 @@ def test__cleans_by_column_ranges__input_within_one_range__is_read_whole(
 
 @pytest.fixture
 def ranges_narrower_than_the_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ranges of two numeric columns: an input as small as these tests' is otherwise
-    read whole, and never given up.
+    """Ranges of two numeric columns. Without this, the small inputs of these tests
+    are read whole, and the fit never frees or overwrites them.
     """
     monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
 
@@ -315,8 +315,8 @@ def test__overwrite_fit_input__frame__is_emptied_and_predicts_as_a_copy(
 def test__overwrite_fit_input__wide_array__members_share_it_narrowed(
     estimator_cls: type, dtype: type
 ) -> None:
-    """The members read one float32 table in the caller's own memory, and predict as
-    members of a fit on a copy.
+    """The members read one float32 table in the caller's memory, and predict the
+    same as after a fit on a copy.
     """
     rng = np.random.default_rng(0)
     X = (rng.standard_normal((N_ROWS + N_TEST, 6)) * 1000).astype(dtype)
@@ -343,7 +343,7 @@ def test__overwrite_fit_input__wide_array__members_share_it_narrowed(
 def test__narrow_fit_input_in_place__many_blocks__holds_the_cast_values(
     monkeypatch: pytest.MonkeyPatch, dtype: type
 ) -> None:
-    """Narrowed a row at a time, the blocks of each wave in any order, the table holds
+    """With one row per block and each wave's blocks in reverse order, the table holds
     `X` cast to float32.
     """
 
@@ -374,7 +374,7 @@ def test__narrow_fit_input_in_place__many_blocks__holds_the_cast_values(
 
 @pytest.mark.usefixtures("ranges_narrower_than_the_input")
 def test__overwrite_fit_input__wide_array_with_a_categorical__is_copied() -> None:
-    """A column that is encoded keeps the table from being the array narrowed."""
+    """An encoded column makes the fit copy the array instead of casting it in place."""
     rng = np.random.default_rng(0)
     X = rng.standard_normal((N_ROWS + N_TEST, 4))
     X[:, 1] = rng.integers(0, 3, len(X))
@@ -393,14 +393,15 @@ def test__overwrite_fit_input__wide_array_with_a_categorical__is_copied() -> Non
 
 @pytest.mark.usefixtures("ranges_narrower_than_the_input")
 @pytest.mark.skipif(
-    DELETING_COLUMNS_COPIES, reason="The frame is emptied at the end on pandas < 2"
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
 )
 def test__overwrite_fit_input__frame__streams_the_largest_block_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The largest block is cleaned, then copied into the table by rows and freed,
-    before any other range writes to the table; then the smaller blocks follow. The
-    model predicts as one fit on a copy.
+    """The fit cleans the largest block, copies it into the table slice by slice and
+    frees it before any other range writes to the table. The smaller blocks follow.
+    The model predicts the same as after a fit on a copy.
     """
     rng = np.random.default_rng(0)
     floats = rng.standard_normal((N_ROWS + N_TEST, 6)).astype(np.float32)
@@ -434,7 +435,7 @@ def test__overwrite_fit_input__frame__streams_the_largest_block_first(
     monkeypatch.setattr(tabpfn.base, "clean_data", clean_spy)
     monkeypatch.setattr(tabpfn.base._StreamedBlock, "copy_into", copy_spy)
     monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
-    # Several blocks of rows.
+    # Several slices of rows.
     monkeypatch.setattr(tabpfn.base, "_STREAM_BLOCK_BYTES", 7 * 6 * 4)
 
     with overwrite_fit_input():
@@ -454,7 +455,7 @@ def test__overwrite_fit_input__frame__streams_the_largest_block_first(
 
 @pytest.fixture
 def pages_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pages given back read as zeros, as after Linux's `madvise`, on any system."""
+    """Released pages read as zeros on every system, as after `madvise` on Linux."""
 
     def zero_pages(X: np.ndarray, start: int, stop: int | None = None) -> None:
         page = mmap.PAGESIZE
@@ -468,7 +469,7 @@ def pages_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 PAGED_ROWS = 4096
-"""Rows enough for six float32 columns to span several whole pages, even of 16 KiB."""
+"""Enough rows for six float32 columns to span several whole pages of 16 KiB."""
 
 
 def _frame_over(values: np.ndarray, n_ints: int = 2) -> pd.DataFrame:
@@ -482,7 +483,8 @@ def _frame_over(values: np.ndarray, n_ints: int = 2) -> pd.DataFrame:
 
 
 @pytest.mark.skipif(
-    DELETING_COLUMNS_COPIES, reason="The frame is emptied at the end on pandas < 2"
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
 )
 @pytest.mark.usefixtures("ranges_narrower_than_the_input", "pages_dropped")
 def test__overwrite_fit_input__frame_over_a_read_only_array__leaves_it_as_it_is() -> (
@@ -503,12 +505,13 @@ def test__overwrite_fit_input__frame_over_a_read_only_array__leaves_it_as_it_is(
 
 
 @pytest.mark.skipif(
-    DELETING_COLUMNS_COPIES, reason="The frame is emptied at the end on pandas < 2"
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
 )
 @pytest.mark.usefixtures("ranges_narrower_than_the_input", "pages_dropped")
 def test__overwrite_fit_input__frame_over_an_array_a_model_reads__leaves_it() -> None:
-    """A first fit keeps the caller's float32 array; a second fit, given a frame over
-    it, leaves the first model's input whole.
+    """A first fit keeps the caller's float32 array. A second fit, given a frame over
+    that array, does not change it.
     """
     rng = np.random.default_rng(0)
     train = rng.standard_normal((PAGED_ROWS, 6)).astype(np.float32)
@@ -527,7 +530,8 @@ def test__overwrite_fit_input__frame_over_an_array_a_model_reads__leaves_it() ->
 
 
 @pytest.mark.skipif(
-    DELETING_COLUMNS_COPIES, reason="The frame is emptied at the end on pandas < 2"
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
 )
 @pytest.mark.usefixtures("ranges_narrower_than_the_input", "pages_dropped")
 def test__overwrite_fit_input__memory_given_back__a_later_fit_on_it_raises() -> None:
@@ -568,8 +572,8 @@ def test__overwrite_fit_input__frame__invalid_targets__leave_it_whole() -> None:
 
 @pytest.mark.usefixtures("ranges_narrower_than_the_input")
 def test__overwrite_fit_input__frame__failing_midway__is_empty_and_refused() -> None:
-    """A fit that fails once the frame is given up leaves it empty, never part
-    cleaned, and a fit given it again is refused.
+    """A fit that fails after it empties the frame leaves the frame empty, not partly
+    cleaned. A later fit refuses the frame.
     """
     rng = np.random.default_rng(0)
     X = _frame_over(rng.standard_normal((N_ROWS, 6)).astype(np.float32))
