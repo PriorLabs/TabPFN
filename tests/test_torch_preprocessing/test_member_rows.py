@@ -13,12 +13,11 @@ from tabpfn import TabPFNClassifier
 from tabpfn.base import clean_predict_input
 from tabpfn.inference import _maybe_run_gpu_preprocessing, _prepare_model_inputs
 from tabpfn.preprocessing import PreprocessorConfig
-from tabpfn.preprocessing.torch import member_rows, pipeline_interface
+from tabpfn.preprocessing.torch import pipeline_interface
 from tabpfn.preprocessing.torch.member_rows import MemberRows, MemberRowSource
 
 N_TRAIN = 120
 N_TEST = 30
-COLUMNS_PER_BLOCK = 3
 
 # The preprocessors of TabPFN-4, each with sign flips, and its outlier clipping and
 # feature shuffle.
@@ -71,21 +70,44 @@ def _members(**overrides: object) -> tuple[list, np.ndarray]:
 
 @pytest.fixture
 def small_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fit blocks of `COLUMNS_PER_BLOCK` columns in the eager pipeline and in
-    `MemberRows`. On the CPU without staging, the eager pipeline fits only in in-place
-    blocks, so the groups of `MemberRows` must not be wider.
+    """Groups of 5 columns moved to the compute device, cut into in-place blocks of 3.
+
+    Set in the pipeline only: `MemberRows` must take its blocks from there.
     """
-    block = (N_TRAIN + N_TEST) * 4 * COLUMNS_PER_BLOCK
-    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", block)
-    monkeypatch.setattr(member_rows, "IN_PLACE_BLOCK_BYTES", block)
-    monkeypatch.setattr(member_rows, "DEVICE_BLOCK_BYTES", block)
+    column = (N_TRAIN + N_TEST) * 4
+    monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", 3 * column)
+    monkeypatch.setattr(pipeline_interface, "DEVICE_BLOCK_BYTES", 5 * column)
 
 
-def _eager(
+_DEVICES = pytest.mark.parametrize(
+    ("device", "stage_on_cpu"),
+    [("cpu", False), ("cpu", True), ("cuda", False)],
+    ids=["cpu", "cpu-staged", "cuda"],
+)
+
+
+def _device(
+    device: str, stage_on_cpu: bool, monkeypatch: pytest.MonkeyPatch
+) -> torch.device:
+    """`device`; with `stage_on_cpu`, the pipeline stages a CPU input as for a GPU."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("Needs a GPU")
+    if stage_on_cpu:
+        monkeypatch.setattr(pipeline_interface, "_same_device", lambda _a, _b: False)
+    return torch.device(device)
+
+
+def _host_staged(
     member, X_test: np.ndarray, device: torch.device
 ) -> tuple[torch.Tensor, object]:
+    """The member's model input, built in host memory and preprocessed on `device`."""
     X_full, _ = _prepare_model_inputs(
-        device, None, member.X_train, X_test, member.y_train
+        device,
+        None,
+        member.X_train,
+        X_test,
+        member.y_train,
+        x_device=torch.device("cpu"),
     )
     X_full, schema = _maybe_run_gpu_preprocessing(
         X_full,
@@ -93,6 +115,7 @@ def _eager(
         num_train_rows=member.X_train.shape[0],
         feature_schema=member.feature_schema,
         consume_input=True,
+        compute_device=device,
     )
     return X_full[:, 0], schema
 
@@ -104,16 +127,16 @@ def _assert_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
 
 
 @pytest.mark.usefixtures("small_blocks")
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test__read__equals_the_eager_model_input(device: str) -> None:
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("Needs a GPU")
-    device = torch.device(device)
+@_DEVICES
+def test__read__equals_the_host_staged_model_input(
+    device: str, stage_on_cpu: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = _device(device, stage_on_cpu, monkeypatch)
     members, X_test = _members()
     rng = np.random.default_rng(1)
     for member in members:
         X_test_member = member.transform_X_test(X_test)
-        expected, schema = _eager(member, X_test_member, device)
+        expected, schema = _host_staged(member, X_test_member, device)
         rows = MemberRows.fit(
             member.X_train,
             X_test_member,
@@ -131,6 +154,51 @@ def test__read__equals_the_eager_model_input(device: str) -> None:
         _assert_equal(rows.read(across, some, device), expected[across][:, some])
         picked = rng.permutation(R)[:20]
         _assert_equal(rows.read(picked, some, device), expected[picked][:, some])
+
+
+@pytest.mark.usefixtures("small_blocks")
+@_DEVICES
+def test__fit__fits_each_step_on_the_pipelines_blocks(
+    device: str, stage_on_cpu: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A step's fitted values can round differently on other blocks of columns."""
+    device = _device(device, stage_on_cpu, monkeypatch)
+    members, X_test = _members()
+    for member in members:
+        X_test_member = member.transform_X_test(X_test)
+        fits = _record_fits(member.gpu_preprocessor, monkeypatch)
+        _host_staged(member, X_test_member, device)
+        expected = fits.copy()
+        fits.clear()
+
+        MemberRows.fit(
+            member.X_train,
+            X_test_member,
+            member.gpu_preprocessor,
+            member.feature_schema,
+            device,
+        )
+
+        assert [step for step, _ in fits] == [step for step, _ in expected]
+        assert len(expected) > len({id(step) for step, _ in expected})
+        for (_, actual), (_, wanted) in zip(fits, expected, strict=True):
+            _assert_equal(actual, wanted)
+
+
+def _record_fits(
+    pipeline, monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[object, torch.Tensor]]:
+    """Records, from now on, each input a columnwise step of `pipeline` fits on."""
+    fits: list[tuple[object, torch.Tensor]] = []
+    for step, _ in pipeline.steps:
+        if step.columnwise:
+
+            def spy(x: torch.Tensor, step=step, fit=step._fit) -> dict:
+                fits.append((step, x.cpu().clone()))
+                return fit(x)
+
+            monkeypatch.setattr(step, "_fit", spy)
+    return fits
 
 
 @pytest.mark.usefixtures("small_blocks")
