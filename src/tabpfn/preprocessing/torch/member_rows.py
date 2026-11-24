@@ -20,13 +20,11 @@ import torch
 
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.preprocessing.torch.pipeline_interface import (
-    DEVICE_BLOCK_BYTES,
-    IN_PLACE_BLOCK_BYTES,
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
     _join_column_caches,
-    column_block_width,
-    fit_group_width,
+    column_blocks,
+    runs_staged,
 )
 from tabpfn.preprocessing.torch.steps import (
     TorchRandomSignFlipStep,
@@ -102,13 +100,11 @@ class MemberRows:
         member = cls((X_train, X_test), np.arange(X_train.shape[1]), [], feature_schema)
         if gpu_preprocessor is None:
             return member
-        # Use the width functions of the staged pipeline, so that each columnwise step
-        # is fit on the same blocks. The other columns in a block can change how a
-        # column's fitted values round.
+        # The pipeline stages an input held off `device`, as the host tables are. The
+        # other columns in a block can change how a column's fitted values round, so
+        # each columnwise step fits on the pipeline's blocks.
+        staged = runs_staged(torch.device("cpu"), device)
         itemsize = np.dtype(np.float32).itemsize
-        column_bytes = member.shape[0] * itemsize
-        group = column_block_width(DEVICE_BLOCK_BYTES, column_bytes)
-        width = column_block_width(IN_PLACE_BLOCK_BYTES, column_bytes)
         schema = feature_schema
         for step, modalities in gpu_preprocessor.steps:
             targets = step.target_columns(schema, modalities)
@@ -126,18 +122,24 @@ class MemberRows:
                 )
             elif step.columnwise:
                 columns = member.order[targets]
+                plan = column_blocks(
+                    step,
+                    len(columns),
+                    member.shape[0],
+                    member.num_train,
+                    itemsize,
+                    staged=staged,
+                )
                 parts = [
                     step._fit(
                         member._read_input(
                             slice(0, member.num_train),
-                            columns[start:stop],
+                            columns[block],
                             device,
                             infinities=False,
                         )
                     )
-                    for start, stop in _fit_blocks(
-                        step, member.num_train, len(columns), group, width, itemsize
-                    )
+                    for block in plan.fit_blocks()
                 ]
                 cache = _join_column_caches(parts, step.shared_cache_keys)
                 member.ops.append(_ColumnwiseOp(step, columns, cache))
@@ -237,33 +239,6 @@ class MemberRowSource:
 
 def _rows(rows: slice | torch.Tensor) -> slice | np.ndarray:
     return rows if isinstance(rows, slice) else rows.cpu().numpy()
-
-
-def _fit_blocks(
-    step: TorchPreprocessingStep,
-    num_train: int,
-    num_columns: int,
-    group: int,
-    width: int,
-    itemsize: int,
-) -> list[tuple[int, int]]:
-    """The `(start, stop)` blocks of a columnwise step's columns that a staged
-    pipeline fits the step on.
-
-    For a step that fits columns together, each block holds whole column groups, as
-    `fit_group_width` gives. For other steps, the blocks are `width` columns wide,
-    inside groups of `group` columns.
-    """
-    if step._fit_column_group(num_train) > 1:
-        size = fit_group_width(
-            step, num_train, num_train * itemsize, DEVICE_BLOCK_BYTES
-        )
-        return [(a, min(a + size, num_columns)) for a in range(0, num_columns, size)]
-    return [
-        (a, min(a + width, start + group, num_columns))
-        for start in range(0, num_columns, group)
-        for a in range(start, min(start + group, num_columns), width)
-    ]
 
 
 def _positions(columns: np.ndarray, of: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
