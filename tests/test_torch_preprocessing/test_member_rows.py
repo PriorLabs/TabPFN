@@ -72,8 +72,8 @@ def _members(**overrides: object) -> tuple[list, np.ndarray]:
 @pytest.fixture
 def small_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fit blocks of `COLUMNS_PER_BLOCK` columns in the eager pipeline and in
-    `MemberRows`. Unstaged on the CPU, the eager pipeline fits in in-place blocks
-    only, so `MemberRows`' groups are made no wider.
+    `MemberRows`. On the CPU without staging, the eager pipeline fits only in in-place
+    blocks, so the groups of `MemberRows` must not be wider.
     """
     block = (N_TRAIN + N_TEST) * 4 * COLUMNS_PER_BLOCK
     monkeypatch.setattr(pipeline_interface, "IN_PLACE_BLOCK_BYTES", block)
@@ -173,7 +173,7 @@ def test__row_source__reads_each_member_along_the_batch() -> None:
 
 
 def test__fit__with_a_step_that_reads_whole_rows__is_none() -> None:
-    """The fingerprint hashes whole rows, so the input has to be built whole."""
+    """The fingerprint hashes whole rows, so the input must be built whole."""
     members, X_test = _members(FINGERPRINT_FEATURE=True)
     member = members[0]
 

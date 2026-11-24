@@ -1,13 +1,13 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""An ensemble member's model input, produced a block of cells at a time.
+"""The model input of an ensemble member, produced one block of cells at a time.
 
 A member's model input is its preprocessed table, train rows then test rows, after
-its GPU preprocessing. Held whole in host memory it is as large as the cleaned
-table, once per member in turn. `MemberRows` fits the GPU preprocessing by blocks of
-columns instead, and applies it to whatever rows and columns are read, so the input
-never exists whole. `MemberRowSource` serves the members of one forward to a model
-that reads its input this way.
+GPU preprocessing. Held whole in host memory, it is as large as the cleaned table,
+for each member in turn. `MemberRows` fits the GPU preprocessing on blocks of columns
+and applies it only to the rows and columns that are read, so the whole input never
+exists. `MemberRowSource` gives the members of one forward pass to a model that reads
+its input this way.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ Table = np.ndarray | SharedColumnsTable
 
 @dataclasses.dataclass(frozen=True)
 class _ColumnwiseOp:
-    """A columnwise step, fitted on `columns`, input columns in its cache's order."""
+    """A columnwise step fitted on `columns`, input columns in its cache's order."""
 
     step: TorchPreprocessingStep
     columns: np.ndarray
@@ -53,18 +53,18 @@ class _ColumnwiseOp:
 
 @dataclasses.dataclass(frozen=True)
 class _SignsOp:
-    """Signs multiplied into `columns`, input columns in the order of `signs`."""
+    """Signs to multiply into `columns`, input columns in the order of `signs`."""
 
     columns: np.ndarray
     signs: torch.Tensor
 
 
 class MemberRows:
-    """One member's model input, `(train rows + test rows, columns)`, by blocks.
+    """The model input of one member, `(train rows + test rows, columns)`, by blocks.
 
-    Its cells equal those of the member's table after `gpu_preprocessor` runs on it
-    whole: the steps are fitted on the same blocks of columns, and each is applied to
-    the cells read as it is to every cell.
+    Its cells equal those of the member's table after `gpu_preprocessor` runs on the
+    whole table. The steps are fitted on the same blocks of columns. Each step
+    transforms the cells that are read as it would transform every cell.
     """
 
     def __init__(
@@ -94,16 +94,17 @@ class MemberRows:
         feature_schema: FeatureSchema,
         device: torch.device,
     ) -> MemberRows | None:
-        """Fit `gpu_preprocessor` on `X_train`'s rows by blocks of columns on `device`.
+        """Fit `gpu_preprocessor` on `X_train` one block of columns at a time.
 
-        None when a step is neither columnwise nor a sign flip nor a shuffle: such a
-        step reads whole rows, and the member's input has to be built whole.
+        Returns None if a step is not columnwise, a sign flip or a shuffle. Such a step
+        reads whole rows, so the member's input must be built whole.
         """
         member = cls((X_train, X_test), np.arange(X_train.shape[1]), [], feature_schema)
         if gpu_preprocessor is None:
             return member
-        # The blocks a staged pipeline fits a columnwise step on, from the same width
-        # functions: a block's columns can round a column's fit.
+        # Use the width functions of the staged pipeline, so that each columnwise step
+        # is fit on the same blocks. The other columns in a block can change how a
+        # column's fitted values round.
         itemsize = np.dtype(np.float32).itemsize
         column_bytes = member.shape[0] * itemsize
         group = column_block_width(DEVICE_BLOCK_BYTES, column_bytes)
@@ -159,11 +160,14 @@ class MemberRows:
         *,
         infinities: bool = True,
     ) -> torch.Tensor:
-        """The table's input `columns` at `rows` after the steps fitted so far,
-        `(rows, 1, columns)`.
+        """Read input `columns` at `rows` after the steps fitted so far.
 
-        The steps see an infinity as missing; it is written back after them unless
-        not `infinities`, as the steps after them see it.
+        The steps see an infinity as NaN. With `infinities`, the infinities are written
+        back after the steps. Without it, they stay NaN, as the next step to fit sees
+        them.
+
+        Returns:
+            A `(rows, 1, columns)` tensor.
         """
         cells = _rows_of(self.tables, self.num_train, rows, columns).to(device)
         cells = cells.unsqueeze(1)
@@ -191,8 +195,10 @@ class MemberRows:
 
 
 class MemberRowSource:
-    """The model input `(rows, members, columns)` of members that share its shape,
-    read a block of cells at a time: a `HostRowSource` for the model's `x_host`.
+    """The model input `(rows, members, columns)` of members with one input shape.
+
+    It is read one block of cells at a time, as a `HostRowSource` for the model's
+    `x_host`.
     """
 
     def __init__(self, members: Sequence[MemberRows]) -> None:
@@ -241,9 +247,12 @@ def _fit_blocks(
     width: int,
     itemsize: int,
 ) -> list[tuple[int, int]]:
-    """The blocks of a columnwise step's columns, by position, that a staged pipeline
-    fits it on: whole fit groups of train rows for a step that reads columns
-    together, else blocks of `width` within groups of `group`.
+    """The `(start, stop)` blocks of a columnwise step's columns that a staged
+    pipeline fits the step on.
+
+    For a step that fits columns together, each block holds whole column groups, as
+    `fit_group_width` gives. For other steps, the blocks are `width` columns wide,
+    inside groups of `group` columns.
     """
     if step._fit_column_group(num_train) > 1:
         size = fit_group_width(
@@ -258,7 +267,9 @@ def _fit_blocks(
 
 
 def _positions(columns: np.ndarray, of: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Where `columns` holds a column of `of`, and that column's place in `of`."""
+    """The positions in `columns` of the columns that are in `of`, and their positions
+    in `of`.
+    """
     order = np.argsort(of, kind="stable")
     found = np.searchsorted(of, columns, sorter=order)
     found = np.minimum(found, len(of) - 1)
@@ -297,10 +308,11 @@ def _rows_of(
 
 
 def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch.Tensor:
-    """`table`'s `columns` at `rows`, as a new row-major float32 CPU tensor.
+    """`columns` at `rows` of `table`, as a new row-major float32 CPU tensor.
 
-    Row-major as the built input's blocks are: a fit's reductions add up in an order
-    that follows the layout, so another one can round a fitted value differently.
+    The blocks of the built input are row-major too. A fit's reductions sum in an
+    order that follows the memory layout, so another layout can round a fitted value
+    differently.
     """
     if isinstance(table, SharedColumnsTable):
         selected = table[:, columns]
@@ -312,7 +324,7 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
         else:
             out = selected.rows_at(rows)
     else:
-        # Torch gathers on threads; numpy's fancy indexing on one.
+        # Torch gathers with many threads. NumPy fancy indexing uses one thread.
         whole = as_tensor_to_read(table)
         picked = (
             whole[rows]
