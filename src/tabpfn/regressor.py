@@ -77,6 +77,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     _maybe_run_gpu_preprocessing,
 )
+from tabpfn.inference_config import OVERRIDABLE_FIELDS
 from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
     RegressorTuningConfig,
@@ -189,14 +190,19 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
+        # A sign flip moves a member's zeros off the transform's fixed atom. Logit
+        # averaging is a geometric mean, so one member with little mass at zero
+        # removes the ensemble's.
+        "REGRESSION_TARGET_SIGN_FLIP": False,
+        "AVERAGE_BEFORE_SOFTMAX": False,
     },
     "grouped": GROUPED_PRESET,
 }
 """The named bundles of `inference_config` values that `presets` selects."""
 
 ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5: dict[str, Any] = {
+    **REGRESSION_PRESETS["zero_inflated"],
     "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
-    "REGRESSION_READOUT": "nonnegative_and_capped",
 }
 """What the "zero_inflated" preset sets on the models up to TabPFN-3.5."""
 
@@ -732,9 +738,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
                   `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_fixed_atom",)`
-                  and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. On the
-                  models up to TabPFN-3.5 it sets `log_quantile_gap` as the y
-                  transform.
+                  and `REGRESSION_READOUT` to `"nonnegative_and_capped"`, and
+                  turns off `REGRESSION_TARGET_SIGN_FLIP` and
+                  `AVERAGE_BEFORE_SOFTMAX`. On the models up to TabPFN-3.5 it sets
+                  `log_quantile_gap` as the y transform. An
+                  `average_before_softmax` argument wins over the preset.
                 - `"grouped"`: for `group_col` data, no effect without it. It sets
                   `APPEND_GROUP_AGGREGATES=True` and
                   `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
@@ -968,12 +976,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         byte_size = initialize_model_variables_helper(self, self.estimator_type)
         if self.presets is not None:
-            self.inference_config_ = _apply_presets(
-                self.inference_config_,
-                self.presets,
-                self.inference_config,
-                self.configs_,
-            )
+            self.inference_config_ = _apply_presets(self)
+            self.average_before_softmax_ = self.inference_config_.AVERAGE_BEFORE_SOFTMAX
         return byte_size
 
     def _rebuild_raw_space_bardist(self) -> None:
@@ -2959,25 +2963,25 @@ truncate_above)` of one tuning fold, see
 `TabPFNRegressor._compute_holdout_validation_data`."""
 
 
-def _apply_presets(
-    config: InferenceConfig,
-    presets: str | Sequence[str],
-    user_config: dict | InferenceConfig | None,
-    architecture_configs: Sequence[ArchitectureConfig],
-) -> InferenceConfig:
-    """`config` with the presets' values, except the keys `user_config` names.
+def _apply_presets(estimator: TabPFNRegressor) -> InferenceConfig:
+    """`estimator.inference_config_` with the presets' values, except the keys the
+    user names in `inference_config` or by an argument such as
+    `average_before_softmax`.
 
     On a model up to TabPFN-3.5, "zero_inflated" sets
     `ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5` instead.
     """
     registry = REGRESSION_PRESETS
-    if any(type(c) in ARCHITECTURE_CONFIGS_UP_TO_V3_5 for c in architecture_configs):
+    if any(type(c) in ARCHITECTURE_CONFIGS_UP_TO_V3_5 for c in estimator.configs_):
         registry = {
             **REGRESSION_PRESETS,
             "zero_inflated": ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5,
         }
-    values = resolve_presets(presets, user_config, registry)
-    return dataclasses.replace(config, **values)
+    values = resolve_presets(estimator.presets, estimator.inference_config, registry)
+    for field, (_, argument) in OVERRIDABLE_FIELDS.items():
+        if getattr(estimator, argument) != "auto":
+            values.pop(field, None)
+    return dataclasses.replace(estimator.inference_config_, **values)
 
 
 _zero_share_warning_issued = False

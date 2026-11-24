@@ -32,7 +32,11 @@ import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.base import ModelSpecs, initialize_tabpfn_model
+from tabpfn.base import (
+    ModelSpecs,
+    initialize_tabpfn_model,
+    resolved_average_before_softmax,
+)
 from tabpfn.constants import ModelVersion
 from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.inference_config import InferenceConfig
@@ -2814,6 +2818,51 @@ def test__fit__zero_inflated_preset_on_a_model_up_to_3_5__sets_log_quantile_gap(
     assert config.REGRESSION_READOUT == "nonnegative_and_capped"
 
 
+def _with_sign_flip_and_logit_averaging(specs: ModelSpecs) -> ModelSpecs:
+    return dataclasses.replace(
+        specs,
+        inference_config=dataclasses.replace(
+            specs.inference_config,
+            REGRESSION_TARGET_SIGN_FLIP=True,
+            AVERAGE_BEFORE_SOFTMAX=True,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "make_specs",
+    [_other_architecture_specs, _create_dummy_regressor_model_specs],
+    ids=["later_model", "model_up_to_3_5"],
+)
+@pytest.mark.parametrize(
+    ("kwargs", "expected_sign_flip", "expected_average_before_softmax"),
+    [
+        ({}, False, False),
+        ({"inference_config": {"REGRESSION_TARGET_SIGN_FLIP": True}}, True, False),
+        ({"inference_config": {"AVERAGE_BEFORE_SOFTMAX": True}}, False, True),
+        ({"average_before_softmax": True}, False, True),
+    ],
+)
+def test__fit__zero_inflated_preset__turns_off_a_stored_sign_flip_and_logit_averaging(
+    make_specs: Callable[[], ModelSpecs],
+    kwargs: dict[str, Any],
+    expected_sign_flip: bool,
+    expected_average_before_softmax: bool,
+) -> None:
+    """Unless the user names a value, in `inference_config` or by argument."""
+    X, y = _zero_inflated_tuning_data()
+    specs = _with_sign_flip_and_logit_averaging(make_specs())
+
+    regressor = TabPFNRegressor(
+        presets="zero_inflated", **_tuning_regressor_kwargs(model_path=specs, **kwargs)
+    ).fit(X, y)
+
+    config = regressor.inference_config_
+    assert config.REGRESSION_TARGET_SIGN_FLIP is expected_sign_flip
+    assert config.AVERAGE_BEFORE_SOFTMAX is expected_average_before_softmax
+    assert resolved_average_before_softmax(regressor) is expected_average_before_softmax
+
+
 def test__fit__zero_inflated_preset_with_calibrate_mean__calibrates_with_it() -> None:
     X, y = _zero_inflated_tuning_data()
     regressor = TabPFNRegressor(
@@ -2833,8 +2882,8 @@ def test__fit__presets__user_keys_win_and_conflicting_presets_raise(
 ) -> None:
     monkeypatch.setitem(
         regressor_module.REGRESSION_PRESETS,
-        "flipped",
-        {"REGRESSION_TARGET_SIGN_FLIP": True},
+        "unfingerprinted",
+        {"FINGERPRINT_FEATURE": False},
     )
     monkeypatch.setitem(
         regressor_module.REGRESSION_PRESETS,
@@ -2845,15 +2894,15 @@ def test__fit__presets__user_keys_win_and_conflicting_presets_raise(
     kwargs = _tuning_regressor_kwargs(model_path=_other_architecture_specs())
 
     regressor = TabPFNRegressor(
-        presets=["zero_inflated", "flipped"],
-        inference_config={"REGRESSION_TARGET_SIGN_FLIP": False},
+        presets=["zero_inflated", "unfingerprinted"],
+        inference_config={"FINGERPRINT_FEATURE": True},
         **kwargs,
     ).fit(X, y)
 
     config = regressor.inference_config_
     assert config.REGRESSION_Y_PREPROCESS_TRANSFORMS == ("log_fixed_atom",)
     assert config.REGRESSION_READOUT == "nonnegative_and_capped"
-    assert config.REGRESSION_TARGET_SIGN_FLIP is False
+    assert config.FINGERPRINT_FEATURE is True
 
     regressor = TabPFNRegressor(presets=["zero_inflated", "uncapped"], **kwargs)
     with pytest.raises(ValueError, match="cannot be combined: they set REGRESSION_"):
