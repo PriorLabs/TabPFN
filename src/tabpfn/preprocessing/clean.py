@@ -536,13 +536,12 @@ def may_write_fit_memory(X: np.ndarray) -> bool:
     """Whether a `fit` may write into or release the memory of `X`, the caller's array.
 
     True inside `overwrite_fit_input()` if `X` is writeable and no fitted model reads
-    its memory or has overwritten it.
+    its memory. `check_fit_input` has already refused memory a fit overwrote.
     """
     return (
         _OVERWRITE_FIT_INPUT.get()
         and X.flags.writeable
         and not _shares_memory([X], _KEPT_FIT_MEMORY)
-        and not _shares_memory([X], _OVERWRITTEN_FIT_MEMORY)
     )
 
 
