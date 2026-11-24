@@ -128,10 +128,16 @@ def _unscaled_cache(lambdas: np.ndarray) -> dict[str, torch.Tensor]:
 
 
 @pytest.mark.parametrize("lmbda", [0.0, 2.0, 0.5])
-def test__transform__matches_cpu_centered_transform(lmbda: float):
-    """Same values as the CPU transform, also in the log limits and across zero."""
+@pytest.mark.parametrize("log_means", [[0.7, -0.7, 0.0], [0.7]])
+def test__transform__matches_cpu_centered_transform(
+    lmbda: float, log_means: list[float]
+):
+    """Same values as the CPU transform, also in the log limits and across zero.
+
+    With one column, only one side of zero is in its log limit.
+    """
     x = np.linspace(-3.0, 3.0, 25)
-    log_means = np.array([0.7, -0.7, 0.0])
+    log_means = np.array(log_means)
     expected = np.column_stack(
         [_yeojohnson_centered_transform(x, lmbda, log_mean) for log_mean in log_means]
     )

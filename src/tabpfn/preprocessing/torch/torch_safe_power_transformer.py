@@ -135,6 +135,8 @@ def _fit_lambdas(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     # Step 1 of the transform does not depend on lambda, so the search computes
     # it once and repeats only step 2.
     log_ratios, nonnegative = _log_ratios(x, log_means)
+    # Without missing values the two fills below change nothing and are skipped.
+    any_invalid = bool(invalid.any())
 
     def neg_llf(lambdas: torch.Tensor) -> torch.Tensor:
         # The Yeo-Johnson log-likelihood has two terms: one in the variance of the
@@ -142,9 +144,12 @@ def _fit_lambdas(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # geometric mean makes the second term constant, so the variance alone
         # decides.
         y = _yeo_johnson(log_ratios, nonnegative, lambdas, log_means)
-        y.masked_fill_(invalid, 0.0)
+        if any_invalid:
+            y.masked_fill_(invalid, 0.0)
         mean = y.sum(dim=0) / n_valid
-        y.sub_(mean).masked_fill_(invalid, 0.0)
+        y.sub_(mean)
+        if any_invalid:
+            y.masked_fill_(invalid, 0.0)
         var = y.square_().sum(dim=0) / n_valid
         llf = -n_valid / 2 * var.log()
         # Reject a vanishing or undefined variance, as SafePowerTransformer does.
@@ -211,28 +216,33 @@ def _yeo_johnson(
     lambdas = torch.where(mirrored, 2 - lambdas, lambdas)
     log_means = log_means.abs()
 
+    # The search calls this function once per step. Each ``if`` below skips
+    # passes over the data that would change nothing.
+    #
     # 2. y = (ratio^power - 1) / power, from the log of the ratio.
     #    The power is lambda for the values x >= 0. The values x < 0 go through
     #    the same line with the power of the classic formula, lambda - 2.
     power = torch.where(nonnegative, lambdas, lambdas - 2)
-    power_is_0 = power.abs() < _EPS
-    power.masked_fill_(power_is_0, 1.0)
     y = torch.mul(power, log_ratios).expm1_().div_(power)
+    # A power of 0 leaves NaN in y. The limit of the line above is the log itself.
+    if ((lambdas.abs() < _EPS) | ((lambdas - 2).abs() < _EPS)).any():
+        torch.where(power.abs() < _EPS, log_ratios, y, out=y)
     del power
-    torch.where(power_is_0, log_ratios, y, out=y)
-    del power_is_0
 
     # Values x < 0 now hold the classic result, which is accurate for them.
     # Compared with it, step 1 scaled and shifted the values x >= 0. The same
     # scale and shift here make the two parts join at x = 0.
-    lambda_is_0 = lambdas.abs() < _EPS
-    safe_lambdas = lambdas.masked_fill(lambda_is_0, 1.0)
-    value_at_zero = (-safe_lambdas * log_means).expm1_().div_(safe_lambdas)
-    value_at_zero = torch.where(lambda_is_0, -log_means, value_at_zero)
-    rescaled = (y * (-lambdas * log_means).exp_()).add_(value_at_zero)
-    torch.where(nonnegative, y, rescaled, out=y)
-    del rescaled
-    return y.mul_(torch.where(mirrored, -1.0, 1.0))
+    if not nonnegative.all():
+        lambda_is_0 = lambdas.abs() < _EPS
+        safe_lambdas = lambdas.masked_fill(lambda_is_0, 1.0)
+        value_at_zero = (-safe_lambdas * log_means).expm1_().div_(safe_lambdas)
+        value_at_zero = torch.where(lambda_is_0, -log_means, value_at_zero)
+        rescaled = (y * (-lambdas * log_means).exp_()).add_(value_at_zero)
+        torch.where(nonnegative, y, rescaled, out=y)
+        del rescaled
+    if mirrored.any():
+        y.mul_(torch.where(mirrored, -1.0, 1.0))
+    return y
 
 
 def _golden_section_search(

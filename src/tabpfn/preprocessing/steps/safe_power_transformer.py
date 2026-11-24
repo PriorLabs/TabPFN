@@ -229,11 +229,24 @@ def _yeojohnson_centered_transform(
         # flips the sign of the result.
         return -_yeojohnson_centered_transform(-x, 2 - lmbda, -log_mean)
 
-    x_at_mean = np.expm1(log_mean)  # the x at which 1 + x equals g
     nonnegative = x >= 0
     out = np.empty_like(x)
+    out[nonnegative], out[~nonnegative] = _power_of_ratio(
+        *_log_ratio(x, log_mean), lmbda, log_mean
+    )
+    return out
 
-    # Values x >= 0: the two lines of the docstring.
+
+def _log_ratio(x: np.ndarray, log_mean: float) -> tuple[np.ndarray, np.ndarray]:
+    """Step 1 of `_yeojohnson_centered_transform`, which does not depend on lambda.
+
+    Returns the logs that step 2, `_power_of_ratio`, takes a power of: one array
+    for the values x >= 0 and one for the other values. Expects ``log_mean >= 0``.
+    """
+    x_at_mean = np.expm1(log_mean)  # the x at which 1 + x equals g
+    nonnegative = x >= 0
+
+    # Values x >= 0:
     #
     # 1. ratio = (1 + x) / g, kept as its log.
     #    For a row near the mean, log(1 + x) and log(g) are almost equal, and
@@ -245,18 +258,29 @@ def _yeojohnson_centered_transform(
     near_mean = (x_pos >= x_at_mean / 2) & (x_pos <= 2 * x_at_mean)
     distance = np.where(near_mean, (x_pos - x_at_mean) / (1 + x_at_mean), 0.0)
     log_ratio = np.where(near_mean, np.log1p(distance), np.log1p(x_pos) - log_mean)
+
+    # Values x < 0 get the log that the classic formula takes a power of.
+    return log_ratio, np.log1p(-x[~nonnegative])
+
+
+def _power_of_ratio(
+    log_ratio: np.ndarray, log_negative: np.ndarray, lmbda: float, log_mean: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Step 2 of `_yeojohnson_centered_transform`, from the two arrays of step 1."""
+    # Values x >= 0:
+    #
     # 2. y = (ratio^lambda - 1) / lambda.
-    out[nonnegative] = _power_transform_from_log(log_ratio, lmbda)
+    y_pos = _power_transform_from_log(log_ratio, lmbda)
 
     # Values x < 0. In a mostly positive column these lie across zero from the
-    # rest, and the classic formula is accurate for them. Compared with the
-    # classic result, step 1 scaled and shifted the values above. The same scale
-    # and shift here make the two parts join at x = 0.
+    # rest, and the classic formula, -((1 - x)^(2 - lambda) - 1) / (2 - lambda),
+    # is accurate for them. Compared with the classic result, step 1 scaled and
+    # shifted the values above. The same scale and shift here make the two parts
+    # join at x = 0.
     value_at_zero = _power_transform_from_log(-log_mean, lmbda)  # y at x = 0
     scale = np.exp(-lmbda * log_mean)
-    classic = _yeojohnson_transform(x[~nonnegative], lmbda)
-    out[~nonnegative] = value_at_zero + scale * classic
-    return out
+    classic = -_power_transform_from_log(log_negative, 2 - lmbda)
+    return y_pos, value_at_zero + scale * classic
 
 
 def _yeojohnson_centered_inverse_transform(
@@ -313,13 +337,25 @@ def _fit_yeojohnson_centered(x: np.ndarray) -> tuple[float, float]:
     # sign of its value, so that a mostly negative column gets a negative mean.
     log_mean = float(np.mean(np.sign(x) * np.log1p(np.abs(x))))
 
+    # Step 1 of the transform does not depend on lambda, so the search computes it
+    # once and repeats only step 2. A mostly negative column is searched as its
+    # mirror image, as in the transform.
+    mirrored = log_mean < 0
+    x_mirrored = -x if mirrored else x
+    logs = _log_ratio(x_mirrored, abs(log_mean))
+    nonnegative = x_mirrored >= 0
+
     def log_likelihood(lmbda: float, data: np.ndarray) -> np.ndarray:
         # The Yeo-Johnson log-likelihood has two terms: one in the variance of the
         # transformed column and one in the sum of its logs (`_yeojohnson_llf`).
         # Dividing by the geometric mean makes the second term constant, so the
         # variance alone decides. A vanishing variance is reported as inf, as
         # there.
-        var = _yeojohnson_centered_transform(data, lmbda, log_mean).var()
+        y = np.empty_like(x)
+        y[nonnegative], y[~nonnegative] = _power_of_ratio(
+            *logs, 2 - lmbda if mirrored else lmbda, abs(log_mean)
+        )
+        var = y.var()
         if not var >= np.finfo(np.float64).tiny:
             return np.array(np.inf)
         return np.array(-data.size / 2 * np.log(var))
