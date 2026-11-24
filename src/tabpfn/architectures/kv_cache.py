@@ -32,6 +32,9 @@ KV_CACHE_PRECISION_DTYPES: dict[str, torch.dtype] = {
     "fp8": FP8_KV_DTYPE,
     # The dtype when no attention backend left the keys and values on its grid.
     "adaptive": QUANTIZED_KV_DTYPE,
+    # 4-bit codes packed two per byte, with their scales; the architecture lays out
+    # the bytes and decodes them.
+    "int4": torch.uint8,
 }
 
 # Low, high, max-magnitude value for each integer dtype.

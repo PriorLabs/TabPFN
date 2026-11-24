@@ -1282,7 +1282,7 @@ class _TestModelRecordingCacheOptions(_TestModelWithKVCache):
 
     @override
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
-        return ("auto", "int8", "fp8", "adaptive")
+        return ("auto", "int8", "fp8", "adaptive", "int4")
 
     @override
     def forward(self, x, y, **kwargs) -> Tensor | tuple[Tensor, TabPFNV3Cache]:
@@ -1331,6 +1331,7 @@ def _cache_build_options(**engine_kwargs: Any) -> PerformanceOptions:
     [
         ("adaptive", torch.int8, True),
         ("int8", torch.int8, False),
+        ("int4", torch.uint8, False),
         ("auto", None, False),
     ],
 )
