@@ -311,8 +311,13 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
             selected.copy_rows_into(rows.start, rows.stop, out)
         else:
             out = selected.rows_at(rows)
-    elif isinstance(rows, slice):
-        out = as_tensor_to_read(table[rows][:, columns])
     else:
-        out = as_tensor_to_read(table[np.ix_(rows, columns)])
+        # Torch gathers on threads; numpy's fancy indexing on one.
+        whole = as_tensor_to_read(table)
+        picked = (
+            whole[rows]
+            if isinstance(rows, slice)
+            else whole.index_select(0, torch.from_numpy(rows))
+        )
+        out = picked.index_select(1, torch.from_numpy(columns))
     return out.to(torch.float32).contiguous()
