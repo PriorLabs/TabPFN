@@ -648,7 +648,11 @@ def validate_and_clean_fit_input(
             passthrough_inf=passthrough_inf,
             overwrite_input=may_overwrite_fit_input(X, X_given),
         )
-        if X.dtype != dtype and dtype == np.float32:
+        if (
+            X.dtype != dtype
+            and dtype == np.float32
+            and _float32_holds_codes(encoder, X, group_feature_index)
+        ):
             X = X.astype(np.float32)
         return (
             X,
@@ -675,16 +679,22 @@ def validate_and_clean_fit_input(
         passthrough_inf=passthrough_inf,
     )
     table = None
-    if isinstance(X, np.ndarray):
-        # Cleaning that encodes no column leaves every value as it is, so the table
-        # is `X` cast, which reads it row by row rather than in strided ranges; the
-        # ranges are read without a table to write into.
-        y_clean, ranges, feature_schema = clean_ranges(None)
-        if not any(encoder.selected_columns() for _, _, encoder in ranges):
-            table = X.astype(dtype)
-    if table is None:
+    try:
+        if isinstance(X, np.ndarray):
+            # Cleaning that encodes no column leaves every value as it is, so the
+            # table is `X` cast, which reads it row by row rather than in strided
+            # ranges; the ranges are read without a table to write into.
+            y_clean, ranges, feature_schema = clean_ranges(None, dtype)
+            if not any(encoder.selected_columns() for _, _, encoder in ranges):
+                table = X.astype(dtype)
+        if table is None:
+            table = np.empty((n_rows, n_columns), dtype=dtype)
+            y_clean, ranges, feature_schema = clean_ranges(table, dtype)
+    except _Float32CannotHoldError:
+        del table
+        dtype = np.dtype(np.float64)
         table = np.empty((n_rows, n_columns), dtype=dtype)
-        y_clean, ranges, feature_schema = clean_ranges(table)
+        y_clean, ranges, feature_schema = clean_ranges(table, dtype)
     warn_on_text(feature_schema)
     return (
         table,
@@ -697,11 +707,12 @@ def validate_and_clean_fit_input(
     )
 
 
-def _clean_ranges(
+def _clean_ranges(  # noqa: PLR0913
     estimator: TabPFNClassifier | TabPFNRegressor,
     X: pd.DataFrame | np.ndarray,
     y: YType,
     table: np.ndarray | None,
+    dtype: np.dtype,
     *,
     names: list[str],
     declared: list[int],
@@ -714,9 +725,14 @@ def _clean_ranges(
     list[tuple[int, int, OrderPreservingColumnTransformer]],
     FeatureSchema,
 ]:
-    """Validate, type and clean `X` a range of columns at a time, into `table`.
+    """Validate, type and clean `X` a range of columns at a time, into `table` of
+    `dtype`.
 
     Returns the validated targets, each range's fitted encoder and the schema.
+
+    Raises:
+        _Float32CannotHoldError: For a float32 table, when a range's codes exceed what
+            float32 holds exactly.
     """
     config = estimator.inference_config_
     ranges: list[tuple[int, int, OrderPreservingColumnTransformer]] = []
@@ -770,11 +786,46 @@ def _clean_ranges(
         cleaned, encoder, schema = clean_data(
             X=part, feature_schema=schema, passthrough_inf=passthrough_inf
         )
+        group = group_feature_index
+        if dtype == np.float32 and not _float32_holds_codes(
+            encoder,
+            cleaned,
+            None if group is None or not start <= group < stop else group - start,
+        ):
+            raise _Float32CannotHoldError
         if table is not None:
             table[:, start:stop] = cleaned
         ranges.append((start, stop, encoder))
         features += schema.features
     return np.asarray(y), ranges, FeatureSchema(features=features)
+
+
+class _Float32CannotHoldError(Exception):
+    """A cleaned range holds codes that float32 does not hold exactly."""
+
+
+_FLOAT32_EXACT_INTEGERS = 2**24
+"""Float32 holds every integer up to this one exactly."""
+
+
+def _float32_holds_codes(
+    encoder: OrderPreservingColumnTransformer,
+    cleaned: np.ndarray,
+    group_column: int | None,
+) -> bool:
+    """Whether float32 holds exactly the codes of `cleaned`'s encoded columns and of
+    its group column, at `group_column`.
+
+    A member re-encodes such codes on the CPU, so codes that round together would
+    merge categories or groups. Codes count up from 0, so the encoder's number of
+    categories bounds them.
+    """
+    categories = getattr(encoder.named_transformers_.get("encoder"), "categories_", [])
+    if any(len(c) - 1 > _FLOAT32_EXACT_INTEGERS for c in categories):
+        return False
+    return group_column is None or not bool(
+        (cleaned[:, group_column] > _FLOAT32_EXACT_INTEGERS).any()
+    )
 
 
 def clean_predict_input(
