@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Decisions the ensemble takes from the fit input, taken before it is narrowed."""
+"""Decisions that the ensemble takes from the fit input before its cast to float32."""
 
 from __future__ import annotations
 
@@ -13,20 +13,20 @@ from tabpfn.preprocessing.steps.remove_constant_features_step import kept_by_fit
 
 @dataclasses.dataclass
 class SourceDecisions:
-    """What the ensemble members decide from the cleaned fit input, decided on it in
-    its own dtype before a float32 table holds it.
+    """What the ensemble members decide from the cleaned fit input, decided in the
+    input's own dtype before the cast to float32.
 
-    Values that differ can round to one float32: a column can then look constant to a
-    member, or the feature-importance model see fewer distinct values, where on the
-    cleaned input they would not.
+    Different values can round to the same float32. Then a column can look constant
+    to a member, or the feature-importance model can see fewer distinct values than
+    the cleaned input has.
     """
 
     member_rows: list[np.ndarray] | None
     """Each member's rows, or `None` when every member reads all of them."""
 
     kept: np.ndarray
-    """Per member, or once for all rows, per column: whether the member's
-    `RemoveConstantFeaturesStep` keeps it."""
+    """Whether the `RemoveConstantFeaturesStep` of a member keeps a column. One row
+    per member, or a single row when every member reads all rows."""
 
     importance_rows: np.ndarray | None
     """The rows the feature-importance model is fit on, `None` without one."""
@@ -41,7 +41,7 @@ class SourceDecisions:
         importance_rows: np.ndarray | None,
         n_columns: int,
     ) -> SourceDecisions:
-        """Decisions for these rows, to be taken a range of columns at a time."""
+        """Empty decisions for these rows, for `take` to fill one range at a time."""
         return cls(
             member_rows=member_rows,
             kept=np.zeros((len(member_rows or [None]), n_columns), dtype=bool),
@@ -58,7 +58,7 @@ class SourceDecisions:
         return self.importance_rows, self.importance_values
 
     def take(self, start: int, cleaned: np.ndarray) -> None:
-        """Take the decisions for the cleaned columns from `start` on."""
+        """Take the decisions for `cleaned`, the columns from `start` on."""
         stop = start + cleaned.shape[1]
         for member, rows in enumerate(self.member_rows or [None]):
             self.kept[member, start:stop] = kept_by_fit(

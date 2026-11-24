@@ -177,9 +177,9 @@ class TabPFNEnsemblePreprocessor:
                 per-row weights. Each member gets the rows it keeps.
             sample_weight_mode: How the model applies ``row_weights``. Required
                 with ``row_weights``.
-            source_decisions: The decisions taken on the fit input before
-                ``X_train`` narrowed it, which the members take in place of their
-                own. They must be for the rows this preprocessor draws.
+            source_decisions: Decisions taken on the fit input before its cast to
+                the dtype of ``X_train``. The members use them instead of their own
+                decisions. They must be for the rows that this preprocessor draws.
         """
         super().__init__()
         if (row_weights is None) != (sample_weight_mode is None):
@@ -436,12 +436,15 @@ def draw_fit_rows(  # noqa: PLR0913
     subsample_samples: int | float | list[np.ndarray] | None,
     sample_subsampling_method: SampleSubsamplingMethod,
 ) -> tuple[list[np.ndarray] | None, np.ndarray | None]:
-    """The rows `TabPFNEnsemblePreprocessor` draws from these arguments for its
-    members, `None` when each reads all of them, and the rows its feature-importance
-    model is fit on, `None` without one.
+    """The rows that `TabPFNEnsemblePreprocessor` draws with these arguments.
 
-    `max_features_per_estimator` may hold the budgets of more members than there
-    are: their importance rows are then drawn though no model is fit.
+    `max_features_per_estimator` can include budgets that no member uses. Then the
+    importance rows can be drawn although the preprocessor fits no importance model.
+
+    Returns:
+        The rows of each member, `None` if every member reads all rows, and the rows
+        that the feature-importance model is fit on, `None` if there is no such
+        model.
     """
     _, rng_features, rng_rows = _ensemble_generators(random_state)
     member_rows = _get_subsample_indices_for_estimators(
@@ -473,9 +476,9 @@ def draw_fit_rows(  # noqa: PLR0913
 def _ensemble_generators(
     random_state: int | np.random.Generator,
 ) -> tuple[np.random.Generator, np.random.Generator, np.random.Generator]:
-    """The generators of the pipelines, the features and the rows.
+    """The random generators for the pipelines, the features and the rows.
 
-    Each has its own seed, so what one draws leaves the others' streams alone.
+    Each generator has its own seed, so draws from one do not change the others.
     """
     _, rng = infer_random_state(random_state)
     seed_pipelines, seed_features, seed_rows = rng.integers(
@@ -496,8 +499,8 @@ def _resolve_feature_subsampling(
     n_total_features: int,
     importance_top_k_count: int | float | Literal["auto"],
 ) -> tuple[FeatureSubsamplingMethod, int, bool]:
-    """The feature subsampling method, the number of top features every member
-    reads, and whether a feature-importance order is fit to rank them.
+    """The resolved feature subsampling method, the number of top features that every
+    member reads, and whether to fit a feature-importance order that ranks them.
     """
     resolved_top_k = _resolve_importance_top_k(
         importance_top_k_count=importance_top_k_count,
@@ -520,7 +523,7 @@ def _resolved_sample_subsampling_method(
     subsample_samples: int | float | list[np.ndarray] | None,
     task_type: Literal["classifier", "regressor"],
 ) -> SampleSubsamplingMethod:
-    """How rows are drawn per member, `"auto"` resolved where it applies."""
+    """The method that draws the rows of each member, with `"auto"` resolved."""
     method = SampleSubsamplingMethod(method)
     if isinstance(subsample_samples, (int, float)):
         return _resolve_sample_subsampling_method(method, task_type=task_type)
@@ -533,8 +536,8 @@ def _take_source_selections(
     member_rows: list[np.ndarray] | None,
     member_columns: Sequence[np.ndarray | None],
 ) -> None:
-    """Have each member's `RemoveConstantFeaturesStep` keep the columns `decisions`
-    kept on its rows.
+    """Make the `RemoveConstantFeaturesStep` of each member keep the columns that
+    `decisions` kept on the rows of that member.
     """
     taken = decisions.member_rows
     if taken is None or member_rows is None:
@@ -544,13 +547,18 @@ def _take_source_selections(
             np.array_equal(t, d) for t, d in zip(taken, member_rows, strict=True)
         )
     if not same_rows:
-        raise RuntimeError("The fit input's decisions were taken for other rows.")
+        raise RuntimeError(
+            "The fit input's decisions were taken for other rows than the members draw."
+        )
     for member, (pipeline, columns) in enumerate(
         zip(pipelines, member_columns, strict=True)
     ):
         step = pipeline.steps[0][0]
         if not isinstance(step, RemoveConstantFeaturesStep):
-            raise TypeError(f"A member's pipeline starts with {type(step).__name__}.")
+            raise TypeError(
+                f"A member's pipeline starts with {type(step).__name__}, not "
+                "RemoveConstantFeaturesStep."
+            )
         kept = decisions.kept[0 if member_rows is None else member]
         step.source_selection = (kept if columns is None else kept[columns]).tolist()
 
@@ -1398,8 +1406,9 @@ def _importance_rows(
     max_samples: int,
     rng: np.random.Generator,
 ) -> np.ndarray | None:
-    """The rows a feature-importance ordering is fit on, at most ``max_samples``
-    and stratified for classification; ``None`` for all of them.
+    """The rows to fit a feature-importance ordering on, or ``None`` for all rows.
+
+    These are at most ``max_samples`` rows, stratified by class for classification.
     """
     if n_samples <= max_samples:
         return None
@@ -1425,8 +1434,9 @@ def _fit_importance_ordering(
 ) -> np.ndarray:
     """Fit one feature-importance ordering, on at most ``max_samples`` rows.
 
-    The subsample is stratified for classification. ``source_rows`` holds rows'
-    indices and their values, read in place of ``X``'s, which must be those rows.
+    The subsample is stratified for classification. ``source_rows`` holds row indices
+    and the values of those rows, which are read instead of ``X``. The indices must be
+    the rows that the ordering is fit on.
     """
     rows = _importance_rows(len(X), y, task_type, max_samples, rng)
     if rows is not None:
@@ -1435,8 +1445,8 @@ def _fit_importance_ordering(
         given, values = source_rows
         if not np.array_equal(np.arange(len(X)) if rows is None else rows, given):
             raise RuntimeError(
-                "The feature-importance rows were read for other rows than it is "
-                "fit on."
+                "The feature-importance values were read for other rows than the "
+                "ordering is fit on."
             )
         return fit_ordering_fn(values, y)
     if rows is not None:
@@ -1469,8 +1479,8 @@ def _compute_feature_importance_order(
         categorical_feature_indices: Column indices of categorical features
             passed natively to LightGBM.
         rng: Random number generator.
-        source_rows: The fit rows' indices and float64 values, read in place of
-            ``X``'s.
+        source_rows: Indices and float64 values of the fit rows, read instead of
+            ``X``.
 
     Returns:
         Array of feature indices sorted from most to least important, shared by

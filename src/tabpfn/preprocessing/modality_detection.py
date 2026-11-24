@@ -87,10 +87,11 @@ def named_feature_modalities(
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
-    """`detect_feature_modalities` with the features' final names, and no warning.
+    """`detect_feature_modalities` for final feature names, without the text warning.
 
-    Each column is decided on its own, so a table can be decided a range of columns
-    at a time, with the names `build_input_feature_names` gives the whole table.
+    The modality of a column depends on that column only. So a table can be processed
+    one range of columns at a time, with the names that `build_input_feature_names`
+    gives the whole table.
     """
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
@@ -300,10 +301,11 @@ def _numeric_n_unique_per_column(
 
 
 _DISTINCT_COUNT_BLOCK_BYTES = 1 << 28
-"""Bytes of columns `_count_distinct_per_column` sorts at a time per thread, at most."""
+"""Maximum bytes of columns that one thread of `_count_distinct_per_column` sorts."""
 _DISTINCT_COUNT_MIN_BLOCK_BYTES = 1 << 22
-"""Bytes of columns below which a block is not split further to give threads work:
-smaller blocks pay more for their thread than the sort saves."""
+"""Minimum bytes of a block. Blocks are not split below this size to give more threads
+work, because a smaller block costs more in thread overhead than the parallel sort
+saves."""
 _DISTINCT_COUNT_BUDGET_BYTES = 4 << 30
 """Bytes the threads of `_count_distinct_per_column` hold at once, at most: each holds
 a block's copy and its sort, about three blocks."""
@@ -325,7 +327,7 @@ def _count_distinct_per_column(
         return np.zeros(0, dtype=np.int64)
     column_bytes = max(1, n_rows * X.itemsize)
     threads = _usable_cpus()
-    # As wide as fills every thread, within the block bounds.
+    # Split the columns evenly across the threads, within the block size bounds.
     width = max(
         1,
         _DISTINCT_COUNT_MIN_BLOCK_BYTES // column_bytes,

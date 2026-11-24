@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""A fit input cleaned a range of columns at a time matches it cleaned whole."""
+"""Cleaning a fit input one range of columns at a time matches cleaning it whole."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ N_TEST = 60
 
 
 def _mixed_frame(n: int, seed: int = 0) -> pd.DataFrame:
-    """One column of each kind the range cleaning has to handle."""
+    """A frame with one column of each kind that range cleaning must handle."""
     rng = np.random.default_rng(seed)
     missing = rng.random(n) < 0.1
     words = np.array(["red", "green", "blue", "cyan"], dtype=object)
@@ -83,8 +83,8 @@ def _fit_predict(
                 tabpfn.base, "cleaned_table_dtype", lambda _: np.dtype(np.float64)
             )
         else:
-            # Ranges of a column or two, so range boundaries fall inside each run of
-            # numeric or non-numeric columns.
+            # Ranges of one or two columns, so that range boundaries fall inside each
+            # run of numeric or non-numeric columns.
             patch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
         model = estimator_cls(
             n_estimators=2,
@@ -120,8 +120,8 @@ def test__mixed_frame__cleaned_by_ranges__matches_the_whole_table(
 def test__clean_data_transform__range_encoders__match_clean_predict_input(
     estimator_cls: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A caller that validates predict input whole and cleans it with
-    `ordinal_encoder_` gets what predict cleans.
+    """Validating predict input whole and cleaning it with `ordinal_encoder_` gives
+    the same table as `predict` cleans.
     """
     monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
     X = _mixed_frame(N_ROWS + N_TEST)
@@ -207,8 +207,9 @@ def test__fit__infinity_after_the_first_range__refused_as_the_whole_table_is(
     refused: bool,
     by_range: bool,
 ) -> None:
-    """A frame with a string column is one array of objects to the whole-table
-    validation, which refuses no infinity; a numeric one is refused, with the hint.
+    """The whole-table validation reads a frame with a string column as one object
+    array and allows its infinities. It refuses an infinity in a numeric frame, with
+    the hint.
     """
     if by_range:
         monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", N_ROWS * 32)

@@ -26,8 +26,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
     no_arithmetic = True
 
     source_selection: list[bool] | None = None
-    """The columns to keep, when decided on the fit input in a wider dtype than the
-    one this step reads: rounding can make the columns it reads look constant."""
+    """The columns to keep, decided on the fit input in a wider dtype than this step
+    reads. Rounding to the narrower dtype can make a column look constant."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,8 +43,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         if self.source_selection is not None:
             if len(self.source_selection) != X.shape[1]:
                 raise ValueError(
-                    f"A selection of {len(self.source_selection)} columns cannot "
-                    f"select from {X.shape[1]}."
+                    f"The selection has {len(self.source_selection)} columns, but "
+                    f"the input has {X.shape[1]}."
                 )
             sel_ = list(self.source_selection)
         elif isinstance(X, torch.Tensor):
@@ -88,10 +88,10 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
 
 
 def kept_by_fit(X: np.ndarray) -> np.ndarray:
-    """Per column of `X`, whether this step, fit in a pipeline on `X`, keeps it.
+    """Per column of `X`, whether this step keeps it after a pipeline fits it on `X`.
 
-    The pipeline hands the step infinities as NaN, and keeps a column whose
-    infinities vary.
+    The pipeline passes infinities to the step as NaN. The pipeline also keeps a
+    column whose infinities vary.
     """
     infinite = np.isinf(X)
     if not infinite.any():
