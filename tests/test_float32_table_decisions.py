@@ -26,6 +26,7 @@ def _fit(
     float64_table: bool,
     by_ranges: bool = False,
     categorical: list[int] | None = None,
+    tuning_config: dict | None = None,
     **config: Any,
 ) -> tuple[np.ndarray, np.ndarray]:
     """The cleaned fit table and the test rows' probabilities."""
@@ -49,6 +50,7 @@ def _fit(
             device="cpu",
             random_state=0,
             categorical_features_indices=categorical,
+            tuning_config=tuning_config,
             inference_config={"ENABLE_GPU_PREPROCESSING": True, **config},
         )
         model.fit(X[:n_rows], y[:n_rows])
@@ -74,6 +76,27 @@ def test__column_constant_only_in_float32__predicts_as_a_float64_table(
     _, expected = _fit(X, y, float64_table=True)
 
     assert table.dtype == np.float32
+    np.testing.assert_array_equal(proba, expected)
+
+
+@pytest.mark.parametrize("by_ranges", [False, True])
+def test__tuning__column_constant_only_in_float32__predicts_as_a_float64_table(
+    by_ranges: bool,
+) -> None:
+    """The holdout models that tuning fits read the table too. The column carries
+    the target in steps too small for float32, so dropping it moves the temperature.
+    """
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, N_ROWS + N_TEST)
+    X = rng.standard_normal((N_ROWS + N_TEST, 6))
+    X[:, 0] = 1.0 + (y + rng.integers(0, 3, len(y))) * 1e-12
+    tuning = {"calibrate_temperature": True}
+
+    _, proba = _fit(
+        X, y, float64_table=False, by_ranges=by_ranges, tuning_config=tuning
+    )
+    _, expected = _fit(X, y, float64_table=True, tuning_config=tuning)
+
     np.testing.assert_array_equal(proba, expected)
 
 

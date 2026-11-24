@@ -228,6 +228,7 @@ def test__fit__infinity_after_the_first_range__refused_as_the_whole_table_is(
             model.fit(X, y)
     else:
         model.fit(X, y)
+        model.predict_proba(X)
 
 
 def test__cleans_by_column_ranges__input_within_one_range__is_read_whole(

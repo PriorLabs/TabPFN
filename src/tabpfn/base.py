@@ -567,6 +567,10 @@ def cleaned_table_dtype(estimator: TabPFNClassifier | TabPFNRegressor) -> np.dty
     different values can round to the same float32. `SourceDecisions` takes those
     decisions before the cast to float32.
     """
+    if getattr(estimator, "tuning_config", None) is not None:
+        # Tuning fits its holdout models on this table, and they take their decisions
+        # on its values, without `SourceDecisions`.
+        return np.dtype(np.float64)
     config = estimator.inference_config_
     reads_float32 = estimator.forced_inference_dtype_ in (
         None,
@@ -930,7 +934,12 @@ def clean_predict_input(
         ord_encoder=getattr(estimator, "ordinal_encoder_", None),
         passthrough_inf=estimator.get_inference_config().PASSTHROUGH_INF,
         validate=functools.partial(
-            ensure_compatible_predict_input_sklearn, estimator=estimator
+            ensure_compatible_predict_input_sklearn,
+            estimator=estimator,
+            # As at fit: the whole-table validation reads a frame as one array, and
+            # `check_array` refuses infinities only in a numeric array.
+            check_finite=not isinstance(X, pd.DataFrame)
+            or _interleaved_dtype(X).kind != "O",
         ),
     )
 

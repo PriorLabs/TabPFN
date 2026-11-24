@@ -177,6 +177,8 @@ def ensure_compatible_fit_inputs(
 def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,
+    *,
+    check_finite: bool = True,
 ) -> np.ndarray:
     """Validate the values of an already-shape-checked, already-date-resolved input.
 
@@ -194,9 +196,7 @@ def ensure_compatible_predict_input_sklearn(
             X,
             accept_sparse=False,
             dtype=None,
-            ensure_all_finite=False
-            if estimator.get_inference_config().PASSTHROUGH_INF
-            else "allow-nan",
+            ensure_all_finite=_ensure_all_finite(estimator, check_finite=check_finite),
             estimator=estimator,
         )
     except (ValueError, TypeError) as e:
@@ -328,7 +328,7 @@ def ensure_compatible_fit_columns(
 def _ensure_all_finite(
     estimator: TabPFNRegressor | TabPFNClassifier, *, check_finite: bool
 ) -> bool | str:
-    """The `ensure_all_finite` argument of `check_array` for fit input X.
+    """The `ensure_all_finite` argument of `check_array` for an input X.
 
     NaN marks a missing value and is allowed. Infinities are refused unless
     `check_finite` is False or `PASSTHROUGH_INF` is set.
