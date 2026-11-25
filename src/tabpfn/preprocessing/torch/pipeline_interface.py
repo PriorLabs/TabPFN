@@ -12,14 +12,13 @@ import time
 from typing import TYPE_CHECKING, Any
 from typing_extensions import override
 
+import numpy as np
 import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import numpy as np
 
 IN_PLACE_BLOCK_BYTES = 1 << 28
 """Bytes of selected columns a columnwise step copies, to its own device or the
@@ -667,19 +666,43 @@ class BlockFit:
     """The new order of all columns, for a step that reorders them."""
 
 
-@dataclasses.dataclass(frozen=True)
 class _CachedTransform:
-    """`step._transform` with the part of a fitted cache, held in host memory, that
-    the cells' columns need.
+    """`step._transform` with a fitted cache held in host memory, of which each block
+    of cells gets the part its columns need.
     """
 
-    step: TorchPreprocessingStep
-    cache: dict[str, torch.Tensor]
+    def __init__(
+        self, step: TorchPreprocessingStep, cache: dict[str, torch.Tensor]
+    ) -> None:
+        self.step = step
+        self.cache = cache
+        self._last: tuple[np.ndarray, dict[str, torch.Tensor]] | None = None
 
     def __call__(self, x: torch.Tensor, positions: np.ndarray) -> torch.Tensor:
-        cache = _slice_column_cache(
-            self.cache, torch.from_numpy(positions), self.step.shared_cache_keys
-        )
+        cache = self._cache_of(positions)
+        # Bounds the step's intermediates on the device to a block of columns.
+        width = max(1, IN_PLACE_BLOCK_BYTES // max(1, x[..., 0].numel() * x.itemsize))
+        if len(positions) <= width:
+            return self._transform(x, cache)
+        for block in _spans(0, len(positions), width):
+            part = _slice_column_cache(cache, block, self.step.shared_cache_keys)
+            x[..., block] = self._transform(x[..., block].contiguous(), part).to(x)
+        return x
+
+    def _cache_of(self, positions: np.ndarray) -> dict[str, torch.Tensor]:
+        """The part of the cache for the columns at `positions`.
+
+        Reads of one input mostly ask for the same columns, so the last part is kept.
+        """
+        if self._last is None or not np.array_equal(self._last[0], positions):
+            index = torch.from_numpy(positions)
+            part = _slice_column_cache(self.cache, index, self.step.shared_cache_keys)
+            self._last = (positions.copy(), part)
+        return self._last[1]
+
+    def _transform(
+        self, x: torch.Tensor, cache: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
         transformed, _, _ = self.step._transform(
             x, fitted_cache=_move_cache_to_device(cache, x.device)
         )
