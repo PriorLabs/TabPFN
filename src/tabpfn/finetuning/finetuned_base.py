@@ -932,6 +932,20 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             X_train, y_train = X, y
             X_val = y_val = None
 
+        # One task per target column; each keeps its own target normalization
+        # and transform, and all of them update the same model.
+        y_tasks = list(y_train.T) if multi_target else [y_train]
+        if self._model_type == "regressor":
+            # A target that is constant in training cannot be standardized, and
+            # its prediction does not depend on the weights, so it is left out of
+            # training. The final regressor still predicts it.
+            y_tasks = [y_k for y_k in y_tasks if np.ptp(y_k) > 0]
+            if not y_tasks:
+                raise TabPFNValidationError(
+                    "Every target is constant in the training data, so there is "
+                    "nothing to finetune on."
+                )
+
         do_validation = X_val is not None
         has_scheduled_validation = (
             self.epochs // validation_frequency
@@ -1058,9 +1072,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             query_size=1,
             y_train=y_train,
         )
-        # One task per target column; each keeps its own target normalization
-        # and transform, and all of them update the same model.
-        y_tasks = list(y_train.T) if multi_target else [y_train]
         for epoch in range(epoch_to_start_from, self.epochs):
             epoch_start_time = _synchronize_epoch_timer()
             # Per-epoch aggregates for cleaner learning curves.

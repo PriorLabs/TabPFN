@@ -26,6 +26,7 @@ from tabpfn.finetuning.train_util import clone_model_for_evaluation
 from tabpfn.regression_metrics import (
     ranked_probability_score_loss_from_bar_logits,
 )
+from tabpfn.validation import has_several_targets
 
 logger = logging.getLogger(__name__)
 
@@ -506,8 +507,11 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     ) -> None:
         """Log evaluation results for regression."""
         mean_train_loss = "N/A" if mean_train_loss is None else f"{mean_train_loss:.4f}"
+        # With several targets, `_evaluate_model` averages standardized errors.
+        metric = "standardized MSE" if has_several_targets(self.y_) else "MSE"
         logger.info(
-            f"📊 Epoch {epoch + 1} Evaluation | Val MSE: {eval_result.primary:.4f}, "
+            f"📊 Epoch {epoch + 1} Evaluation | Val {metric}: "
+            f"{eval_result.primary:.4f}, "
             f"Train Loss: {mean_train_loss}"
         )
 

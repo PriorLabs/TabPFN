@@ -717,6 +717,59 @@ def test__finetuned_tabpfn_regressor__2d_target__one_task_per_target(
     assert finetuned_reg.predict(X_test).shape == (X_test.shape[0], 3)
 
 
+def test__finetuned_tabpfn_regressor__2d_target__constant_column_is_not_trained_on(
+    synthetic_regression_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A target that is constant in training cannot be standardized in the training
+    loop. It is left out of training, and the final regressor still predicts it.
+    """
+    X, y = synthetic_regression_data
+    Y = np.stack([y, 1000.0 * X[:, 1], np.full(len(y), 3.0)], axis=1)
+    Y = Y.astype(np.float32)
+    finetuned_reg = FinetunedTabPFNRegressor(
+        device="cpu",
+        epochs=1,
+        n_finetune_ctx_plus_query_samples=50,
+        random_state=0,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+    )
+
+    with (
+        mock.patch(
+            "tabpfn.architectures.tabpfn_v3_5.TabPFNV3p5.forward",
+            autospec=True,
+            side_effect=create_mock_architecture_forward_regression(),
+        ),
+        mock.patch.object(
+            finetuned_base,
+            "get_preprocessed_dataset_chunks",
+            wraps=finetuned_base.get_preprocessed_dataset_chunks,
+        ) as chunks,
+    ):
+        finetuned_reg.fit(X, Y)
+
+    assert len(chunks.call_args.kwargs["y_raw"]) == 2
+    predictions = finetuned_reg.predict(X[:10])
+    assert predictions.shape == (10, 3)
+    np.testing.assert_allclose(predictions[:, 2], 3.0)
+
+
+@pytest.mark.parametrize("n_targets", [1, 2])
+def test__finetuned_tabpfn_regressor__only_constant_targets__raises_clear_error(
+    synthetic_regression_data: tuple[np.ndarray, np.ndarray],
+    n_targets: int,
+) -> None:
+    X, _ = synthetic_regression_data
+    shape = (len(X),) if n_targets == 1 else (len(X), n_targets)
+    y = np.full(shape, 3.0)
+    finetuned_reg = FinetunedTabPFNRegressor(device="cpu", epochs=1)
+
+    with pytest.raises(TabPFNValidationError, match="constant"):
+        finetuned_reg.fit(X, y)
+
+
 def _evaluate_with_predictions(
     y_train: np.ndarray, y_val: np.ndarray, predictions: np.ndarray
 ) -> EvalResult:
