@@ -454,6 +454,63 @@ def test__overwrite_fit_input__frame__streams_the_largest_block_first(
     )
 
 
+def test__overwrite_fit_input__frame__frees_each_block_after_its_last_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A block that is not streamed is freed once its last range is cleaned, before
+    the ranges of the next block.
+    """
+    rng = np.random.default_rng(0)
+    floats = rng.standard_normal((N_ROWS, 6)).astype(np.float32)
+    ints = rng.integers(0, 1000, (N_ROWS, 2)).astype(np.int32)
+    wide = rng.standard_normal((N_ROWS, 3))
+    given = pd.concat(
+        [
+            pd.DataFrame(floats, copy=False),
+            pd.DataFrame(ints, columns=[6, 7], copy=False),
+            pd.DataFrame(wide, columns=[8, 9, 10], copy=False),
+        ],
+        axis=1,
+        copy=False,
+    )
+    del floats, ints, wide
+    y = _targets(TabPFNClassifier, N_ROWS)
+    # A block's `.values` is a view; the array that owns its memory is its root.
+    # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
+    ints_memory = next(
+        weakref.ref(_root(b.values))
+        for b in given._mgr.blocks
+        if b.values.dtype == np.int32  # noqa: PD011
+    )
+    alive_while_cleaning: list[tuple[str, bool]] = []
+    clean_data = tabpfn.base.clean_data
+
+    def clean_spy(*, X: np.ndarray, **kwargs: Any) -> Any:
+        alive_while_cleaning.append((str(X.dtype), ints_memory() is not None))
+        return clean_data(X=X, **kwargs)
+
+    monkeypatch.setattr(tabpfn.base, "clean_data", clean_spy)
+    # Two columns per range: the int32 block is one range, cleaned before the
+    # float64 block's ranges because it is smaller.
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 2 * N_ROWS * 32)
+
+    with overwrite_fit_input():
+        _gpu_preprocessing_model(TabPFNClassifier).fit(given, y)
+
+    assert ("int32", True) in alive_while_cleaning
+    assert [alive for kind, alive in alive_while_cleaning if kind == "float64"] == [
+        False,
+        False,
+    ]
+
+
+def _root(array: np.ndarray) -> np.ndarray:
+    """The array that owns the memory `array` views."""
+    while isinstance(array.base, np.ndarray):
+        array = array.base
+    return array
+
+
 @pytest.fixture
 def pages_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Released pages read as zeros on every system, as after `madvise` on Linux."""
