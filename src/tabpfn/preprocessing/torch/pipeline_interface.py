@@ -698,11 +698,14 @@ class _CachedTransform:
 
         Reads of one input mostly ask for the same columns, so the last part is kept.
         """
-        if self._last is None or not np.array_equal(self._last[0], positions):
+        # Read once: another thread's read can replace it meanwhile.
+        last = self._last
+        if last is None or not np.array_equal(last[0], positions):
             index = torch.from_numpy(positions)
             part = _slice_column_cache(self.cache, index, self.step.shared_cache_keys)
-            self._last = (positions.copy(), part)
-        return self._last[1]
+            last = (positions.copy(), part)
+            self._last = last
+        return last[1]
 
     def _transform(
         self, x: torch.Tensor, cache: dict[str, torch.Tensor]

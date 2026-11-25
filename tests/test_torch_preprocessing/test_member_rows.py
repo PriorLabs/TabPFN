@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import sys
+import threading
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -275,6 +278,69 @@ def test__row_source__reads_each_member_along_the_batch() -> None:
         atol=0,
         equal_nan=True,
     )
+
+
+def test__read__of_no_columns__is_empty() -> None:
+    members, X_test = _members()
+    member = members[0]
+    rows = MemberRows.fit(
+        member.X_train,
+        member.transform_X_test(X_test),
+        member.gpu_preprocessor,
+        member.feature_schema,
+        torch.device("cpu"),
+    )
+
+    cells = rows.read(slice(0, 10), np.arange(0), torch.device("cpu"))
+
+    assert tuple(cells.shape) == (10, 0)
+
+
+def test__read__from_many_threads__equals_the_host_staged_model_input() -> None:
+    """A model can read one member from several threads, each its own columns."""
+    device = torch.device("cpu")
+    members, X_test = _members()
+    member = members[1]
+    X_test_member = member.transform_X_test(X_test)
+    expected, _ = _host_staged(member, X_test_member, device)
+    rows = MemberRows.fit(
+        member.X_train,
+        X_test_member,
+        member.gpu_preprocessor,
+        member.feature_schema,
+        device,
+    )
+    R, C = rows.shape
+    rng = np.random.default_rng(0)
+    column_sets = [rng.permutation(C)[:k] for k in (3, 5, 3, 7)]
+    failures: list[str] = []
+
+    def read_again_and_again(columns: np.ndarray) -> None:
+        try:
+            for _ in range(100):
+                _assert_equal(
+                    rows.read(slice(0, R), columns, device), expected[:, columns]
+                )
+        except Exception as error:  # noqa: BLE001
+            failures.append(repr(error))
+
+    # Switch threads often, so that reads interleave within a step.
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [
+            threading.Thread(target=read_again_and_again, args=(columns,))
+            for columns in column_sets
+            for _ in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(interval)
+
+    assert not failures, failures[:2]
 
 
 def test__fit__with_a_step_that_reads_whole_rows__is_none() -> None:
