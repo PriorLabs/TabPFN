@@ -189,14 +189,16 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
+        "REGRESSION_TARGET_SIGN_FLIP": False,
+        "AVERAGE_BEFORE_SOFTMAX": False,
     },
     "grouped": GROUPED_PRESET,
 }
 """The named bundles of `inference_config` values that `presets` selects."""
 
 ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5: dict[str, Any] = {
+    **REGRESSION_PRESETS["zero_inflated"],
     "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_quantile_gap",),
-    "REGRESSION_READOUT": "nonnegative_and_capped",
 }
 """What the "zero_inflated" preset sets on the models up to TabPFN-3.5."""
 
@@ -732,9 +734,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - `"zero_inflated"`: for nonnegative targets with many exact zeros,
                   such as claim amounts or demand. It sets
                   `REGRESSION_Y_PREPROCESS_TRANSFORMS` to `("log_fixed_atom",)`
-                  and `REGRESSION_READOUT` to `"nonnegative_and_capped"`. On the
-                  models up to TabPFN-3.5 it sets `log_quantile_gap` as the y
-                  transform.
+                  and `REGRESSION_READOUT` to `"nonnegative_and_capped"`, and
+                  turns off `REGRESSION_TARGET_SIGN_FLIP` and
+                  `AVERAGE_BEFORE_SOFTMAX`. On the models up to TabPFN-3.5 it sets
+                  `log_quantile_gap` as the y transform. An
+                  `average_before_softmax` argument wins over the preset.
                 - `"grouped"`: for `group_col` data, no effect without it. It sets
                   `APPEND_GROUP_AGGREGATES=True` and
                   `POOL_GROUP_PREDICTIONS="mean"`. Both are computed over the rows
@@ -973,7 +977,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.presets,
                 self.inference_config,
                 self.configs_,
+                average_before_softmax=self.average_before_softmax,
             )
+            self.average_before_softmax_ = self.inference_config_.AVERAGE_BEFORE_SOFTMAX
         return byte_size
 
     def _rebuild_raw_space_bardist(self) -> None:
@@ -2964,8 +2970,11 @@ def _apply_presets(
     presets: str | Sequence[str],
     user_config: dict | InferenceConfig | None,
     architecture_configs: Sequence[ArchitectureConfig],
+    *,
+    average_before_softmax: bool | Literal["auto"],
 ) -> InferenceConfig:
-    """`config` with the presets' values, except the keys `user_config` names.
+    """`config` with the presets' values, except the keys `user_config` names, and
+    `AVERAGE_BEFORE_SOFTMAX` if `average_before_softmax` is not "auto".
 
     On a model up to TabPFN-3.5, "zero_inflated" sets
     `ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5` instead.
@@ -2977,6 +2986,8 @@ def _apply_presets(
             "zero_inflated": ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5,
         }
     values = resolve_presets(presets, user_config, registry)
+    if average_before_softmax != "auto":
+        values.pop("AVERAGE_BEFORE_SOFTMAX", None)
     return dataclasses.replace(config, **values)
 
 
