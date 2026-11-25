@@ -77,7 +77,6 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     _maybe_run_gpu_preprocessing,
 )
-from tabpfn.inference_config import OVERRIDABLE_FIELDS
 from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
     RegressorTuningConfig,
@@ -973,7 +972,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         byte_size = initialize_model_variables_helper(self, self.estimator_type)
         if self.presets is not None:
-            self.inference_config_ = _apply_presets(self)
+            self.inference_config_ = _apply_presets(
+                self.inference_config_,
+                self.presets,
+                self.inference_config,
+                self.configs_,
+                average_before_softmax=self.average_before_softmax,
+            )
             self.average_before_softmax_ = self.inference_config_.AVERAGE_BEFORE_SOFTMAX
         return byte_size
 
@@ -2960,25 +2965,30 @@ truncate_above)` of one tuning fold, see
 `TabPFNRegressor._compute_holdout_validation_data`."""
 
 
-def _apply_presets(estimator: TabPFNRegressor) -> InferenceConfig:
-    """`estimator.inference_config_` with the presets' values, except the keys the
-    user names in `inference_config` or by an argument such as
-    `average_before_softmax`.
+def _apply_presets(
+    config: InferenceConfig,
+    presets: str | Sequence[str],
+    user_config: dict | InferenceConfig | None,
+    architecture_configs: Sequence[ArchitectureConfig],
+    *,
+    average_before_softmax: bool | Literal["auto"],
+) -> InferenceConfig:
+    """`config` with the presets' values, except the keys `user_config` names, and
+    `AVERAGE_BEFORE_SOFTMAX` if `average_before_softmax` is not "auto".
 
     On a model up to TabPFN-3.5, "zero_inflated" sets
     `ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5` instead.
     """
     registry = REGRESSION_PRESETS
-    if any(type(c) in ARCHITECTURE_CONFIGS_UP_TO_V3_5 for c in estimator.configs_):
+    if any(type(c) in ARCHITECTURE_CONFIGS_UP_TO_V3_5 for c in architecture_configs):
         registry = {
             **REGRESSION_PRESETS,
             "zero_inflated": ZERO_INFLATED_INFERENCE_CONFIG_UP_TO_V3_5,
         }
-    values = resolve_presets(estimator.presets, estimator.inference_config, registry)
-    for field, (_, argument) in OVERRIDABLE_FIELDS.items():
-        if getattr(estimator, argument) != "auto":
-            values.pop(field, None)
-    return dataclasses.replace(estimator.inference_config_, **values)
+    values = resolve_presets(presets, user_config, registry)
+    if average_before_softmax != "auto":
+        values.pop("AVERAGE_BEFORE_SOFTMAX", None)
+    return dataclasses.replace(config, **values)
 
 
 _zero_share_warning_issued = False
