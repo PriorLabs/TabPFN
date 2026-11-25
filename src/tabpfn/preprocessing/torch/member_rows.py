@@ -13,6 +13,7 @@ its input this way.
 from __future__ import annotations
 
 import dataclasses
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -342,16 +343,38 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
             selected.copy_rows_into(rows.start, rows.stop, out)
         else:
             out = selected.rows_at(rows)
-    else:
-        # Torch gathers with many threads. NumPy fancy indexing uses one thread.
+    elif (
+        isinstance(rows, slice) and len(columns) and bool((np.diff(columns) == 1).all())
+    ):
+        # A run of columns is a slice, which copies much faster than a gather.
+        # A clone: the slice is a view of the table, which the steps write into.
         whole = as_tensor_to_read(table)
-        index = torch.from_numpy(columns)
-        if not isinstance(rows, slice):
-            out = whole[torch.from_numpy(rows)[:, None], index[None, :]]
-        elif len(columns) and bool((np.diff(columns) == 1).all()):
-            # A run of columns is a slice, which copies much faster than a gather.
-            # A clone: the slice is a view of the table, which the steps write into.
-            out = whole[rows, int(columns[0]) : int(columns[-1]) + 1].clone()
-        else:
-            out = whole[rows][:, index]
+        out = whole[rows, int(columns[0]) : int(columns[-1]) + 1].clone()
+    else:
+        out = _gather(as_tensor_to_read(table), rows, torch.from_numpy(columns))
     return out.to(torch.float32).contiguous()
+
+
+def _gather(
+    whole: torch.Tensor, rows: slice | np.ndarray, index: torch.Tensor
+) -> torch.Tensor:
+    """`whole[rows][:, index]`, gathered one block of rows per torch thread.
+
+    `index_select` along columns runs on one thread. Advanced indexing runs on all
+    of them, but does several times the work per thread. So each thread runs
+    `index_select` on its own block.
+    """
+    n_rows = rows.stop - rows.start if isinstance(rows, slice) else len(rows)
+    out = torch.empty((n_rows, len(index)), dtype=whole.dtype)
+    bounds = np.linspace(0, n_rows, torch.get_num_threads() + 1).astype(int)
+
+    def gather_block(start: int, stop: int) -> None:
+        if isinstance(rows, slice):
+            block = whole[rows.start + start : rows.start + stop]
+        else:
+            block = whole.index_select(0, torch.from_numpy(rows[start:stop]))
+        torch.index_select(block, 1, index, out=out[start:stop])
+
+    with ThreadPoolExecutor(len(bounds) - 1) as pool:
+        list(pool.map(gather_block, bounds[:-1].tolist(), bounds[1:].tolist()))
+    return out
