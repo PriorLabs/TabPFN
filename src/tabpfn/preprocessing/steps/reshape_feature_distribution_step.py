@@ -641,6 +641,7 @@ def get_adaptive_preprocessors(
                         SafePowerTransformer(
                             standardize=False,
                             method="yeo-johnson",
+                            relative_to_geometric_mean=True,
                         ),
                     ),
                     make_column_selector("skewed*"),
@@ -684,7 +685,10 @@ def get_all_reshape_feature_distribution_preprocessors(
             PowerTransformer(standardize=False),
         ),
         "safepower": wrap_with_safe_standard_scaler(
-            SafePowerTransformer(standardize=False),
+            # Relative to the geometric mean, columns far from zero, such as
+            # years, do not collapse. After the scaler the output equals the
+            # classic transform's wherever that one is accurate.
+            SafePowerTransformer(standardize=False, relative_to_geometric_mean=True),
         ),
         "power_box": _make_box_cox_safe(
             wrap_with_safe_standard_scaler(

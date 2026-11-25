@@ -12,11 +12,25 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSche
 from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     get_all_reshape_feature_distribution_preprocessors,
 )
+from tabpfn.preprocessing.steps.safe_power_transformer import (
+    _yeojohnson_centered_transform,
+    _yeojohnson_transform,
+)
 from tabpfn.preprocessing.torch.pipeline_interface import TorchPreprocessingPipeline
 from tabpfn.preprocessing.torch.steps import TorchSelectiveSafePowerStep
 from tabpfn.preprocessing.torch.torch_safe_power_transformer import (
     TorchSafePowerTransformer,
 )
+from tests.test_preprocessing.test_power_transformer import (
+    FAR_FROM_ZERO_COLUMNS,
+    make_far_from_zero_columns,
+    make_offset_1e12_columns,
+    make_wide_range_columns,
+)
+from tests.utils import get_pytest_devices
+
+# The transformer computes in float64, which MPS does not have.
+_FLOAT64_DEVICES = [device for device in get_pytest_devices() if device != "mps"]
 
 
 def _make_columns(rng: np.random.Generator, n: int) -> np.ndarray:
@@ -56,6 +70,99 @@ def test__fit_transform__matches_cpu_safepower(n_samples: int, nan_fraction: flo
         cache["lambdas"].numpy(), cpu.steps[0][1].lambdas_, rtol=1e-6, atol=1e-7
     )
     np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("kind", list(FAR_FROM_ZERO_COLUMNS))
+@pytest.mark.parametrize("n_samples", [100, 1000])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("device", _FLOAT64_DEVICES)
+def test__fit_transform__far_from_zero__informative_and_matches_cpu(
+    kind: str, n_samples: int, dtype: type[np.floating], device: str
+):
+    """Year-like columns keep unit variance and match the CPU ``safepower`` preset.
+
+    The model passes float32 features, which the transformer widens to float64. On
+    the GPU runner the transformer runs on CUDA and the reference on the CPU.
+    """
+    x = make_far_from_zero_columns(kind, n_samples).astype(dtype)
+
+    cpu = get_all_reshape_feature_distribution_preprocessors(n_samples)["safepower"]
+    expected = cpu.fit_transform(x.astype(np.float64))
+
+    torch_pt = TorchSafePowerTransformer()
+    x_torch = torch.from_numpy(x).to(device)
+    result = torch_pt.transform(x_torch, fitted_cache=torch_pt.fit(x_torch))
+    result = result.cpu().numpy()
+
+    assert result.dtype == dtype
+    np.testing.assert_allclose(result.std(axis=0), 1.0, rtol=1e-5)
+    np.testing.assert_allclose(result, expected, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "make_columns", [make_wide_range_columns, make_offset_1e12_columns]
+)
+def test__fit_transform__extreme_columns__matches_cpu(make_columns):
+    """Values far below, or very close to, the geometric mean match the CPU preset."""
+    x = make_columns(200)
+
+    cpu = get_all_reshape_feature_distribution_preprocessors(len(x))["safepower"]
+    expected = cpu.fit_transform(x.copy())
+
+    torch_pt = TorchSafePowerTransformer()
+    x_torch = torch.from_numpy(x)
+    result = torch_pt.transform(x_torch, fitted_cache=torch_pt.fit(x_torch))
+
+    np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5, atol=1e-5)
+
+
+def _unscaled_cache(lambdas: np.ndarray) -> dict[str, torch.Tensor]:
+    """A fitted cache whose scaler is the identity."""
+    zeros = torch.zeros(len(lambdas), dtype=torch.float64)
+    return {
+        "lambdas": torch.from_numpy(lambdas),
+        "impute_mean": zeros,
+        "mean": zeros,
+        "scale": torch.ones_like(zeros),
+    }
+
+
+@pytest.mark.parametrize("lmbda", [0.0, 2.0, 0.5])
+@pytest.mark.parametrize("log_means", [[0.7, -0.7, 0.0], [0.7]])
+def test__transform__matches_cpu_centered_transform(
+    lmbda: float, log_means: list[float]
+):
+    """Same values as the CPU transform, also in the log limits and across zero.
+
+    With one column, only one side of zero is in its log limit.
+    """
+    x = np.linspace(-3.0, 3.0, 25)
+    log_means = np.array(log_means)
+    expected = np.column_stack(
+        [_yeojohnson_centered_transform(x, lmbda, log_mean) for log_mean in log_means]
+    )
+    cache = _unscaled_cache(np.full(len(log_means), lmbda))
+    cache["log_means"] = torch.from_numpy(log_means)
+
+    result = TorchSafePowerTransformer().transform(
+        torch.from_numpy(np.tile(x[:, None], (1, len(log_means)))), fitted_cache=cache
+    )
+
+    np.testing.assert_allclose(result.numpy(), expected, rtol=1e-12, atol=1e-12)
+
+
+def test__transform__cache_without_log_means__is_the_classic_transform():
+    """A cache fitted before the log means existed keeps its meaning."""
+    x = np.linspace(-3.0, 3.0, 25)
+    lambdas = np.array([0.0, 2.0, 0.5, -1.5])
+    expected = np.column_stack([_yeojohnson_transform(x, lmbda) for lmbda in lambdas])
+
+    result = TorchSafePowerTransformer().transform(
+        torch.from_numpy(np.tile(x[:, None], (1, len(lambdas)))),
+        fitted_cache=_unscaled_cache(lambdas),
+    )
+
+    np.testing.assert_allclose(result.numpy(), expected, rtol=1e-12, atol=1e-12)
 
 
 def test__transform__keeps_shape_and_dtype_of_3d_input():

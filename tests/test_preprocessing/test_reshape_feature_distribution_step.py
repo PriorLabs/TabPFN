@@ -9,6 +9,7 @@ from typing import Literal
 import numpy as np
 import pytest
 from sklearn.base import clone
+from sklearn.preprocessing import PowerTransformer
 
 from tabpfn.preprocessing.datamodel import (
     Feature,
@@ -19,6 +20,10 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     get_all_reshape_feature_distribution_preprocessors,
+)
+from tests.test_preprocessing.test_power_transformer import (
+    FAR_FROM_ZERO_COLUMNS,
+    make_far_from_zero_columns,
 )
 
 
@@ -667,3 +672,54 @@ def test__reshape__transform__estimator_without_column_order_attribute():
 
     del step.data_is_unchanged_, step.column_order_
     np.testing.assert_array_equal(step.transform(X).X, expected)
+
+
+@pytest.mark.parametrize("kind", list(FAR_FROM_ZERO_COLUMNS))
+@pytest.mark.parametrize("n_samples", [100, 1000])
+def test__safepower__far_from_zero__columns_stay_informative(kind: str, n_samples: int):
+    """Year-like columns keep unit variance and every distinction between rows."""
+    X = make_far_from_zero_columns(kind, n_samples)
+
+    preset = get_all_reshape_feature_distribution_preprocessors(n_samples)["safepower"]
+    result = preset.fit_transform(X.copy())
+
+    np.testing.assert_allclose(result.std(axis=0), 1.0, rtol=1e-6)
+    order = np.argsort(X, axis=0)
+    sorted_input = np.take_along_axis(X, order, axis=0)
+    sorted_result = np.take_along_axis(result, order, axis=0)
+    # Rows that differ in the input differ in the output, in the same order.
+    assert (
+        (np.diff(sorted_result, axis=0) > 0) == (np.diff(sorted_input, axis=0) > 0)
+    ).all()
+
+
+def test__safepower__columns_near_zero__same_as_power_transformer():
+    """The preset is the Yeo-Johnson transform of the columns as they are.
+
+    Its lambda is not invariant to shifting or rescaling a column first.
+    """
+    rng = np.random.default_rng(42)
+    X = np.column_stack(
+        [
+            rng.normal(0, 1, 200),
+            rng.exponential(1, 200),
+            100 * rng.lognormal(0, 1, 200),
+            -rng.lognormal(0, 1, 200),
+            np.concatenate([rng.normal(5, 2, 100), rng.normal(-3, 1, 100)]),
+        ]
+    )
+    X_test = 1.5 * X + 0.5
+    sklearn_transformer = PowerTransformer(standardize=True).fit(X)
+
+    preset = get_all_reshape_feature_distribution_preprocessors(len(X))["safepower"]
+    result = preset.fit_transform(X.copy())
+
+    np.testing.assert_allclose(
+        result, sklearn_transformer.transform(X), rtol=1e-6, atol=1e-7
+    )
+    np.testing.assert_allclose(
+        preset.transform(X_test.copy()),
+        sklearn_transformer.transform(X_test),
+        rtol=1e-6,
+        atol=1e-7,
+    )
