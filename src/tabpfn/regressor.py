@@ -190,9 +190,6 @@ REGRESSION_PRESETS: dict[str, dict[str, Any]] = {
     "zero_inflated": {
         "REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log_fixed_atom",),
         "REGRESSION_READOUT": "nonnegative_and_capped",
-        # A sign flip moves a member's zeros off the transform's fixed atom. Logit
-        # averaging is a geometric mean, so one member with little mass at zero
-        # removes the ensemble's.
         "REGRESSION_TARGET_SIGN_FLIP": False,
         "AVERAGE_BEFORE_SOFTMAX": False,
     },
