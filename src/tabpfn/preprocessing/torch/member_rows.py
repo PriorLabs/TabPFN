@@ -22,19 +22,12 @@ import torch
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
-    TorchPreprocessingStep,
-    _join_column_caches,
-    column_blocks,
     runs_staged,
-)
-from tabpfn.preprocessing.torch.steps import (
-    TorchRandomSignFlipStep,
-    TorchShuffleFeaturesStep,
 )
 from tabpfn.utils import as_tensor_to_read
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
@@ -42,31 +35,12 @@ Table = np.ndarray | SharedColumnsTable
 
 
 @dataclasses.dataclass(frozen=True)
-class _ColumnwiseOp:
-    """A columnwise step fitted on `columns`, input columns in its cache's order."""
+class _Op:
+    """A fitted step's transform of some input columns."""
 
-    step: TorchPreprocessingStep
-    columns: np.ndarray
-    cache: dict[str, torch.Tensor]
+    transform: Callable[[torch.Tensor, np.ndarray], torch.Tensor]
     position: np.ndarray
-    """Per input column, its position in `columns`, or -1."""
-
-
-@dataclasses.dataclass(frozen=True)
-class _SignsOp:
-    """Signs to multiply into `columns`, input columns in the order of `signs`."""
-
-    columns: np.ndarray
-    signs: torch.Tensor
-    position: np.ndarray
-    """Per input column, its position in `columns`, or -1."""
-
-
-def _position_map(columns: np.ndarray, num_columns: int) -> np.ndarray:
-    """Per input column of `num_columns`, its position in `columns`, or -1."""
-    position = np.full(num_columns, -1)
-    position[columns] = np.arange(len(columns))
-    return position
+    """Per input column, its position among the step's target columns, or -1."""
 
 
 class MemberRows:
@@ -81,7 +55,7 @@ class MemberRows:
         self,
         tables: tuple[Table, Table],
         order: np.ndarray,
-        ops: list[_ColumnwiseOp | _SignsOp],
+        ops: list[_Op],
         feature_schema: FeatureSchema,
     ) -> None:
         self.tables = tables
@@ -106,76 +80,48 @@ class MemberRows:
     ) -> MemberRows | None:
         """Fit `gpu_preprocessor` on `X_train` one block of columns at a time.
 
-        Returns None if a step is not columnwise, a sign flip or a shuffle. Such a step
-        reads whole rows, so the member's input must be built whole.
+        Returns None if a step cannot fit by blocks. Such a step reads whole rows, so
+        the member's input must be built whole.
         """
         member = cls((X_train, X_test), np.arange(X_train.shape[1]), [], feature_schema)
         if gpu_preprocessor is None:
             return member
         if any(
-            not _reads_by_blocks(step)
-            and step.target_columns(feature_schema, modalities)
+            not step.fits_by_blocks and step.target_columns(feature_schema, modalities)
             for step, modalities in gpu_preprocessor.steps
         ):
-            # A shuffle keeps the set of columns each step targets, so the schema
+            # A reordering keeps the set of columns each step targets, so the schema
             # before the steps tells which steps run.
             return None
-        # The pipeline stages an input held off `device`, as the host tables are. The
-        # other columns in a block can change how a column's fitted values round, so
-        # each columnwise step fits on the pipeline's blocks.
+        # The pipeline stages an input held off `device`, as the host tables are.
         staged = runs_staged(torch.device("cpu"), device)
-        itemsize = np.dtype(np.float32).itemsize
         schema = feature_schema
         for step, modalities in gpu_preprocessor.steps:
             targets = step.target_columns(schema, modalities)
             if not targets:
                 continue
-            if isinstance(step, TorchShuffleFeaturesStep):
-                # The shuffle and the sign flip fit on the shape of the input only.
-                empty = torch.empty((0, 1, len(member.order)))
-                permutation = step._fit(empty)["permutation"].tolist()
-                member.order = member.order[permutation]
-                schema = schema.apply_permutation(permutation)
-            elif isinstance(step, TorchRandomSignFlipStep):
-                signs = step._fit(torch.empty((0, 1, len(targets))))["signs"]
-                signs = signs.reshape(-1)
-                columns = member.order[targets]
-                member.ops.append(
-                    _SignsOp(columns, signs, _position_map(columns, len(member.order)))
+            columns = member.order[targets]
+
+            def read_train(block: slice, columns: np.ndarray = columns) -> torch.Tensor:
+                return member._read_input(
+                    slice(0, member.num_train), columns[block], device, infinities=False
                 )
-            else:
-                columns = member.order[targets]
-                plan = column_blocks(
-                    step,
-                    len(columns),
-                    member.shape[0],
-                    member.num_train,
-                    itemsize,
-                    staged=staged,
-                )
-                parts = [
-                    step._fit(
-                        member._read_input(
-                            slice(0, member.num_train),
-                            columns[block],
-                            device,
-                            infinities=False,
-                        )
-                    )
-                    for block in plan.fit_blocks()
-                ]
-                cache = _join_column_caches(parts, step.shared_cache_keys)
-                # Kept in host memory: the model sizes its chunks from the free memory
-                # of `device`, which must be what the input built whole leaves free.
-                cpu_cache = {key: value.cpu() for key, value in cache.items()}
-                member.ops.append(
-                    _ColumnwiseOp(
-                        step,
-                        columns,
-                        cpu_cache,
-                        _position_map(columns, len(member.order)),
-                    )
-                )
+
+            fitted = step.fit_by_blocks(
+                read_train,
+                len(columns),
+                member.shape[0],
+                member.num_train,
+                cell_bytes=np.dtype(np.float32).itemsize,
+                staged=staged,
+            )
+            if fitted.transform is not None:
+                position = np.full(len(member.order), -1)
+                position[columns] = np.arange(len(columns))
+                member.ops.append(_Op(fitted.transform, position))
+            if fitted.permutation is not None:
+                member.order = member.order[fitted.permutation]
+                schema = schema.apply_permutation(fitted.permutation)
         member.feature_schema = schema.clear_gpu_transform_marks()
         return member
 
@@ -212,20 +158,8 @@ class MemberRows:
         for op in self.ops:
             of = op.position[columns]
             at = np.flatnonzero(of >= 0)
-            of = of[at]
-            if not len(at):
-                continue
-            if isinstance(op, _SignsOp):
-                cells[:, :, at] *= op.signs[of].to(cells)
-                continue
-            cache = {
-                key: (value if key in op.step.shared_cache_keys else value[..., of]).to(
-                    cells.device
-                )
-                for key, value in op.cache.items()
-            }
-            transformed, _, _ = op.step._transform(cells[:, :, at], fitted_cache=cache)
-            cells[:, :, at] = transformed.to(cells)
+            if len(at):
+                cells[:, :, at] = op.transform(cells[:, :, at], of[at]).to(cells)
         if has_inf and infinities:
             cells[infinite] = values
         return cells
@@ -281,13 +215,6 @@ def _rows(rows: slice | torch.Tensor, n_rows: int) -> slice | np.ndarray:
     return rows.cpu().numpy()
 
 
-def _reads_by_blocks(step: TorchPreprocessingStep) -> bool:
-    """Whether `MemberRows` can apply `step` to any block of cells."""
-    return step.columnwise or isinstance(
-        step, (TorchShuffleFeaturesStep, TorchRandomSignFlipStep)
-    )
-
-
 def _rows_of(
     tables: tuple[Table, Table],
     num_train: int,
@@ -296,35 +223,29 @@ def _rows_of(
 ) -> torch.Tensor:
     """`columns` at `rows` of the train table followed by the test table, float32."""
     if isinstance(rows, slice):
-        train: slice | np.ndarray = slice(
-            min(rows.start, num_train), min(rows.stop, num_train)
-        )
-        test: slice | np.ndarray = slice(
-            max(rows.start, num_train) - num_train,
-            max(rows.stop, num_train) - num_train,
-        )
-        sizes = (train.stop - train.start, test.stop - test.start)
-    else:
-        in_train = rows < num_train
-        if in_train.all():
+        if rows.stop <= num_train:
             return _cells(tables[0], rows, columns)
-        if not in_train.any():
-            return _cells(tables[1], rows - num_train, columns)
-        # The train and test rows can interleave: gather each into its places.
-        out = torch.empty((len(rows), len(columns)), dtype=torch.float32)
-        out[torch.from_numpy(in_train)] = _cells(tables[0], rows[in_train], columns)
-        out[torch.from_numpy(~in_train)] = _cells(
-            tables[1], rows[~in_train] - num_train, columns
+        test = slice(max(rows.start, num_train) - num_train, rows.stop - num_train)
+        if rows.start >= num_train:
+            return _cells(tables[1], test, columns)
+        return torch.cat(
+            [
+                _cells(tables[0], slice(rows.start, num_train), columns),
+                _cells(tables[1], test, columns),
+            ]
         )
-        return out
-    parts = [
-        _cells(table, part, columns)
-        for table, part, size in zip(tables, (train, test), sizes, strict=True)
-        if size
-    ]
-    if len(parts) == 1:
-        return parts[0]
-    return torch.cat(parts) if parts else torch.empty((0, len(columns)))
+    in_train = rows < num_train
+    if in_train.all():
+        return _cells(tables[0], rows, columns)
+    if not in_train.any():
+        return _cells(tables[1], rows - num_train, columns)
+    # The train and test rows can interleave: gather each into its places.
+    out = torch.empty((len(rows), len(columns)), dtype=torch.float32)
+    out[torch.from_numpy(in_train)] = _cells(tables[0], rows[in_train], columns)
+    out[torch.from_numpy(~in_train)] = _cells(
+        tables[1], rows[~in_train] - num_train, columns
+    )
+    return out
 
 
 def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch.Tensor:
@@ -347,9 +268,11 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
         isinstance(rows, slice) and len(columns) and bool((np.diff(columns) == 1).all())
     ):
         # A run of columns is a slice, which copies much faster than a gather.
-        # A clone: the slice is a view of the table, which the steps write into.
+        # A copy: the slice is a view of the table, which the steps write into.
         whole = as_tensor_to_read(table)
-        out = whole[rows, int(columns[0]) : int(columns[-1]) + 1].clone()
+        out = whole[rows, int(columns[0]) : int(columns[-1]) + 1].to(
+            torch.float32, memory_format=torch.contiguous_format, copy=True
+        )
     else:
         out = _gather(as_tensor_to_read(table), rows, torch.from_numpy(columns))
     return out.to(torch.float32).contiguous()

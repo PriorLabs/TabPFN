@@ -18,7 +18,6 @@ from tabpfn.preprocessing.torch.member_rows import (
     MemberRows,
     MemberRowSource,
     _cells,
-    _SignsOp,
 )
 
 N_TRAIN = 120
@@ -314,6 +313,3 @@ def test__fit__on_cuda__leaves_nothing_on_the_device() -> None:
 
         assert rows is not None
         assert torch.cuda.memory_allocated(device) == before
-        for op in rows.ops:
-            held = [op.signs] if isinstance(op, _SignsOp) else op.cache.values()
-            assert all(tensor.device.type == "cpu" for tensor in held)

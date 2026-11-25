@@ -9,12 +9,17 @@ import dataclasses
 import functools
 import inspect
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from typing_extensions import override
 
 import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import numpy as np
 
 IN_PLACE_BLOCK_BYTES = 1 << 28
 """Bytes of selected columns a columnwise step copies, to its own device or the
@@ -169,6 +174,56 @@ class TorchPreprocessingStep(abc.ABC):
         if fitted_cache is None:
             fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+    @property
+    def fits_by_blocks(self) -> bool:
+        """Whether `fit_by_blocks` can fit the step."""
+        return self.columnwise
+
+    def fit_by_blocks(
+        self,
+        read_train: Callable[[slice], torch.Tensor],
+        num_columns: int,
+        num_rows: int,
+        num_train_rows: int,
+        *,
+        cell_bytes: int,
+        staged: bool,
+    ) -> BlockFit:
+        """Fit the step to transform any block of cells of its target columns.
+
+        Args:
+            read_train: The train rows of a block of target columns, by position,
+                `(num_train_rows, 1, block)`, as the steps before this one leave them.
+            num_columns: The number of target columns.
+            num_rows: The rows of the whole input, train rows first.
+            num_train_rows: The train rows of the whole input.
+            cell_bytes: The bytes of one cell of the input.
+            staged: Whether the pipeline would stage the input: see `column_blocks`.
+
+        The fitted values equal those the pipeline fits on the whole input.
+        """
+        if not self.columnwise:
+            raise TypeError(f"{type(self).__name__} reads whole rows.")
+        # The other columns in a block can change how a column's fitted values round,
+        # so the step fits on the pipeline's blocks.
+        plan = column_blocks(
+            self,
+            num_columns,
+            num_rows,
+            num_train_rows,
+            cell_bytes,
+            staged=staged,
+        )
+        cache = _join_column_caches(
+            [self._fit(read_train(block)) for block in plan.fit_blocks()],
+            self.shared_cache_keys,
+        )
+        # In host memory: a model that reads the cells sizes its chunks from the free
+        # memory of the device, which must be what the input built whole leaves free.
+        return BlockFit(
+            _CachedTransform(self, _move_cache_to_device(cache, torch.device("cpu")))
+        )
 
     def _fit_column_group(self, num_train_rows: int) -> int:  # noqa: ARG002
         """Columns that a columnwise step's fit reads together, for batch size 1.
@@ -599,6 +654,39 @@ def _fit_transform_on_device(
 
 
 @dataclasses.dataclass(frozen=True)
+class BlockFit:
+    """A step fitted to transform any block of cells of its target columns."""
+
+    transform: Callable[[torch.Tensor, np.ndarray], torch.Tensor] | None
+    """Transforms `(rows, 1, len(positions))` cells of the target columns at
+    `positions`, and may write into them. None for a step that only reorders the
+    columns.
+    """
+
+    permutation: list[int] | None = None
+    """The new order of all columns, for a step that reorders them."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _CachedTransform:
+    """`step._transform` with the part of a fitted cache, held in host memory, that
+    the cells' columns need.
+    """
+
+    step: TorchPreprocessingStep
+    cache: dict[str, torch.Tensor]
+
+    def __call__(self, x: torch.Tensor, positions: np.ndarray) -> torch.Tensor:
+        cache = _slice_column_cache(
+            self.cache, torch.from_numpy(positions), self.step.shared_cache_keys
+        )
+        transformed, _, _ = self.step._transform(
+            x, fitted_cache=_move_cache_to_device(cache, x.device)
+        )
+        return transformed
+
+
+@dataclasses.dataclass(frozen=True)
 class ColumnBlocks:
     """The blocks of a columnwise step's target columns, by position, that the
     pipeline runs the step on.
@@ -698,9 +786,11 @@ def _join_column_caches(
 
 
 def _slice_column_cache(
-    cache: dict[str, torch.Tensor], columns: slice, shared_keys: frozenset[str]
+    cache: dict[str, torch.Tensor],
+    columns: slice | torch.Tensor,
+    shared_keys: frozenset[str],
 ) -> dict[str, torch.Tensor]:
-    """Takes the part of a columnwise step's cache that covers a block of columns."""
+    """Takes the part of a columnwise step's cache that covers some of its columns."""
     return {
         key: value if key in shared_keys else value[..., columns]
         for key, value in cache.items()
