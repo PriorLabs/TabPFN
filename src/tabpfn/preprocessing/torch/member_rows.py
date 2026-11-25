@@ -368,12 +368,17 @@ def _gather(
     out = torch.empty((n_rows, len(index)), dtype=whole.dtype)
     bounds = np.linspace(0, n_rows, torch.get_num_threads() + 1).astype(int)
 
+    # Inference mode is per thread, and `out` is an inference tensor when the caller
+    # runs in that mode: each thread must write to it in the same mode.
+    inference = torch.is_inference_mode_enabled()
+
     def gather_block(start: int, stop: int) -> None:
-        if isinstance(rows, slice):
-            block = whole[rows.start + start : rows.start + stop]
-        else:
-            block = whole.index_select(0, torch.from_numpy(rows[start:stop]))
-        torch.index_select(block, 1, index, out=out[start:stop])
+        with torch.inference_mode(inference):
+            if isinstance(rows, slice):
+                block = whole[rows.start + start : rows.start + stop]
+            else:
+                block = whole.index_select(0, torch.from_numpy(rows[start:stop]))
+            torch.index_select(block, 1, index, out=out[start:stop])
 
     with ThreadPoolExecutor(len(bounds) - 1) as pool:
         list(pool.map(gather_block, bounds[:-1].tolist(), bounds[1:].tolist()))

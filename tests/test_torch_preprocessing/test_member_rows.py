@@ -208,6 +208,18 @@ def _record_fits(
     return fits
 
 
+@pytest.mark.parametrize("rows", [slice(1, 7), np.array([0, 3, 5])])
+def test__cells__in_inference_mode__gathers_the_cells(rows: slice | np.ndarray) -> None:
+    """The model reads its input inside `torch.inference_mode`."""
+    table = np.arange(40, dtype=np.float32).reshape(8, 5)
+    columns = np.array([4, 0, 2])
+
+    with torch.inference_mode():
+        cells = _cells(table, rows, columns)
+
+    np.testing.assert_array_equal(cells.numpy(), table[rows][:, columns])
+
+
 def test__cells__of_whole_rows__does_not_share_the_tables_memory() -> None:
     """The steps write into the cells a read returns."""
     table = np.zeros((4, 3), dtype=np.float32)
