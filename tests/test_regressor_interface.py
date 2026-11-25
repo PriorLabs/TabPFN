@@ -23,6 +23,7 @@ import sklearn.datasets
 import torch
 from sklearn import config_context
 from sklearn.base import check_is_fitted
+from sklearn.exceptions import NotFittedError
 from sklearn.metrics import r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -3485,6 +3486,36 @@ def test__fit__2d_target_with_an_invalid_column__keeps_the_earlier_fit(
         reg.fit(X, Y_bad)
 
     np.testing.assert_array_equal(reg.predict(X[30:]), before)
+
+
+def test__fit__2d_target_failing_in_a_later_target__leaves_no_partial_fit(
+    multi_target_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """A later column that passes the check on all of `y` but fails in its own
+    fit must leave an earlier fit usable, and a fresh regressor unfitted.
+    """
+    X, Y = multi_target_data
+    Y = np.abs(Y) + 1.0
+    params = {
+        "n_estimators": 1,
+        "device": "cpu",
+        "random_state": 0,
+        "inference_config": {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("log",)},
+    }
+    Y_bad = Y.copy()
+    Y_bad[0, 1] = -1.0
+    reg = TabPFNRegressor(**params).fit(X[:30], Y[:30])
+    before = reg.predict(X[30:])
+
+    with pytest.raises(ValueError, match="strictly positive"):
+        reg.fit(X, Y_bad)
+
+    np.testing.assert_array_equal(reg.predict(X[30:]), before)
+    fresh = TabPFNRegressor(**params)
+    with pytest.raises(ValueError, match="strictly positive"):
+        fresh.fit(X, Y_bad)
+    with pytest.raises(NotFittedError):
+        fresh.predict(X)
 
 
 def test__to__2d_target__moves_the_regressor_and_its_per_target_regressors(

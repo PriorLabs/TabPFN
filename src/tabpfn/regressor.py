@@ -1792,26 +1792,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         loads the model once and holds it. Every per-target regressor gets it by
         reference, along with its copies on each device.
         """
-        # Check the targets before the earlier fit is dropped below, so that a
-        # rejected `y` leaves that fit usable. The per-target fits check `X`.
+        # The per-target fits check `X`; check all of `y` before loading the model.
         y = check_array(y, dtype="numeric", ensure_all_finite=True, input_name="y")
         check_consistent_length(X, y)
-        # Only the model and the per-target regressors live on this regressor, so
-        # nothing an earlier single-target fit set may stay behind.
-        for name in [n for n in vars(self) if n.endswith("_") and n[0] != "_"]:
-            delattr(self, name)
-        self._initialize_model_variables()
+        # Load the model into a fresh regressor and change this one only once every
+        # target has fitted, so that a failed fit leaves any earlier fit usable.
         params = self.get_params(deep=False)
+        loaded = type(self)(**params)
+        loaded._initialize_model_variables()
         params["model_path"] = [
             ModelSpecs(
                 model=model,
                 architecture_config=config,
-                inference_config=self.inference_config_,
-                norm_criterion=self.znorm_space_bardist_,
+                inference_config=loaded.inference_config_,
+                norm_criterion=loaded.znorm_space_bardist_,
             )
-            for model, config in zip(self.models_, self.configs_, strict=True)
+            for model, config in zip(loaded.models_, loaded.configs_, strict=True)
         ]
-        model_caches = [_PerDeviceModelCache(model) for model in self.models_]
+        model_caches = [_PerDeviceModelCache(model) for model in loaded.models_]
         target_estimators = []
         for y_k in y.T:
             estimator = type(self)(**params)
@@ -1824,8 +1822,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     label_reliability=label_reliability,
                 )
             )
-        # Set only once every target fitted, so a failed fit leaves no regressor
-        # that predicts some of the targets.
+        # Only the model and the per-target regressors live on this regressor, so
+        # nothing an earlier single-target fit set may stay behind.
+        for name in [n for n in vars(self) if n.endswith("_") and n[0] != "_"]:
+            delattr(self, name)
+        for name, value in vars(loaded).items():
+            if name.endswith("_") and name[0] != "_":
+                setattr(self, name, value)
         self.target_estimators_ = target_estimators
         self.n_outputs_ = y.shape[1]
         self.feature_names_in_, self.n_features_in_ = extract_input_shape(X)
