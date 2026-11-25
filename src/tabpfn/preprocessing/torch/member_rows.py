@@ -157,12 +157,14 @@ class MemberRows:
         for op in self.ops:
             of = op.position[columns]
             at = np.flatnonzero(of >= 0)
+            if not len(at):
+                continue
             if len(at) == len(columns):
                 # The op reads every column: it transforms the cells themselves.
                 out = op.transform(cells, of)
                 if out is not cells:
                     cells.copy_(out)
-            elif len(at):
+            else:
                 cells[:, :, at] = op.transform(cells[:, :, at], of[at]).to(cells)
         if has_inf and infinities:
             cells[infinite] = values
@@ -171,7 +173,7 @@ class MemberRows:
 
 class MemberRowSource:
     """The model input `(rows, members, columns)` of members with one input shape,
-    read one block of cells at a time.
+    read one block of cells at a time, for a model's `x_host`.
     """
 
     def __init__(self, members: Sequence[MemberRows]) -> None:
