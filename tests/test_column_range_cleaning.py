@@ -566,6 +566,10 @@ def test__overwrite_fit_input__frame__streams_the_largest_block_first(
     )
 
 
+@pytest.mark.skipif(
+    DELETING_COLUMNS_COPIES,
+    reason="Deleting a column copies its block, so blocks are freed only at the end",
+)
 def test__overwrite_fit_input__frame__frees_each_block_after_its_last_range(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
