@@ -62,6 +62,48 @@ def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray
     return out
 
 
+def gather_cells(
+    whole: torch.Tensor, rows: slice | np.ndarray, index: torch.Tensor
+) -> torch.Tensor:
+    """`whole[rows][:, index]` as a new tensor, one block of rows per torch thread.
+
+    `index_select` along columns runs on one thread. Advanced indexing runs on all
+    of them, but does several times the work per thread. So each thread runs
+    `index_select` on its own block.
+    """
+    n_rows = rows.stop - rows.start if isinstance(rows, slice) else len(rows)
+    out = torch.empty((n_rows, len(index)), dtype=whole.dtype)
+    threads = torch.get_num_threads()
+    bounds = np.linspace(0, n_rows, threads + 1).astype(int)
+
+    # Inference mode is per thread, and `out` is an inference tensor when the caller
+    # runs in that mode: each thread must write to it in the same mode.
+    inference = torch.is_inference_mode_enabled()
+
+    def gather_block(start: int, stop: int) -> None:
+        with torch.inference_mode(inference):
+            if isinstance(rows, slice):
+                block = whole[rows.start + start : rows.start + stop]
+            else:
+                block = whole.index_select(0, torch.from_numpy(rows[start:stop]))
+            torch.index_select(block, 1, index, out=out[start:stop])
+
+    pool = _thread_pool(threads, os.getpid())
+    list(pool.map(gather_block, bounds[:-1].tolist(), bounds[1:].tolist()))
+    return out
+
+
+@functools.cache
+def _thread_pool(threads: int, pid: int) -> ThreadPoolExecutor:  # noqa: ARG001
+    """A pool of `threads` threads for the process `pid`, kept for its lifetime.
+
+    Starting the threads, and the thread teams torch starts in each of them, costs
+    more than a small gather. A forked process has no threads of its parent's
+    pool, so it gets its own.
+    """
+    return ThreadPoolExecutor(threads)
+
+
 def step_owns_input() -> bool:
     """Whether the running step may write into the array it was handed.
 
