@@ -3463,21 +3463,28 @@ def test__fit__2d_target_after_1d_target__drops_the_single_target_state(
     assert reg.predict(X[30:]).shape == (10, 2)
 
 
-def test__fit__2d_target_with_an_invalid_column__keeps_no_per_target_regressors(
+@pytest.mark.parametrize(
+    ("bad_value", "message"), [(np.nan, "NaN"), (np.inf, "infinity")]
+)
+def test__fit__2d_target_with_an_invalid_column__keeps_the_earlier_fit(
     multi_target_data: tuple[np.ndarray, np.ndarray],
+    bad_value: float,
+    message: str,
 ) -> None:
-    """A fit that fails on a later column must not leave a regressor that
-    predicts only the columns before it.
+    """A refit rejected for a later column must leave the earlier fit usable,
+    not a regressor stripped of its fitted state.
     """
     X, Y = multi_target_data
-    Y = Y.copy()
-    Y[0, 1] = np.nan
     reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=0)
+    reg.fit(X[:30], Y[:30])
+    before = reg.predict(X[30:])
+    Y_bad = Y.copy()
+    Y_bad[0, 1] = bad_value
 
-    with pytest.raises(ValueError, match="NaN"):
-        reg.fit(X, Y)
+    with pytest.raises(ValueError, match=message):
+        reg.fit(X, Y_bad)
 
-    assert reg.target_estimators_ is None
+    np.testing.assert_array_equal(reg.predict(X[30:]), before)
 
 
 def test__to__2d_target__moves_the_regressor_and_its_per_target_regressors(

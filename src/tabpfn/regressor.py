@@ -39,6 +39,7 @@ from sklearn.base import (
     clone,
 )
 from sklearn.pipeline import Pipeline
+from sklearn.utils.validation import check_consistent_length
 from tqdm.auto import tqdm
 
 from tabpfn.architectures import ARCHITECTURE_CONFIGS_UP_TO_V3_5
@@ -86,6 +87,7 @@ from tabpfn.inference_tuning import (
     get_tuning_split_indices,
     resolve_tuning_config,
 )
+from tabpfn.misc._sklearn_compat import check_array
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -318,7 +320,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The per-target regressors after a fit on several targets, else `None`.
 
     They hold each target's fitted state and share this regressor's model. Read
-    them, but do not refit or move them on their own.
+    them, but do not refit or move them on their own. Fitted attributes that
+    belong to one target, such as `raw_space_bardist_`, `y_train_mean_` or
+    `executor_`, are set on `target_estimators_[k]`, not on this regressor.
     """
 
     _model_caches: list[_PerDeviceModelCache] | None = None
@@ -1679,7 +1683,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if has_several_targets(y):
             return self._fit_multi_target(
                 X,
-                np.asarray(y),
+                y,
                 sample_weight=sample_weight,
                 label_reliability=label_reliability,
             )
@@ -1776,7 +1780,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def _fit_multi_target(
         self,
         X: XType,
-        y: np.ndarray,
+        y: YType,
         *,
         sample_weight: npt.ArrayLike | None,
         label_reliability: npt.ArrayLike | None,
@@ -1788,6 +1792,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         loads the model once and holds it. Every per-target regressor gets it by
         reference, along with its copies on each device.
         """
+        # Check the targets before the earlier fit is dropped below, so that a
+        # rejected `y` leaves that fit usable. The per-target fits check `X`.
+        y = check_array(y, dtype="numeric", ensure_all_finite=True, input_name="y")
+        check_consistent_length(X, y)
         # Only the model and the per-target regressors live on this regressor, so
         # nothing an earlier single-target fit set may stay behind.
         for name in [n for n in vars(self) if n.endswith("_") and n[0] != "_"]:
