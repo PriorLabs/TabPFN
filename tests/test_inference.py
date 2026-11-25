@@ -51,7 +51,7 @@ from tabpfn.preprocessing.clean import overwrite_fit_input
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.preprocessing.torch import FeatureSchema, TorchSoftClipOutliers
-from tabpfn.regressor import _concat_block_outputs
+from tabpfn.regressor import _join_outputs
 from tabpfn.settings import settings
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
@@ -1254,23 +1254,23 @@ def test__regressor_predict_row_blocks__single_pass_outside_their_scope(
         assert out["logits"].shape[0] == n_test
 
 
-def test__concat_block_outputs__joins_every_output_shape() -> None:
+def test__join_outputs__joins_every_output_shape() -> None:
     a, b = np.arange(3.0), np.arange(3.0, 5.0)
-    np.testing.assert_array_equal(_concat_block_outputs([a, b], "mean"), np.arange(5.0))
+    np.testing.assert_array_equal(_join_outputs([a, b], "mean"), np.arange(5.0))
 
-    joined = _concat_block_outputs([[a, a + 10], [b, b + 10]], "quantiles")
+    joined = _join_outputs([[a, a + 10], [b, b + 10]], "quantiles")
     assert len(joined) == 2
     np.testing.assert_array_equal(joined[1], np.arange(5.0) + 10)
 
     part = {"mean": a, "median": a, "mode": a, "quantiles": [a]}
     other = {"mean": b, "median": b, "mode": b, "quantiles": [b]}
-    main = _concat_block_outputs([part, other], "main")
+    main = _join_outputs([part, other], "main")
     for key in ("mean", "median", "mode"):
         np.testing.assert_array_equal(main[key], np.arange(5.0))
     np.testing.assert_array_equal(main["quantiles"][0], np.arange(5.0))
 
     with pytest.raises(ValueError, match="full"):
-        _concat_block_outputs([part, other], "full")
+        _join_outputs([part, other], "full")
 
 
 class _TestModelRecordingCacheOptions(_TestModelWithKVCache):
