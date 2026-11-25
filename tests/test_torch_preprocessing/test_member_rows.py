@@ -85,8 +85,8 @@ def small_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 _DEVICES = pytest.mark.parametrize(
     ("device", "stage_on_cpu"),
-    [("cpu", False), ("cpu", True), ("cuda", False)],
-    ids=["cpu", "cpu-staged", "cuda"],
+    [("cpu", False), ("cpu", True), ("cuda", False), ("mps", False)],
+    ids=["cpu", "cpu-staged", "cuda", "mps"],
 )
 
 
@@ -96,6 +96,8 @@ def _device(
     """`device`; with `stage_on_cpu`, the pipeline stages a CPU input as for a GPU."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("Needs a GPU")
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("Needs MPS")
     if stage_on_cpu:
         monkeypatch.setattr(pipeline_interface, "_same_device", lambda _a, _b: False)
     return torch.device(device)

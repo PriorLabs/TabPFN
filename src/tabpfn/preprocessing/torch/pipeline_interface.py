@@ -214,9 +214,13 @@ class TorchPreprocessingStep(abc.ABC):
             cell_bytes,
             staged=staged,
         )
+
+        def fit(block: slice) -> dict[str, torch.Tensor]:
+            x = read_train(block)
+            return self._fit(x.to(self._compute_device(x.device)))
+
         cache = _join_column_caches(
-            [self._fit(read_train(block)) for block in plan.fit_blocks()],
-            self.shared_cache_keys,
+            [fit(block) for block in plan.fit_blocks()], self.shared_cache_keys
         )
         # In host memory: a model that reads the cells sizes its chunks from the free
         # memory of the device, which must be what the input built whole leaves free.
@@ -703,8 +707,9 @@ class _CachedTransform:
     def _transform(
         self, x: torch.Tensor, cache: dict[str, torch.Tensor]
     ) -> torch.Tensor:
+        device = self.step._compute_device(x.device)
         transformed, _, _ = self.step._transform(
-            x, fitted_cache=_move_cache_to_device(cache, x.device)
+            x.to(device), fitted_cache=_move_cache_to_device(cache, device)
         )
         return transformed
 

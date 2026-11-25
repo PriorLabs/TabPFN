@@ -170,10 +170,8 @@ class MemberRows:
 
 
 class MemberRowSource:
-    """The model input `(rows, members, columns)` of members with one input shape.
-
-    It is read one block of cells at a time, as a `HostRowSource` for the model's
-    `x_host`.
+    """The model input `(rows, members, columns)` of members with one input shape,
+    read one block of cells at a time.
     """
 
     def __init__(self, members: Sequence[MemberRows]) -> None:
@@ -192,7 +190,19 @@ class MemberRowSource:
         device: torch.device,
         batch: int | None = None,
     ) -> torch.Tensor:
-        """See `HostRowSource.read`."""
+        """The cells at `rows` and `columns` of each member, or of member `batch`.
+
+        Args:
+            rows: A slice of rows with step 1, or an index of rows: `(members, P)`,
+                the rows of each member, when `batch` is None, else `(P,)`.
+            columns: A slice of columns with step 1, or a `(K,)` index.
+            device: The device of the result.
+            batch: The member to read, or None to read all of them.
+
+        Returns:
+            `(members, rows, columns)`, the members first unlike in `shape`, or
+            `(rows, columns)` when `batch` is set.
+        """
         column_index = np.arange(self.shape[2])[
             columns if isinstance(columns, slice) else columns.cpu().numpy()
         ]
