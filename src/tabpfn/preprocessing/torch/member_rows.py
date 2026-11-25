@@ -13,13 +13,12 @@ its input this way.
 from __future__ import annotations
 
 import dataclasses
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
+from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable, gather_cells
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
     runs_staged,
@@ -279,35 +278,5 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
             torch.float32, memory_format=torch.contiguous_format, copy=True
         )
     else:
-        out = _gather(as_tensor_to_read(table), rows, torch.from_numpy(columns))
+        out = gather_cells(as_tensor_to_read(table), rows, torch.from_numpy(columns))
     return out.to(torch.float32).contiguous()
-
-
-def _gather(
-    whole: torch.Tensor, rows: slice | np.ndarray, index: torch.Tensor
-) -> torch.Tensor:
-    """`whole[rows][:, index]`, gathered one block of rows per torch thread.
-
-    `index_select` along columns runs on one thread. Advanced indexing runs on all
-    of them, but does several times the work per thread. So each thread runs
-    `index_select` on its own block.
-    """
-    n_rows = rows.stop - rows.start if isinstance(rows, slice) else len(rows)
-    out = torch.empty((n_rows, len(index)), dtype=whole.dtype)
-    bounds = np.linspace(0, n_rows, torch.get_num_threads() + 1).astype(int)
-
-    # Inference mode is per thread, and `out` is an inference tensor when the caller
-    # runs in that mode: each thread must write to it in the same mode.
-    inference = torch.is_inference_mode_enabled()
-
-    def gather_block(start: int, stop: int) -> None:
-        with torch.inference_mode(inference):
-            if isinstance(rows, slice):
-                block = whole[rows.start + start : rows.start + stop]
-            else:
-                block = whole.index_select(0, torch.from_numpy(rows[start:stop]))
-            torch.index_select(block, 1, index, out=out[start:stop])
-
-    with ThreadPoolExecutor(len(bounds) - 1) as pool:
-        list(pool.map(gather_block, bounds[:-1].tolist(), bounds[1:].tolist()))
-    return out
