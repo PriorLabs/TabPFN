@@ -10,26 +10,40 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import ctypes
+import dataclasses
+import mmap
+import sys
+import threading
 import typing
 import warnings
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import torch
 from packaging.version import Version
+
+try:
+    from numpy.lib.array_utils import byte_bounds
+except ImportError:  # numpy < 2
+    from numpy import byte_bounds  # type: ignore[attr-defined,no-redef]
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.pipeline_interface import _usable_cpus
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     get_ordinal_encoder,
     to_numpy_may_alias,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import Any, Literal
 
+    from tabpfn.constants import XType
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -54,6 +68,8 @@ BYTES_DTYPE_KINDS = "Sa"
 # `c` complex, `M` datetime64. Not needed, just for completeness.
 UNSUPPORTED_DTYPE_KINDS = "cM"
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
+# Below this version, deleting a column of a frame copies the rest of its block.
+DELETING_COLUMNS_COPIES = Version(pd.__version__) < Version("2.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
 _ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
@@ -109,6 +125,21 @@ def _cast_columns(
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
+def delete_columns(X: pd.DataFrame, positions: Sequence[int]) -> None:
+    """Delete the columns at `positions` from `X` in place, in one call.
+
+    By position, so a label that repeats loses only the positions given. The kept
+    columns are not copied.
+    """
+    labels = X.columns[list(positions)]
+    X._mgr = X._mgr.idelete(positions)
+    # As `del X[label]` does: a cached column keeps its block's memory alive.
+    cache = getattr(X, "_item_cache", None)
+    if cache is not None:
+        for label in labels:
+            cache.pop(label, None)
+
+
 _FILL_BLOCK_BYTES = 1 << 24
 """Bytes of rows `_with_constants` copies at a time. Each block's constant columns are
 written while it is in cache: larger blocks fall out of it, smaller ones pay more
@@ -153,11 +184,12 @@ def _encoder_selects_nothing(
 
 
 def clean_data_transform(
-    X: np.ndarray | pd.DataFrame,
+    X: XType,
     *,
-    cat_indices: Sequence[int | str] | None,
-    ord_encoder: OrderPreservingColumnTransformer | None,
+    cat_indices: Sequence[int] | None,
+    ord_encoder: OrderPreservingColumnTransformer | ColumnRangeEncoders | None,
     passthrough_inf: bool = False,
+    validate: Callable[[XType], np.ndarray] | None = None,
 ) -> np.ndarray:
     """Clean data being predicted on, the way `clean_data` cleaned the training data.
 
@@ -168,17 +200,32 @@ def clean_data_transform(
     Args:
         X: The data to clean.
         cat_indices: Indices of the columns the encoder was fitted on.
-        ord_encoder: The encoder `clean_data` returned at fit time.
+        ord_encoder: The `ordinal_encoder_` of a fitted estimator. This is the
+            encoder that `clean_data` returned at fit time, or the
+            `ColumnRangeEncoders` of a fit input cleaned one range of columns at a
+            time.
         passthrough_inf: If True, +/-inf values are carried through the ordinal
             encoding stage unchanged instead of crashing it.
+        validate: Validates `X`, or each column range of `X`, before cleaning. None
+            if `X` is already validated.
 
     Returns:
-        `X`, or a copy of it with the fit-time constant columns restored, when `X` is
-        a numeric array the encoder encodes no column of; a new float32, C-ordered
-        array when `X` is a float32 array whose encoded columns all held numbers at
-        fit, and which holds no infinity if `passthrough_inf`; otherwise a new float64
-        array.
+        For `ColumnRangeEncoders`, a new table of their `dtype`. Otherwise `X`, or a
+        copy of it with the fit-time constant columns restored, when `X` is a numeric
+        array the encoder encodes no column of; a new float32, C-ordered array when
+        `X` is a float32 array whose encoded columns all held numbers at fit, and
+        which holds no infinity if `passthrough_inf`; otherwise a new float64 array.
     """
+    if isinstance(ord_encoder, ColumnRangeEncoders):
+        return ord_encoder.transform(
+            X,
+            cat_indices=cat_indices or (),
+            passthrough_inf=passthrough_inf,
+            validate=validate,
+            validate_runs=False,
+        )
+    if validate is not None:
+        X = validate(X)
     given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
         # A column constant at fit gets its fit-time value back, so it is cleaned
@@ -357,18 +404,128 @@ def _encode_categoricals(
     if out is None or not ord_encoder.selected_columns():
         return None
     if out is X:
-        _OVERWRITTEN_FIT_INPUTS[id(X)] = X
+        mark_fit_memory(X, overwritten=True)
     return out
+
+
+@dataclasses.dataclass
+class ColumnRangeEncoders:
+    """The fitted cleaning of a fit input cleaned one range of columns at a time.
+
+    `clean_data` fitted one encoder on each range. Predict input is cleaned with the
+    same ranges into a table of `dtype`.
+    """
+
+    ranges: list[tuple[int, int, OrderPreservingColumnTransformer]]
+    """`(start, stop, encoder)` per range of columns, in column order."""
+    dtype: np.dtype
+
+    def transform(
+        self,
+        X: XType,
+        *,
+        cat_indices: Sequence[int],
+        passthrough_inf: bool,
+        validate: Callable[[XType], np.ndarray] | None,
+        validate_runs: bool,
+    ) -> np.ndarray:
+        """`clean_data_transform` of `X` by these ranges.
+
+        With `validate_runs`, each of `_runs(X)` is validated at once rather than
+        each range: one fixed validation cost per run, but a run's converted copy
+        held at once.
+        """
+        if validate is not None and (
+            not isinstance(X, (pd.DataFrame, np.ndarray)) or X.ndim != 2
+        ):
+            # Only a frame or a 2-D array can be cut into ranges. Validation converts
+            # any other input to an array or refuses it.
+            X = validate(X)
+        table = np.empty((X.shape[0], self.ranges[-1][1]), dtype=self.dtype)
+        runs = self._runs(X) if validate_runs else [[r] for r in self.ranges]
+        for run in runs:
+            first, last = run[0][0], run[-1][1]
+            part = column_range(X, first, last)
+            if validate is not None:
+                part = validate(part)
+            for start, stop, encoder in run:
+                table[:, start:stop] = clean_data_transform(
+                    column_range(part, start - first, stop - first),
+                    cat_indices=[i - start for i in cat_indices if start <= i < stop],
+                    ord_encoder=encoder,
+                    passthrough_inf=passthrough_inf,
+                )
+        return table
+
+    def _runs(
+        self, X: pd.DataFrame | np.ndarray
+    ) -> list[list[tuple[int, int, OrderPreservingColumnTransformer]]]:
+        """The ranges, grouped into runs of adjacent ranges whose columns share one
+        dtype that validates the same however many columns of it are validated
+        together. A range with other columns is a run of its own.
+        """
+        dtypes = (
+            list(X.dtypes) if isinstance(X, pd.DataFrame) else [X.dtype] * X.shape[1]
+        )
+        runs: list[list[tuple[int, int, OrderPreservingColumnTransformer]]] = []
+        run_dtype = None
+        for start, stop, encoder in self.ranges:
+            own = set(dtypes[start:stop])
+            dtype = own.pop() if len(own) == 1 else None
+            # `run_dtype` is checked too: `np.dtype(np.float64) == None` holds.
+            if (
+                _validates_alike_in_runs(dtype)
+                and _validates_alike_in_runs(run_dtype)
+                and dtype == run_dtype
+            ):
+                runs[-1].append((start, stop, encoder))
+            else:
+                runs.append([(start, stop, encoder)])
+                run_dtype = dtype
+        return runs
+
+
+def _validates_alike_in_runs(dtype: Any) -> bool:
+    """Whether columns of `dtype` validate to the same array whether validated one by
+    one or together.
+
+    Not so for a categorical column, which converts to its categories' dtype alone
+    but to objects next to another one.
+    """
+    return isinstance(dtype, (np.dtype, pd.StringDtype)) or _coerced_to_float64(dtype)
+
+
+def column_range(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
+    """The columns `start:stop` of `X`, in the same container type."""
+    if isinstance(X, pd.DataFrame):
+        return X.iloc[:, start:stop]
+    return X[:, start:stop]
 
 
 _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_overwrite_fit_input", default=False
 )
 
-_OVERWRITTEN_FIT_INPUTS: weakref.WeakValueDictionary[int, np.ndarray] = (
+
+@dataclasses.dataclass(frozen=True)
+class _FitMemory:
+    """A byte range of an array's memory, recorded while the array owning it lives."""
+
+    owner: weakref.ref[Any]
+    start: int
+    stop: int
+
+
+_FIT_MEMORY_LOCK = threading.Lock()
+"""Guards both registries against fits on other threads."""
+_OVERWRITTEN_FIT_MEMORY: list[_FitMemory] = []
+"""The memory that a `fit` wrote into or released."""
+_KEPT_FIT_MEMORY: list[_FitMemory] = []
+"""The memory that a fitted model reads without a copy."""
+_EMPTIED_FIT_FRAMES: weakref.WeakValueDictionary[int, pd.DataFrame] = (
     weakref.WeakValueDictionary()
 )
-"""The live arrays a `fit` has written into, by `id`."""
+"""The live frames a `fit` emptied, by `id`."""
 
 
 @contextlib.contextmanager
@@ -380,9 +537,28 @@ def overwrite_fit_input() -> Iterator[None]:
     and preprocessing that writes nothing keeps the array rather than a copy. A
     read-only array's categorical columns are coded in a copy, as outside the block.
 
-    Each array may be given to one `fit` only. Its contents are undefined after that
-    fit, and the fitted model may keep it, so the caller must neither read nor
-    write it. A later `fit` given the same array raises a `ValueError`.
+    The caller gives up each input that it passes to a `fit` inside this block. Pass
+    each input, and anything that shares its memory, to one `fit` only. After that
+    fit, the caller must not read or write them. Their contents are undefined, and the
+    fitted model may keep them.
+
+    When `fit` cleans a given-up input into a new table:
+
+    - A frame is emptied after its targets are validated. Its blocks are freed as
+      their columns are copied into the table. If pandas can delete a column without
+      copying its block, the memory of the largest block is released to the system
+      a slice of rows at a time.
+    - For a float32 table, a writeable numeric array of a wider dtype is cast to
+      float32 in its own memory, and the rest of that memory is released.
+
+    Released memory reads as zeros through any array or frame that shares it. This
+    includes frames the input was derived from without a copy, e.g. under pandas
+    copy-on-write.
+
+    A later `fit` raises a `ValueError` for an input whose memory a fit wrote into or
+    released, and for a frame that a fit emptied. A fit never writes into or releases
+    memory that a read-only array holds, that maps a file (`np.memmap`, `mmap`), or
+    that another fitted model reads. It copies instead.
     """
     token = _OVERWRITE_FIT_INPUT.set(True)
     try:
@@ -396,29 +572,215 @@ def overwriting_fit_input() -> bool:
     return _OVERWRITE_FIT_INPUT.get()
 
 
+def check_fit_input(given: Any) -> None:
+    """Refuse a fit input whose memory an earlier `fit` wrote into or released, or a
+    frame that an earlier `fit` emptied.
+
+    Raises:
+        ValueError: If `given` is such an input.
+    """
+    if (
+        isinstance(given, pd.DataFrame) and _EMPTIED_FIT_FRAMES.get(id(given)) is given
+    ) or _shares_memory(_arrays_of(given), _OVERWRITTEN_FIT_MEMORY):
+        raise ValueError(
+            "This input was overwritten by an earlier fit inside "
+            "`overwrite_fit_input()` and no longer holds its original data. Pass "
+            "each input to one fit only, or fit on a copy."
+        )
+
+
 def may_overwrite_fit_input(X: Any, given: Any) -> bool:
     """Whether `fit` may write into `X`, the array it made from the caller's `given`.
 
-    Raises:
-        ValueError: If an earlier `fit` inside `overwrite_fit_input()` wrote into
-            `given`.
+    The caller has already refused, with `check_fit_input`, a `given` that an earlier
+    fit overwrote.
     """
-    if (
-        isinstance(given, np.ndarray)
-        and _OVERWRITTEN_FIT_INPUTS.get(id(given)) is given
-    ):
-        raise ValueError(
-            "This array was overwritten by an earlier fit inside "
-            "`overwrite_fit_input()`, so it no longer holds the data it was given "
-            "with. Pass each array to one fit only, or fit on a copy."
-        )
     if X is given:
-        return (
-            isinstance(X, np.ndarray)
-            and X.flags.writeable
-            and _OVERWRITE_FIT_INPUT.get()
-        )
+        return isinstance(X, np.ndarray) and may_write_fit_memory(X)
     return is_private_copy(X, given)
+
+
+def may_write_fit_memory(X: np.ndarray) -> bool:
+    """Whether a `fit` may write into or release the memory of `X`, the caller's array.
+
+    True inside `overwrite_fit_input()` if `X` is writeable, maps no file, and no
+    fitted model reads its memory. `check_fit_input` has already refused memory a fit
+    overwrote.
+    """
+    return (
+        _OVERWRITE_FIT_INPUT.get()
+        and X.flags.writeable
+        and not _maps_a_file(X)
+        and not _shares_memory([X], _KEPT_FIT_MEMORY)
+    )
+
+
+def _maps_a_file(X: np.ndarray) -> bool:
+    """Whether the memory of `X` is a memory map, whose writes can reach a file."""
+    owner: Any = X
+    while isinstance(owner, np.ndarray):
+        if isinstance(owner, np.memmap):
+            return True
+        owner = owner.base
+    if isinstance(owner, memoryview):
+        owner = owner.obj
+    return isinstance(owner, mmap.mmap)
+
+
+def mark_fit_memory(X: np.ndarray, *, overwritten: bool) -> None:
+    """Record that a `fit` writes into or releases the memory of `X` (`overwritten`),
+    or that a fitted model reads it without a copy.
+    """
+    start, stop = byte_bounds(X)
+    entry = _FitMemory(_owner_ref(X), start, stop)
+    registry = _OVERWRITTEN_FIT_MEMORY if overwritten else _KEPT_FIT_MEMORY
+    with _FIT_MEMORY_LOCK:
+        # An entry whose owner is gone no longer describes live memory.
+        registry[:] = [memory for memory in registry if memory.owner() is not None]
+        registry.append(entry)
+
+
+def _owner_ref(X: np.ndarray) -> weakref.ref[Any]:
+    """A weak reference to the object that owns the memory of `X`, as far as the
+    chain of bases leads to one that takes weak references.
+
+    The memory lives as long as its owner. An array made from a torch tensor or a
+    buffer has a base that is not an array; for a tensor, its storage owns the
+    memory.
+    """
+    owner: Any = X
+    while isinstance(owner.base, np.ndarray):
+        owner = owner.base
+    base = owner.base
+    if isinstance(base, memoryview):
+        base = base.obj
+    if callable(getattr(base, "untyped_storage", None)):
+        # `Tensor.numpy()` makes an alias tensor that dies with the array. The
+        # storage is shared and lives as long as the memory.
+        base = base.untyped_storage()
+    try:
+        return weakref.ref(base)
+    except TypeError:
+        # No base, or one without weak references (e.g. `bytes`): the owning array
+        # is as far as the chain can be followed.
+        return weakref.ref(owner)
+
+
+def _arrays_of(given: Any) -> list[np.ndarray]:
+    """The arrays that hold the values of `given`: the array, a frame's blocks, or a
+    CPU tensor's memory.
+    """
+    if isinstance(given, np.ndarray):
+        return [given]
+    if isinstance(given, torch.Tensor):
+        return [given.detach().numpy()] if given.device.type == "cpu" else []
+    if isinstance(given, pd.DataFrame):
+        # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
+        blocks = [block.values for block in given._mgr.blocks]  # noqa: PD011
+        return [values for values in blocks if isinstance(values, np.ndarray)]
+    return []
+
+
+def _shares_memory(arrays: list[np.ndarray], registry: list[_FitMemory]) -> bool:
+    """Whether the bytes of any of `arrays` overlap live memory in `registry`."""
+    with _FIT_MEMORY_LOCK:
+        held = [memory for memory in registry if memory.owner() is not None]
+    for array in arrays:
+        start, stop = byte_bounds(array)
+        if any(memory.start < stop and start < memory.stop for memory in held):
+            return True
+    return False
+
+
+_NARROW_BLOCK_BYTES = 1 << 26
+"""Bytes of rows that `narrow_fit_input_in_place` casts at a time. Each block is cast
+into a temporary array first. Larger blocks need a larger temporary array. Smaller
+blocks pay the per-block overhead more often."""
+
+_MADV_DONTNEED = 4
+"""Linux's `madvise` advice to drop a range of pages."""
+
+
+def narrow_fit_input_in_place(X: np.ndarray) -> np.ndarray:
+    """Return the values of `X` as a float32 table over the start of the memory of `X`.
+
+    `X` must be a given-up, writeable, C-ordered numeric array with at least four
+    bytes per value. The rest of its memory is released to the system. Afterwards `X`
+    holds no meaningful values.
+    """
+    n_rows, n_columns = X.shape
+    table = X.reshape(-1).view(np.float32)[: X.size].reshape(n_rows, n_columns)
+    rows = max(1, _NARROW_BLOCK_BYTES // max(1, n_columns * X.itemsize))
+    ratio = X.itemsize // table.itemsize
+
+    def narrow(start: int, stop: int) -> None:
+        # `astype` reads the whole block into a temporary array before the write, so
+        # the write can overlap the block's own input.
+        table[start:stop] = X[start:stop].astype(np.float32)
+
+    # Output rows `[w, ratio * w)` overwrite the memory of input rows `[w / ratio, w)`.
+    # Earlier waves have read those input rows, so the blocks of one wave can run in
+    # any order. The first block overwrites its own input and runs alone. If
+    # `ratio == 1`, each row overwrites only itself, so one wave holds all rows.
+    waves = [(0, n_rows)] if ratio == 1 else [(0, min(rows, n_rows))]
+    while waves[-1][1] < n_rows:
+        start = waves[-1][1]
+        waves.append((start, min(ratio * start, n_rows)))
+    # Mark before the first write, so that a later fit refuses `X` even if this fit
+    # fails midway.
+    mark_fit_memory(X, overwritten=True)
+    with ThreadPoolExecutor(max_workers=_usable_cpus()) as pool:
+        for wave_start, wave_stop in waves:
+            starts = range(wave_start, wave_stop, rows)
+            stops = [min(start + rows, wave_stop) for start in starts]
+            list(pool.map(narrow, starts, stops))
+    _release_pages(X, table.nbytes)
+    return table
+
+
+def release_rows(X: np.ndarray, start: int, stop: int) -> None:
+    """Release the whole pages of rows `start:stop` of `X` to the system.
+
+    `X` must be a given-up, C-ordered array.
+    """
+    row_bytes = X.strides[0]
+    _release_pages(X, start * row_bytes, stop * row_bytes)
+
+
+def _release_pages(X: np.ndarray, start: int, stop: int | None = None) -> None:
+    """Release the whole pages of the memory of `X` from byte `start` to byte `stop`
+    (default: the end) to the system.
+
+    This works on Linux only. On other systems the pages stay, which costs memory but
+    changes no value. A released page reads as zeros when it is read again.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    page = mmap.PAGESIZE
+    stop = X.nbytes if stop is None else stop
+    first = -(-(X.ctypes.data + start) // page) * page
+    last = (X.ctypes.data + stop) // page * page
+    if last <= first:
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    if libc.madvise(first, last - first, _MADV_DONTNEED) != 0:
+        # Locked or huge pages cannot be released. They only cost memory, and the fit
+        # has already written its input, so it continues.
+        warnings.warn(
+            f"madvise could not release fit input memory (errno "
+            f"{ctypes.get_errno()}), so it stays in use.",
+            stacklevel=2,
+        )
+
+
+def empty_fit_frame(X: pd.DataFrame) -> None:
+    """Drop every column of `X`, a given-up frame, so that its memory is freed when
+    nothing else holds it.
+    """
+    # Drop in place: the caller's frame object must stop referencing its blocks.
+    X.drop(columns=X.columns, inplace=True)  # noqa: PD002
+    _EMPTIED_FIT_FRAMES[id(X)] = X
 
 
 def is_private_copy(X: Any, given: Any) -> bool:
@@ -458,14 +820,16 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     dtypes = X.dtypes
     # Decided once per distinct dtype rather than once per column: a wide frame has
     # thousands of columns and a handful of dtypes.
-    dtypes_to_cast = {
-        dtype
-        for dtype in dtypes.unique()
-        if pd.api.types.is_bool_dtype(dtype)
-        or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
-    }
+    dtypes_to_cast = {dtype for dtype in dtypes.unique() if _coerced_to_float64(dtype)}
     cols = [col for col, dtype in dtypes.items() if dtype in dtypes_to_cast]
     return _cast_columns(X, cols, "float64")
+
+
+def _coerced_to_float64(dtype: Any) -> bool:
+    """Whether `coerce_nullable_dtypes_to_numpy` casts a column of `dtype`."""
+    return pd.api.types.is_bool_dtype(dtype) or (
+        pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf"
+    )
 
 
 def fix_dtypes(  # noqa: D103

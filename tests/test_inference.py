@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 import types
 from types import SimpleNamespace
 from typing import Any, Literal, overload
@@ -35,6 +36,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
+    _member_rows,
     _model_input_arguments,
     _model_input_device,
     _prepare_member_inputs,
@@ -51,6 +53,7 @@ from tabpfn.preprocessing.clean import overwrite_fit_input
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
 from tabpfn.preprocessing.torch import FeatureSchema, TorchSoftClipOutliers
+from tabpfn.preprocessing.torch.member_rows import MemberRowSource
 from tabpfn.regressor import _concat_block_outputs
 from tabpfn.settings import settings
 
@@ -1597,3 +1600,94 @@ def test__prepare_model_inputs__x_device__holds_the_rows_and_matches_device() ->
     torch.testing.assert_close(X_full, expected, rtol=0, atol=0)
     assert X_full.device == cpu
     assert y.device == cpu
+
+
+def test__forward__input_held_off_the_device__model_reading_row_sources_gets_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the input is held off the device, a model that reads row sources gets the
+    members' rows as a row source, and predicts the same as from the built input.
+    """
+    rng = default_rng(0)
+    X = rng.standard_normal((90, 6))
+    X[:, 2] = rng.integers(0, 3, len(X))
+    y = rng.integers(0, 2, 70)
+    # Use steps that run by blocks, independent of the checkpoint's preprocessing.
+    config = {
+        "ENABLE_GPU_PREPROCESSING": True,
+        "FINGERPRINT_FEATURE": False,
+        "FEATURE_SHIFT_METHOD": "shuffle",
+        "OUTLIER_REMOVAL_STD": 12.0,
+        "PREPROCESS_TRANSFORMS": [
+            PreprocessorConfig("safepower", categorical_name="ordinal_shuffled"),
+            PreprocessorConfig("quantile_norm", categorical_name="ordinal"),
+        ],
+    }
+    model = TabPFNClassifier(
+        n_estimators=2, device="cpu", random_state=0, inference_config=config
+    ).fit(X[:70], y)
+    expected = model.predict_proba(X[70:])
+    architecture = type(model.models_[0])
+    forward = architecture.forward
+    sources: list[MemberRowSource] = []
+
+    @functools.wraps(forward)
+    def reading_forward(
+        self: nn.Module, x: Tensor | None, *args: object, **kwargs: object
+    ) -> object:
+        source = kwargs.pop("x_host", None)
+        if x is None:
+            assert isinstance(source, MemberRowSource)
+            sources.append(source)
+            R, _, C = source.shape
+            x = source.read(slice(0, R), slice(0, C), torch.device("cpu"))
+            # Make `x` contiguous like the built input. A strided `x` can round
+            # differently.
+            x = x.transpose(0, 1).contiguous()
+        return forward(self, x, *args, **kwargs)
+
+    monkeypatch.setattr(architecture, "forward", reading_forward)
+    monkeypatch.setattr(architecture, "reads_row_sources", True, raising=False)
+    # Report the input as held off the device, which a CPU run cannot show otherwise.
+    # Every member takes the row-source path, so no input is built on that device.
+    monkeypatch.setattr(
+        "tabpfn.inference._model_input_device", lambda *_: torch.device("meta")
+    )
+
+    actual = model.predict_proba(X[70:])
+
+    assert sources
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test__member_rows__gpu_step_that_reads_whole_rows__warns_and_builds_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At the sizes that hold the input in host memory, building it whole can run out
+    of memory, so the fallback says so.
+    """
+    rng = default_rng(0)
+    X = rng.standard_normal((60, 4))
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    ).fit(X[:40], rng.integers(0, 2, 40))
+    member = model.executor_.ensemble_members[0]
+    architecture = model.models_[0]
+    monkeypatch.setattr(type(architecture), "reads_row_sources", True, raising=False)
+    monkeypatch.setattr(
+        "tabpfn.inference._model_input_device", lambda *_: torch.device("meta")
+    )
+    monkeypatch.setattr("tabpfn.inference.MemberRows.fit", lambda *_: None)
+
+    with pytest.warns(UserWarning, match="reads whole rows"):
+        rows = _member_rows(
+            member,
+            member.transform_X_test(X[40:]),
+            torch.device("cpu"),
+            None,
+            architecture,
+        )
+
+    assert rows is None

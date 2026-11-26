@@ -64,9 +64,37 @@ def detect_feature_modalities(
     Returns:
         The inferred `FeatureSchema`.
     """
+    feature_schema = named_feature_modalities(
+        X,
+        build_input_feature_names(feature_names, X.shape[1]),
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
+        provided_categorical_indices=provided_categorical_indices,
+    )
+    warn_on_text(feature_schema)
+    return feature_schema
+
+
+def named_feature_modalities(
+    X: np.ndarray,
+    unique_feature_names: list[str],
+    *,
+    min_samples_for_inference: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
+    provided_categorical_indices: Sequence[int] | None = None,
+) -> FeatureSchema:
+    """`detect_feature_modalities` for final feature names, without the text warning.
+
+    The modality of a column depends on that column only. So a table can be processed
+    one range of columns at a time, with the names that `build_input_feature_names`
+    gives the whole table.
+    """
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
-    unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
     provided = set(provided_categorical_indices or ())
     decided_at = _decided_at(
         max_unique_for_category=max_unique_for_category,
@@ -97,9 +125,7 @@ def detect_feature_modalities(
                 big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
             )
         features.append(Feature(name=feature_name, modality=feat_modality))
-    feature_schema = FeatureSchema(features=features)
-    _warn_on_text(feature_schema)
-    return feature_schema
+    return FeatureSchema(features=features)
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -111,7 +137,7 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_on_text(feature_schema: FeatureSchema) -> None:
+def warn_on_text(feature_schema: FeatureSchema) -> None:
     """Warn about any free-text columns.
 
     A column declared categorical is never `TEXT`, so it never shows up here.
@@ -275,7 +301,11 @@ def _numeric_n_unique_per_column(
 
 
 _DISTINCT_COUNT_BLOCK_BYTES = 1 << 28
-"""Bytes of columns `_count_distinct_per_column` sorts at a time, per thread."""
+"""Maximum bytes of columns that one thread of `_count_distinct_per_column` sorts."""
+_DISTINCT_COUNT_MIN_BLOCK_BYTES = 1 << 22
+"""Minimum bytes of a block. Blocks are not split below this size to give more threads
+work, because a smaller block costs more in thread overhead than the parallel sort
+saves."""
 _DISTINCT_COUNT_BUDGET_BYTES = 4 << 30
 """Bytes the threads of `_count_distinct_per_column` hold at once, at most: each holds
 a block's copy and its sort, about three blocks."""
@@ -295,7 +325,14 @@ def _count_distinct_per_column(
     n_columns = len(columns)
     if n_columns == 0:
         return np.zeros(0, dtype=np.int64)
-    width = max(1, _DISTINCT_COUNT_BLOCK_BYTES // max(1, n_rows * X.itemsize))
+    column_bytes = max(1, n_rows * X.itemsize)
+    threads = _usable_cpus()
+    # Split the columns evenly across the threads, within the block size bounds.
+    width = max(
+        1,
+        _DISTINCT_COUNT_MIN_BLOCK_BYTES // column_bytes,
+        min(_DISTINCT_COUNT_BLOCK_BYTES // column_bytes, -(-n_columns // threads)),
+    )
 
     def block_of(start: int, stop: int) -> np.ndarray:
         picked = columns[start:stop]
@@ -313,8 +350,8 @@ def _count_distinct_per_column(
 
     workers = min(
         len(blocks),
-        _usable_cpus(),
-        max(1, _DISTINCT_COUNT_BUDGET_BYTES // (3 * _DISTINCT_COUNT_BLOCK_BYTES)),
+        threads,
+        max(1, _DISTINCT_COUNT_BUDGET_BYTES // (3 * width * column_bytes)),
     )
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(count, blocks))

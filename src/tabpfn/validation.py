@@ -177,6 +177,8 @@ def ensure_compatible_fit_inputs(
 def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,
+    *,
+    check_finite: bool = True,
 ) -> np.ndarray:
     """Validate the values of an already-shape-checked, already-date-resolved input.
 
@@ -194,9 +196,7 @@ def ensure_compatible_predict_input_sklearn(
             X,
             accept_sparse=False,
             dtype=None,
-            ensure_all_finite=False
-            if estimator.get_inference_config().PASSTHROUGH_INF
-            else "allow-nan",
+            ensure_all_finite=_ensure_all_finite(estimator, check_finite=check_finite),
             estimator=estimator,
         )
     except (ValueError, TypeError) as e:
@@ -245,6 +245,7 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
+    check_finite: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Validate the values of already-shape-captured fit inputs.
 
@@ -255,6 +256,7 @@ def ensure_compatible_fit_inputs_sklearn(
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
+        check_finite: If True, refuse infinities in X unless `PASSTHROUGH_INF` is set.
 
     Returns:
         A tuple of the validated input data X and target data y.
@@ -267,9 +269,7 @@ def ensure_compatible_fit_inputs_sklearn(
             y,
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
-            ensure_all_finite=False
-            if estimator.get_inference_config().PASSTHROUGH_INF
-            else "allow-nan",
+            ensure_all_finite=_ensure_all_finite(estimator, check_finite=check_finite),
             ensure_min_samples=2,
             ensure_min_features=1,
             y_numeric=ensure_y_numeric,
@@ -292,19 +292,66 @@ def ensure_compatible_fit_inputs_sklearn(
                 ensure_2d=False,
             )
     except (ValueError, TypeError) as e:
-        e_str = str(e)
-        if "X contains infinity" in e_str:
-            e_str += (
-                "\nHint: TabPFN uses infinite values as missing completely at random "  # noqa: S608
-                "(MCAR) markers. If this matches your use case, try using "
-                f"{estimator.__class__.__name__}"
-                '(inference_config={"PASSTHROUGH_INF": True}).\n'
-                "Otherwise, replace your infinite values with NaN to indicate "
-                "missingness."
-            )
-        raise TabPFNValidationError(e_str) from e
+        raise _fit_validation_error(e, estimator) from e
 
     return X, y
+
+
+def ensure_compatible_fit_columns(
+    X: XType,
+    *,
+    estimator: TabPFNRegressor | TabPFNClassifier,
+    check_finite: bool,
+) -> np.ndarray:
+    """Validate a range of fit input columns after the targets are validated.
+
+    The checks are the ones that `ensure_compatible_fit_inputs_sklearn` applies to `X`.
+    """
+    if isinstance(X, pd.DataFrame):
+        X = coerce_nullable_dtypes_to_numpy(X)
+    try:
+        result = check_array(
+            X,
+            accept_sparse=False,
+            dtype=None,
+            ensure_all_finite=_ensure_all_finite(estimator, check_finite=check_finite),
+            ensure_min_samples=2,
+            ensure_min_features=1,
+            estimator=estimator,
+            input_name="X",
+        )
+    except (ValueError, TypeError) as e:
+        raise _fit_validation_error(e, estimator) from e
+    return typing.cast("np.ndarray", result)
+
+
+def _ensure_all_finite(
+    estimator: TabPFNRegressor | TabPFNClassifier, *, check_finite: bool
+) -> bool | str:
+    """The `ensure_all_finite` argument of `check_array` for an input X.
+
+    NaN marks a missing value and is allowed. Infinities are refused unless
+    `check_finite` is False or `PASSTHROUGH_INF` is set.
+    """
+    if not check_finite or estimator.get_inference_config().PASSTHROUGH_INF:
+        return False
+    return "allow-nan"
+
+
+def _fit_validation_error(
+    e: ValueError | TypeError, estimator: TabPFNRegressor | TabPFNClassifier
+) -> TabPFNValidationError:
+    e_str = str(e)
+    if "X contains infinity" in e_str:
+        e_str += (
+            "\nHint: TabPFN uses infinite values as missing completely at random "  # noqa: S608
+            "(MCAR) markers. If this matches your use case, try using "
+            f"{estimator.__class__.__name__}"
+            '(inference_config={"PASSTHROUGH_INF": True}).\n'
+            "Otherwise, replace your infinite values with NaN to indicate "
+            "missingness."
+        )
+    return TabPFNValidationError(e_str)
 
 
 def validate_num_classes(

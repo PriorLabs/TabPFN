@@ -30,6 +30,7 @@ from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_interface import SharedColumnsTable
+from tabpfn.preprocessing.torch.member_rows import MemberRows, MemberRowSource
 from tabpfn.settings import settings
 from tabpfn.utils import as_tensor_to_read, get_autocast_context
 
@@ -195,6 +196,49 @@ def _prepare_member_inputs(
     return X, y, feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
 
+def _member_rows(
+    member: TabPFNEnsembleMember,
+    X_test: torch.Tensor | np.ndarray | SharedColumnsTable,
+    device: torch.device,
+    force_inference_dtype: torch.dtype | None,
+    model: torch.nn.Module,
+) -> tuple[MemberRows, torch.Tensor, list[int]] | None:
+    """A member's model input to read one block at a time, its targets and its
+    categorical indices, for a model that reads row sources from host memory.
+
+    Returns None if the input must be built whole:
+
+    - the model reads no row source,
+    - the inference dtype is forced to a dtype other than float32,
+    - the input goes to the device, or
+    - a step of the member's GPU preprocessing reads whole rows.
+    """
+    if (
+        not getattr(model, "reads_row_sources", False)
+        or force_inference_dtype not in (None, torch.float32)
+        or _model_input_device(
+            model, device, member.X_train, X_test, force_inference_dtype
+        )
+        == device
+    ):
+        return None
+    rows = MemberRows.fit(
+        member.X_train, X_test, member.gpu_preprocessor, member.feature_schema, device
+    )
+    if rows is None:
+        warnings.warn(
+            "A step of the member's GPU preprocessing reads whole rows, so the "
+            "member's model input is built whole in host memory.",
+            stacklevel=2,
+        )
+        return None
+    return (
+        rows,
+        torch.as_tensor(member.y_train, dtype=torch.float32, device=device),
+        rows.feature_schema.indices_for(FeatureModality.CATEGORICAL),
+    )
+
+
 def _cache_builds(
     positions: list[int],
     rows_per_member: int,
@@ -328,20 +372,25 @@ def _batch_member_inputs(
     """
     if len(xs) == 1:
         return xs[0], ys[0]
-    return (
-        torch.cat(list(xs), dim=1),
-        torch.cat([y.reshape(y.shape[0], -1) for y in ys], dim=1),
-    )
+    return torch.cat(list(xs), dim=1), _batch_targets(ys)
+
+
+def _batch_targets(ys: Sequence[torch.Tensor]) -> torch.Tensor:
+    """Batch the members' targets as `_batch_member_inputs` does."""
+    if len(ys) == 1:
+        return ys[0]
+    return torch.cat([y.reshape(y.shape[0], -1) for y in ys], dim=1)
 
 
 def _row_weight_kwargs(
     members: Sequence[TabPFNEnsembleMember],
     sample_weight_mode: str | None,
-    x: torch.Tensor,
+    device: torch.device,
+    dtype: torch.dtype,
 ) -> dict[str, torch.Tensor | str]:
     """The members' per-row weights as forward arguments, batched like their rows.
 
-    The weights take the device and dtype of `x`, the members' batched rows. Empty
+    The weights take the `device` and `dtype` of the members' batched rows. Empty
     when `fit` got no per-row weights, so the forward is the same call as for a
     model that takes none.
     """
@@ -351,7 +400,7 @@ def _row_weight_kwargs(
     for member in members:
         assert member.row_weights is not None
         row_weights.append(
-            torch.as_tensor(member.row_weights, device=x.device, dtype=x.dtype)
+            torch.as_tensor(member.row_weights, device=device, dtype=dtype)
         )
     return {
         "row_weights_NB2": torch.stack(row_weights, dim=1),
@@ -1483,7 +1532,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                     **_row_weight_kwargs(
                         [read[i] for i in positions],
                         self.ensemble_preprocessor.sample_weight_mode,
-                        X,
+                        X.device,
+                        X.dtype,
                     ),
                 )
             assert cache is not None
@@ -1682,7 +1732,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             self.ensemble_preprocessor.additional_model_input,
         )
         row_weight_kwargs = _row_weight_kwargs(
-            members, self.ensemble_preprocessor.sample_weight_mode, X
+            members, self.ensemble_preprocessor.sample_weight_mode, X.device, X.dtype
         )
 
         cache_on_device = self.kv_caches[cache_index].to(device)
@@ -1811,10 +1861,15 @@ def _call_model_on_members(  # noqa: PLR0913
     ``members`` it holds.
     """
     model = model_caches[members[0].config._model_index].get(device)
-    prepared: list[tuple[torch.Tensor, torch.Tensor, list[int]]] = []
+    prepared: list[tuple[torch.Tensor | MemberRows, torch.Tensor, list[int]]] = []
     for member, X_test in zip(members, X_tests, strict=True):
+        rows = _member_rows(member, X_test, device, force_inference_dtype, model)
         prepared.append(
-            _prepare_member_inputs(member, X_test, device, force_inference_dtype, model)
+            rows
+            if rows is not None
+            else _prepare_member_inputs(
+                member, X_test, device, force_inference_dtype, model
+            )
         )
     performance_options = dataclasses.replace(
         model.get_default_performance_options(),
@@ -1826,18 +1881,27 @@ def _call_model_on_members(  # noqa: PLR0913
     # GPU preprocessing may have changed the members' widths, so the group is
     # refined by the prepared shapes.
     outputs: _MemberOutputs = []
-    shapes = [tuple(X_full.shape) for X_full, _, _ in prepared]
+    shapes = [
+        (isinstance(X_full, MemberRows), tuple(X_full.shape))
+        for X_full, _, _ in prepared
+    ]
     for positions in _group_equal(shapes):
-        X, y = _batch_member_inputs(
-            [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
-        )
+        inputs = [prepared[i][0] for i in positions]
+        targets = [prepared[i][1] for i in positions]
+        if isinstance(inputs[0], MemberRows):
+            y = _batch_targets(targets)
+            x, x_kwargs = None, {"x_host": MemberRowSource(inputs)}
+            rows_device, rows_dtype = torch.device("cpu"), torch.float32
+        else:
+            X, y = _batch_member_inputs(inputs, targets)
+            x, x_kwargs = _model_input_arguments(X, device)
+            rows_device, rows_dtype = X.device, X.dtype
         kwargs = _model_forward_kwargs(
             model,
             task_type,
             [members[i].config.estimator_id for i in positions],
             additional_model_input,
         )
-        x, x_kwargs = _model_input_arguments(X, device)
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(inference_mode),
@@ -1851,7 +1915,10 @@ def _call_model_on_members(  # noqa: PLR0913
                 **x_kwargs,
                 **kwargs,
                 **_row_weight_kwargs(
-                    [members[i] for i in positions], sample_weight_mode, X
+                    [members[i] for i in positions],
+                    sample_weight_mode,
+                    rows_device,
+                    rows_dtype,
                 ),
             )
         outputs.append((positions, output))
