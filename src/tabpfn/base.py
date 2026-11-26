@@ -10,6 +10,7 @@ import pathlib
 import typing
 import warnings
 from collections.abc import Sequence
+from inspect import signature
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
@@ -1290,6 +1291,23 @@ def reject_categoricals_for_differentiable_input(
     ):
         raise ValueError(
             "Categorical features are not supported for differentiable input."
+        )
+
+
+def validate_additional_model_input(
+    models: Sequence[Architecture], tuning_config: object | None
+) -> None:
+    """Raise unless `fit` can pass `additional_model_input` to every model."""
+    if any("additional_input" not in signature(m.forward).parameters for m in models):
+        raise TabPFNValidationError(
+            "This model does not support `additional_model_input`: its "
+            "architecture takes no `additional_input`."
+        )
+    if tuning_config is not None:
+        raise TabPFNValidationError(
+            "`additional_model_input` cannot be combined with `tuning_config`: "
+            "tuning refits on row subsets, and the input is passed unchanged. "
+            "Set `tuning_config=None`."
         )
 
 

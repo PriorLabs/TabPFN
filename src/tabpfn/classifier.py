@@ -50,6 +50,7 @@ from tabpfn.base import (
     resolved_n_estimators,
     resolved_softmax_temperature,
     transform_columns,
+    validate_additional_model_input,
     validate_and_clean_fit_input,
 )
 from tabpfn.constants import (
@@ -1125,6 +1126,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: YType,
         sample_weight: npt.ArrayLike | None = None,
         label_reliability: npt.ArrayLike | None = None,
+        additional_model_input: Any = None,
     ) -> Self:
         """Fit the model.
 
@@ -1142,6 +1144,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 to 0 (carries no information). Not a class probability or a
                 soft label. Raises unless the model supports
                 `SAMPLE_WEIGHT_MODE="learned"`.
+            additional_model_input: Experimental. Additional input the model can
+                use if its architecture supports it, passed unchanged. Raises
+                if the architecture does not, or with `tuning_config`.
 
         With `tuning_config`, each tuning fold is fit with the weights of its
         rows, and a holdout row counts in the tuned metric in proportion to
@@ -1177,6 +1182,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         row_weights, sample_weight_mode = self._resolve_row_weights(
             sample_weight, label_reliability, y=y
         )
+        if additional_model_input is not None:
+            validate_additional_model_input(self.models_, self.tuning_config)
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
@@ -1202,6 +1209,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             task_type=self.estimator_type,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            additional_model_input=additional_model_input,
             source_decisions=source_decisions,
         )
 

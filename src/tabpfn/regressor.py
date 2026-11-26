@@ -63,6 +63,7 @@ from tabpfn.base import (
     resolved_n_estimators,
     resolved_softmax_temperature,
     transform_columns,
+    validate_additional_model_input,
     validate_and_clean_fit_input,
 )
 from tabpfn.constants import (
@@ -997,7 +998,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             borders.device,
         )
 
-    def _build_ensemble_preprocessor_and_executor(
+    def _build_ensemble_preprocessor_and_executor(  # noqa: PLR0913
         self,
         *,
         X: Any,
@@ -1009,6 +1010,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         inference_mode: bool,
         row_weights: np.ndarray | None,
         sample_weight_mode: SampleWeightMode | None,
+        additional_model_input: Any,
         source_decisions: SourceDecisions | None,
     ) -> None:
         """Build ``self.ensemble_preprocessor_`` and ``self.executor_``.
@@ -1044,6 +1046,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             task_type=self.estimator_type,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            additional_model_input=additional_model_input,
             source_decisions=source_decisions,
         )
         self.executor_ = create_inference_engine(
@@ -1605,6 +1608,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_mode=False,
             row_weights=None,
             sample_weight_mode=None,
+            additional_model_input=None,
             source_decisions=None,
         )
         # `y` is z-normalized by now; histogramming on the raw-space borders
@@ -1622,6 +1626,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         y: YType,
         sample_weight: npt.ArrayLike | None = None,
         label_reliability: npt.ArrayLike | None = None,
+        additional_model_input: Any = None,
     ) -> Self:
         """Fit the model.
 
@@ -1638,6 +1643,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 how much to trust that row's target, from 1 (known to be right)
                 to 0 (carries no information). Raises unless the model
                 supports `SAMPLE_WEIGHT_MODE="learned"`.
+            additional_model_input: Experimental. Additional input the model can
+                use if its architecture supports it, passed unchanged. Raises
+                if the architecture does not, or with `tuning_config`.
 
         With `tuning_config`, each tuning fold is fit with the weights of its
         rows, and a holdout row counts in the tuned metric in proportion to
@@ -1687,6 +1695,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         row_weights, sample_weight_mode = self._resolve_row_weights(
             sample_weight, label_reliability, n_samples=len(y)
         )
+        if additional_model_input is not None:
+            validate_additional_model_input(self.models_, self.tuning_config)
 
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -1737,6 +1747,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_mode=True,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            additional_model_input=additional_model_input,
             source_decisions=source_decisions,
         )
         self._compute_downsample_correction(y_raw=y_raw)
