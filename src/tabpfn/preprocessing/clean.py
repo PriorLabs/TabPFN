@@ -172,7 +172,7 @@ def _encoder_selects_nothing(
 def clean_data_transform(
     X: XType,
     *,
-    cat_indices: Sequence[int | str] | None,
+    cat_indices: Sequence[int] | None,
     ord_encoder: OrderPreservingColumnTransformer | ColumnRangeEncoders | None,
     passthrough_inf: bool = False,
     validate: Callable[[XType], np.ndarray] | None = None,
@@ -205,7 +205,7 @@ def clean_data_transform(
     if isinstance(ord_encoder, ColumnRangeEncoders):
         return ord_encoder.transform(
             X,
-            cat_indices=typing.cast("Sequence[int]", cat_indices),
+            cat_indices=cat_indices or (),
             passthrough_inf=passthrough_inf,
             validate=validate,
         )
