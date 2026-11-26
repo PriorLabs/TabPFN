@@ -9,12 +9,16 @@ import dataclasses
 import functools
 import inspect
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from typing_extensions import override
 
+import numpy as np
 import torch
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 IN_PLACE_BLOCK_BYTES = 1 << 28
 """Bytes of selected columns a columnwise step copies, to its own device or the
@@ -137,17 +141,23 @@ class TorchPreprocessingStep(abc.ABC):
         `device`.
         """
         columns = torch.as_tensor(column_indices, device=x.device)
-        row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-        width = max(1, IN_PLACE_BLOCK_BYTES // max(1, row_bytes))
-        if fitted_cache is None and self._fit_column_group(num_train_rows) > 1:
+        plan = column_blocks(
+            self,
+            len(column_indices),
+            x.shape[0],
+            num_train_rows,
+            x.shape[1] * x.element_size(),
+            staged=False,
+        )
+        if fitted_cache is None and plan.fit_groups is not None:
             fitted_cache = _fit_column_groups(
-                self, x, column_indices, num_train_rows, device, IN_PLACE_BLOCK_BYTES
+                self, x, column_indices, num_train_rows, device, plan.fit_groups
             )
         if fitted_cache is not None:
             fitted_cache = _move_cache_to_device(fitted_cache, device)
         parts: list[dict[str, torch.Tensor]] = []
-        for start in range(0, len(column_indices), width):
-            block = slice(start, start + width)
+        (blocks,) = plan.groups
+        for block in blocks:
             # Indexing by a tensor copies, also when `device` is `x`'s.
             selected = x[:, :, columns[block]].to(device)
             if fitted_cache is None:
@@ -163,6 +173,60 @@ class TorchPreprocessingStep(abc.ABC):
         if fitted_cache is None:
             fitted_cache = _join_column_caches(parts, self.shared_cache_keys)
         return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+    @property
+    def fits_by_blocks(self) -> bool:
+        """Whether `fit_by_blocks` can fit the step."""
+        return self.columnwise
+
+    def fit_by_blocks(
+        self,
+        read_train: Callable[[slice], torch.Tensor],
+        num_columns: int,
+        num_rows: int,
+        num_train_rows: int,
+        *,
+        cell_bytes: int,
+        staged: bool,
+    ) -> BlockFit:
+        """Fit the step to transform any block of cells of its target columns.
+
+        Args:
+            read_train: The train rows of a block of target columns, by position,
+                `(num_train_rows, 1, block)`, as the steps before this one leave them.
+            num_columns: The number of target columns.
+            num_rows: The rows of the whole input, train rows first.
+            num_train_rows: The train rows of the whole input.
+            cell_bytes: The bytes of one cell of the input.
+            staged: Whether the pipeline would stage the input: see `column_blocks`.
+
+        The fitted values equal those the pipeline fits on the whole input.
+        """
+        if not self.columnwise:
+            raise TypeError(f"{type(self).__name__} reads whole rows.")
+        # The other columns in a block can change how a column's fitted values round,
+        # so the step fits on the pipeline's blocks.
+        plan = column_blocks(
+            self,
+            num_columns,
+            num_rows,
+            num_train_rows,
+            cell_bytes,
+            staged=staged,
+        )
+
+        def fit(block: slice) -> dict[str, torch.Tensor]:
+            x = read_train(block)
+            return self._fit(x.to(self._compute_device(x.device)))
+
+        cache = _join_column_caches(
+            [fit(block) for block in plan.fit_blocks()], self.shared_cache_keys
+        )
+        # In host memory: a model that reads the cells sizes its chunks from the free
+        # memory of the device, which must be what the input built whole leaves free.
+        return BlockFit(
+            _CachedTransform(self, _move_cache_to_device(cache, torch.device("cpu")))
+        )
 
     def _fit_column_group(self, num_train_rows: int) -> int:  # noqa: ARG002
         """Columns that a columnwise step's fit reads together, for batch size 1.
@@ -336,7 +400,7 @@ class TorchPreprocessingPipeline:
         staged = (
             consume_input
             and compute_device is not None
-            and not _same_device(torch.device(compute_device), x.device)
+            and runs_staged(x.device, compute_device)
         )
         if staged:
             # Run whole, such a step would read all of `x` and could copy it.
@@ -475,6 +539,13 @@ def _in_place_kwargs(step: TorchPreprocessingStep) -> dict[str, bool]:
     return {"in_place": True} if _accepts_in_place(type(step)) else {}
 
 
+def runs_staged(x_device: torch.device, compute_device: torch.device) -> bool:
+    """Whether the pipeline, given `consume_input`, moves an input on `x_device` to
+    `compute_device` a block at a time.
+    """
+    return not _same_device(torch.device(compute_device), x_device)
+
+
 def _same_device(a: torch.device, b: torch.device) -> bool:
     """Whether `a` and `b` name one device, an index of None meaning the current
     one of its type.
@@ -548,27 +619,28 @@ def _fit_transform_on_device(
 
     Returns the fitted cache on `device`.
     """
-    # Wide blocks, sliced where the columns are contiguous, keep the host-side
-    # copies fast; the step's own blocks then bound its intermediates on `device`.
-    row_bytes = x.shape[0] * x.shape[1] * x.element_size()
-    width = max(1, DEVICE_BLOCK_BYTES // max(1, row_bytes))
-    if fitted_cache is None and step._fit_column_group(num_train_rows) > 1:
+    plan = column_blocks(
+        step,
+        len(column_indices),
+        x.shape[0],
+        num_train_rows,
+        x.shape[1] * x.element_size(),
+        staged=True,
+    )
+    if fitted_cache is None and plan.fit_groups is not None:
         fitted_cache = _fit_column_groups(
-            step, x, column_indices, num_train_rows, device, DEVICE_BLOCK_BYTES
+            step, x, column_indices, num_train_rows, device, plan.fit_groups
         )
     if fitted_cache is not None:
         fitted_cache = _move_cache_to_device(fitted_cache, device)
     parts: list[dict[str, torch.Tensor]] = []
-    for start in range(0, len(column_indices), width):
-        selected = column_indices[start : start + width]
+    for blocks in plan.groups:
+        group = slice(blocks[0].start, blocks[-1].stop)
+        selected = column_indices[group]
         index = _column_index(selected)
         cache = None
         if fitted_cache is not None:
-            cache = _slice_column_cache(
-                fitted_cache,
-                slice(start, start + len(selected)),
-                step.shared_cache_keys,
-            )
+            cache = _slice_column_cache(fitted_cache, group, step.shared_cache_keys)
         result = step._fit_transform_column_blocks(
             x[:, :, index].to(device),
             list(range(len(selected))),
@@ -584,31 +656,149 @@ def _fit_transform_on_device(
     return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
 
 
+@dataclasses.dataclass(frozen=True)
+class BlockFit:
+    """A step fitted to transform any block of cells of its target columns."""
+
+    transform: Callable[[torch.Tensor, np.ndarray], torch.Tensor] | None
+    """Transforms `(rows, 1, len(positions))` cells of the target columns at
+    `positions`, and may write into them. None for a step that only reorders the
+    columns.
+    """
+
+    permutation: list[int] | None = None
+    """The new order of all columns, for a step that reorders them."""
+
+
+class _CachedTransform:
+    """`step._transform` with a fitted cache held in host memory, of which each block
+    of cells gets the part its columns need.
+    """
+
+    def __init__(
+        self, step: TorchPreprocessingStep, cache: dict[str, torch.Tensor]
+    ) -> None:
+        self.step = step
+        self.cache = cache
+        self._last: tuple[np.ndarray, dict[str, torch.Tensor]] | None = None
+
+    def __call__(self, x: torch.Tensor, positions: np.ndarray) -> torch.Tensor:
+        cache = self._cache_of(positions)
+        # Bounds the step's intermediates on the device to a block of columns.
+        width = max(1, IN_PLACE_BLOCK_BYTES // max(1, x[..., 0].numel() * x.itemsize))
+        if len(positions) <= width:
+            return self._transform(x, cache)
+        for block in _spans(0, len(positions), width):
+            part = _slice_column_cache(cache, block, self.step.shared_cache_keys)
+            x[..., block] = self._transform(x[..., block].contiguous(), part).to(x)
+        return x
+
+    def _cache_of(self, positions: np.ndarray) -> dict[str, torch.Tensor]:
+        """The part of the cache for the columns at `positions`.
+
+        Reads of one input mostly ask for the same columns, so the last part is kept.
+        """
+        # Read once: another thread's read can replace it meanwhile.
+        last = self._last
+        if last is None or not np.array_equal(last[0], positions):
+            index = torch.from_numpy(positions)
+            part = _slice_column_cache(self.cache, index, self.step.shared_cache_keys)
+            last = (positions.copy(), part)
+            self._last = last
+        return last[1]
+
+    def _transform(
+        self, x: torch.Tensor, cache: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        device = self.step._compute_device(x.device)
+        transformed, _, _ = self.step._transform(
+            x.to(device), fitted_cache=_move_cache_to_device(cache, device)
+        )
+        return transformed
+
+
+@dataclasses.dataclass(frozen=True)
+class ColumnBlocks:
+    """The blocks of a columnwise step's target columns, by position, that the
+    pipeline runs the step on.
+    """
+
+    groups: list[list[slice]]
+    """Consecutive blocks, grouped by what moves to the compute device at a time:
+    one group when the input is on it.
+
+    The step fits on each block's train rows, unless `fit_groups` is set, and
+    transforms the block.
+    """
+
+    fit_groups: list[slice] | None
+    """For a step whose fit reads columns together, the blocks of whole fit groups
+    that it fits on, before it transforms any block.
+    """
+
+    def fit_blocks(self) -> list[slice]:
+        """The blocks the step fits on."""
+        if self.fit_groups is not None:
+            return self.fit_groups
+        return [block for blocks in self.groups for block in blocks]
+
+
+def column_blocks(
+    step: TorchPreprocessingStep,
+    num_columns: int,
+    num_rows: int,
+    num_train_rows: int,
+    cell_bytes: int,
+    *,
+    staged: bool,
+) -> ColumnBlocks:
+    """The blocks a columnwise step runs on, for `num_columns` target columns of
+    `num_rows` rows, `cell_bytes` per row of a column.
+
+    Staged, the input is held off the compute device; else it is on it.
+    """
+    column_bytes = max(1, num_rows * cell_bytes)
+    width = max(1, IN_PLACE_BLOCK_BYTES // column_bytes)
+    # Wide groups, sliced where the columns are contiguous, keep the host-side
+    # copies fast; the narrow blocks bound the step's intermediates on the device.
+    # A staged step runs in place on each group's copy, so a group's blocks are the
+    # in-place blocks of that copy.
+    group_width = max(1, DEVICE_BLOCK_BYTES // column_bytes) if staged else num_columns
+    groups = [
+        _spans(group.start, group.stop, width)
+        for group in _spans(0, num_columns, group_width)
+    ]
+    fit_group = step._fit_column_group(num_train_rows)
+    if fit_group == 1:
+        return ColumnBlocks(groups, None)
+    # As many whole fit groups as fit in a block of train rows, at least one.
+    block_bytes = DEVICE_BLOCK_BYTES if staged else IN_PLACE_BLOCK_BYTES
+    fit_width = block_bytes // max(1, num_train_rows * cell_bytes)
+    fit_width = max(fit_group, fit_width - fit_width % fit_group)
+    return ColumnBlocks(groups, _spans(0, num_columns, fit_width))
+
+
+def _spans(start: int, stop: int, width: int) -> list[slice]:
+    """`start:stop` cut into slices of `width` columns, the last one narrower."""
+    return [slice(a, min(a + width, stop)) for a in range(start, stop, width)]
+
+
 def _fit_column_groups(
     step: TorchPreprocessingStep,
     x: torch.Tensor,
     column_indices: list[int],
     num_train_rows: int,
     device: torch.device,
-    block_bytes: int,
+    blocks: list[slice],
 ) -> dict[str, torch.Tensor]:
-    """`step._fit` on the train rows of `column_indices`, a block of whole fit groups
-    at a time moved to `device`.
-
-    A group's train rows fit in `block_bytes`: its width comes from the train rows.
+    """`step._fit` on the train rows of `column_indices`, one block of positions at a
+    time moved to `device`.
     """
-    group = step._fit_column_group(num_train_rows)
     train = x[:num_train_rows]
-    width = block_bytes // max(1, train.shape[0] * train.shape[1] * x.element_size())
-    width = max(group, width - width % group)
     return _join_column_caches(
         [
-            step._fit(
-                train[:, :, _column_index(column_indices[start : start + width])].to(
-                    device
-                )
-            )
-            for start in range(0, len(column_indices), width)
+            step._fit(train[:, :, _column_index(column_indices[block])].to(device))
+            for block in blocks
         ],
         step.shared_cache_keys,
     )
@@ -627,9 +817,11 @@ def _join_column_caches(
 
 
 def _slice_column_cache(
-    cache: dict[str, torch.Tensor], columns: slice, shared_keys: frozenset[str]
+    cache: dict[str, torch.Tensor],
+    columns: slice | torch.Tensor,
+    shared_keys: frozenset[str],
 ) -> dict[str, torch.Tensor]:
-    """Takes the part of a columnwise step's cache that covers a block of columns."""
+    """Takes the part of a columnwise step's cache that covers some of its columns."""
     return {
         key: value if key in shared_keys else value[..., columns]
         for key, value in cache.items()
