@@ -208,6 +208,7 @@ def clean_data_transform(
             cat_indices=cat_indices or (),
             passthrough_inf=passthrough_inf,
             validate=validate,
+            validate_runs=False,
         )
     if validate is not None:
         X = validate(X)
@@ -412,8 +413,14 @@ class ColumnRangeEncoders:
         cat_indices: Sequence[int],
         passthrough_inf: bool,
         validate: Callable[[XType], np.ndarray] | None,
+        validate_runs: bool,
     ) -> np.ndarray:
-        """`clean_data_transform` of `X` by these ranges."""
+        """`clean_data_transform` of `X` by these ranges.
+
+        With `validate_runs`, each of `_runs(X)` is validated at once rather than
+        each range: one fixed validation cost per run, but a run's converted copy
+        held at once.
+        """
         if validate is not None and (
             not isinstance(X, (pd.DataFrame, np.ndarray)) or X.ndim != 2
         ):
@@ -421,15 +428,57 @@ class ColumnRangeEncoders:
             # any other input to an array or refuses it.
             X = validate(X)
         table = np.empty((X.shape[0], self.ranges[-1][1]), dtype=self.dtype)
-        for start, stop, encoder in self.ranges:
-            table[:, start:stop] = clean_data_transform(
-                column_range(X, start, stop),
-                cat_indices=[i - start for i in cat_indices if start <= i < stop],
-                ord_encoder=encoder,
-                passthrough_inf=passthrough_inf,
-                validate=validate,
-            )
+        runs = self._runs(X) if validate_runs else [[r] for r in self.ranges]
+        for run in runs:
+            first, last = run[0][0], run[-1][1]
+            part = column_range(X, first, last)
+            if validate is not None:
+                part = validate(part)
+            for start, stop, encoder in run:
+                table[:, start:stop] = clean_data_transform(
+                    column_range(part, start - first, stop - first),
+                    cat_indices=[i - start for i in cat_indices if start <= i < stop],
+                    ord_encoder=encoder,
+                    passthrough_inf=passthrough_inf,
+                )
         return table
+
+    def _runs(
+        self, X: pd.DataFrame | np.ndarray
+    ) -> list[list[tuple[int, int, OrderPreservingColumnTransformer]]]:
+        """The ranges, grouped into runs of adjacent ranges whose columns share one
+        dtype that validates the same however many columns of it are validated
+        together. A range with other columns is a run of its own.
+        """
+        dtypes = (
+            list(X.dtypes) if isinstance(X, pd.DataFrame) else [X.dtype] * X.shape[1]
+        )
+        runs: list[list[tuple[int, int, OrderPreservingColumnTransformer]]] = []
+        run_dtype = None
+        for start, stop, encoder in self.ranges:
+            own = set(dtypes[start:stop])
+            dtype = own.pop() if len(own) == 1 else None
+            # `run_dtype` is checked too: `np.dtype(np.float64) == None` holds.
+            if (
+                _validates_alike_in_runs(dtype)
+                and _validates_alike_in_runs(run_dtype)
+                and dtype == run_dtype
+            ):
+                runs[-1].append((start, stop, encoder))
+            else:
+                runs.append([(start, stop, encoder)])
+                run_dtype = dtype
+        return runs
+
+
+def _validates_alike_in_runs(dtype: Any) -> bool:
+    """Whether columns of `dtype` validate to the same array whether validated one by
+    one or together.
+
+    Not so for a categorical column, which converts to its categories' dtype alone
+    but to objects next to another one.
+    """
+    return isinstance(dtype, (np.dtype, pd.StringDtype)) or _coerced_to_float64(dtype)
 
 
 def column_range(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
@@ -536,14 +585,16 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     dtypes = X.dtypes
     # Decided once per distinct dtype rather than once per column: a wide frame has
     # thousands of columns and a handful of dtypes.
-    dtypes_to_cast = {
-        dtype
-        for dtype in dtypes.unique()
-        if pd.api.types.is_bool_dtype(dtype)
-        or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
-    }
+    dtypes_to_cast = {dtype for dtype in dtypes.unique() if _coerced_to_float64(dtype)}
     cols = [col for col, dtype in dtypes.items() if dtype in dtypes_to_cast]
     return _cast_columns(X, cols, "float64")
+
+
+def _coerced_to_float64(dtype: Any) -> bool:
+    """Whether `coerce_nullable_dtypes_to_numpy` casts a column of `dtype`."""
+    return pd.api.types.is_bool_dtype(dtype) or (
+        pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf"
+    )
 
 
 def fix_dtypes(  # noqa: D103

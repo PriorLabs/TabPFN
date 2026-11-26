@@ -14,7 +14,11 @@ import tabpfn.base
 import tabpfn.classifier
 import tabpfn.regressor
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.preprocessing.clean import ColumnRangeEncoders, clean_data_transform
+from tabpfn.preprocessing.clean import (
+    ColumnRangeEncoders,
+    _validates_alike_in_runs,
+    clean_data_transform,
+)
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
@@ -145,6 +149,82 @@ def test__clean_data_transform__range_encoders__match_clean_predict_input(
     expected = tabpfn.base.clean_predict_input(model, X_test)
     assert cleaned.dtype == expected.dtype
     np.testing.assert_array_equal(cleaned, expected)
+
+
+@pytest.mark.parametrize("container", ["frame", "array"])
+def test__clean_predict_input__ranges_validated_in_runs__match_ranges_validated_alone(
+    container: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    n = N_ROWS + N_TEST
+    rng = np.random.default_rng(0)
+    if container == "frame":
+        # Adjacent categoricals of one dtype: one converts to its categories' dtype
+        # alone, but two convert to objects together.
+        X = _mixed_frame(n).assign(
+            codes_a=pd.Categorical(rng.integers(0, 3, n), categories=[0, 1, 2]),
+            codes_b=pd.Categorical(rng.integers(0, 3, n), categories=[0, 1, 2]),
+        )
+        X_fit, X_test = X.iloc[:N_ROWS], X.iloc[N_ROWS:]
+    else:
+        X = rng.standard_normal((n, 6))
+        X_fit, X_test = X[:N_ROWS], X[N_ROWS:]
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", N_ROWS * 32)
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"ENABLE_GPU_PREPROCESSING": True},
+    ).fit(X_fit, np.arange(N_ROWS) % 2)
+    X_test, _ = tabpfn.base.transform_columns(model, X_test)
+    encoders = model.ordinal_encoder_
+    assert len(encoders._runs(X_test)) < len(encoders.ranges)
+
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 1 << 30)
+    in_runs = tabpfn.base.clean_predict_input(model, X_test)
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", 1)
+    alone = tabpfn.base.clean_predict_input(model, X_test)
+
+    assert in_runs.dtype == alone.dtype
+    np.testing.assert_array_equal(in_runs, alone)
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        np.array([0.5, -1.0, np.nan, 2.0], dtype=np.float32),
+        np.array([1, 2, 3, 4], dtype=np.int32),
+        np.array([True, False, True, True]),
+        np.array(["a", None, "b", "a"], dtype=object),
+        pd.array([1, None, 3, 4], dtype="Int32"),
+        pd.array([True, None, False, True], dtype="boolean"),
+        pd.array(["a", None, "b", "a"], dtype="string"),
+        pd.Categorical([0, 1, 2, 1], categories=[0, 1, 2]),
+    ],
+    ids=[
+        "float32",
+        "int32",
+        "bool",
+        "object",
+        "Int32",
+        "boolean",
+        "string",
+        "category",
+    ],
+)
+def test__validates_alike_in_runs__iff_one_column_validates_as_in_two(
+    column: Any,
+) -> None:
+    X = pd.DataFrame({"a": column, "b": column})
+
+    def validate(part: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(
+            ensure_compatible_predict_input_sklearn(
+                part, TabPFNClassifier(), check_finite=False
+            )
+        )
+
+    alike = validate(X).iloc[:, :1].equals(validate(X.iloc[:, :1]))
+
+    assert _validates_alike_in_runs(X.dtypes.iloc[0]) == alike
 
 
 def test__gpu_preprocessing_off__keeps_a_float64_table(

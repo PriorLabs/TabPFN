@@ -895,18 +895,32 @@ def clean_predict_input(
     """Validate and clean predict input the way `validate_and_clean_fit_input` did
     the fit input.
     """
+    cat_indices = estimator.inferred_feature_schema_.indices_for(
+        FeatureModality.CATEGORICAL
+    )
+    encoder = getattr(estimator, "ordinal_encoder_", None)
+    passthrough_inf = estimator.get_inference_config().PASSTHROUGH_INF
+    validate = functools.partial(
+        ensure_compatible_predict_input_sklearn,
+        estimator=estimator,
+        check_finite=_whole_table_checks_finite(X),
+    )
+    if isinstance(encoder, ColumnRangeEncoders):
+        return encoder.transform(
+            X,
+            cat_indices=cat_indices,
+            passthrough_inf=passthrough_inf,
+            validate=validate,
+            # Each range adds a fixed cost to validation, so an input whose converted
+            # copy fits in one range validates its ranges together.
+            validate_runs=_converted_bytes(X) <= _RANGE_BYTES,
+        )
     return clean_data_transform(
         X,
-        cat_indices=estimator.inferred_feature_schema_.indices_for(
-            FeatureModality.CATEGORICAL
-        ),
-        ord_encoder=getattr(estimator, "ordinal_encoder_", None),
-        passthrough_inf=estimator.get_inference_config().PASSTHROUGH_INF,
-        validate=functools.partial(
-            ensure_compatible_predict_input_sklearn,
-            estimator=estimator,
-            check_finite=_whole_table_checks_finite(X),
-        ),
+        cat_indices=cat_indices,
+        ord_encoder=encoder,
+        passthrough_inf=passthrough_inf,
+        validate=validate,
     )
 
 
