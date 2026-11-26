@@ -557,8 +557,8 @@ def overwrite_fit_input() -> Iterator[None]:
 
     A later `fit` raises a `ValueError` for an input whose memory a fit wrote into or
     released, and for a frame that a fit emptied. A fit never writes into or releases
-    memory that a read-only array holds or that another fitted model reads. It copies
-    instead.
+    memory that a read-only array holds, that maps a file (`np.memmap`, `mmap`), or
+    that another fitted model reads. It copies instead.
     """
     token = _OVERWRITE_FIT_INPUT.set(True)
     try:
@@ -603,14 +603,28 @@ def may_overwrite_fit_input(X: Any, given: Any) -> bool:
 def may_write_fit_memory(X: np.ndarray) -> bool:
     """Whether a `fit` may write into or release the memory of `X`, the caller's array.
 
-    True inside `overwrite_fit_input()` if `X` is writeable and no fitted model reads
-    its memory. `check_fit_input` has already refused memory a fit overwrote.
+    True inside `overwrite_fit_input()` if `X` is writeable, maps no file, and no
+    fitted model reads its memory. `check_fit_input` has already refused memory a fit
+    overwrote.
     """
     return (
         _OVERWRITE_FIT_INPUT.get()
         and X.flags.writeable
+        and not _maps_a_file(X)
         and not _shares_memory([X], _KEPT_FIT_MEMORY)
     )
+
+
+def _maps_a_file(X: np.ndarray) -> bool:
+    """Whether the memory of `X` is a memory map, whose writes can reach a file."""
+    owner: Any = X
+    while isinstance(owner, np.ndarray):
+        if isinstance(owner, np.memmap):
+            return True
+        owner = owner.base
+    if isinstance(owner, memoryview):
+        owner = owner.obj
+    return isinstance(owner, mmap.mmap)
 
 
 def mark_fit_memory(X: np.ndarray, *, overwritten: bool) -> None:

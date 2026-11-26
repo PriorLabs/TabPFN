@@ -452,6 +452,29 @@ def test__overwrite_fit_input__wide_array__members_share_it_narrowed(
         _gpu_preprocessing_model(estimator_cls).fit(given, y)
 
 
+@pytest.mark.usefixtures("ranges_narrower_than_the_input")
+def test__overwrite_fit_input__memory_mapped_array__leaves_the_file_as_it_is(
+    tmp_path: Any,
+) -> None:
+    """A writeable memory map is not narrowed in place: that would write the file."""
+    rng = np.random.default_rng(0)
+    values = rng.standard_normal((N_ROWS + N_TEST, 6)) * 1000
+    path = tmp_path / "X.f64"
+    values[:N_ROWS].tofile(path)
+    given = np.memmap(path, dtype=np.float64, mode="r+", shape=(N_ROWS, 6))
+    y = _targets(TabPFNClassifier, N_ROWS)
+    expected = _gpu_preprocessing_model(TabPFNClassifier).fit(values[:N_ROWS], y)
+
+    with overwrite_fit_input():
+        model = _gpu_preprocessing_model(TabPFNClassifier).fit(given, y)
+    given.flush()
+
+    np.testing.assert_array_equal(np.fromfile(path), values[:N_ROWS].reshape(-1))
+    np.testing.assert_array_equal(
+        _predict(model, values[N_ROWS:]), _predict(expected, values[N_ROWS:])
+    )
+
+
 @pytest.mark.parametrize("dtype", [np.float64, np.int64, np.int32])
 def test__narrow_fit_input_in_place__many_blocks__holds_the_cast_values(
     monkeypatch: pytest.MonkeyPatch, dtype: type
