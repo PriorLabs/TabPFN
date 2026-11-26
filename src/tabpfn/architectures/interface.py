@@ -273,6 +273,10 @@ class Architecture(nn.Module, ABC):
             estimator_ids: Zero-based ensemble positions, one per batch element.
                 These stay fixed across batching, cache construction, and prediction.
 
+        An architecture may also take an `additional_input` keyword argument: the
+        `additional_model_input` given to `fit`, passed unchanged. It is passed
+        only when given.
+
         Returns:
             If `only_return_standard_out`, then a Tensor of shape
             `(test rows, batch size, num classes)`, which is the output of the

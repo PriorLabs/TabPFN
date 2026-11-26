@@ -10,7 +10,7 @@ import math
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import numpy as np
 import torch
@@ -105,6 +105,7 @@ class TabPFNEnsemblePreprocessor:
     # existed still load.
     sample_weight_mode: SampleWeightMode | None = None
     member_row_weights: list[np.ndarray] | None = None
+    additional_model_input: Any = None
 
     def __init__(  # noqa: PLR0913
         self,
@@ -126,6 +127,7 @@ class TabPFNEnsemblePreprocessor:
         task_type: Literal["classifier", "regressor"] = "classifier",
         row_weights: np.ndarray | None = None,
         sample_weight_mode: SampleWeightMode | None = None,
+        additional_model_input: Any = None,
     ) -> None:
         """Init.
 
@@ -172,6 +174,8 @@ class TabPFNEnsemblePreprocessor:
                 per-row weights. Each member gets the rows it keeps.
             sample_weight_mode: How the model applies ``row_weights``. Required
                 with ``row_weights``.
+            additional_model_input: Passed unchanged to the model's forward as
+                ``additional_input``, or ``None``.
         """
         super().__init__()
         if (row_weights is None) != (sample_weight_mode is None):
@@ -179,6 +183,7 @@ class TabPFNEnsemblePreprocessor:
                 "row_weights and sample_weight_mode must be given together."
             )
         self.sample_weight_mode = sample_weight_mode
+        self.additional_model_input = additional_model_input
         self.configs = configs
         self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs

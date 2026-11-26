@@ -13,7 +13,7 @@ from copy import copy, deepcopy
 from functools import partial
 from inspect import Parameter, signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -89,15 +89,20 @@ def _forward_parameters(model: torch.nn.Module) -> Mapping[str, Parameter]:
 
 
 def _model_forward_kwargs(
-    model: Architecture, task_type: str, estimator_ids: list[int]
-) -> dict[str, str | list[int]]:
+    model: Architecture,
+    task_type: str,
+    estimator_ids: list[int],
+    additional_model_input: Any,
+) -> dict[str, Any]:
     """Return the metadata arguments accepted by the architecture."""
     parameters = _forward_parameters(model)
-    kwargs: dict[str, str | list[int]] = {}
+    kwargs: dict[str, Any] = {}
     if "task_type" in parameters:
         kwargs["task_type"] = task_type
     if "estimator_ids" in parameters:
         kwargs["estimator_ids"] = estimator_ids
+    if additional_model_input is not None:
+        kwargs["additional_input"] = additional_model_input
     return kwargs
 
 
@@ -755,6 +760,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             save_peak_mem=save_peak_mem,
             task_type=task_type,
             sample_weight_mode=self.ensemble_preprocessor.sample_weight_mode,
+            additional_model_input=self.ensemble_preprocessor.additional_model_input,
         )
 
 
@@ -851,6 +857,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                     model,
                     task_type,
                     [config.estimator_id for config in self.ensemble_configs[i]],
+                    additional_model_input=None,
                 )
                 with (
                     get_autocast_context(device, enabled=autocast),
@@ -1071,6 +1078,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             save_peak_mem=save_peak_mem,
             task_type=task_type,
             sample_weight_mode=self.ensemble_preprocessor.sample_weight_mode,
+            additional_model_input=self.ensemble_preprocessor.additional_model_input,
         )
 
     @override
@@ -1455,6 +1463,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 model,
                 self.task_type,
                 [read[i].config.estimator_id for i in positions],
+                self.ensemble_preprocessor.additional_model_input,
             )
             # Nothing reads this forward's input after it.
             x, x_kwargs = _model_input_arguments(X, device, given_up_to=model)
@@ -1667,7 +1676,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             else None,
         )
         kwargs = _model_forward_kwargs(
-            model, task_type, [member.config.estimator_id for member in members]
+            model,
+            task_type,
+            [member.config.estimator_id for member in members],
+            self.ensemble_preprocessor.additional_model_input,
         )
         row_weight_kwargs = _row_weight_kwargs(
             members, self.ensemble_preprocessor.sample_weight_mode, X
@@ -1790,6 +1802,7 @@ def _call_model_on_members(  # noqa: PLR0913
     save_peak_mem: bool,
     task_type: str,
     sample_weight_mode: str | None,
+    additional_model_input: Any,
 ) -> _MemberOutputs:
     """Forward the members, which share a model, from their train and test rows.
 
@@ -1819,7 +1832,10 @@ def _call_model_on_members(  # noqa: PLR0913
             [prepared[i][0] for i in positions], [prepared[i][1] for i in positions]
         )
         kwargs = _model_forward_kwargs(
-            model, task_type, [members[i].config.estimator_id for i in positions]
+            model,
+            task_type,
+            [members[i].config.estimator_id for i in positions],
+            additional_model_input,
         )
         x, x_kwargs = _model_input_arguments(X, device)
         with (
