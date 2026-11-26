@@ -331,18 +331,15 @@ def drop_and_append(
     # Not `iloc`, which would copy the blocks that hold the kept columns.
     delete_columns(out, expanded)
     out.index = pd.RangeIndex(len(out))
-    # Insert one column at a time. On older pandas, `concat` merges the new columns
+    # Insert one column at a time. Before pandas 3, `concat` merges the new columns
     # into the kept block of the same dtype, and that copies the block.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
         for block in blocks:
             for j, name in enumerate(block.columns):
-                out.insert(
-                    out.shape[1],
-                    name,
-                    block.iloc[:, j].to_numpy(),
-                    allow_duplicates=True,
-                )
+                # A Series on the same index, so copy-on-write pandas references
+                # the block's column instead of copying it.
+                out.insert(out.shape[1], name, block.iloc[:, j], allow_duplicates=True)
     return out
 
 
