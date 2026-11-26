@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.0] - 2026-11-26
+
+### Added
+
+- Add `SKILL.md`, a usage guide for coding agents that use TabPFN. ([#1443](https://github.com/PriorLabs/TabPFN/pull/1443))
+- Add the `TABPFN_HOST_MODEL_INPUT_MIN_BYTES` setting: the input size from which a model that reads its input from host memory gets it there instead of on the inference device (default 16 GiB). ([#1451](https://github.com/PriorLabs/TabPFN/pull/1451))
+- Add a `kv_cache_on_host` option to `TabPFNClassifier`/`TabPFNRegressor` for `fit_mode="fit_with_cache"`: whether the KV cache keeps its keys and values in host memory. `None` (default) lets the model architecture decide. ([#1457](https://github.com/PriorLabs/TabPFN/pull/1457))
+
+### Changed
+
+- `fit_mode="fit_with_cache"` writes an ensemble member that shares the caller's table to the device a block of rows at a time, rather than building the member's whole table on the host first. ([#1445](https://github.com/PriorLabs/TabPFN/pull/1445))
+- The fingerprint feature copies and rounds a block of rows at a time on the host, rather than the whole table, so GPU preprocessing no longer holds two host copies of each ensemble member's training table. ([#1446](https://github.com/PriorLabs/TabPFN/pull/1446))
+- At predict, a float32 test table with categorical columns is cleaned into a float32 table, so ensemble members whose CPU preprocessing only selects, reorders or encodes (as with GPU preprocessing) read it and hold only the columns they encode, also when they subsample features, rather than a float64 copy each. Members that cannot share it encode their own copy in place. ([#1448](https://github.com/PriorLabs/TabPFN/pull/1448))
+- `fit_with_cache` uses less peak GPU and host memory on large tables. ([#1451](https://github.com/PriorLabs/TabPFN/pull/1451))
+- The `fit_with_cache` build tells a model whose `forward` takes `free_x_host` that it may free a host-memory input once it has read it. ([#1452](https://github.com/PriorLabs/TabPFN/pull/1452))
+- Date and text expansion does not copy the input frame. The columns that it keeps share the input's memory. ([#1459](https://github.com/PriorLabs/TabPFN/pull/1459))
+- `fit` validates and cleans the input one range of columns at a time when reading it whole would convert all of it. The cleaned table is float32 when every ensemble member reads float32, as with GPU preprocessing. This reduces host memory for tables with integer, boolean, nullable, categorical, string, date or float64 columns. Predictions are the same as with a float64 table: the constant columns and the feature-importance order are decided on the input before the cast to float32. If float32 cannot hold the category or group codes exactly, the table stays float64. ([#1460](https://github.com/PriorLabs/TabPFN/pull/1460))
+- Inside `overwrite_fit_input()`, `fit` frees the memory of its input while it cleans it. It empties a frame after the targets are validated and frees the frame's blocks during cleaning. For a float32 table, it casts a wider numeric array to float32 in the array's own memory. A fit never writes into the memory of a read-only array or of an array that another fitted model reads. A fit refuses an input whose memory an earlier fit overwrote. ([#1462](https://github.com/PriorLabs/TabPFN/pull/1462))
+- Ensemble preprocessing copies the columns each member reads faster, which speeds up fit and predict on wide tables, in particular those with date or text columns. ([#1463](https://github.com/PriorLabs/TabPFN/pull/1463))
+- With `fit_mode="fit_with_cache"` and GPU preprocessing, preparing the training data needs less GPU memory, so larger tables fit without CUDA out-of-memory errors. ([#1465](https://github.com/PriorLabs/TabPFN/pull/1465))
+- The GPU-preprocessed model input of an ensemble member can be produced one block of cells at a time, without building the whole input. ([#1467](https://github.com/PriorLabs/TabPFN/pull/1467))
+- When an ensemble member's model input is held in host memory, a model that reads row sources gets the input as blocks computed on demand. The whole input is not built. ([#1468](https://github.com/PriorLabs/TabPFN/pull/1468))
+
+### Fixed
+
+- The `safepower` preprocessing no longer turns numeric columns that lie far from zero relative to their spread, such as years or coordinates, into a constant, and its CPU and GPU implementations now agree on such columns. Models whose configuration applies `safepower` to features (among the bundled ones the v2 regressor) can give different predictions on tables with such a column; other columns are unchanged up to rounding. No configuration change is needed. ([#1464](https://github.com/PriorLabs/TabPFN/pull/1464))
+- With GPU preprocessing, the `safepower` feature transform gives the same results on tables large enough to be processed in parts as it does on smaller ones. ([#1465](https://github.com/PriorLabs/TabPFN/pull/1465))
+- The `"zero_inflated"` preset of `TabPFNRegressor` now sets `REGRESSION_TARGET_SIGN_FLIP=False` and `AVERAGE_BEFORE_SOFTMAX=False`. A key in `inference_config` or an `average_before_softmax` argument still wins. ([#1470](https://github.com/PriorLabs/TabPFN/pull/1470))
+
+
 ## [10.2.0] - 2026-11-17
 
 ### Added
