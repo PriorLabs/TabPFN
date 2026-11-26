@@ -109,6 +109,21 @@ def _cast_columns(
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
+def delete_columns(X: pd.DataFrame, positions: Sequence[int]) -> None:
+    """Delete the columns at `positions` from `X` in place, in one call.
+
+    By position, so a label that repeats loses only the positions given. The kept
+    columns are not copied.
+    """
+    labels = X.columns[list(positions)]
+    X._mgr = X._mgr.idelete(positions)
+    # As `del X[label]` does: a cached column keeps its block's memory alive.
+    cache = getattr(X, "_item_cache", None)
+    if cache is not None:
+        for label in labels:
+            cache.pop(label, None)
+
+
 _FILL_BLOCK_BYTES = 1 << 24
 """Bytes of rows `_with_constants` copies at a time. Each block's constant columns are
 written while it is in cache: larger blocks fall out of it, smaller ones pay more

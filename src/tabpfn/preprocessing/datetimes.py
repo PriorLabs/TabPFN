@@ -28,6 +28,7 @@ from sklearn.exceptions import NotFittedError
 from skrub import DatetimeEncoder
 
 from tabpfn.errors import TabPFNValidationError
+from tabpfn.preprocessing.clean import delete_columns
 from tabpfn.preprocessing.datamodel import make_names_unique
 
 if TYPE_CHECKING:
@@ -327,14 +328,8 @@ def drop_and_append(
     a default index, like skrub's output.
     """
     out = frame.copy(deep=False)
-    labels = out.columns
-    # Temporary integer labels are unique, so each `del` removes exactly one
-    # position, also when the caller's labels repeat. `del` does not copy the kept
-    # columns. Selecting them with `iloc` would copy the blocks that hold them.
-    out.columns = pd.RangeIndex(out.shape[1])
-    for position in expanded:
-        del out[position]
-    out.columns = labels.delete(list(expanded))
+    # Not `iloc`, which would copy the blocks that hold the kept columns.
+    delete_columns(out, expanded)
     out.index = pd.RangeIndex(len(out))
     # Insert one column at a time. On older pandas, `concat` merges the new columns
     # into the kept block of the same dtype, and that copies the block.
