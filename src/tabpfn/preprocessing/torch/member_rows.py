@@ -290,5 +290,5 @@ def _cells(table: Table, rows: slice | np.ndarray, columns: np.ndarray) -> torch
             torch.float32, memory_format=torch.contiguous_format, copy=True
         )
     else:
-        out = gather_cells(as_tensor_to_read(table), rows, torch.from_numpy(columns))
+        out = gather_cells(as_tensor_to_read(table), rows, columns)
     return out.to(torch.float32).contiguous()

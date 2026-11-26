@@ -62,15 +62,27 @@ def gather_columns(X: np.ndarray, indices: np.ndarray, dtype: Any) -> np.ndarray
     return out
 
 
+def positions(values: np.ndarray) -> torch.Tensor:
+    """`values`, positions along an axis, as a contiguous int64 tensor.
+
+    numpy 1 gives int32 on Windows, which some torch indexing ops reject, and
+    `torch.from_numpy` rejects negative strides, such as those of a reversed view.
+    """
+    return torch.from_numpy(np.ascontiguousarray(values, dtype=np.int64))
+
+
 def gather_cells(
-    whole: torch.Tensor, rows: slice | np.ndarray, index: torch.Tensor
+    whole: torch.Tensor, rows: slice | np.ndarray, columns: np.ndarray
 ) -> torch.Tensor:
-    """`whole[rows][:, index]` as a new tensor, one block of rows per torch thread.
+    """`whole[rows][:, columns]` as a new tensor, one block of rows per torch thread.
 
     `index_select` along columns runs on one thread. Advanced indexing runs on all
     of them, but does several times the work per thread. So each thread runs
     `index_select` on its own block.
     """
+    index = positions(columns)
+    if not isinstance(rows, slice):
+        rows = positions(rows)
     n_rows = rows.stop - rows.start if isinstance(rows, slice) else len(rows)
     out = torch.empty((n_rows, len(index)), dtype=whole.dtype)
     threads = torch.get_num_threads()
@@ -85,7 +97,7 @@ def gather_cells(
             if isinstance(rows, slice):
                 block = whole[rows.start + start : rows.start + stop]
             else:
-                block = whole.index_select(0, torch.from_numpy(rows[start:stop]))
+                block = whole.index_select(0, rows[start:stop])
             torch.index_select(block, 1, index, out=out[start:stop])
 
     pool = _thread_pool(threads, os.getpid())
@@ -278,7 +290,7 @@ class SharedColumnsTable:
         from_base, own_at, own_from = self._gather_indices
         # One index of rows and columns reads only the table's cells, not whole rows
         # of `base`. Torch indexes with many threads, NumPy with one.
-        index = torch.from_numpy(rows).view(-1, 1)
+        index = positions(rows).view(-1, 1)
         out = as_tensor_to_read(self.base)[index, from_base]
         if own_at.numel():
             values = torch.from_numpy(self.own)[index, own_from]

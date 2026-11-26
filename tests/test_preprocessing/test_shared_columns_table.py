@@ -49,14 +49,17 @@ def test__with_columns__places_own_values() -> None:
     np.testing.assert_array_equal(np.asarray(table)[:, 1], np.full(6, 7.0))
 
 
-def test__rows_at__matches_the_array() -> None:
+@pytest.mark.parametrize(
+    "rows",
+    [np.array([5, 0, 3, 3, 1]), np.array([5, 0, 3], np.int32), np.arange(6)[::-2]],
+    ids=["int64", "int32", "reversed"],
+)
+def test__rows_at__matches_the_array(rows: np.ndarray) -> None:
     base = _base()
     values = -np.arange(12, dtype=np.float32).reshape(6, 2)
     table = SharedColumnsTable.of(base)[:, [4, 1, 3]].with_columns(
         values, [1, 3], [(0, 0), (2, 1), (4, 2)]
     )
-    rows = np.array([5, 0, 3, 3, 1])
-
     np.testing.assert_array_equal(table.rows_at(rows).numpy(), np.asarray(table)[rows])
 
 

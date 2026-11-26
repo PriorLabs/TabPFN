@@ -212,11 +212,21 @@ def _record_fits(
     return fits
 
 
-@pytest.mark.parametrize("rows", [slice(1, 7), np.array([0, 3, 5])])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        slice(1, 7),
+        np.array([0, 3, 5]),
+        np.array([5, 0, 3], np.int32),
+        np.arange(8)[::-3],
+    ],
+    ids=["slice", "int64", "int32", "reversed"],
+)
 def test__cells__in_inference_mode__gathers_the_cells(rows: slice | np.ndarray) -> None:
     """The model reads its input inside `torch.inference_mode`."""
     table = np.arange(40, dtype=np.float32).reshape(8, 5)
-    columns = np.array([4, 0, 2])
+    # int32 as numpy 1 gives on Windows, which torch rejects as an index.
+    columns = np.array([4, 0, 2], np.int32)
 
     with torch.inference_mode():
         cells = _cells(table, rows, columns)
