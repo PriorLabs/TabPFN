@@ -944,12 +944,14 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
     This is the case when reading the input whole would make a converted copy of all
     of it:
 
-    - a frame with more than one block, or with one non-numeric block;
+    - a frame with more than one block, unless all are float32, or with one
+      non-numeric block;
     - a numeric frame or array whose dtype is not float32, for a float32 table.
 
-    Other numeric frames and arrays are read without a copy. An input with no columns
-    goes to the whole-table validation, which refuses it. An input whose converted
-    copy fits in one range is read whole.
+    Other numeric frames and arrays are read without a copy. A frame of float32
+    blocks is read into one float32 copy, which cleaning keeps as the table. An input
+    with no columns goes to the whole-table validation, which refuses it. An input
+    whose converted copy fits in one range is read whole.
     """
     if _converted_bytes(X) <= _RANGE_BYTES:
         # Each range adds a fixed cost to validation and cleaning. This also sends
@@ -957,11 +959,14 @@ def _cleans_by_column_ranges(X: XType, dtype: np.dtype) -> bool:
         # whole-table validation.
         return False
     if isinstance(X, pd.DataFrame):
-        blocks = X._mgr.blocks
-        if len(blocks) != 1:
-            return True
         # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
-        values = blocks[0].values  # noqa: PD011
+        arrays = [block.values for block in X._mgr.blocks]  # noqa: PD011
+        if len(arrays) != 1:
+            return not all(
+                isinstance(values, np.ndarray) and values.dtype == np.float32
+                for values in arrays
+            )
+        values = arrays[0]
         if not isinstance(values, np.ndarray) or values.dtype.kind not in "biuf":
             return True
         return dtype == np.float32 and values.dtype != np.float32

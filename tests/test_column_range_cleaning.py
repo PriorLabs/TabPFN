@@ -248,6 +248,41 @@ def test__gpu_preprocessing_off__keeps_a_float64_table(
     assert captured["fit"][0].dtype == np.float64
 
 
+@pytest.mark.parametrize("gpu_preprocessing", [False, True])
+def test__float32_frame_in_several_blocks__cleaned_whole_into_a_float32_table(
+    monkeypatch: pytest.MonkeyPatch, gpu_preprocessing: bool
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fit_spy(*args: Any, **kwargs: Any) -> Any:
+        captured["fit"] = tabpfn.base.validate_and_clean_fit_input(*args, **kwargs)
+        return captured["fit"]
+
+    monkeypatch.setattr(tabpfn.classifier, "validate_and_clean_fit_input", fit_spy)
+    monkeypatch.setattr(tabpfn.base, "_RANGE_BYTES", N_ROWS * 32)
+    rng = np.random.default_rng(0)
+    X = pd.concat(
+        [
+            pd.DataFrame(
+                rng.standard_normal((N_ROWS, 2), np.float32), columns=["a", "b"]
+            ),
+            pd.DataFrame(
+                rng.standard_normal((N_ROWS, 2), np.float32), columns=["c", "d"]
+            ),
+        ],
+        axis=1,
+    )
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"ENABLE_GPU_PREPROCESSING": gpu_preprocessing},
+    )
+    model.fit(X, np.arange(N_ROWS) % 2)
+
+    assert not isinstance(captured["fit"][4], ColumnRangeEncoders)
+    assert captured["fit"][0].dtype == np.float32
+
+
 def test__column_ranges__split_by_kind_and_width(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
