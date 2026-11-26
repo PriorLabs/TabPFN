@@ -275,12 +275,14 @@ class SharedColumnsTable:
 
     def rows_at(self, rows: np.ndarray) -> torch.Tensor:
         """Rows `rows`, in their order, as a new CPU tensor."""
-        # Torch gathers with many threads. NumPy fancy indexing uses one thread.
-        index = torch.from_numpy(rows)
-        base = as_tensor_to_read(self.base).index_select(0, index)
-        own = torch.from_numpy(self.own).index_select(0, index)
-        out = torch.empty((len(rows), self.shape[1]), dtype=base.dtype)
-        self._fill(base, own, out)
+        from_base, own_at, own_from = self._gather_indices
+        # One index of rows and columns reads only the table's cells, not whole rows
+        # of `base`. Torch indexes with many threads, NumPy with one.
+        index = torch.from_numpy(rows).view(-1, 1)
+        out = as_tensor_to_read(self.base)[index, from_base]
+        if own_at.numel():
+            values = torch.from_numpy(self.own)[index, own_from]
+            out.scatter_(1, own_at.expand(len(rows), -1), values)
         return out
 
     def _fill(self, base: torch.Tensor, own: torch.Tensor, out: torch.Tensor) -> None:
