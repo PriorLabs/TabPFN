@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import dataclasses
 import typing
 import warnings
 import weakref
@@ -27,9 +28,10 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import Any, Literal
 
+    from tabpfn.constants import XType
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -168,11 +170,12 @@ def _encoder_selects_nothing(
 
 
 def clean_data_transform(
-    X: np.ndarray | pd.DataFrame,
+    X: XType,
     *,
-    cat_indices: Sequence[int | str] | None,
-    ord_encoder: OrderPreservingColumnTransformer | None,
+    cat_indices: Sequence[int] | None,
+    ord_encoder: OrderPreservingColumnTransformer | ColumnRangeEncoders | None,
     passthrough_inf: bool = False,
+    validate: Callable[[XType], np.ndarray] | None = None,
 ) -> np.ndarray:
     """Clean data being predicted on, the way `clean_data` cleaned the training data.
 
@@ -183,17 +186,32 @@ def clean_data_transform(
     Args:
         X: The data to clean.
         cat_indices: Indices of the columns the encoder was fitted on.
-        ord_encoder: The encoder `clean_data` returned at fit time.
+        ord_encoder: The `ordinal_encoder_` of a fitted estimator. This is the
+            encoder that `clean_data` returned at fit time, or the
+            `ColumnRangeEncoders` of a fit input cleaned one range of columns at a
+            time.
         passthrough_inf: If True, +/-inf values are carried through the ordinal
             encoding stage unchanged instead of crashing it.
+        validate: Validates `X`, or each column range of `X`, before cleaning. None
+            if `X` is already validated.
 
     Returns:
-        `X`, or a copy of it with the fit-time constant columns restored, when `X` is
-        a numeric array the encoder encodes no column of; a new float32, C-ordered
-        array when `X` is a float32 array whose encoded columns all held numbers at
-        fit, and which holds no infinity if `passthrough_inf`; otherwise a new float64
-        array.
+        For `ColumnRangeEncoders`, a new table of their `dtype`. Otherwise `X`, or a
+        copy of it with the fit-time constant columns restored, when `X` is a numeric
+        array the encoder encodes no column of; a new float32, C-ordered array when
+        `X` is a float32 array whose encoded columns all held numbers at fit, and
+        which holds no infinity if `passthrough_inf`; otherwise a new float64 array.
     """
+    if isinstance(ord_encoder, ColumnRangeEncoders):
+        return ord_encoder.transform(
+            X,
+            cat_indices=cat_indices or (),
+            passthrough_inf=passthrough_inf,
+            validate=validate,
+            validate_runs=False,
+        )
+    if validate is not None:
+        X = validate(X)
     given = X
     if constant_values := getattr(ord_encoder, "constant_values_", None):
         # A column constant at fit gets its fit-time value back, so it is cleaned
@@ -376,6 +394,100 @@ def _encode_categoricals(
     return out
 
 
+@dataclasses.dataclass
+class ColumnRangeEncoders:
+    """The fitted cleaning of a fit input cleaned one range of columns at a time.
+
+    `clean_data` fitted one encoder on each range. Predict input is cleaned with the
+    same ranges into a table of `dtype`.
+    """
+
+    ranges: list[tuple[int, int, OrderPreservingColumnTransformer]]
+    """`(start, stop, encoder)` per range of columns, in column order."""
+    dtype: np.dtype
+
+    def transform(
+        self,
+        X: XType,
+        *,
+        cat_indices: Sequence[int],
+        passthrough_inf: bool,
+        validate: Callable[[XType], np.ndarray] | None,
+        validate_runs: bool,
+    ) -> np.ndarray:
+        """`clean_data_transform` of `X` by these ranges.
+
+        With `validate_runs`, each of `_runs(X)` is validated at once rather than
+        each range: one fixed validation cost per run, but a run's converted copy
+        held at once.
+        """
+        if validate is not None and (
+            not isinstance(X, (pd.DataFrame, np.ndarray)) or X.ndim != 2
+        ):
+            # Only a frame or a 2-D array can be cut into ranges. Validation converts
+            # any other input to an array or refuses it.
+            X = validate(X)
+        table = np.empty((X.shape[0], self.ranges[-1][1]), dtype=self.dtype)
+        runs = self._runs(X) if validate_runs else [[r] for r in self.ranges]
+        for run in runs:
+            first, last = run[0][0], run[-1][1]
+            part = column_range(X, first, last)
+            if validate is not None:
+                part = validate(part)
+            for start, stop, encoder in run:
+                table[:, start:stop] = clean_data_transform(
+                    column_range(part, start - first, stop - first),
+                    cat_indices=[i - start for i in cat_indices if start <= i < stop],
+                    ord_encoder=encoder,
+                    passthrough_inf=passthrough_inf,
+                )
+        return table
+
+    def _runs(
+        self, X: pd.DataFrame | np.ndarray
+    ) -> list[list[tuple[int, int, OrderPreservingColumnTransformer]]]:
+        """The ranges, grouped into runs of adjacent ranges whose columns share one
+        dtype that validates the same however many columns of it are validated
+        together. A range with other columns is a run of its own.
+        """
+        dtypes = (
+            list(X.dtypes) if isinstance(X, pd.DataFrame) else [X.dtype] * X.shape[1]
+        )
+        runs: list[list[tuple[int, int, OrderPreservingColumnTransformer]]] = []
+        run_dtype = None
+        for start, stop, encoder in self.ranges:
+            own = set(dtypes[start:stop])
+            dtype = own.pop() if len(own) == 1 else None
+            # `run_dtype` is checked too: `np.dtype(np.float64) == None` holds.
+            if (
+                _validates_alike_in_runs(dtype)
+                and _validates_alike_in_runs(run_dtype)
+                and dtype == run_dtype
+            ):
+                runs[-1].append((start, stop, encoder))
+            else:
+                runs.append([(start, stop, encoder)])
+                run_dtype = dtype
+        return runs
+
+
+def _validates_alike_in_runs(dtype: Any) -> bool:
+    """Whether columns of `dtype` validate to the same array whether validated one by
+    one or together.
+
+    Not so for a categorical column, which converts to its categories' dtype alone
+    but to objects next to another one.
+    """
+    return isinstance(dtype, (np.dtype, pd.StringDtype)) or _coerced_to_float64(dtype)
+
+
+def column_range(X: pd.DataFrame | np.ndarray, start: int, stop: int) -> XType:
+    """The columns `start:stop` of `X`, in the same container type."""
+    if isinstance(X, pd.DataFrame):
+        return X.iloc[:, start:stop]
+    return X[:, start:stop]
+
+
 _OVERWRITE_FIT_INPUT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "tabpfn_overwrite_fit_input", default=False
 )
@@ -473,14 +585,16 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     dtypes = X.dtypes
     # Decided once per distinct dtype rather than once per column: a wide frame has
     # thousands of columns and a handful of dtypes.
-    dtypes_to_cast = {
-        dtype
-        for dtype in dtypes.unique()
-        if pd.api.types.is_bool_dtype(dtype)
-        or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
-    }
+    dtypes_to_cast = {dtype for dtype in dtypes.unique() if _coerced_to_float64(dtype)}
     cols = [col for col, dtype in dtypes.items() if dtype in dtypes_to_cast]
     return _cast_columns(X, cols, "float64")
+
+
+def _coerced_to_float64(dtype: Any) -> bool:
+    """Whether `coerce_nullable_dtypes_to_numpy` casts a column of `dtype`."""
+    return pd.api.types.is_bool_dtype(dtype) or (
+        pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf"
+    )
 
 
 def fix_dtypes(  # noqa: D103

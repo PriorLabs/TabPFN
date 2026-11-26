@@ -25,6 +25,10 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
 
     no_arithmetic = True
 
+    source_selection: list[bool] | None = None
+    """The columns to keep, decided on the fit input in a wider dtype than this step
+    reads. Rounding to the narrower dtype can make a column look constant."""
+
     def __init__(self) -> None:
         super().__init__()
         self.sel_: list[bool] | None = None
@@ -36,7 +40,14 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
         forced = [feat.non_constant_with_inf for feat in feature_schema.features]
-        if isinstance(X, torch.Tensor):
+        if self.source_selection is not None:
+            if len(self.source_selection) != X.shape[1]:
+                raise ValueError(
+                    f"The selection has {len(self.source_selection)} columns, but "
+                    f"the input has {X.shape[1]}."
+                )
+            sel_ = list(self.source_selection)
+        elif isinstance(X, torch.Tensor):
             sel_ = (torch.max(X[0:1, :] != X, dim=0)[0] & ~X.isnan().all(dim=0)).cpu()
             if any(forced):
                 sel_ = sel_ | torch.tensor(forced, dtype=torch.bool)
@@ -74,6 +85,21 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         if isinstance(self.sel_, torch.Tensor):
             return bool(torch.all(self.sel_))
         return all(self.sel_)  # type: ignore[arg-type]
+
+
+def kept_by_fit(X: np.ndarray) -> np.ndarray:
+    """Per column of `X`, whether this step keeps it after a pipeline fits it on `X`.
+
+    The pipeline passes infinities to the step as NaN. The pipeline also keeps a
+    column whose infinities vary.
+    """
+    infinite = np.isinf(X)
+    if not infinite.any():
+        return _non_constant_columns(X)
+    signs = np.where(infinite, X, 0)
+    return _non_constant_columns(np.where(infinite, np.nan, X)) | (
+        signs != signs[:1]
+    ).any(axis=0)
 
 
 def _non_constant_columns(X: np.ndarray) -> np.ndarray:

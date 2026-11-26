@@ -28,8 +28,8 @@ from tabpfn.preprocessing.modality_detection import (
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
-    _warn_on_text,
     detect_feature_modalities,
+    warn_on_text,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
 
@@ -605,7 +605,7 @@ def _text_schema(*names: str) -> FeatureSchema:
 
 
 class TestWarnOnText:
-    """Schema-level unit tests for `_warn_on_text`."""
+    """Schema-level unit tests for `warn_on_text`."""
 
     def test__no_text_features__does_not_warn(self) -> None:
         schema = FeatureSchema(
@@ -617,11 +617,11 @@ class TestWarnOnText:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_text(schema)
+            warn_on_text(schema)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(_text_schema("review"))
+            warn_on_text(_text_schema("review"))
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -639,7 +639,7 @@ class TestWarnOnText:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_text(schema)
+            warn_on_text(schema)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
@@ -1041,14 +1041,39 @@ def test__count_distinct_per_column__column_blocks__match_one_block(
     X = rng.integers(0, 50, size=(300, 23)).astype(np.float64)
     X[rng.random(X.shape) < 0.05] = np.nan
     X[0, :6] = [np.inf, -np.inf, -0.0, 0.0, np.nan, 1.0]
-    expected = modality_detection._count_distinct_per_column(X)
+    expected = modality_detection._count_distinct_in_columns(X)
     monkeypatch.setattr(
         modality_detection, "_DISTINCT_COUNT_BLOCK_BYTES", 2 * 300 * X.itemsize
     )
+    monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_MIN_BLOCK_BYTES", 1)
 
     actual = modality_detection._count_distinct_per_column(X)
 
     np.testing.assert_array_equal(actual, expected)
+
+
+def test__count_distinct_per_column__narrower_than_a_block__fills_the_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = np.random.default_rng(3)
+    X = rng.integers(0, 40, size=(250, 10)).astype(np.float32)
+    X[rng.random(X.shape) < 0.05] = np.nan
+    expected = modality_detection._count_distinct_in_columns(X)
+    count = modality_detection._count_distinct_in_columns
+    widths: list[int] = []
+
+    def spy(block: np.ndarray) -> np.ndarray:
+        widths.append(block.shape[1])
+        return count(block)
+
+    monkeypatch.setattr(modality_detection, "_count_distinct_in_columns", spy)
+    monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_MIN_BLOCK_BYTES", 1)
+    monkeypatch.setattr(modality_detection, "_usable_cpus", lambda: 4)
+
+    actual = modality_detection._count_distinct_per_column(X)
+
+    np.testing.assert_array_equal(actual, expected)
+    assert sorted(widths) == [1, 3, 3, 3]
 
 
 def test__count_distinct_per_column__memory_budget_of_one_thread__matches_one_block(
@@ -1057,9 +1082,10 @@ def test__count_distinct_per_column__memory_budget_of_one_thread__matches_one_bl
     rng = np.random.default_rng(1)
     X = rng.integers(0, 9, size=(200, 17)).astype(np.float64)
     X[rng.random(X.shape) < 0.1] = np.nan
-    expected = modality_detection._count_distinct_per_column(X)
+    expected = modality_detection._count_distinct_in_columns(X)
     block_bytes = 3 * 200 * X.itemsize
     monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_BLOCK_BYTES", block_bytes)
+    monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_MIN_BLOCK_BYTES", 1)
     monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_BUDGET_BYTES", 1)
 
     actual = modality_detection._count_distinct_per_column(X)
@@ -1074,10 +1100,11 @@ def test__count_distinct_per_column__selected_columns__match_their_slice(
     X = rng.integers(0, 30, size=(150, 19)).astype(np.float64)
     X[rng.random(X.shape) < 0.05] = np.nan
     columns = np.array([0, 1, 2, 5, 9, 10, 11, 18])
-    expected = modality_detection._count_distinct_per_column(X[:, columns])
+    expected = modality_detection._count_distinct_in_columns(X[:, columns])
     monkeypatch.setattr(
         modality_detection, "_DISTINCT_COUNT_BLOCK_BYTES", 3 * 150 * X.itemsize
     )
+    monkeypatch.setattr(modality_detection, "_DISTINCT_COUNT_MIN_BLOCK_BYTES", 1)
 
     actual = modality_detection._count_distinct_per_column(X, columns)
 

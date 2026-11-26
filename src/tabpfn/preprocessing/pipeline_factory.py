@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from tabpfn.preprocessing.configs import EnsembleConfig
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingPipeline,
     PreprocessingStep,
@@ -26,9 +27,11 @@ from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy as np
 
-    from tabpfn.preprocessing.configs import EnsembleConfig
+    from tabpfn.preprocessing.configs import PreprocessorConfig
 
 
 def _polynomial_feature_settings(
@@ -138,3 +141,35 @@ def create_preprocessing_pipeline(
             ),
         )
     return PreprocessingPipeline(steps)
+
+
+def pipelines_keep_float32(
+    preprocess_configs: Sequence[PreprocessorConfig],
+    *,
+    polynomial_features: Literal["no", "all"] | int,
+    add_fingerprint_feature: bool,
+    enable_gpu_preprocessing: bool,
+) -> bool:
+    """Whether the CPU pipeline of every member keeps a float32 input as float32.
+
+    The answer is `PreprocessingPipeline.keep_float32` of the pipelines that this
+    factory builds for `preprocess_configs`.
+    """
+    return all(
+        create_preprocessing_pipeline(
+            EnsembleConfig(
+                preprocess_config=config,
+                add_fingerprint_feature=add_fingerprint_feature,
+                polynomial_features=polynomial_features,
+                feature_shift_count=0,
+                feature_shift_decoder=None,
+                outlier_removal_std=None,
+                _model_index=0,
+                estimator_id=0,
+                passthrough_inf=False,
+            ),
+            random_state=None,
+            enable_gpu_preprocessing=enable_gpu_preprocessing,
+        ).keep_float32
+        for config in preprocess_configs
+    )

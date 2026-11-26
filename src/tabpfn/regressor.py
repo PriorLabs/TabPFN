@@ -49,6 +49,7 @@ from tabpfn.architectures.shared.bar_distribution import (
 from tabpfn.base import (
     GROUPED_PRESET,
     ModelSpecs,
+    clean_predict_input,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -62,6 +63,7 @@ from tabpfn.base import (
     resolved_n_estimators,
     resolved_softmax_temperature,
     transform_columns,
+    validate_and_clean_fit_input,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -97,10 +99,8 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     RegressorEnsembleConfig,
     SampleSubsamplingMethod,
-    clean_data,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import clean_data_transform, may_overwrite_fit_input
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.datetimes import DateTransformer
 from tabpfn.preprocessing.ensemble import (
@@ -110,10 +110,8 @@ from tabpfn.preprocessing.ensemble import (
 from tabpfn.preprocessing.group_aggregates import GroupAggregator, pool_rows
 from tabpfn.preprocessing.group_ids import (
     GroupIdEncoder,
-    as_group_feature,
     reject_group_col,
 )
-from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.row_weights import (
     resolve_sample_weight_mode,
     tuning_metric_row_weights,
@@ -139,8 +137,6 @@ from tabpfn.utils import (
 )
 from tabpfn.validation import (
     check_input_shape_matches,
-    ensure_compatible_fit_inputs,
-    ensure_compatible_predict_input_sklearn,
     extract_input_shape,
     validate_dataset_size,
 )
@@ -159,7 +155,9 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.clean import ColumnRangeEncoders
     from tabpfn.preprocessing.row_weights import SampleWeightMode
+    from tabpfn.preprocessing.source_decisions import SourceDecisions
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -330,8 +328,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    ordinal_encoder_: OrderPreservingColumnTransformer
-    """The column transformer used to preprocess categorical data to be numeric."""
+    ordinal_encoder_: OrderPreservingColumnTransformer | ColumnRangeEncoders
+    """The fitted cleaning that makes categorical data numeric.
+    `clean_data_transform` applies it to predict input."""
 
     date_transformer_: DateTransformer
     """The transformer that converted every temporal column before validation."""
@@ -1010,6 +1009,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         inference_mode: bool,
         row_weights: np.ndarray | None,
         sample_weight_mode: SampleWeightMode | None,
+        source_decisions: SourceDecisions | None,
     ) -> None:
         """Build ``self.ensemble_preprocessor_`` and ``self.executor_``.
 
@@ -1044,6 +1044,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             task_type=self.estimator_type,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            source_decisions=source_decisions,
         )
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
@@ -1167,6 +1168,31 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ]:
         """Prepare ensemble configs and validate X, y for one dataset/chunk.
 
+        The table is float64: the caller gets no decisions to pass to the ensemble.
+        """
+        ensemble_configs, X, y, bardist, _ = (
+            self._initialize_dataset_preprocessing_with_decisions(
+                X=X, y=y, random_state=random_state, may_cast_to_float32=False
+            )
+        )
+        return ensemble_configs, X, y, bardist
+
+    def _initialize_dataset_preprocessing_with_decisions(
+        self,
+        X: XType,
+        y: YType,
+        random_state: int | np.random.Generator,
+        *,
+        may_cast_to_float32: bool,
+    ) -> tuple[
+        list[RegressorEnsembleConfig],
+        np.ndarray,
+        np.ndarray,
+        FullSupportBarDistribution,
+        SourceDecisions | None,
+    ]:
+        """Prepare ensemble configs and validate X, y for one dataset/chunk.
+
         Handle the preprocessing of the input (X and y). We also return the
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
@@ -1209,45 +1235,23 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if feature_names is not None:
             feature_names = [*feature_names, *self.group_aggregator_.names_]
 
-        X, y, _ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=self,
-            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
-            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
-            max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
-            ignore_pretraining_limits=self.ignore_pretraining_limits,
-            ensure_y_numeric=True,
-            devices=self.devices_,
+        self.group_feature_index_ = self.group_encoder_.feature_index(feature_names)
+        X, y, _, feature_schema, ordinal_encoder, decisions = (
+            validate_and_clean_fit_input(
+                self,
+                X,
+                y,
+                X_given=X_given,
+                feature_names=feature_names,
+                categorical_indices=categorical_indices,
+                group_feature_index=self.group_feature_index_,
+                ensure_y_numeric=True,
+                random_state=random_state,
+                may_cast_to_float32=may_cast_to_float32,
+            )
         )
         # Set class variables for sklearn compatibility
         self.n_train_samples_ = len(X)
-
-        feature_schema = detect_feature_modalities(
-            X=X,
-            feature_names=feature_names,
-            provided_categorical_indices=categorical_indices,
-            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-            min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
-        )
-        # Numerical through cleaning, so neither the ordinal encoder nor the
-        # constant-column restore rewrites an unseen group's NaN; categorical
-        # after it, whatever the number of groups.
-        self.group_feature_index_ = self.group_encoder_.feature_index(feature_names)
-        feature_schema = as_group_feature(
-            feature_schema, self.group_feature_index_, FeatureModality.NUMERICAL
-        )
-        X, ordinal_encoder, feature_schema = clean_data(
-            X=X,
-            feature_schema=feature_schema,
-            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
-            overwrite_input=may_overwrite_fit_input(X, X_given),
-        )
-        feature_schema = as_group_feature(
-            feature_schema, self.group_feature_index_, FeatureModality.CATEGORICAL
-        )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
         self.date_transformer_ = date_transformer
@@ -1344,7 +1348,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         assert len(ensemble_configs) == self.n_estimators_
 
-        return ensemble_configs, X, y, self.znorm_space_bardist_
+        return ensemble_configs, X, y, self.znorm_space_bardist_, decisions
 
     def _compute_downsample_correction(self, *, y_raw: np.ndarray) -> None:
         """Set `downsample_correction_log_weights_` from the fitted row sampler.
@@ -1601,6 +1605,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_mode=False,
             row_weights=None,
             sample_weight_mode=None,
+            source_decisions=None,
         )
         # `y` is z-normalized by now; histogramming on the raw-space borders
         # needs the original target values.
@@ -1666,8 +1671,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        ensemble_configs, X, y, znorm_space_bardist = (
-            self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
+        ensemble_configs, X, y, znorm_space_bardist, source_decisions = (
+            self._initialize_dataset_preprocessing_with_decisions(
+                X=X, y=y, random_state=static_seed, may_cast_to_float32=True
+            )
         )
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
@@ -1730,6 +1737,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_mode=True,
             row_weights=row_weights,
             sample_weight_mode=sample_weight_mode,
+            source_decisions=source_decisions,
         )
         self._compute_downsample_correction(y_raw=y_raw)
 
@@ -1824,7 +1832,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # TODO: Move these at some point to InferenceEngine
         check_input_shape_matches(X, estimator=self)
         X, groups = transform_columns(self, X)
-        X = ensure_compatible_predict_input_sklearn(X, self)
+        X = clean_predict_input(self, X)
 
         check_is_fitted(self)
 
@@ -1864,7 +1872,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         if not use_blocks:
             logits = pool_rows(
-                self._compute_aggregated_logits(X),
+                self._aggregate_cleaned_logits(X),
                 groups,
                 logits=True,
                 geometric=self.inference_config_.POOL_GROUP_PREDICTIONS
@@ -1875,18 +1883,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Each test row only attends to the cached training context, and every
         # later step is per row, so blocks give the same result as one call.
         # Decoding each block keeps the [rows, n_buckets] tensors block-sized.
-        X_clean = self._clean_predict_input(X)
         parts: list[RegressionResultType] = []
         speed_metrics = self.executor_._speed_metrics
         forward_seconds = 0.0
         for start in tqdm(
-            range(0, X_clean.shape[0], block_rows),
+            range(0, X.shape[0], block_rows),
             desc="TabPFN inference",
             unit="block",
             disable=not self.show_progress_bar,
         ):
             logits = self._aggregate_cleaned_logits(
-                X_clean[start : start + block_rows], show_progress_bar=False
+                X[start : start + block_rows], show_progress_bar=False
             )
             parts.append(decode(logits))
             del logits
@@ -2134,9 +2141,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # `softmax_temperature` correctly still applied.
             check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
             X_holdout_NhF, _ = transform_columns(tuning_regressor, X_holdout_NhF)
-            X_holdout_NhF = ensure_compatible_predict_input_sklearn(
-                X_holdout_NhF, tuning_regressor
-            )
             logits_NhB = tuning_regressor._compute_aggregated_logits(
                 X_holdout_NhF, apply_downsample_correction=False
             )
@@ -2179,15 +2183,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         (before or after the softmax, per `average_before_softmax` flat),
         and returned in log space.
 
-        Shared by `predict` and `_compute_holdout_validation_data`.
-
-        `X` must already have passed `ensure_compatible_predict_input_sklearn`;
-        the remaining dtype/NA preprocessing happens here. Constant-target
-        models have no executor and must be routed to
-        `_handle_constant_target` by the caller instead.
+        Used by `_compute_holdout_validation_data`. Constant-target models have no
+        executor and must be routed to `_handle_constant_target` by the caller
+        instead.
 
         Args:
-            X: The validated input data.
+            X: The input data, after `transform_columns`.
             apply_downsample_correction: Whether to add the majority-downsampling
                 correction. Temperature tuning passes `False` so it can compose
                 the fold's own correction with each candidate temperature.
@@ -2198,20 +2199,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `ensemble_softmax_temperature_` applied.
         """
         return self._aggregate_cleaned_logits(
-            self._clean_predict_input(X),
+            clean_predict_input(self, X),
             apply_downsample_correction=apply_downsample_correction,
-        )
-
-    def _clean_predict_input(self, X: XType) -> np.ndarray:
-        """Apply the fit-time dtype fixing and ordinal encoding to predict input."""
-        cat_indices = self.inferred_feature_schema_.indices_for(
-            FeatureModality.CATEGORICAL
-        )
-        return clean_data_transform(
-            X,
-            cat_indices=cat_indices,
-            ord_encoder=getattr(self, "ordinal_encoder_", None),
-            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
     def _aggregate_cleaned_logits(
@@ -2221,7 +2210,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         apply_downsample_correction: bool = True,
         show_progress_bar: bool | None = None,
     ) -> torch.Tensor:
-        """`_compute_aggregated_logits` for input `_clean_predict_input` returned.
+        """`_compute_aggregated_logits` for input `clean_predict_input` returned.
 
         Args:
             X: The cleaned input data.
@@ -2480,15 +2469,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # categoricals and NaNs behave identically.
             check_input_shape_matches(X_test, estimator=worker)
             X_test, _ = transform_columns(worker, X_test)  # noqa: PLW2901
-            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test = clean_data_transform(  # noqa: PLW2901
-                X_test,
-                cat_indices=worker.inferred_feature_schema_.indices_for(
-                    FeatureModality.CATEGORICAL
-                ),
-                ord_encoder=getattr(worker, "ordinal_encoder_", None),
-                passthrough_inf=worker.inference_config_.PASSTHROUGH_INF,
-            )
+            X_test = clean_predict_input(worker, X_test)  # noqa: PLW2901
             members = worker.executor_.ensemble_members
             x_context, x_query, cat_indices = [], [], []
             y_context = [

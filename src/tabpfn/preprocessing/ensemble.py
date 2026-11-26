@@ -33,6 +33,9 @@ from tabpfn.preprocessing.configs import (
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.row_weights import row_weights_for_estimator
+from tabpfn.preprocessing.steps.remove_constant_features_step import (
+    RemoveConstantFeaturesStep,
+)
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
         SharedColumnsTable,
     )
     from tabpfn.preprocessing.row_weights import SampleWeightMode
+    from tabpfn.preprocessing.source_decisions import SourceDecisions
 
 T = TypeVar("T")
 
@@ -126,6 +130,7 @@ class TabPFNEnsemblePreprocessor:
         task_type: Literal["classifier", "regressor"] = "classifier",
         row_weights: np.ndarray | None = None,
         sample_weight_mode: SampleWeightMode | None = None,
+        source_decisions: SourceDecisions | None = None,
     ) -> None:
         """Init.
 
@@ -172,6 +177,9 @@ class TabPFNEnsemblePreprocessor:
                 per-row weights. Each member gets the rows it keeps.
             sample_weight_mode: How the model applies ``row_weights``. Required
                 with ``row_weights``.
+            source_decisions: Decisions taken on the fit input before its cast to
+                the dtype of ``X_train``. The members use them instead of their own
+                decisions. They must be for the rows that this preprocessor draws.
         """
         super().__init__()
         if (row_weights is None) != (sample_weight_mode is None):
@@ -186,15 +194,7 @@ class TabPFNEnsemblePreprocessor:
 
         self.random_state = random_state
         self.enable_gpu_preprocessing = enable_gpu_preprocessing
-        _, rng = infer_random_state(random_state)
-        # Derive independent seeds for each random step in one batch so that
-        # each step's stream is unaffected by what happens in the others.
-        seed_pipelines, seed_features, seed_rows = rng.integers(
-            0, np.iinfo(np.int64).max, 3
-        )
-        rng_pipelines = np.random.default_rng(seed=seed_pipelines)
-        rng_features = np.random.default_rng(seed=seed_features)
-        rng_rows = np.random.default_rng(seed=seed_rows)
+        rng_pipelines, rng_features, rng_rows = _ensemble_generators(random_state)
 
         self.pipeline_seeds = rng_pipelines.integers(
             0, np.iinfo(np.int32).max, len(self.configs)
@@ -208,37 +208,21 @@ class TabPFNEnsemblePreprocessor:
             for config, seed in zip(self.configs, self.pipeline_seeds, strict=True)
         ]
 
-        n_total_features = feature_schema.num_columns
-        resolved_top_k = _resolve_importance_top_k(
-            importance_top_k_count=importance_top_k_count,
-            n_total_features=n_total_features,
-        )
-
         max_features_per_estimator = [
             c.preprocess_config.max_features_per_estimator for c in self.configs
         ]
+        feature_subsampling_method, resolved_top_k, fits_importance = (
+            _resolve_feature_subsampling(
+                feature_subsampling_method,
+                max_features_per_estimator=max_features_per_estimator,
+                n_samples=n_samples,
+                n_total_features=feature_schema.num_columns,
+                importance_top_k_count=importance_top_k_count,
+            )
+        )
 
         importance_feature_order: np.ndarray | None = None
-        needs_subsampling = any(
-            s < n_total_features for s in max_features_per_estimator
-        )
-
-        feature_subsampling_method = _resolve_feature_subsampling_method(
-            method=feature_subsampling_method,
-            needs_subsampling=needs_subsampling,
-            n_samples=n_samples,
-        )
-
-        is_feature_importance_subsampling = (
-            feature_subsampling_method
-            == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
-        )
-
-        if (
-            is_feature_importance_subsampling
-            and needs_subsampling
-            and resolved_top_k < n_total_features
-        ):
+        if fits_importance:
             if X_train is None or y_train is None:
                 raise ValueError(
                     "X_train and y_train must be provided when using a "
@@ -248,12 +232,20 @@ class TabPFNEnsemblePreprocessor:
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
             y_for_importance = _targets_to_numpy(y_train)
+            if source_decisions is not None and source_decisions.importance is None:
+                raise RuntimeError(
+                    "The fit input was cast to float32 without reading the rows of "
+                    "the feature-importance model."
+                )
             importance_feature_order = _compute_feature_importance_order(
                 X=X_train,
                 y=y_for_importance,
                 task_type=task_type,
                 categorical_feature_indices=cat_indices,
                 rng=rng_features,
+                source_rows=None
+                if source_decisions is None
+                else source_decisions.importance,
             )
 
         self.subsample_feature_indices = _get_subsample_feature_indices(
@@ -268,15 +260,9 @@ class TabPFNEnsemblePreprocessor:
             importance_top_k_count=resolved_top_k,
         )
 
-        resolved_sample_subsampling_method = SampleSubsamplingMethod(
-            sample_subsampling_method
+        resolved_sample_subsampling_method = _resolved_sample_subsampling_method(
+            sample_subsampling_method, subsample_samples, task_type
         )
-        if isinstance(subsample_samples, (int, float)):
-            resolved_sample_subsampling_method = _resolve_sample_subsampling_method(
-                resolved_sample_subsampling_method,
-                task_type=task_type,
-            )
-
         self.sample_subsampling_method_ = resolved_sample_subsampling_method
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
@@ -287,6 +273,13 @@ class TabPFNEnsemblePreprocessor:
             y=y_train,
             task_type=task_type,
         )
+        if source_decisions is not None:
+            _take_source_selections(
+                source_decisions,
+                self.pipelines,
+                self.subsample_row_indices,
+                self.subsample_feature_indices,
+            )
         self.member_row_weights = None
         if row_weights is not None:
             member_rows = self.subsample_row_indices or [None] * len(self.configs)
@@ -432,6 +425,147 @@ class TabPFNEnsemblePreprocessor:
                 parallel_mode="block",
             )
         )
+
+
+def draw_fit_rows(  # noqa: PLR0913
+    *,
+    random_state: int | np.random.Generator,
+    n_members: int,
+    n_samples: int,
+    n_features: int,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    max_features_per_estimator: Sequence[int],
+    feature_subsampling_method: FeatureSubsamplingMethod,
+    importance_top_k_count: int | float | Literal["auto"],
+    subsample_samples: int | float | list[np.ndarray] | None,
+    sample_subsampling_method: SampleSubsamplingMethod,
+) -> tuple[list[np.ndarray] | None, np.ndarray | None]:
+    """The rows that `TabPFNEnsemblePreprocessor` draws with these arguments.
+
+    `max_features_per_estimator` can include budgets that no member uses. Then the
+    importance rows can be drawn although the preprocessor fits no importance model.
+
+    Returns:
+        The rows of each member, `None` if every member reads all rows, and the rows
+        that the feature-importance model is fit on, `None` if there is no such
+        model.
+    """
+    _, rng_features, rng_rows = _ensemble_generators(random_state)
+    member_rows = _get_subsample_indices_for_estimators(
+        subsample_samples=subsample_samples,
+        num_estimators=n_members,
+        n_samples=n_samples,
+        rng=rng_rows,
+        method=_resolved_sample_subsampling_method(
+            sample_subsampling_method, subsample_samples, task_type
+        ),
+        y=y,
+        task_type=task_type,
+    )
+    _, _, fits_importance = _resolve_feature_subsampling(
+        feature_subsampling_method,
+        max_features_per_estimator=max_features_per_estimator,
+        n_samples=n_samples,
+        n_total_features=n_features,
+        importance_top_k_count=importance_top_k_count,
+    )
+    if not fits_importance:
+        return member_rows, None
+    rows = _importance_rows(
+        n_samples, y, task_type, FEATURE_IMPORTANCE_MAX_SAMPLES, rng_features
+    )
+    return member_rows, np.arange(n_samples) if rows is None else rows
+
+
+def _ensemble_generators(
+    random_state: int | np.random.Generator,
+) -> tuple[np.random.Generator, np.random.Generator, np.random.Generator]:
+    """The random generators for the pipelines, the features and the rows.
+
+    Each generator has its own seed, so draws from one do not change the others.
+    """
+    _, rng = infer_random_state(random_state)
+    seed_pipelines, seed_features, seed_rows = rng.integers(
+        0, np.iinfo(np.int64).max, 3
+    )
+    return (
+        np.random.default_rng(seed=seed_pipelines),
+        np.random.default_rng(seed=seed_features),
+        np.random.default_rng(seed=seed_rows),
+    )
+
+
+def _resolve_feature_subsampling(
+    method: FeatureSubsamplingMethod,
+    *,
+    max_features_per_estimator: Sequence[int],
+    n_samples: int,
+    n_total_features: int,
+    importance_top_k_count: int | float | Literal["auto"],
+) -> tuple[FeatureSubsamplingMethod, int, bool]:
+    """The resolved feature subsampling method, the number of top features that every
+    member reads, and whether to fit a feature-importance order that ranks them.
+    """
+    resolved_top_k = _resolve_importance_top_k(
+        importance_top_k_count=importance_top_k_count,
+        n_total_features=n_total_features,
+    )
+    needs_subsampling = any(s < n_total_features for s in max_features_per_estimator)
+    method = _resolve_feature_subsampling_method(
+        method=method, needs_subsampling=needs_subsampling, n_samples=n_samples
+    )
+    fits_importance = (
+        method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
+        and needs_subsampling
+        and resolved_top_k < n_total_features
+    )
+    return method, resolved_top_k, fits_importance
+
+
+def _resolved_sample_subsampling_method(
+    method: SampleSubsamplingMethod,
+    subsample_samples: int | float | list[np.ndarray] | None,
+    task_type: Literal["classifier", "regressor"],
+) -> SampleSubsamplingMethod:
+    """The method that draws the rows of each member, with `"auto"` resolved."""
+    method = SampleSubsamplingMethod(method)
+    if isinstance(subsample_samples, (int, float)):
+        return _resolve_sample_subsampling_method(method, task_type=task_type)
+    return method
+
+
+def _take_source_selections(
+    decisions: SourceDecisions,
+    pipelines: Sequence[PreprocessingPipeline],
+    member_rows: list[np.ndarray] | None,
+    member_columns: Sequence[np.ndarray | None],
+) -> None:
+    """Make the `RemoveConstantFeaturesStep` of each member keep the columns that
+    `decisions` kept on the rows of that member.
+    """
+    taken = decisions.member_rows
+    if taken is None or member_rows is None:
+        same_rows = taken is member_rows
+    else:
+        same_rows = len(taken) == len(member_rows) and all(
+            np.array_equal(t, d) for t, d in zip(taken, member_rows, strict=True)
+        )
+    if not same_rows:
+        raise RuntimeError(
+            "The fit input's decisions were taken for other rows than the members draw."
+        )
+    for member, (pipeline, columns) in enumerate(
+        zip(pipelines, member_columns, strict=True)
+    ):
+        step = pipeline.steps[0][0]
+        if not isinstance(step, RemoveConstantFeaturesStep):
+            raise TypeError(
+                f"A member's pipeline starts with {type(step).__name__}, not "
+                "RemoveConstantFeaturesStep."
+            )
+        kept = decisions.kept[0 if member_rows is None else member]
+        step.source_selection = (kept if columns is None else kept[columns]).tolist()
 
 
 def _balance(x: Iterable[T], n: int) -> list[T]:
@@ -1270,6 +1404,30 @@ def _get_lightgbm_model_cls(task_type: Literal["classifier", "regressor"]) -> ty
     )
 
 
+def _importance_rows(
+    n_samples: int,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    max_samples: int,
+    rng: np.random.Generator,
+) -> np.ndarray | None:
+    """The rows to fit a feature-importance ordering on, or ``None`` for all rows.
+
+    These are at most ``max_samples`` rows, stratified by class for classification.
+    """
+    if n_samples <= max_samples:
+        return None
+    from sklearn.model_selection import train_test_split  # noqa: PLC0415
+
+    idx, _ = train_test_split(
+        np.arange(n_samples),
+        train_size=max_samples,
+        stratify=y if task_type == "classifier" else None,
+        random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
+    )
+    return idx
+
+
 def _fit_importance_ordering(
     X: np.ndarray,
     y: np.ndarray,
@@ -1277,23 +1435,27 @@ def _fit_importance_ordering(
     max_samples: int,
     fit_ordering_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     rng: np.random.Generator,
+    source_rows: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Fit one feature-importance ordering, on at most ``max_samples`` rows.
 
-    The subsample is stratified for classification.
+    The subsample is stratified for classification. ``source_rows`` holds row indices
+    and the values of those rows, which are read instead of ``X``. The indices must be
+    the rows that the ordering is fit on.
     """
-    n_samples = len(X)
-
-    if n_samples > max_samples:
-        from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-        idx, _ = train_test_split(
-            np.arange(n_samples),
-            train_size=max_samples,
-            stratify=y if task_type == "classifier" else None,
-            random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
-        )
-        X, y = X[idx], y[idx]
+    rows = _importance_rows(len(X), y, task_type, max_samples, rng)
+    if rows is not None:
+        y = y[rows]
+    if source_rows is not None:
+        given, values = source_rows
+        if not np.array_equal(np.arange(len(X)) if rows is None else rows, given):
+            raise RuntimeError(
+                "The feature-importance values were read for other rows than the "
+                "ordering is fit on."
+            )
+        return fit_ordering_fn(values, y)
+    if rows is not None:
+        X = X[rows]
 
     # The importance model bins each feature from the values it is handed,
     # but `clean_data` no longer casts: not a no-op
@@ -1309,6 +1471,7 @@ def _compute_feature_importance_order(
     n_tree_estimators: int = 50,
     categorical_feature_indices: list[int] | None = None,
     rng: np.random.Generator,
+    source_rows: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Rank features by LightGBM gain importance.
 
@@ -1321,6 +1484,8 @@ def _compute_feature_importance_order(
         categorical_feature_indices: Column indices of categorical features
             passed natively to LightGBM.
         rng: Random number generator.
+        source_rows: Indices and float64 values of the fit rows, read instead of
+            ``X``.
 
     Returns:
         Array of feature indices sorted from most to least important, shared by
@@ -1341,7 +1506,9 @@ def _compute_feature_importance_order(
         model.fit(X_fit, y_fit, categorical_feature=cat_feature)
         return np.argsort(model.feature_importances_)[::-1].copy()
 
-    return _fit_importance_ordering(X, y, task_type, max_samples, _fit_ordering, rng)
+    return _fit_importance_ordering(
+        X, y, task_type, max_samples, _fit_ordering, rng, source_rows
+    )
 
 
 def generate_classification_ensemble_configs(  # noqa: PLR0913
