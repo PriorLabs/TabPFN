@@ -269,10 +269,12 @@ class TestExpansion:
 
     def test__repeated_labels__drop_only_the_expanded_position(self) -> None:
         X = pd.DataFrame(
-            [[1.0, pd.Timestamp("2020-01-01"), 3.0]] * 3, columns=["x", "x", "y"]
-        ).astype({"y": float})
-        X.isetitem(0, [1.0, 2.0, 3.0])
-        X.isetitem(1, pd.date_range("2020-01-01", periods=3))
+            {
+                "a": [1.0, 2.0, 3.0],
+                "b": pd.date_range("2020-01-01", periods=3),
+                "y": [3.0, 3.0, 3.0],
+            }
+        ).set_axis(["x", "x", "y"], axis=1)
 
         out = self._expander().fit_transform(X)
 
