@@ -53,6 +53,7 @@ from tabpfn.preprocessing.clean import (
     clean_data_transform,
     coerce_nullable_dtypes_to_numpy,
     column_range,
+    delete_columns,
     empty_fit_frame,
     is_private_copy,
     mark_fit_memory,
@@ -1044,12 +1045,7 @@ def _delete_columns(X: pd.DataFrame, labels: np.ndarray) -> None:
     # -1 marks a missing label, which `idelete` would take as the last column.
     if (positions < 0).any():
         raise RuntimeError(f"Columns {labels} are not all in the frame.")
-    X._mgr = X._mgr.idelete(positions)
-    # As `del X[label]` does: a cached column keeps its block's memory alive.
-    cache = getattr(X, "_item_cache", None)
-    if cache is not None:
-        for label in labels:
-            cache.pop(label, None)
+    delete_columns(X, positions)
 
 
 def _largest_block_of(X: pd.DataFrame) -> Callable[[tuple[int, int]], int]:
