@@ -151,6 +151,12 @@ def _flash_backward_num_iterations(
     return (q_BHSD.shape[0] + max_sub_batch - 1) // max_sub_batch
 
 
+def _has_active_flash_attention_override() -> bool:
+    """Check for an opted-in FA provider on PyTorch versions with the registry."""
+    current_impl = getattr(torch.nn.attention, "current_flash_attention_impl", None)
+    return current_impl is not None and current_impl() is not None
+
+
 def _torch_sdpa(
     q_BSHD: torch.Tensor,
     k_BSJD: torch.Tensor | None,
@@ -171,6 +177,22 @@ def _torch_sdpa(
     assert v_BSJD is not None
     assert k_BSJD.dim() == 4, f"{msg} k:{tuple(k_BSJD.shape)}"
     assert v_BSJD.dim() == 4, f"{msg} v:{tuple(v_BSJD.shape)}"
+
+    original_query_shape = q_BSHD.shape
+    pack_query_heads = (
+        q_BSHD.device.type == "cuda"
+        and torch.version.hip is None
+        and q_BSHD.dtype in (torch.float16, torch.bfloat16)
+        and k_BSJD.shape[2] == v_BSJD.shape[2] == 1
+        and not torch.is_grad_enabled()
+        and not torch.compiler.is_compiling()
+        and not _has_active_flash_attention_override()
+    )
+    if pack_query_heads:
+        # Short queries can leave some SDPA tiles empty. Since all heads share one
+        # K/V head, folding the heads into the rows gives one longer query instead.
+        batch, rows, heads, head_dim = original_query_shape
+        q_BSHD = q_BSHD.reshape(batch, rows * heads, 1, head_dim)
 
     q_BHSD = q_BSHD.permute(0, 2, 1, 3)
     k_BJSD = k_BSJD.permute(0, 2, 1, 3)
@@ -237,4 +259,7 @@ def _torch_sdpa(
                 )
             )
     output_BHSD = outputs[0] if len(outputs) == 1 else torch.cat(outputs)
-    return output_BHSD.permute(0, 2, 1, 3)
+    output_BSHD = output_BHSD.permute(0, 2, 1, 3)
+    if pack_query_heads:
+        return output_BSHD.reshape(*original_query_shape[:3], output_BSHD.shape[-1])
+    return output_BSHD
