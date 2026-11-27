@@ -408,7 +408,13 @@ def _consume_windows_char(ch: str, chars: list[str]) -> tuple[bool, str | None]:
 def _poll_for_token_windows(
     auth_event: threading.Event, received_token: list[str | None]
 ) -> str | None:
-    """Poll the Windows console for a pasted API key until *auth_event* is set."""
+    """Poll the Windows console non-blockingly alongside *auth_event*.
+
+    ``select.select`` on Windows only accepts Winsock sockets and raises
+    ``OSError`` (WinError 10038) on ``sys.stdin``. Polling ``msvcrt.kbhit``
+    avoids blocking a background reader thread on ``sys.stdin`` after the
+    browser callback completes.
+    """
     if sys.platform != "win32":
         return None
 
@@ -421,8 +427,9 @@ def _poll_for_token_windows(
             continue
 
         ch = msvcrt.getwch()
-        if ch in ("\x00", "\xe0"):  # function / arrow key prefix; drain buffered scan code
-            msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):  # function / arrow key prefix; discard scan code
+            if msvcrt.kbhit():
+                msvcrt.getwch()
             continue
 
         done, token = _consume_windows_char(ch, chars)
