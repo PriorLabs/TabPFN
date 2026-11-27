@@ -131,17 +131,20 @@ proba = clf.predict_proba(X_test)  # X_test: same columns, same order
 
 ## 5. Large datasets: native subsampling only
 
-- First fit on **all** training rows if they are within the checkpoint limit
-  (section 3).
-- If the data is above the limit, or fit/predict is too slow or runs out of
-  memory, use TabPFN's own per-estimator subsampling. Each estimator then sees
-  a different subsample, so the ensemble still covers the data:
+- Fit on **all** training rows. Above the checkpoint's row limit (section 3),
+  `fit` splits the rows itself into chunks within the limit and runs one
+  ensemble of `n_estimators` estimators on each chunk, so `k` chunks mean `k`
+  times as many estimators.
+- If fit/predict is too slow or runs out of memory, use TabPFN's own
+  per-estimator subsampling. Each estimator then sees a different subsample, so
+  the ensemble still covers the data:
 
   ```python
   TabPFNRegressor(inference_config={"SUBSAMPLE_SAMPLES": n_rows_per_estimator})
   ```
 
-  `SAMPLE_SUBSAMPLING_METHOD` chooses how rows are drawn (`"balanced"`,
+  Above the row limit, also set `ignore_pretraining_limits=True`, or `fit`
+  raises. `SAMPLE_SUBSAMPLING_METHOD` chooses how rows are drawn (`"balanced"`,
   `"stratified"`, `"majority_downsample"`); see its docstring in
   [`inference_config.py`](src/tabpfn/inference_config.py).
 - **Never write your own sampler**: no `df.sample(...)` before `fit`, no loop

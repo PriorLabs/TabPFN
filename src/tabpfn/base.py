@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
+import math
 import pathlib
 import typing
 import warnings
@@ -107,11 +109,14 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.constants import MemorySavingMode, YType
+    from tabpfn.preprocessing.configs import EnsembleConfig
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
     from tabpfn.regressor import TabPFNRegressor
+
+_ConfigT = typing.TypeVar("_ConfigT", bound="EnsembleConfig")
 
 
 @dataclasses.dataclass
@@ -659,7 +664,8 @@ def validate_and_clean_fit_input(
             X,
             y,
             estimator=estimator,
-            max_num_samples=config.MAX_NUMBER_OF_SAMPLES,
+            # Each chunk of a split fit holds at most MAX_NUMBER_OF_SAMPLES rows.
+            max_num_samples=config.MAX_NUMBER_OF_SAMPLES * n_row_chunks(estimator),
             max_num_features=config.MAX_NUMBER_OF_FEATURES,
             max_cpu_samples=config.MAX_CPU_SAMPLES,
             ignore_pretraining_limits=estimator.ignore_pretraining_limits,
@@ -774,7 +780,7 @@ class _RangeCleaner:
         validate_dataset_size(
             X=self.X,
             y=y,
-            max_num_samples=config.MAX_NUMBER_OF_SAMPLES,
+            max_num_samples=config.MAX_NUMBER_OF_SAMPLES * n_row_chunks(self.estimator),
             max_num_features=config.MAX_NUMBER_OF_FEATURES,
             max_cpu_samples=config.MAX_CPU_SAMPLES,
             devices=self.estimator.devices_,
@@ -901,7 +907,7 @@ def _source_decisions(
             n_total_features=n_columns,
             preprocessor_configs=config.PREPROCESS_TRANSFORMS,
             auto_scale_n_estimators=estimator.auto_scale_n_estimators,
-        )
+        ) * n_row_chunks(estimator)
     member_rows, importance_rows = draw_fit_rows(
         random_state=random_state,
         n_members=n_members,
@@ -916,7 +922,7 @@ def _source_decisions(
             config.FEATURE_SUBSAMPLING_METHOD
         ),
         importance_top_k_count=config.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
-        subsample_samples=config.SUBSAMPLE_SAMPLES,
+        subsample_samples=member_subsample_samples(estimator, n_members),
         sample_subsampling_method=SampleSubsamplingMethod(
             config.SAMPLE_SUBSAMPLING_METHOD
         ),
@@ -1295,7 +1301,10 @@ def reject_categoricals_for_differentiable_input(
 
 
 def validate_additional_model_input(
-    models: Sequence[Architecture], tuning_config: object | None
+    models: Sequence[Architecture],
+    tuning_config: object | None,
+    *,
+    row_chunks: int = 1,
 ) -> None:
     """Raise unless `fit` can pass `additional_model_input` to every model."""
     if any("additional_input" not in signature(m.forward).parameters for m in models):
@@ -1308,6 +1317,13 @@ def validate_additional_model_input(
             "`additional_model_input` cannot be combined with `tuning_config`: "
             "tuning refits on row subsets, and the input is passed unchanged. "
             "Set `tuning_config=None`."
+        )
+    if row_chunks > 1:
+        raise TabPFNValidationError(
+            "`additional_model_input` cannot be combined with a fit above "
+            "`MAX_NUMBER_OF_SAMPLES`: such a fit splits the training rows into "
+            "chunks, and the input is passed unchanged. Set "
+            "`ignore_pretraining_limits=True` to give every estimator all rows."
         )
 
 
@@ -1481,6 +1497,180 @@ def resolved_n_estimators(
     return estimator.inference_config_.N_ESTIMATORS
 
 
+def plan_row_chunks(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    X: XType,
+    y: YType,
+    *,
+    random_state: int,
+) -> list[np.ndarray] | None:
+    """Chunks of the training rows for a fit with more rows than one estimator
+    reads, `None` for any other fit.
+
+    A fit is split when it has more than `MAX_NUMBER_OF_SAMPLES` rows, leaves
+    `SUBSAMPLE_SAMPLES` unset and does not set `ignore_pretraining_limits`. Its rows
+    are dealt in turn after a shuffle, for a classifier one class after another, so
+    that each class's count differs by at most one row between chunks. Like the
+    stratified row sampler, every chunk gets at least one row of every class: a
+    class with fewer rows than chunks has one of its rows copied into each chunk
+    that lacks it. The number of chunks `k` is the smallest for which
+    `ceil(n_rows / k)` rows plus one row per such class fit in
+    `MAX_NUMBER_OF_SAMPLES`.
+
+    A tuning estimator is split into as many chunks as the fit it tunes
+    (`_tuning_row_chunks`), so that all folds have the same number of estimators,
+    and does not warn.
+    """
+    config = estimator.inference_config_
+    if estimator.ignore_pretraining_limits or config.SUBSAMPLE_SAMPLES is not None:
+        return None
+    limit = config.MAX_NUMBER_OF_SAMPLES
+    n_rows = _rows_of(X)
+    tuning_chunks = getattr(estimator, "_tuning_row_chunks", None)
+    n_chunks = tuning_chunks or math.ceil(n_rows / limit)
+    # Input without rows, and X and y of different lengths, are left to the
+    # validation to reject.
+    if n_chunks <= 1 or _rows_of(y) != n_rows:
+        return None
+    order = np.random.default_rng(random_state).permutation(n_rows)
+    counts = None
+    if estimator.estimator_type == "classifier":
+        codes = _class_codes(y, n_rows)
+        if codes is None:
+            return None
+        counts = np.bincount(codes)
+        while True:
+            n_rare = int(np.count_nonzero((counts > 0) & (counts < n_chunks)))
+            if n_rare >= limit:
+                # Labels this sparse are left to the validation, as without chunks.
+                return None
+            # The fewest chunks that also hold one row of each rare class.
+            needed = math.ceil(n_rows / (limit - n_rare))
+            if tuning_chunks or needed <= n_chunks:
+                break
+            n_chunks = needed
+        # A stable sort by class deals one class after another. Small codes sort fast.
+        class_of = codes[order].astype(np.min_scalar_type(len(counts)))
+        order = order[np.argsort(class_of, kind="stable")]
+    if not tuning_chunks:
+        warnings.warn(
+            f"The fit has {n_rows:,} training rows, more than the checkpoint's limit "
+            f"of {limit:,} rows per estimator (MAX_NUMBER_OF_SAMPLES). The rows are "
+            f"split into {n_chunks} chunks, and each chunk is read by its own "
+            f"`n_estimators` estimators, so fit and predict run {n_chunks} times as "
+            "many estimators. Set `ignore_pretraining_limits=True` to give every "
+            "estimator all rows instead.",
+            UserWarning,
+            stacklevel=4,
+        )
+    # Row `order[i]` goes to chunk `i % n_chunks`.
+    chunks = [order[chunk::n_chunks] for chunk in range(n_chunks)]
+    if counts is not None:
+        chunks = _add_rare_class_rows(chunks, order, counts)
+    chunks = [np.sort(chunk) for chunk in chunks]
+    assert tuning_chunks or max(len(chunk) for chunk in chunks) <= limit
+    return chunks
+
+
+def _class_codes(y: YType, n_rows: int) -> np.ndarray | None:
+    """One code per row for the labels in `y`, a missing label coded 0 so that
+    every code is an index, or `None` for labels the validation rejects
+    (unhashable, ragged, or of more than one column).
+    """
+    try:
+        codes = pd.factorize(np.asarray(y).ravel())[0] + 1
+    except (TypeError, ValueError):
+        return None
+    return codes if len(codes) == n_rows else None
+
+
+def _add_rare_class_rows(
+    chunks: list[np.ndarray], order: np.ndarray, counts: np.ndarray
+) -> list[np.ndarray]:
+    """`chunks` with one row of each class that has fewer rows than chunks added to
+    every chunk that lacks the class.
+
+    `order` holds the rows sorted by class code, `counts` the rows per code, and row
+    `order[i]` is in chunk `i % len(chunks)`.
+    """
+    n_chunks = len(chunks)
+    starts = np.cumsum(counts) - counts
+    added: list[list[int]] = [[] for _ in range(n_chunks)]
+    for code in np.flatnonzero((counts > 0) & (counts < n_chunks)):
+        start, count = int(starts[code]), int(counts[code])
+        holders = {(start + offset) % n_chunks for offset in range(count)}
+        for chunk in range(n_chunks):
+            if chunk not in holders:
+                added[chunk].append(order[start + chunk % count])
+    return [
+        np.concatenate([chunk, np.asarray(rows, dtype=order.dtype)])
+        for chunk, rows in zip(chunks, added, strict=True)
+    ]
+
+
+def n_row_chunks(estimator: TabPFNClassifier | TabPFNRegressor) -> int:
+    """How many chunks `plan_row_chunks` split the fit's rows into, 1 if none."""
+    chunks = getattr(estimator, "row_chunks_", None)
+    return 1 if chunks is None else len(chunks)
+
+
+def keep_one_copy_of_row_chunks(estimator: TabPFNClassifier | TabPFNRegressor) -> None:
+    """Point `row_chunks_` at the ensemble preprocessor's copies of the chunks, so
+    that a split fit holds the row indices of each chunk once.
+    """
+    if n_row_chunks(estimator) > 1:
+        rows = estimator.ensemble_preprocessor_.subsample_row_indices
+        estimator.row_chunks_ = rows[:: len(rows) // n_row_chunks(estimator)]
+
+
+def drop_row_chunks(estimator: TabPFNClassifier | TabPFNRegressor) -> None:
+    """Undo the split of an earlier `fit` for a fit that reads every row: keep one
+    repeat of its ensemble configs (`repeat_for_row_chunks`), and no chunks.
+    """
+    configs = getattr(estimator, "ensemble_configs_", None)
+    n_chunks = n_row_chunks(estimator)
+    # Configs that do not divide into the chunks are not its repeats: keep them.
+    if configs is not None and n_chunks > 1 and len(configs) % n_chunks == 0:
+        estimator.ensemble_configs_ = configs[: len(configs) // n_chunks]
+    estimator.row_chunks_ = None
+
+
+def repeat_for_row_chunks(configs: list[_ConfigT], n_chunks: int) -> list[_ConfigT]:
+    """The ensemble of a fit within the row limit, once for each of `n_chunks`
+    chunks, so that every chunk is read by estimators configured as in that fit.
+
+    Estimator `i` reads chunk `i // len(configs)` (`member_subsample_samples`). The
+    repeats are deep copies: a regressor member fits its target transform in place.
+    """
+    if n_chunks == 1:
+        return configs
+    return [
+        dataclasses.replace(
+            copy.deepcopy(config),
+            estimator_id=chunk * len(configs) + config.estimator_id,
+        )
+        for chunk in range(n_chunks)
+        for config in configs
+    ]
+
+
+def member_subsample_samples(
+    estimator: TabPFNClassifier | TabPFNRegressor, n_members: int
+) -> int | float | list[np.ndarray] | None:
+    """The `SUBSAMPLE_SAMPLES` that the ensemble of `n_members` estimators reads.
+
+    For a fit split by `plan_row_chunks` into `k` chunks, the ensemble is repeated
+    once per chunk (`repeat_for_row_chunks`), and estimator `i` reads chunk
+    `i // (n_members // k)`.
+    """
+    chunks = getattr(estimator, "row_chunks_", None)
+    if chunks is None:
+        return estimator.inference_config_.SUBSAMPLE_SAMPLES
+    assert n_members % len(chunks) == 0
+    per_chunk = n_members // len(chunks)
+    return [chunks[member // per_chunk] for member in range(n_members)]
+
+
 def resolved_average_before_softmax(
     estimator: TabPFNClassifier | TabPFNRegressor,
 ) -> bool:
@@ -1553,7 +1743,8 @@ def get_embeddings(
 
     Raises:
         TabPFNValidationError: If ``data_source="train"`` and the model was
-            fitted with ``fit_mode="fit_with_cache"``.
+            fitted with ``fit_mode="fit_with_cache"``, or its fit split the
+            training rows into chunks.
 
     Returns:
         np.ndarray
@@ -1579,6 +1770,15 @@ def get_embeddings(
             'fit_mode="fit_with_cache", because the cached predict pass does not '
             "run the training rows through the transformer. Refit the model with "
             'fit_mode="fit_preprocessors" to obtain training embeddings.'
+        )
+    if data_source == "train" and n_row_chunks(model) > 1:
+        # Each estimator embeds only the rows of its own chunk.
+        raise TabPFNValidationError(
+            'get_embeddings(..., data_source="train") is not supported for a fit '
+            "that split its training rows into chunks (more rows than "
+            "MAX_NUMBER_OF_SAMPLES), because each estimator reads only its own "
+            "chunk. Refit with ignore_pretraining_limits=True to obtain training "
+            "embeddings."
         )
 
     data_map = {"train": "train_embeddings", "test": "test_embeddings"}

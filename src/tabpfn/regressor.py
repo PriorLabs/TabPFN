@@ -52,11 +52,17 @@ from tabpfn.base import (
     clean_predict_input,
     create_inference_engine,
     determine_precision,
+    drop_row_chunks,
     estimator_to_device,
     expand_dates_and_text,
     get_embeddings,
     initialize_model_variables_helper,
+    keep_one_copy_of_row_chunks,
+    member_subsample_samples,
+    n_row_chunks,
+    plan_row_chunks,
     reject_categoricals_for_differentiable_input,
+    repeat_for_row_chunks,
     resolve_categorical_features_indices,
     resolve_presets,
     resolved_average_before_softmax,
@@ -303,6 +309,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     n_train_samples_: int
     """The number of training samples used during `fit()`."""
+
+    row_chunks_: list[np.ndarray] | None
+    """The training row indices of each chunk when `fit()` split the rows above
+    `MAX_NUMBER_OF_SAMPLES`, else `None`."""
 
     inferred_feature_schema_: FeatureSchema
     """The inferred feature schema. This contains the feature modalities per column,
@@ -555,10 +565,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 pre-training range.
 
                 - If `True`, the model will not raise an error if the input data is
-                  outside the pre-training range. Also suppresses error when using
-                  the model with a large dataset on CPU.
-                - If `False`, you can use the model outside the pre-training range, but
-                  the model could perform worse.
+                  outside the pre-training range, and does not split the training
+                  rows into chunks. Also suppresses error when using the model with a
+                  large dataset on CPU.
+                - If `False`, a fit with more training rows than
+                  `MAX_NUMBER_OF_SAMPLES` and no `SUBSAMPLE_SAMPLES` splits them into
+                  chunks of at most that many rows, each read by its own
+                  `n_estimators` estimators. Other input outside the pre-training
+                  range raises an error.
 
                 !!! note
 
@@ -1036,7 +1050,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
-            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            subsample_samples=member_subsample_samples(self, len(ensemble_configs)),
             sample_subsampling_method=SampleSubsamplingMethod(
                 self.inference_config_.SAMPLE_SUBSAMPLING_METHOD
             ),
@@ -1048,7 +1062,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             sample_weight_mode=sample_weight_mode,
             additional_model_input=additional_model_input,
             source_decisions=source_decisions,
+            row_chunks=n_row_chunks(self),
         )
+        keep_one_copy_of_row_chunks(self)
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
             X_train=X,
@@ -1173,6 +1189,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         The table is float64: the caller gets no decisions to pass to the ensemble.
         """
+        # Fine-tuning splits its data itself (`max_data_size`).
+        self.row_chunks_ = None
         ensemble_configs, X, y, bardist, _ = (
             self._initialize_dataset_preprocessing_with_decisions(
                 X=X, y=y, random_state=random_state, may_cast_to_float32=False
@@ -1350,6 +1368,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
 
         assert len(ensemble_configs) == self.n_estimators_
+        ensemble_configs = repeat_for_row_chunks(ensemble_configs, n_row_chunks(self))
+        self.n_estimators_ = len(ensemble_configs)
 
         return ensemble_configs, X, y, self.znorm_space_bardist_, decisions
 
@@ -1408,7 +1428,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         params.update(forced)
         params.update(overwrite_kwargs)
 
-        return TabPFNRegressor(**params)
+        tuning_regressor = TabPFNRegressor(**params)
+        # Split every fold into as many chunks as this fit (`plan_row_chunks`), so
+        # that all folds have the same number of estimators.
+        tuning_regressor._tuning_row_chunks = n_row_chunks(self)
+        return tuning_regressor
 
     def fit_from_preprocessed(
         self,
@@ -1532,6 +1556,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.fit_mode = "fit_preprocessors"
 
         static_seed, rng = infer_random_state(self.random_state)
+        # A differentiable fit reads every row.
+        drop_row_chunks(self)
 
         is_first_fit_call = not hasattr(self, "models_")
         if is_first_fit_call:
@@ -1679,11 +1705,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        ensemble_configs, X, y, znorm_space_bardist, source_decisions = (
-            self._initialize_dataset_preprocessing_with_decisions(
-                X=X, y=y, random_state=static_seed, may_cast_to_float32=True
+        earlier_row_chunks = getattr(self, "row_chunks_", None)
+        self.row_chunks_ = plan_row_chunks(self, X, y, random_state=static_seed)
+        try:
+            ensemble_configs, X, y, znorm_space_bardist, source_decisions = (
+                self._initialize_dataset_preprocessing_with_decisions(
+                    X=X, y=y, random_state=static_seed, may_cast_to_float32=True
+                )
             )
-        )
+        except BaseException:
+            # The ensemble of an earlier fit stays, so its chunks stay too.
+            self.row_chunks_ = earlier_row_chunks
+            raise
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
         self.y_train_max_ = float(np.max(y))
@@ -1696,7 +1729,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             sample_weight, label_reliability, n_samples=len(y)
         )
         if additional_model_input is not None:
-            validate_additional_model_input(self.models_, self.tuning_config)
+            validate_additional_model_input(
+                self.models_, self.tuning_config, row_chunks=n_row_chunks(self)
+            )
 
         assert len(ensemble_configs) == self.n_estimators_
 

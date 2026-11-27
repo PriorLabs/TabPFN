@@ -223,7 +223,7 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 - **Predict in a single call**: By default, each `predict` call recomputes the training set, so predicting 100 samples one at a time is almost 100 times slower and more expensive than a single call. Pass the whole test set at once, and only split it up if you run out of memory — the error raised then shows how. To reuse the training-set representation across repeated `predict` calls on the same training data, fit with `fit_mode="fit_with_cache"`, which also chunks large test sets automatically (see [kv_cache_fast_prediction.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/kv_cache_fast_prediction.py)).
 - **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
 - **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
-- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. **TabPFN-3.5** and **TabPFN-3.5-Fast** accept up to **1,000,000 rows** and **20,000 features**. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
+- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. **TabPFN-3.5** and **TabPFN-3.5-Fast** accept up to **1,000,000 rows** per estimator and **20,000 features**. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
 
 ## ❓ FAQ
 
@@ -232,7 +232,9 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 <details>
 <summary><b>Q: What dataset sizes work best with TabPFN?</b></summary>
 
-Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3.5**, and **TabPFN-3.5-Fast**) accepts up to **1,000,000 rows** and **20,000 features**. If your dataset exceeds the recommended limits for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
+Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3.5**, and **TabPFN-3.5-Fast**) accepts up to **1,000,000 rows** per estimator and **20,000 features**. If your training set has more rows than your checkpoint's limit, `fit` splits the rows into chunks within the limit, and each chunk is read by its own `n_estimators` estimators (figure below). For the other limits, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit. `ignore_pretraining_limits=True` also turns the row split off, so that every estimator reads all rows.
+
+<img src="docs/assets/row_chunks.svg" width="100%" alt="Up to the row limit, every estimator reads all training rows. Above it, the rows are dealt into k chunks (for a classifier, with nearly the same class mix), each chunk is read by its own n_estimators estimators, and the ensemble averages all of them.">
 
 </details>
 

@@ -111,7 +111,7 @@ class TabPFNEnsemblePreprocessor:
     member_row_weights: list[np.ndarray] | None = None
     additional_model_input: Any = None
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, C901
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
@@ -133,6 +133,7 @@ class TabPFNEnsemblePreprocessor:
         sample_weight_mode: SampleWeightMode | None = None,
         additional_model_input: Any = None,
         source_decisions: SourceDecisions | None = None,
+        row_chunks: int = 1,
     ) -> None:
         """Init.
 
@@ -184,6 +185,10 @@ class TabPFNEnsemblePreprocessor:
             source_decisions: Decisions taken on the fit input before its cast to
                 the dtype of ``X_train``. The members use them instead of their own
                 decisions. They must be for the rows that this preprocessor draws.
+            row_chunks: The number of chunks of a fit that split its rows, whose
+                configs repeat once per chunk (``repeat_for_row_chunks``). Each
+                chunk's block of members draws its feature subsets on its own, so
+                every chunk covers the features as a fit within the limit does.
         """
         super().__init__()
         if (row_weights is None) != (sample_weight_mode is None):
@@ -253,17 +258,22 @@ class TabPFNEnsemblePreprocessor:
                 else source_decisions.importance,
             )
 
-        self.subsample_feature_indices = _get_subsample_feature_indices(
-            pipelines=self.pipelines,
-            n_samples=n_samples,
-            feature_schema=self.feature_schema,
-            max_features_per_estimator=max_features_per_estimator,
-            rng=rng_features,
-            feature_subsampling_method=feature_subsampling_method,
-            constant_feature_count=constant_feature_count,
-            importance_feature_order=importance_feature_order,
-            importance_top_k_count=resolved_top_k,
-        )
+        per_chunk, rest = divmod(len(self.pipelines), row_chunks)
+        assert rest == 0, "the configs must repeat once per chunk"
+        self.subsample_feature_indices = []
+        for chunk in range(row_chunks):
+            block = slice(chunk * per_chunk, (chunk + 1) * per_chunk)
+            self.subsample_feature_indices += _get_subsample_feature_indices(
+                pipelines=self.pipelines[block],
+                n_samples=n_samples,
+                feature_schema=self.feature_schema,
+                max_features_per_estimator=max_features_per_estimator[block],
+                rng=rng_features,
+                feature_subsampling_method=feature_subsampling_method,
+                constant_feature_count=constant_feature_count,
+                importance_feature_order=importance_feature_order,
+                importance_top_k_count=resolved_top_k,
+            )
 
         resolved_sample_subsampling_method = _resolved_sample_subsampling_method(
             sample_subsampling_method, subsample_samples, task_type
@@ -1030,7 +1040,11 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         leftover = num_estimators % len(subsample_samples)
         if leftover > 0:
             subsample_indices += subsample_samples[:leftover]
-        return [np.array(subsample) for subsample in subsample_indices]
+        # One copy per distinct array: a split fit (`plan_row_chunks`) passes each
+        # chunk once for every estimator that reads it.
+        distinct = {id(subsample): subsample for subsample in subsample_samples}
+        copies = {key: np.array(subsample) for key, subsample in distinct.items()}
+        return [copies[id(subsample)] for subsample in subsample_indices]
 
     if subsample_samples is None:
         return None
