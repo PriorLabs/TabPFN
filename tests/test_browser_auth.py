@@ -834,9 +834,13 @@ class _FakeMsvcrt:
         on_empty_poll: object | None = None,
     ) -> None:
         self._keys = list(keys)
+        self._pushback: str | None = None
         self._on_empty_poll = on_empty_poll
 
     def kbhit(self) -> bool:
+        # Real CRT kbhit() ignores getwch's scan-code pushback.
+        if self._pushback is not None:
+            return False
         if self._keys:
             return True
         if callable(self._on_empty_poll):
@@ -844,7 +848,14 @@ class _FakeMsvcrt:
         return bool(self._keys)
 
     def getwch(self) -> str:
-        return self._keys.pop(0)
+        if self._pushback is not None:
+            ch = self._pushback
+            self._pushback = None
+            return ch
+        ch = self._keys.pop(0)
+        if ch in ("\x00", "\xe0") and self._keys:
+            self._pushback = self._keys.pop(0)
+        return ch
 
 
 class TestPollForToken:
