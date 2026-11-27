@@ -387,7 +387,8 @@ def create_inference_engine(  # noqa: PLR0913
     task_type: str,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
-    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive", "int4"]
+    | None = None,
     kv_cache_on_host: bool | None = None,
     enable_torch_compile: bool = False,
 ) -> InferenceEngine:

@@ -409,7 +409,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         memory_saving_mode: MemorySavingMode = "auto",
         enable_torch_compile: bool = False,
         keep_cache_on_device: bool = True,
-        kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+        kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive", "int4"]
+        | None = None,
         kv_cache_on_host: bool | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
@@ -663,7 +664,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 architecture default (`"int8"` when it can quantize, e.g. TabPFN-3,
                 else `"auto"`); `"int8"` quantizes the key-value cache to save
                 memory; `"fp8"` stores it as 8-bit floats instead (same size,
-                float rounding semantics; not supported on MPS);
+                float rounding semantics; not supported on MPS); `"int4"` stores
+                it at about 4.5 bits per number, where the architecture supports it;
                 `"auto"` keeps the computed dtype; `"adaptive"` stores the cache
                 on the grid an attention backend already rounded the keys and
                 values to (one that declares `kv_grid_dtype` and took the call),

@@ -1136,11 +1136,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
 
 def _resolve_kv_cache_precision(
-    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None,
+    kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive", "int4"] | None,
     *,
     architecture: Architecture,
     device: torch.device,
-) -> Literal["auto", "int8", "fp8", "adaptive"]:
+) -> Literal["auto", "int8", "fp8", "adaptive", "int4"]:
     """Resolve the KV cache dtype against ``architecture`` and ``device``.
 
     Raises:
@@ -1209,7 +1209,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         keep_cache_on_device: bool = True,
-        kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive"] | None = None,
+        kv_cache_precision: Literal["auto", "int8", "fp8", "adaptive", "int4"]
+        | None = None,
         kv_cache_on_host: bool | None = None,
         enable_torch_compile: bool = False,
     ) -> None:
