@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 930 452" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 z" fill="#596773"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="930" height="452" fill="#ffffff"/>
+  <text x="20" y="32" font-size="20" font-weight="700" fill="#101010" text-anchor="start">a</text>
+  <text x="48" y="30" font-size="15" font-weight="700" fill="#101010" text-anchor="start">Up to the row limit</text>
+  <text x="48" y="50" font-size="13" font-weight="400" fill="#596773" text-anchor="start">every estimator reads all n training rows</text>
+  <rect x="48" y="78" width="14" height="14" rx="3" fill="#bdbdcc" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="96" width="14" height="14" rx="3" fill="#bdbdcc" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="114" width="14" height="14" rx="3" fill="#bdbdcc" stroke="none" stroke-width="1.0"/>
+  <text x="48" y="148" font-size="12" font-weight="400" fill="#596773" text-anchor="start">n ≤ MAX_NUMBER_OF_SAMPLES</text>
+  <path d="M70,103 L150,103" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="158" y="80" width="300" height="46" rx="8" fill="#f4f4fa" stroke="#cfcfe3" stroke-width="1.0"/>
+  <text x="170" y="109" font-size="12" font-weight="400" fill="#596773" text-anchor="start">one model</text>
+  <rect x="274" y="91" width="36" height="24" rx="4" fill="#101075" stroke="none" stroke-width="1.0"/>
+  <rect x="318" y="91" width="36" height="24" rx="4" fill="#3f2670" stroke="none" stroke-width="1.0"/>
+  <rect x="362" y="91" width="36" height="24" rx="4" fill="#b6698d" stroke="none" stroke-width="1.0"/>
+  <rect x="406" y="91" width="36" height="24" rx="4" fill="#9c9cc3" stroke="none" stroke-width="1.0"/>
+  <text x="274" y="148" font-size="12" font-weight="400" fill="#596773" text-anchor="start">n_estimators = 4, each configured differently</text>
+  <path d="M466,103 L500,103" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="508" y="75" width="190" height="56" rx="8" fill="#ffffff" stroke="#9c9cc3" stroke-width="1.0"/>
+  <text x="603" y="99" font-size="13" font-weight="700" fill="#101010" text-anchor="middle">Ensemble average</text>
+  <text x="603" y="116" font-size="12" font-weight="400" fill="#101010" text-anchor="middle">over all 4 estimators</text>
+  <path d="M706,103 L740,103" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="748" y="95" width="64" height="16" rx="4" fill="#fff2ae" stroke="#101075" stroke-width="1.5"/>
+  <text x="780" y="129" font-size="12" font-weight="400" fill="#596773" text-anchor="middle">prediction</text>
+  <path d="M20,170 H910" stroke="#e8e8f2" stroke-width="1"/>
+  <text x="20" y="204" font-size="20" font-weight="700" fill="#101010" text-anchor="start">b</text>
+  <text x="48" y="202" font-size="15" font-weight="700" fill="#101010" text-anchor="start">Above the row limit</text>
+  <text x="48" y="222" font-size="13" font-weight="400" fill="#596773" text-anchor="start">the rows are dealt into k chunks, and each chunk is read by its own n_estimators estimators, configured as in panel a</text>
+  <rect x="48" y="246" width="14" height="14" rx="3" fill="#0072b2" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="264" width="14" height="14" rx="3" fill="#009e73" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="282" width="14" height="14" rx="3" fill="#e69f00" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="300" width="14" height="14" rx="3" fill="#009e73" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="318" width="14" height="14" rx="3" fill="#0072b2" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="336" width="14" height="14" rx="3" fill="#e69f00" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="354" width="14" height="14" rx="3" fill="#e69f00" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="372" width="14" height="14" rx="3" fill="#0072b2" stroke="none" stroke-width="1.0"/>
+  <rect x="48" y="390" width="14" height="14" rx="3" fill="#009e73" stroke="none" stroke-width="1.0"/>
+  <text x="48" y="428" font-size="12" font-weight="400" fill="#596773" text-anchor="start">n rows, colored by class</text>
+  <path d="M70,326 L104,264" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <text x="112" y="251" font-size="12" font-weight="400" fill="#596773" text-anchor="start">chunk 1</text>
+  <rect x="112" y="257" width="14" height="14" rx="3" fill="#0072b2" stroke="none" stroke-width="1.0"/>
+  <rect x="130" y="257" width="14" height="14" rx="3" fill="#009e73" stroke="none" stroke-width="1.0"/>
+  <rect x="148" y="257" width="14" height="14" rx="3" fill="#e69f00" stroke="none" stroke-width="1.0"/>
+  <path d="M170,264 L204,264" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="212" y="241" width="300" height="46" rx="8" fill="#f4f4fa" stroke="#cfcfe3" stroke-width="1.0"/>
+  <text x="224" y="270" font-size="12" font-weight="400" fill="#596773" text-anchor="start">same model</text>
+  <rect x="328" y="252" width="36" height="24" rx="4" fill="#101075" stroke="none" stroke-width="1.0"/>
+  <rect x="372" y="252" width="36" height="24" rx="4" fill="#3f2670" stroke="none" stroke-width="1.0"/>
+  <rect x="416" y="252" width="36" height="24" rx="4" fill="#b6698d" stroke="none" stroke-width="1.0"/>
+  <rect x="460" y="252" width="36" height="24" rx="4" fill="#9c9cc3" stroke="none" stroke-width="1.0"/>
+  <path d="M520,264 L588,318" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M70,326 L104,324" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <text x="112" y="311" font-size="12" font-weight="400" fill="#596773" text-anchor="start">chunk 2</text>
+  <rect x="112" y="317" width="14" height="14" rx="3" fill="#0072b2" stroke="none" stroke-width="1.0"/>
+  <rect x="130" y="317" width="14" height="14" rx="3" fill="#009e73" stroke="none" stroke-width="1.0"/>
+  <rect x="148" y="317" width="14" height="14" rx="3" fill="#e69f00" stroke="none" stroke-width="1.0"/>
+  <path d="M170,324 L204,324" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="212" y="301" width="300" height="46" rx="8" fill="#f4f4fa" stroke="#cfcfe3" stroke-width="1.0"/>
+  <text x="224" y="330" font-size="12" font-weight="400" fill="#596773" text-anchor="start">same model</text>
+  <rect x="328" y="312" width="36" height="24" rx="4" fill="#101075" stroke="none" stroke-width="1.0"/>
+  <rect x="372" y="312" width="36" height="24" rx="4" fill="#3f2670" stroke="none" stroke-width="1.0"/>
+  <rect x="416" y="312" width="36" height="24" rx="4" fill="#b6698d" stroke="none" stroke-width="1.0"/>
+  <rect x="460" y="312" width="36" height="24" rx="4" fill="#9c9cc3" stroke="none" stroke-width="1.0"/>
+  <path d="M520,324 L588,324" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M70,326 L104,404" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <text x="112" y="391" font-size="12" font-weight="400" fill="#596773" text-anchor="start">chunk k</text>
+  <rect x="112" y="397" width="14" height="14" rx="3" fill="#0072b2" stroke="none" stroke-width="1.0"/>
+  <rect x="130" y="397" width="14" height="14" rx="3" fill="#009e73" stroke="none" stroke-width="1.0"/>
+  <rect x="148" y="397" width="14" height="14" rx="3" fill="#e69f00" stroke="none" stroke-width="1.0"/>
+  <path d="M170,404 L204,404" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="212" y="381" width="300" height="46" rx="8" fill="#f4f4fa" stroke="#cfcfe3" stroke-width="1.0"/>
+  <text x="224" y="410" font-size="12" font-weight="400" fill="#596773" text-anchor="start">same model</text>
+  <rect x="328" y="392" width="36" height="24" rx="4" fill="#101075" stroke="none" stroke-width="1.0"/>
+  <rect x="372" y="392" width="36" height="24" rx="4" fill="#3f2670" stroke="none" stroke-width="1.0"/>
+  <rect x="416" y="392" width="36" height="24" rx="4" fill="#b6698d" stroke="none" stroke-width="1.0"/>
+  <rect x="460" y="392" width="36" height="24" rx="4" fill="#9c9cc3" stroke="none" stroke-width="1.0"/>
+  <path d="M520,404 L588,340" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <text x="124" y="370" font-size="15" font-weight="400" fill="#101010" text-anchor="middle">…</text>
+  <text x="362" y="370" font-size="15" font-weight="400" fill="#101010" text-anchor="middle">…</text>
+  <rect x="596" y="312" width="190" height="56" rx="8" fill="#ffffff" stroke="#9c9cc3" stroke-width="1.0"/>
+  <text x="691" y="336" font-size="13" font-weight="700" fill="#101010" text-anchor="middle">Ensemble average</text>
+  <text x="691" y="353" font-size="12" font-weight="400" fill="#101010" text-anchor="middle">over all k × 4 estimators</text>
+  <path d="M794,340 L828,340" stroke="#596773" stroke-width="2" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="836" y="332" width="64" height="16" rx="4" fill="#fff2ae" stroke="#101075" stroke-width="1.5"/>
+  <text x="868" y="366" font-size="12" font-weight="400" fill="#596773" text-anchor="middle">prediction</text>
+  <text x="596" y="404" font-size="12" font-weight="400" fill="#596773" text-anchor="start">k: the fewest chunks within the limit</text>
+  <text x="596" y="422" font-size="12" font-weight="400" fill="#596773" text-anchor="start">for a classifier, every chunk keeps the class mix</text>
+</svg>

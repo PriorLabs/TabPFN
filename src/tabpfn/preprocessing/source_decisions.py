@@ -54,10 +54,14 @@ class SourceDecisions:
     def take(self, start: int, cleaned: np.ndarray) -> None:
         """Take the decisions for `cleaned`, the columns from `start` on."""
         stop = start + cleaned.shape[1]
+        # Members that read the same rows (a chunk of a split fit) share the result.
+        kept_of_rows: dict[int, np.ndarray] = {}
         for member, rows in enumerate(self.member_rows or [None]):
-            self.kept[member, start:stop] = kept_by_fit(
-                cleaned if rows is None else cleaned[rows]
-            )
+            if id(rows) not in kept_of_rows:
+                kept_of_rows[id(rows)] = kept_by_fit(
+                    cleaned if rows is None else cleaned[rows]
+                )
+            self.kept[member, start:stop] = kept_of_rows[id(rows)]
         if self.importance is not None:
             rows, values = self.importance
             values[:, start:stop] = cleaned[rows]
