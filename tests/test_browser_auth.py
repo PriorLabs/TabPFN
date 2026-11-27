@@ -817,3 +817,129 @@ class TestTryBrowserLoginRouting:
         assert result == "browser-jwt"
         mock_browser.assert_called_once()
         assert LICENSE_ACCEPTANCE_HEADER in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _poll_for_token (POSIX and Windows console polling)
+# ---------------------------------------------------------------------------
+
+
+class _FakeMsvcrt:
+    """Deterministic stub for Windows ``msvcrt`` console functions."""
+
+    def __init__(
+        self,
+        keys: list[str],
+        *,
+        on_empty_poll: object | None = None,
+    ) -> None:
+        self._keys = list(keys)
+        self._pushback: str | None = None
+        self._on_empty_poll = on_empty_poll
+
+    def kbhit(self) -> bool:
+        # Real CRT kbhit() ignores getwch's scan-code pushback.
+        if self._pushback is not None:
+            return False
+        if self._keys:
+            return True
+        if callable(self._on_empty_poll):
+            self._on_empty_poll()
+        return bool(self._keys)
+
+    def getwch(self) -> str:
+        if self._pushback is not None:
+            ch = self._pushback
+            self._pushback = None
+            return ch
+        ch = self._keys.pop(0)
+        if ch in ("\x00", "\xe0") and self._keys:
+            self._pushback = self._keys.pop(0)
+        return ch
+
+
+class TestPollForToken:
+    def _import_poll(self):  # noqa: ANN202
+        from tabpfn.browser_auth import _poll_for_token  # noqa: PLC0415
+
+        return _poll_for_token
+
+    def test_windows_callback_succeeds_without_calling_select(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression test: Windows must not call select.select on sys.stdin."""
+        import threading  # noqa: PLC0415
+
+        poll = self._import_poll()
+        auth_event = threading.Event()
+        received: list[str | None] = [None]
+
+        def complete_callback() -> None:
+            received[0] = "callback-jwt"
+            auth_event.set()
+
+        fake_msvcrt = _FakeMsvcrt([], on_empty_poll=complete_callback)
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        with patch(
+            "tabpfn.browser_auth.select.select",
+            side_effect=OSError(10038, "An operation was attempted on non-socket"),
+        ):
+            assert poll(auth_event, received) == "callback-jwt"
+
+    def test_windows_pasted_token_with_backspace_and_empty_enter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Windows console polling supports empty Enter, Backspace, and paste."""
+        import threading  # noqa: PLC0415
+
+        poll = self._import_poll()
+        auth_event = threading.Event()
+        received: list[str | None] = [None]
+        # Empty Enter -> arrow key (\xe0 + H) -> 'ab' + Backspace + 'c' + Enter -> 'ac'
+        fake_msvcrt = _FakeMsvcrt(["\r", "\xe0", "H", "a", "b", "\x08", "c", "\r"])
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        assert poll(auth_event, received) == "ac"
+
+    def test_windows_ctrl_z_eof_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        import threading  # noqa: PLC0415
+
+        poll = self._import_poll()
+        auth_event = threading.Event()
+        fake_msvcrt = _FakeMsvcrt(["\x1a"])
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        assert poll(auth_event, [None]) is None
+
+    def test_windows_ctrl_c_raises_keyboard_interrupt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import threading  # noqa: PLC0415
+
+        poll = self._import_poll()
+        auth_event = threading.Event()
+        fake_msvcrt = _FakeMsvcrt(["\x03"])
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "win32")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        with pytest.raises(KeyboardInterrupt):
+            poll(auth_event, [None])
+
+    def test_posix_pasted_token(self, monkeypatch: pytest.MonkeyPatch):
+        import threading  # noqa: PLC0415
+
+        poll = self._import_poll()
+        auth_event = threading.Event()
+        fake_stdin = io.StringIO("\n  posix-jwt  \n")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "linux")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
+
+        with patch(
+            "tabpfn.browser_auth.select.select",
+            return_value=([fake_stdin], [], []),
+        ):
+            assert poll(auth_event, [None]) == "posix-jwt"

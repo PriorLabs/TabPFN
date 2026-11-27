@@ -372,12 +372,76 @@ def _serve_until_event(
             break
 
 
+def _consume_windows_char(ch: str, chars: list[str]) -> tuple[bool, str | None]:
+    """Process one console character; return ``(done, token)``."""
+    if ch == "\x03":  # Ctrl+C
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        raise KeyboardInterrupt
+    if ch in ("\x04", "\x1a") and not chars:  # Ctrl+D / Ctrl+Z EOF
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return True, None
+    if ch in ("\r", "\n"):
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        token = "".join(chars).strip()
+        chars.clear()
+        if token:
+            return True, token
+        sys.stdout.write("API key (or press Enter to keep waiting): ")
+        sys.stdout.flush()
+        return False, None
+    if ch in ("\x08", "\x7f"):  # Backspace
+        if chars:
+            chars.pop()
+            sys.stdout.write("\b \b")
+            sys.stdout.flush()
+        return False, None
+
+    chars.append(ch)
+    sys.stdout.write(ch)
+    sys.stdout.flush()
+    return False, None
+
+
+def _poll_for_token_windows(
+    auth_event: threading.Event, received_token: list[str | None]
+) -> str | None:
+    """Poll the Windows console for a pasted API key until *auth_event* is set."""
+    if sys.platform != "win32":
+        return None
+
+    import msvcrt  # noqa: PLC0415
+
+    chars: list[str] = []
+    while not auth_event.is_set():
+        if not msvcrt.kbhit():
+            auth_event.wait(0.05)
+            continue
+
+        ch = msvcrt.getwch()
+        # Function / arrow key prefix: drain the buffered scan code.
+        if ch in ("\x00", "\xe0"):
+            msvcrt.getwch()
+            continue
+
+        done, token = _consume_windows_char(ch, chars)
+        if done:
+            return token
+
+    return received_token[0]
+
+
 def _poll_for_token(
     auth_event: threading.Event, received_token: list[str | None]
 ) -> str | None:
     """Read token from stdin or wait for browser callback, whichever comes first."""
     sys.stdout.write("API key (or press Enter to keep waiting): ")
     sys.stdout.flush()
+    if sys.platform == "win32":
+        return _poll_for_token_windows(auth_event, received_token)
+
     while not auth_event.is_set():
         ready, _, _ = select.select([sys.stdin], [], [], 0.5)
         if not ready:
